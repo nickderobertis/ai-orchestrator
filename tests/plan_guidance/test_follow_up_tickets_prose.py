@@ -116,12 +116,14 @@ def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_a
         assert "clearly" not in described, described
 
 
-def test_budget_evidence_is_read_back_from_the_loopback_board(
+def test_budget_evidence_is_held_to_the_runs_comment_receipt_on_the_loopback_board(
     budget_registry: Path,
     drafts_root: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A filed overrun or a budget question is refused until this run's evidence comment on its
+    item is posted through `comment`, whose receipt `check-budgets --board` reads."""
     import github_board as remote
 
     environment, root = remote._followups_environment(tmp_path)
@@ -164,15 +166,15 @@ def test_budget_evidence_is_read_back_from_the_loopback_board(
             done = _budget_cli(root, RUN, "--board", "followups")
             assert done.returncode == tickets.UNSOUND
             assert "evidence" in done.stderr
-            plan_store.sdk(
-                plan_store.client().task_comment_add(
-                    item,
-                    body=tickets.render_comment(
-                        RUN, cause, "Measured long gate. Should the budget change?"
-                    ),
-                )
+            question = root / f"question-{word}.md"
+            question.write_text(
+                tickets.render_comment(RUN, cause, "Measured long gate. Should the budget change?"),
+                encoding="utf-8",
             )
-            assert tickets.main(["re-estimate", "--board", "followups", item]) == tickets.SOUND
+            posted = ["comment", "--board", "followups", "--run", RUN, "--body-file", str(question)]
+            assert tickets.main([*posted, item]) == tickets.SOUND
+            estimated = ["re-estimate", "--board", "followups", "--run", RUN, item]
+            assert tickets.main(estimated) == tickets.SOUND
             done = _budget_cli(root, RUN, "--board", "followups")
             assert done.returncode == tickets.SOUND, done.stderr
 
@@ -192,7 +194,7 @@ def test_relatedness_contract_and_current_example_agree_in_both_modes(feedback: 
 
 def test_candidate_locations_follow_the_plain_schema_boundary_without_repurposing_it() -> None:
     task = _flat(_task())
-    assert tickets.PLAIN_AT == 11 and tickets.SCHEMA == 13
+    assert tickets.PLAIN_AT == 11 and tickets.SCHEMA == 14
     assert (
         "under `## Suggested fix`'s `**Contributing locations.**` on a schema-11 or later "
         "ticket, under `## Root cause`'s `**Contributing locations.**` on a schema-10 ticket"

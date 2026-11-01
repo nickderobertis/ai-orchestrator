@@ -17,10 +17,10 @@ public board and filed a duplicate. So this scan refuses, anywhere in the packag
   mapping nothing composes.
 
 And in the follow-up modules every surviving read of the store's configuration is one that
-decides nothing about where a ticket's item is placed, searched or copied: the destination's
-`config.owner`, which the owner refusal compares, a source's `visibility`, a board's
-`config.status_mapping` and `plugin`, which the comment snapshot reads, and a source's
-`cache.enabled`, which decides whether a comment edit expects a version.
+decides nothing about where a ticket's item is placed, searched or copied: a source's
+`visibility`, a board's `config.status_mapping` and `plugin`, which the comment snapshot reads,
+and a source's `cache.enabled`, which decides whether a comment edit expects a version. Which
+owners a board creates issues for is the store's own refusal at the write, never a read here.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ PLACEMENT_SETTING = re.compile(r"sources\.[^.\s]+\.(?:routes\b|config\.repositor
 SOURCE_SETTING = re.compile(r"sources\.[^.\s]+\.(?P<key>[\w.]*)")
 #: The setting paths a follow-up module may read, none of which places, searches or copies.
 ALLOWED_FOLLOW_UP_SETTING = re.compile(
-    r"(?:config\.owner|config\.status_mapping\.?|plugin|visibility|cache\.enabled)"
+    r"(?:config\.status_mapping\.?|plugin|visibility|cache\.enabled)"
 )
 #: The keyword arguments of `sources_route` that ask it to route a particular item.
 ROUTING_ARGUMENTS = frozenset({"repository", "classification"})
@@ -195,6 +195,11 @@ def test_no_module_derives_a_placement_or_writes_the_binding() -> None:
             True,
             "which no follow-up module may",
         ),
+        (
+            'settings.get(f"sources.{board}.config.owner")',
+            True,
+            "which no follow-up module may",
+        ),
     ],
     ids=[
         "route-by-repositories",
@@ -208,6 +213,7 @@ def test_no_module_derives_a_placement_or_writes_the_binding() -> None:
         "binding-set-by-default",
         "binding-carried-into-a-ticket",
         "follow-up-reads-another-setting",
+        "follow-up-reads-the-boards-owner",
     ],
 )
 def test_each_shape_the_scan_refuses_is_refused(source: str, follow_up: bool, said: str) -> None:
@@ -225,7 +231,6 @@ BINDING_FIELD = "board_item"
 reachable = client.sources_route(board).reachable
 bound = held.get(BINDING_FIELD)
 cleared = dataclasses.replace(ticket, board_item=None)
-owner = settings.get(f"sources.{board}.config.owner")
 private = settings.get(f"sources.{source}.visibility") == "private"
 mapping = f"sources.{board}.config.status_mapping."
 plugin = settings.get(f"sources.{source}.plugin")

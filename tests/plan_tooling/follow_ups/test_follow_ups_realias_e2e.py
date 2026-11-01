@@ -96,6 +96,9 @@ BOARD_ONLY_CAUSE = "the-logout-link-is-hidden"
 SHARED_CAUSE = "the-login-page-retries-without-backoff"
 UNRELATED_CAUSE = "the-profile-page-loads-twice"
 
+#: The Linear credential's name `scripts/dispatch-env.sh` hands a dispatch.
+DISPATCHED_KEY = "HELLOPATIENT_LINEAR_API_KEY"
+
 PYTHON = str(REPO_ROOT / ".venv" / "bin" / "python3")
 MODULE = [PYTHON, "-m", "orchestrator.follow_up_tickets"]
 COMMENTS_MODULE = [PYTHON, "-m", "orchestrator.follow_up_comments"]
@@ -104,7 +107,7 @@ COMMENTS_MODULE = [PYTHON, "-m", "orchestrator.follow_up_comments"]
 COMMENT_PROGRAM = """\
 import json, pathlib, subprocess, sys
 
-store, issue, run, cause, body = sys.argv[1:6]
+store, board, issue, run, cause, body = sys.argv[1:7]
 listed = json.loads(subprocess.run(
     [store, "task", "comment", "list", issue, "--json"], check=True, capture_output=True, text=True
 ).stdout)["comments"]
@@ -115,9 +118,11 @@ mine = [one for one in listed
 path = pathlib.Path(body)
 if mine:
     command = [store, "task", "comment", "edit", issue, mine[0]["id"], "--body-file", str(path)]
+    command.append("--json")
 else:
-    command = [store, "task", "comment", "add", issue, "--body-file", str(path)]
-subprocess.run(command + ["--json"], check=True)
+    command = [sys.executable, "-m", "orchestrator.follow_up_tickets", "comment", "--board", board]
+    command += ["--run", run, issue, "--body-file", str(path)]
+subprocess.run(command, check=True)
 """
 
 
@@ -192,11 +197,17 @@ def _other_issue(bench: Bench, run: str, cause: str) -> str:
 
 
 def _evidence(bench: Bench, issue: str, run: str, cause: str, evidence: str) -> str:
-    """An evidence comment ``run``'s marker names, added through the store's own verb; its id."""
+    """An evidence comment ``run``'s marker names, posted with the module's `comment`; its id.
+
+    The command the task prescribes for every evidence comment, which leaves ``run``'s receipt.
+    """
     body = _staged(bench, f"evidence-{issue.replace(':', '-')}-{cause}.md", "")
     body.write_text(tickets.render_comment(run, cause, evidence), encoding="utf-8")
-    added = _store(bench, "task", "comment", "add", issue, "--body-file", str(body))
-    return str(added["id"])
+    added = _module(
+        bench, "comment", "--board", BOARD, "--run", run, issue, "--body-file", str(body)
+    )
+    assert added.returncode == 0, added.stdout + added.stderr
+    return str(json.loads(added.stdout)["id"])
 
 
 class HeldItem(TypedDict):
@@ -336,6 +347,12 @@ def realiased(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Realiased]: 
         patched.setenv(onetaskgraph_user_layer.XDG_CONFIG_HOME, str(layer))
         environment.update(linear.environment(LINEAR))
         environment.update(linear.environment(onetaskgraph_user_layer.ORGANIZATION_PLANS))
+        # Every copy into a board whose routes name a Linear source builds that source, so the
+        # dispatch carries its credential under the one name the dispatch environment keeps.
+        for routed in (LINEAR, onetaskgraph_user_layer.ORGANIZATION_PLANS):
+            encoded = routed.upper().replace("-", "_")
+            environment[f"ONETASKGRAPH_SOURCES__{encoded}__CONFIG__API_KEY_ENV"] = DISPATCHED_KEY
+        environment[DISPATCHED_KEY] = "loopback-not-a-production-credential"
         remote.BOARD.real_time = True
         patched.setenv(
             follow_up_variables.root_name(), environment[follow_up_variables.root_name()]
@@ -428,7 +445,7 @@ def realiased(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Realiased]: 
             bench, other_issue, UNRELATED, UNRELATED_CAUSE, f"Seen in run `{UNRELATED}`."
         )
         for issue in (other_issue, items[BOARD_ONLY_CAUSE]):
-            estimated = _module(bench, "re-estimate", "--board", BOARD, issue)
+            estimated = _module(bench, "re-estimate", "--board", BOARD, "--run", RUN, issue)
             assert estimated.returncode == 0, estimated.stdout + estimated.stderr
         # The board-only issue's ticket and its draft are gone from the drafts root.
         tickets.ticket_path(bench.drafts_root, RUN, BOARD_ONLY_CAUSE).unlink()
@@ -657,10 +674,11 @@ def realiased(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Realiased]: 
                             f"{module} validate {quoted}",
                             f"{module} copy --board {BOARD} {quoted}",
                             shlex.join(
-                                [PYTHON, str(helper), str(ONETASKGRAPH_BIN), other_issue, public]
-                                + [SHARED_CAUSE, str(comment)]
+                                [PYTHON, str(helper), str(ONETASKGRAPH_BIN), BOARD, other_issue]
+                                + [public, SHARED_CAUSE, str(comment)]
                             ),
-                            f"{module} re-estimate --board {BOARD} {shlex.quote(other_issue)}",
+                            f"{module} re-estimate --board {BOARD} --run {shlex.quote(public)} "
+                            f"{shlex.quote(other_issue)}",
                         ]
                     ),
                 )

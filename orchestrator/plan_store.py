@@ -46,6 +46,10 @@ MEMBERS_KEY = "onetaskgraph.members"
 #: source: an object mapping a source name to a qualified id there (onetaskgraph's
 #: `docs/metadata.md`).
 COPIES_KEY = "onetaskgraph.copies"
+#: Where a copy records, on the item it copies, the create it has in flight at each destination
+#: source, removed with the write that records its link (onetaskgraph's README, *A create safe
+#: to retry*). The store alone writes it; a caller rewriting the item carries it through as read.
+CREATING_KEY = "onetaskgraph.creating"
 #: Where a source that serves a record's images at URLs records what it served, on the
 #: record it wrote: an object keyed by asset name, each value `{"sha256": <lowercase hex of
 #: the bytes>, "url": <string>}`, as onetaskgraph's plugin protocol states it. A `local-md`
@@ -610,42 +614,18 @@ def reachable(source: str) -> tuple[str, ...]:
     return tuple(name.root for name in sdk(client().sources_route(source)).reachable)
 
 
-#: The refusals `task locate --target-native` answers for an item that is gone, or that no
-#: longer carries the task's origin — `task copy --target-task`'s own error kinds.
-TARGET_REFUSALS = frozenset({"target-task-missing", "target-task-origin"})
-
-
-class TargetRefused(OSError):
-    """`task locate --target-native` refused the item it was named, as gone or not the task's."""
-
-
-def task_locate(
-    task: str, to: str, *, counterpart: bool = True, target_native: str | None = None
-) -> Located:
-    """Where `task copy --to <to>` would put ``task``: the store's `task locate`, writing nothing.
+def task_locate(task: str, to: str) -> Located:
+    """Where `task copy --to <to>` would put ``task``: `task locate --no-counterpart`.
 
     The store reads the task, classifies it as a write does and places it through the copy's
-    own placement path, answering its destination, its counterpart there by the copy's own
-    lookup, every item carrying its origin, and the repository a create would file it in.
-    ``counterpart`` false is `--no-counterpart`, which makes no lookup at the destination;
-    ``target_native`` is `--target-native`, the counterpart the caller already knows, read by
-    id and verified by its origin naming the task back. :class:`TargetRefused` when the store
-    refuses that item as gone or not carrying the task's origin, and :class:`OSError` for every
-    other refusal.
+    own placement path, answering its destination and the repository a create there would
+    file it in — with `refused` where the destination's `creation_owners` refuses that create
+    — and makes no lookup at the destination, so it sends the board nothing. :class:`OSError`
+    for every refusal.
     """
     try:
-        answer = asyncio.run(
-            client().task_locate(
-                [task],
-                to=to,
-                no_counterpart=None if counterpart else True,
-                target_native=target_native,
-            )
-        )
+        answer = asyncio.run(client().task_locate([task], to=to, no_counterpart=True))
     except OnetaskgraphError as exc:
-        kind = None if exc.failure is None else exc.failure.kind
-        if target_native is not None and kind in TARGET_REFUSALS:
-            raise TargetRefused(str(exc)) from exc
         raise OSError(str(exc)) from exc
     # llmlint: ignore-block[changed_behavior_has_e2e] A trust-boundary guard no conforming store
     # reaches: `task locate` answers one entry per id named, in order, so a real store cannot be

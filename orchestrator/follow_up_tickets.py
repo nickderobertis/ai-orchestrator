@@ -34,23 +34,32 @@ route`'s `reachable` answers (a route this host declares in its onetaskgraph use
 outside every checkout, sends an organization's root cause to that organization's own tracker,
 and an owner's private work to a board declared private). Every command taking `--board` takes
 that root and asks the store, once per ticket, where the ticket lands — :func:`locate`, the
-store's `task locate`, which reads, classifies and places the ticket through its copy's own
-placement path — so the ticket's destination, its item there, every item carrying its origin
-and the repository a create files its issue in are the store's answers, which cannot disagree
-with its copy, and nothing here derives a route, a counterpart or a filing repository. A ticket
-whose fix changes several repositories lists them all, and its record names the repository the
-store answers it creates the issue in (:func:`filing_problems`).
+store's `task locate --no-counterpart`, which reads, classifies and places the ticket through
+its copy's own placement path and reads nothing at the board — so the ticket's destination and
+the repository a create files its issue in are the store's answers, which cannot disagree with
+its copy, and nothing here derives a route or a filing repository. The ticket's card is the one
+its record names, the store's own link (:func:`named_card`), never a lookup. A ticket whose fix
+changes several repositories lists them all, and its record names the repository the store
+answers it creates the issue in (:func:`filing_problems`).
+
+**Each write is guarded by the store and receipted.** `copy` is one store `task copy`: the
+store's link, intent and origin rules decide the card, its status guard refuses a withdrawal
+over a card a person accepted or deferred, its priority guard keeps a priority a person set,
+and its `creation_owners` refuses an issue outside the board's owner. Every board write a run
+makes for its tickets leaves a receipt built from the store's answer
+(:data:`RECEIPTS_DIRECTORY`), and the closeout's checks hold the account to those receipts
+rather than reading the board back (:func:`receipt_problems`).
 
 **The board is the record of the user's decision, and a ticket names its machine.** A ticket
 reaches the board as a proposal and a person accepts it there, so every copy but a withdrawal
 is made under the store's `preserve-destination` status policy, keeping the status the board
-holds, and a withdrawal closes only an item nobody accepted or deferred
-(:func:`status_before_copy`). Evidence is a claim about trees read on one machine, so the
-record's `host` and its `## Evidence` section both name the host the verification ran on. The
-`followups` source projects that `host` (:data:`HOST_FIELD`) onto the board's `Host` text
-field, so the board filters by it as it does by origin; `just plans sources fields followups
---apply` creates the field, never a hand-written mutation, and a copy onto a board without it
-is refused by the store, naming `sources fields`.
+holds, and a withdrawal closes only a card nobody accepted or deferred, as the store's status
+guard decides at the write (:func:`copy_ticket`). Evidence is a claim about trees read on one
+machine, so the record's `host` and its `## Evidence` section both name the host the
+verification ran on. The `followups` source projects that `host` (:data:`HOST_FIELD`) onto
+the board's `Host` text field, so the board filters by it as it does by origin; `just plans
+sources fields followups --apply` creates the field, never a hand-written mutation, and a copy
+onto a board without it is refused by the store, naming `sources fields`.
 
 **A ticket is read through the store, never parsed here.** An agent writes the front matter
 in whatever YAML style it likes, and what reaches the board is what the installed
@@ -92,6 +101,7 @@ from onetaskgraph_sdk._generated.query_response_of_qualified_task import Qualifi
 # above, and retired by the same follow-up.
 from onetaskgraph_sdk._generated.task_detail import Comment as ShownComment
 from onetaskgraph_sdk._generated.task_detail import Task as ShownTask
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, model_validator
 
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import human_items, npm_installs, plan_store
@@ -143,12 +153,15 @@ BOARD = "followups"
 #: Schema 13 retires :data:`BINDING_FIELD`: where a ticket's item is, is the store's `task
 #: locate` answer, so a schema-13 record never carries the key, while a record of an earlier
 #: schema carrying it is still read and is brought forward by its next `copy`.
-SCHEMA = 13
+#: Schema 14 adds the optional :data:`BOARD_ESTIMATE_FIELD`, the estimate the ticket's card last
+#: received from a copy, which the next copy's priority guard names so it reads nothing first;
+#: a record of an earlier schema carries none, and its copy names `none` in its place.
+SCHEMA = 14
 #: Every earlier schema a re-dispatch brings a ticket forward from, enumerated rather than
 #: admitted by range, so a record declaring any other schema — zero, negative, a later one or
 #: no integer — is refused by name rather than read as an older ticket. `board-status` reads a
 #: board item's record of one before :data:`ESTIMATE_AT` as storing no estimate.
-PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
 #: The schema just before, which every reader still accepts as sound: its body predates
 #: :data:`SCHEMA`'s structure, and a run that rewrites it brings it forward.
 PRIOR_SCHEMA = PRIOR_SCHEMAS[-1]
@@ -172,6 +185,8 @@ SEARCH_RETIRED_AT = 12
 #: carrying the key is written at until its next `copy` brings it forward.
 BINDING_RETIRED_AT = 13
 BINDING_LAST_AT = BINDING_RETIRED_AT - 1
+#: The schema that adds :data:`BOARD_ESTIMATE_FIELD`.
+BOARD_ESTIMATE_AT = 14
 #: Every schema a reader accepts as sound: from :data:`ESTIMATE_AT` on, because schema 7's body
 #: predates the structure :data:`STRUCTURE_AT` added, schemas 7 to 9 the structure
 #: :data:`INVARIANT_AT` added, and schemas 7 to 10 the shape :data:`PLAIN_AT` gave it, which a
@@ -524,8 +539,16 @@ RETIRED_KEYS = (BINDING_FIELD,)
 #: retaining schema-7 and schema-8 records.
 BUDGET_FIELD = "budget"
 BUDGET_RECORD_KEYS = ("repository", "file", "id", "threshold", "direction")
+#: **The estimate the ticket's card last received.** Optional, from :data:`BOARD_ESTIMATE_AT`:
+#: the :data:`ESTIMATE_FIELD` the last successful `copy` wrote onto the card, which the next copy
+#: names to the store as its priority guard (`--when-destination-priority`), so a card follows a
+#: new estimate only while it holds the one its record last received and a priority a person set
+#: stands — read off the ticket rather than the card, so the guard costs no read. Only `copy`
+#: writes it; `board-status` and `re-estimate` never do. Absent on a ticket never copied and on
+#: every record of an earlier schema, whose copy names `none` instead.
+BOARD_ESTIMATE_FIELD = "board_estimate"
 #: The keys a record may carry beside :data:`RECORD_KEYS`.
-OPTIONAL_KEYS = (BINDING_FIELD, FREQUENCY_FIELD, BUDGET_FIELD)
+OPTIONAL_KEYS = (BINDING_FIELD, FREQUENCY_FIELD, BUDGET_FIELD, BOARD_ESTIMATE_FIELD)
 #: The front-matter key the store reads a `local-md` task's priority from, which a copy
 #: carries onto the board item's `Priority` field.
 PRIORITY_FIELD = "priority"
@@ -535,6 +558,13 @@ ORIGIN_KEY = plan_store.ORIGIN_KEY
 #: The store's reserved key a copy records, on the ticket it copied, the item it reached at
 #: each destination source under, and follows on the next copy: the store's link.
 COPIES_KEY = plan_store.COPIES_KEY
+#: The store's reserved key an item being copied holds while a create of it is in flight: the
+#: store writes and removes it, and this module only carries it through a rewrite as read.
+CREATING_KEY = plan_store.CREATING_KEY
+#: The store's reserved metadata namespace, every key of which the store alone writes.
+STORE_NAMESPACE = "onetaskgraph."
+#: The store's reserved key a copy records, on the item it copied, where each copy can be opened.
+COPY_LOCATIONS_KEY = "onetaskgraph.copy_locations"
 
 #: **How a ticket depends on an accepted ticket.** The store's own top-level front-matter
 #: field a dependency is written in — one entry per accepted ticket whose fix changed the
@@ -1135,15 +1165,15 @@ class Mode(StrEnum):
 PROG = "follow-up-tickets"
 
 #: Exit statuses: every ticket is sound; a ticket failed the shape; the command could not run.
-#: And four of `board-status`'s own, each a ticket not to copy: the board holds its item at a
-#: category no ticket carries; a withdrawal a person's decision on the item refuses, whether
-#: they accepted it or deferred it; a ticket whose issue the store would create outside its
-#: board's owner, which nothing is written about; and a ticket depending on an item the board
-#: does not hold as an accepted ticket of another root cause whose URL the ticket names.
-#: And one `board-status` and `copy` share: the item the ticket corresponds to cannot be
-#: established — carriers among which the run owns no one open item, or a copy landing on
-#: another — so nothing is copied. And one of `copy`'s own: the ticket carries a status
-#: `board-status` does not decide from the board, so nothing is copied.
+#: And the statuses of a ticket not to copy or not copied, each named for what refused it: the
+#: board holds its card at a category no ticket carries (`board-status`); the store refused a
+#: withdrawal over a card a person accepted or deferred (`copy`); the store refuses to create
+#: the ticket's issue outside the destination's `creation_owners` (both); a ticket depends on an
+#: item the board does not hold as an accepted ticket of another root cause whose URL it names
+#: (`board-status`); the store refused the card the ticket's record names, or reached another
+#: (`copy`); the ticket carries a status nobody decided for a card it would create (`copy`);
+#: another attempt holds the create of its card (`copy`); and more than one card carries the
+#: key of its create (`copy`).
 SOUND = 0
 UNSOUND = 1
 UNRUNNABLE = 2
@@ -1153,15 +1183,8 @@ OUTSIDE_OWNER = 5
 NOT_ACCEPTED = 6
 MISBOUND = 7
 UNDECIDED = 8
-
-#: The last line of the comment a run leaves on a withdrawn duplicate of its own item, naming
-#: the item the ticket is bound to instead. It is no run's comment under :func:`comment_owner`,
-#: so nothing edits it afterwards; it is read only to leave it once.
-DUPLICATE_MARKER = '<!-- orchestrator:follow-up-duplicate run="{run}" survivor="{survivor}" -->'
-DUPLICATE_OPENING = (
-    "Withdrawn as a duplicate: this ticket's work continues on {survivor}, and follow-up "
-    "run `{run}` copies it there from now on."
-)
+CREATE_IN_PROGRESS = 9
+CREATE_DUPLICATED = 10
 
 #: **The line a gathered feedback file anchors each comment it quotes on.** The grammar is
 #: declared here, beside the markers, because two programs read it: `follow_up_comments`
@@ -1207,9 +1230,15 @@ class Ticket:
     judgment is recorded; and ``priority`` the front matter's :data:`PRIORITY_FIELD`.
     ``origin`` and ``links`` are the store's own :data:`ORIGIN_KEY` and :data:`COPIES_KEY`, as
     read, so a rewrite of the ticket carries them through unchanged; ``links`` is sorted by
-    source, empty until a copy records one. ``changes`` is every repository the ticket's fix
-    changes when its `repositories` lists more than one, in the order listed, and empty for a
-    ticket listing only its ``repository``; :attr:`repositories` is the list either way.
+    source, empty until a copy records one. ``creating`` is the store's :data:`CREATING_KEY` as
+    read, as JSON, which only a create in flight leaves there and a rewrite carries through as
+    it is; it is never part of the ticket's shape. ``reserved`` is every other key of the store's
+    own reserved namespace the item carries — such as where each copy can be opened — each as
+    read, as JSON, carried through a rewrite the same way. ``board_estimate`` is the
+    :data:`BOARD_ESTIMATE_FIELD`, `None` until a copy first writes it. ``changes`` is every
+    repository the ticket's fix changes when its `repositories` lists more than one, in the order
+    listed, and empty for a ticket listing only its ``repository``; :attr:`repositories` is the
+    list either way.
     """
 
     title: str
@@ -1232,6 +1261,9 @@ class Ticket:
     links: tuple[CopyLink, ...] = ()
     budget: OverrunBudget | None = None
     changes: tuple[Origin, ...] = ()
+    board_estimate: Priority | None = None
+    creating: str | None = None
+    reserved: tuple[tuple[str, str], ...] = ()
 
     @property
     def board_item(self) -> BoardItemId | None:
@@ -1330,6 +1362,8 @@ def record(ticket: Ticket) -> dict[str, object]:
         held[FREQUENCY_FIELD] = str(ticket.frequency)
     if ticket.budget is not None:
         held[BUDGET_FIELD] = ticket.budget.record()
+    if ticket.board_estimate is not None:
+        held[BOARD_ESTIMATE_FIELD] = str(ticket.board_estimate)
     return held
 
 
@@ -1360,6 +1394,10 @@ def render(ticket: Ticket) -> str:
         metadata[COPIES_KEY] = dict(ticket.links)
     if ticket.origin is not None:
         metadata[ORIGIN_KEY] = ticket.origin
+    if ticket.creating is not None:
+        metadata[CREATING_KEY] = json.loads(ticket.creating)
+    for key, value in ticket.reserved:
+        metadata[key] = json.loads(value)
     metadata[KEY] = record(ticket)
     fields["metadata"] = metadata
     return frontmatter(fields, ticket.body)
@@ -1577,6 +1615,19 @@ def _record_problems(
         )
     if BUDGET_FIELD in held:
         found.extend(budget_problems(held[BUDGET_FIELD], f"`{BUDGET_FIELD}`"))
+    if BOARD_ESTIMATE_FIELD in held:
+        schema = held.get("schema")
+        if type(schema) is not int or schema < BOARD_ESTIMATE_AT:
+            found.append(
+                f"the record is schema {schema!r} and carries `{BOARD_ESTIMATE_FIELD}`, which only "
+                f"a record from schema {BOARD_ESTIMATE_AT} on carries; leave it to `copy`"
+            )
+        elif held[BOARD_ESTIMATE_FIELD] not in ESTIMATES:
+            found.append(
+                f"`{BOARD_ESTIMATE_FIELD}` {held[BOARD_ESTIMATE_FIELD]!r} is not one of "
+                + ", ".join(f"`{level}`" for level in ESTIMATES)
+                + "; leave it as `copy` wrote it"
+            )
     return found
 
 
@@ -2599,6 +2650,18 @@ def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keywo
             else None
         ),
         changes=tuple(Origin(str(one)) for one in listed) if len(listed) > 1 else (),
+        board_estimate=(
+            Priority(str(held[BOARD_ESTIMATE_FIELD])) if BOARD_ESTIMATE_FIELD in held else None
+        ),
+        creating=(None if CREATING_KEY not in metadata else json.dumps(metadata[CREATING_KEY])),
+        reserved=tuple(
+            sorted(
+                (str(key), json.dumps(value))
+                for key, value in metadata.items()
+                if str(key).startswith(STORE_NAMESPACE)
+                and key not in (ORIGIN_KEY, COPIES_KEY, CREATING_KEY)
+            )
+        ),
     )
 
 
@@ -2766,15 +2829,21 @@ class Unplaced(ValueError):
 
 
 class ProtectedFromWithdrawal(ValueError):
-    """A withdrawal of a ticket a person accepted or deferred, which only a person undoes."""
+    """A withdrawal the store refused because a person accepted or deferred the ticket's card.
 
-    def __init__(self, status: Status) -> None:
+    `copy` sends a withdrawal under the store's status guard — written only while the card is
+    at `Proposal` or already `Cancelled` — so the store decides it on its own read before the
+    write, and its `destination-status` refusal names the status the card holds.
+    """
+
+    def __init__(self, held: str) -> None:
+        shown = f"`{held}` ({Status(held).meaning})" if held in tuple(Status) else f"`{held}`"
         super().__init__(
-            f"the board holds this ticket's item at `{status}` ({status.meaning}), which a "
-            "person accepted or deferred, so this run never withdraws it: copy nothing, leave "
-            "the local ticket as it is, and report that you would have withdrawn it and why"
+            f"the store holds this ticket's card at {shown}, which a person accepted or "
+            "deferred, so this run never withdraws it and the store wrote nothing: leave the "
+            "local ticket as it is, and report that you would have withdrawn it and why"
         )
-        self.status = status
+        self.held = held
 
 
 class Undecided(ValueError):
@@ -2796,22 +2865,173 @@ class Undecided(ValueError):
 
 
 class OutsideOwner(ValueError):
-    """A ticket whose issue the store would create in a repository its board's owner does not own.
+    """A ticket whose issue the store refuses to create outside its destination's owners.
 
-    Where the issue is created is the store's own `task locate` answer, `creates_in`; the
-    destination it places the ticket on configures the owner it may be filed under.
-
-    Filing an issue in a third party's public repository is an outward action nobody asked
-    for, and the store compares no owner for an item with no parent, which a ticket is.
+    The store's own refusal: `onetaskgraph.yaml` declares the `followups` board's
+    `creation_owners`, and a create filing the ticket's issue in a repository of any other owner
+    is refused before anything is written — answered by `task locate` as `creates_in.refused`,
+    which `board-status` reads, and by `task copy` as the failure kind `creation-owner`, which
+    `copy` reports. Filing an issue in a third party's repository is an outward action nobody
+    asked for; a ticket a host route sends elsewhere is held to that destination's own setting.
     """
 
-    def __init__(self, repository: str, owner: str, board: str) -> None:
+    def __init__(self, refusal: str) -> None:
         super().__init__(
-            f"the store would create the ticket's issue in {repository!r}, which is not a "
-            f"repository of the owner {owner!r} ({GITHUB}/{owner}/<name>) that {board!r}, the "
-            "board it places the ticket on, files under, so its issue is filed nowhere: copy "
-            "nothing, never change `repositories` to get it filed, and report it"
+            f"{refusal.rstrip('.')}; so its issue is filed nowhere: copy nothing, never change "
+            "`repositories` to get it filed, and report it"
         )
+
+
+class CreateInProgress(ValueError):
+    """A copy the store refused because another attempt holds the create of the ticket's card.
+
+    The store's `create-in-progress`: it wrote nothing, and its message names the lease's end.
+    """
+
+    def __init__(self, refusal: str) -> None:
+        super().__init__(
+            f"the store refused the copy as `create-in-progress` ({refusal.rstrip('.')}), and "
+            "wrote nothing: run `copy` on this ticket again once the lease it names has ended"
+        )
+
+
+class CreateDuplicated(ValueError):
+    """A copy the store refused because more than one card carries the ticket's create key.
+
+    The store's `create-duplicated`: it recorded no link and left its intent on the ticket, so
+    nothing is filed and a person chooses the card that stays.
+    """
+
+    def __init__(self, refusal: str, key: str | None, cards: Sequence[str]) -> None:
+        named = ", ".join(cards) if cards else "none it named"
+        super().__init__(
+            f"the store refused the copy as `create-duplicated` ({refusal.rstrip('.')}): the "
+            f"ticket is not filed, its record links no card and keeps the store's "
+            f"`{CREATING_KEY}` intent (key {key or 'unread'}), and the cards created are "
+            f"{named}; copy nothing more and report the key and every card for a person to "
+            "resolve"
+        )
+        self.key = key
+        self.cards = tuple(cards)
+
+
+class Location(NamedTuple):
+    """Where the store places one ticket, as its `task locate --no-counterpart` answers it.
+
+    ``destination`` is the source of the root board's family the ticket lands in;
+    ``creates_in`` the repository a create there files the ticket's issue in, `None` where the
+    destination files none in a repository; and ``refused`` the store's refusal of that create
+    under the destination's `creation_owners`, `None` where it would make it.
+    """
+
+    destination: str
+    creates_in: Origin | None
+    refused: str | None
+
+
+def locate(path: Path, board: str) -> Location:
+    """Where `copy` would put the ticket at ``path`` through ``board``: one `task locate`.
+
+    The store reads the ticket, classifies it as a write does and places it through its copy's
+    own placement path, so the answer is the store's and cannot disagree with the write. It is
+    asked with `--no-counterpart`, which reads nothing at the destination: which card is the
+    ticket's is the one its record names (:func:`named_card`), never a lookup.
+    """
+    identifier = qualified_id(*located_path(path.absolute()))
+    answer = plan_store.task_locate(identifier, board)
+    creates = answer.creates_in
+    return Location(
+        destination=answer.destination.root,
+        creates_in=None if creates is None else Origin(creates.repository.root),
+        refused=None if creates is None else creates.refused,
+    )
+
+
+def named_card(
+    ticket: Ticket, destination: str, board: str | None = None
+) -> QualifiedTaskId | None:
+    """The card ``ticket``'s record names where the store places it, or `None` for none.
+
+    The store's :data:`COPIES_KEY` link for ``destination``, which its copy records; on a record
+    from before :data:`BINDING_RETIRED_AT`, its :data:`BINDING_FIELD` there, ahead of any link,
+    since its copy names that card. With ``board``, a link to another source of that board's
+    family stands where ``destination`` has none — a card filed before a route sent the ticket
+    elsewhere is still the card the record names. A ticket whose record names no card has none
+    this module reads, whatever the board holds.
+    """
+    if ticket.board_item is not None:
+        return QualifiedTaskId(f"{destination}:{ticket.board_item}")
+    linked = ticket.link(destination)
+    if linked is not None:
+        return QualifiedTaskId(f"{destination}:{linked}")
+    if board is None or not ticket.links:
+        return None
+    family = plan_store.reachable(board)
+    for link in ticket.links:
+        if link.source in family:
+            return QualifiedTaskId(str(link.item))
+    return None
+
+
+def record_card(
+    item: Mapping[str, object], destination: str, board: str | None = None
+) -> QualifiedTaskId | None:
+    """The card a ticket's stored item names, as :func:`named_card` reads a :class:`Ticket`.
+
+    For an item the store listed rather than a :class:`Ticket`: a record from before
+    :data:`BINDING_RETIRED_AT`'s binding on ``destination``, else its :data:`COPIES_KEY` link
+    there, else, with ``board``, its link to another source of that board's family.
+    """
+    bound = legacy_binding(_held_record(item))
+    if is_item_id(bound):
+        return QualifiedTaskId(f"{destination}:{bound}")
+    metadata = item.get("metadata")
+    links = metadata.get(COPIES_KEY) if isinstance(metadata, Mapping) else None
+    links = links if isinstance(links, Mapping) else {}
+    family = (
+        (destination,) if board is None or destination in links else plan_store.reachable(board)
+    )
+    for source in (destination, *family):
+        linked = links.get(source)
+        if isinstance(linked, str) and QUALIFIED_ID.fullmatch(linked):
+            return QualifiedTaskId(linked)
+    return None
+
+
+def receipt_card(root: Path, run: str, ticket: str) -> QualifiedTaskId | None:
+    """The card ``run``'s own last copy of ``ticket`` reached, by its receipts; `None` for none.
+
+    The fallback for a ticket whose record names no card because the store records no link from
+    a public ticket to a card on a destination declared private: the store's own answer to that
+    copy names the card. A caller reading the card treats it as the ticket's only while it
+    carries the ticket's own origin (:func:`carries_origin`), so a stale or foreign receipt never
+    binds a ticket to another card.
+    """
+    receipts, _malformed = read_receipts(root, run)
+    reached = [
+        one.card
+        for one in receipts
+        if one.command is ReceiptCommand.COPY
+        and one.ticket == ticket
+        and one.card is not None
+        and isinstance(one.outcome, CopyOutcomeReceipt)
+        and one.outcome.error is None
+    ]
+    return QualifiedTaskId(reached[-1]) if reached else None
+
+
+def carries_origin(card: Mapping[str, object], ticket: str) -> bool:
+    """Whether a card read back carries ``ticket`` as the store's own origin."""
+    metadata = card.get("metadata")
+    return isinstance(metadata, Mapping) and metadata.get(ORIGIN_KEY) == ticket
+
+
+def card_status(card: Mapping[str, object]) -> Status:
+    """The status a ticket carries for the category its card is at; :class:`Unplaced` else."""
+    held = str(_category(card.get("status")))
+    if held not in tuple(Status):
+        raise Unplaced(held)
+    return Status(held)
 
 
 class NotAccepted(ValueError):
@@ -2830,84 +3050,6 @@ class NotAccepted(ValueError):
             "accepted — and report what was printed"
         )
         self.problems = tuple(problems)
-
-
-def board_owner(board: str) -> str | None:
-    """The owner ``board`` is configured with, or `None` for a source that configures none.
-
-    Read through the store's own configuration, the way a source's root is. A source with no
-    owner — a `local-md` store — files no issue in any repository, so it bounds nothing.
-    """
-    owner = plan_store.configured_settings().get(f"sources.{board}.config.owner")
-    if owner is not None and (not isinstance(owner, str) or not owner):
-        raise OSError(f"source {board!r} configures an owner {owner!r} that names no account")
-    return owner
-
-
-class Location(NamedTuple):
-    """Where the store places one ticket, as its `task locate` answers it.
-
-    ``destination`` is the source of the root board's family the ticket lands in;
-    ``counterpart`` the item there a copy would update, qualified, and ``via`` the rule the
-    store found it by, both `None` where a copy would create one or no lookup was asked for;
-    ``carriers`` every item of the destination carrying the ticket's origin, empty where the
-    store's origin query did not run; and ``creates_in`` the repository a create there files
-    the ticket's issue in, `None` where the destination files none in a repository.
-    """
-
-    destination: str
-    counterpart: QualifiedTaskId | None
-    via: str | None
-    carriers: tuple[QualifiedTaskId, ...]
-    creates_in: Origin | None
-
-
-def locate(
-    path: Path,
-    board: str,
-    *,
-    bound: object = None,
-    counterpart: bool = True,
-    established: bool = True,
-) -> Location:
-    """Where `copy` would put the ticket at ``path`` through ``board``: one store `task locate`.
-
-    The store reads the ticket, classifies it as a write does and places it through its copy's
-    own placement path, so the answer is the store's and cannot disagree with the write. With
-    ``counterpart`` it looks the ticket's item up as the copy would — its link, its own origin,
-    then the destination's origin query — and without it makes no lookup at the destination.
-
-    ``bound`` is a record's :data:`BINDING_FIELD`, which only a record from before
-    :data:`BINDING_RETIRED_AT` carries: the item that ticket was established on is handed to the
-    store as `--target-native`, which reads it by id and verifies it by its origin naming the
-    ticket back, following neither the ticket's link nor the origin query, so a link naming a
-    withdrawn duplicate or an item gone never redirects the read. Where the store refuses that
-    item as gone or no longer carrying the ticket's origin, the plain lookup recovers it by
-    origin instead; where that finds no item either, the store's refusal stands, because a
-    ticket once established on an item is never given a second one in its place — unless
-    ``established`` is false, for a check that only reads where the ticket's item is, which then
-    reads that it has none.
-    """
-    identifier = qualified_id(*located_path(path.absolute()))
-    answer = None
-    refused: plan_store.TargetRefused | None = None
-    if counterpart and is_item_id(bound):
-        try:
-            answer = plan_store.task_locate(identifier, board, target_native=str(bound))
-        except plan_store.TargetRefused as exc:
-            refused = exc
-    if answer is None:
-        answer = plan_store.task_locate(identifier, board, counterpart=counterpart)
-        if refused is not None and answer.counterpart is None and established:
-            raise refused
-    found = answer.counterpart
-    return Location(
-        destination=answer.destination.root,
-        counterpart=None if found is None else QualifiedTaskId(found.id.root),
-        via=None if found is None else str(found.via),
-        carriers=tuple(QualifiedTaskId(one.root) for one in answer.carriers or ()),
-        creates_in=None if answer.creates_in is None else Origin(answer.creates_in.repository.root),
-    )
 
 
 def filing_problems(ticket: Ticket, location: Location) -> list[str]:
@@ -2936,20 +3078,6 @@ def filing_problems(ticket: Ticket, location: Location) -> list[str]:
         f"`task locate` answers for a ticket listing {listed}; its record's `repository` names "
         f"{filed!r}, not {ticket.repository!r}, and its title opens `{repository_name(filed)}: `"
     ]
-
-
-def owner_refusal(location: Location, owner: str | None) -> OutsideOwner | None:
-    """The refusal for a ticket whose issue would be created outside its board's owner, or `None`.
-
-    ``owner`` is :func:`board_owner`'s answer for ``location``'s destination. The issue is
-    created in ``location``'s `creates_in`, which must be a repository of that owner: filing
-    an issue in a third party's repository is an outward action nobody asked for. A destination
-    filing no issue in a repository, or configuring no owner, refuses nothing.
-    """
-    filed = location.creates_in
-    if filed is None or owner is None or under_owner(filed, owner):
-        return None
-    return OutsideOwner(filed, owner, location.destination)
 
 
 def _held_record(item: Mapping[str, object]) -> Mapping[str, object]:
@@ -3124,7 +3252,7 @@ def board_items(  # noqa: PLR0913 - each narrowing is its own keyword
                     "ask; write the ticket's record before searching for its duplicate"
                 ]
             )
-        board = locate(ticket, board, counterpart=False).destination
+        board = locate(ticket, board).destination
     query: dict[str, object] = {"source": [board]}
     if search is not None:
         query["search"] = search
@@ -3143,31 +3271,12 @@ def root_cause_query(root_cause: str) -> str:
     return f"{KEY}/root_cause={root_cause}"
 
 
-def under_owner(repository: str, owner: str) -> bool:
-    """Whether a normalized origin is `github.com/<owner>/<name>`."""
-    host, named_owner, _name = repository.split("/")
-    return host == GITHUB and named_owner == owner
-
-
 def _native(qualified: str, board: str) -> BoardItemId:
     """The native id of a board item the store names qualified to ``board``."""
     matched = QUALIFIED_ID.fullmatch(qualified)
     if matched is None or matched["source"] != board:
         raise OSError(f"the store named {qualified!r}, which is not an item of {board!r}")
     return BoardItemId(matched["native"])
-
-
-class Placement(NamedTuple):
-    """The board item a ticket's copy reaches, the category the board holds it at, and the item.
-
-    All `None` for a ticket the board holds no item for, which a copy would create.
-    ``record`` is the item as the store shows it by id — its priority, record and content —
-    read in the same step, so the priority decision reads the item the status was read off.
-    """
-
-    item: BoardItemId | None
-    category: str | None
-    record: Mapping[str, object] | None = None
 
 
 #: What one ticket's copy did to its item: the store's copy actions but `orphaned`, which a
@@ -3183,149 +3292,395 @@ class Copied(NamedTuple):
     board: str
 
 
-def _survivor(
-    ticket: Ticket, carriers: Mapping[QualifiedTaskId, Mapping[str, object]], board: str
-) -> QualifiedTaskId:
-    """The one open item of the run's own among ``carriers``, or :class:`Misbound`.
+#: **The receipts a follow-up run's board writes leave.** Every board write the follow-up
+#: commands make for a run's tickets — `copy` (a withdrawal included), `comment` and
+#: `re-estimate` — appends one JSON line to `<drafts root>/receipts/<run>.jsonl` after it
+#: writes, built from the store's own answer to that write, so the closeout's checks hold the
+#: account to what each write returned instead of reading the board back. The file is the
+#: run's, written by those commands alone: the task tells the agent never to write or edit it.
+RECEIPTS_DIRECTORY = "receipts"
+RECEIPT_SCHEMA = 1
+RECEIPT_KEYS = ("schema", "run", "command", "ticket", "card", "outcome")
+RECEIPT_SUFFIX = ".jsonl"
 
-    ``carriers`` is every item of ``board`` the store's `task locate` found carrying the
-    ticket's origin, each to its record. Choosing among them rests on who owns a board item,
-    which is this repository's to say rather than the store's: every other carrier must
-    already be withdrawn, since one a person closed as completed, or any second open one, is a
-    decision this run does not make for them.
+
+class ReceiptCommand(StrEnum):
+    """The command a receipt is the store's answer to."""
+
+    COPY = "copy"
+    COMMENT = "comment"
+    RE_ESTIMATE = "re-estimate"
+
+
+def receipts_path(root: Path, run: str) -> Path:
+    """Where ``run``'s receipts are appended under a `drafts` root."""
+    return root / RECEIPTS_DIRECTORY / f"{run}{RECEIPT_SUFFIX}"
+
+
+class ReceiptStatus(BaseModel):
+    """The status a write left an item at, as `task show` spells it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    category: str
+    name: str
+
+
+class ReceiptResult(BaseModel):
+    """What a store write answered its item holds once written: version, status, priority."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    version: str | None = None
+    status: ReceiptStatus | None = None
+    priority: Priority | None = None
+
+
+class ReceiptCondition(BaseModel):
+    """What a copy's status or priority condition found its counterpart at, and whether met."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    held: str | None = None
+    met: bool
+
+
+class ReceiptError(BaseModel):
+    """The kind and message of a store refusal."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: str
+    message: str
+
+
+class CopyOutcomeReceipt(BaseModel):
+    """A copy's receipt `outcome`: the store's own answer for the item copied.
+
+    Its action, `result`, `status_condition` and `priority_condition`, and for a refusal its
+    error and the `held` the store's read found.
     """
-    closed = (Status.FINISHED.value, Status.WITHDRAWN.value)
-    named = ", ".join(carriers)
 
-    def metadata(held: Mapping[str, object]) -> Mapping[str, object]:
-        found = held.get("metadata")
-        return found if isinstance(found, Mapping) else {}
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    action: Literal["created", "updated", "unchanged", "failed", "skipped", "orphaned"]
+    result: ReceiptResult | None = None
+    status_condition: ReceiptCondition | None = None
+    priority_condition: ReceiptCondition | None = None
+    error: ReceiptError | None = None
+    held: ReceiptResult | None = None
 
-    open_own = [
-        one
-        for one, held in carriers.items()
-        if str(_category(held.get("status"))) not in closed
-        and metadata_owner(metadata(held)) == ticket.created_by_run
-    ]
-    if len(open_own) != 1:
-        raise Misbound(
-            f"{len(carriers)} items of {board!r} carry this ticket's origin ({named}), and "
-            f"{len(open_own)} of them is an open item of run {ticket.created_by_run!r}, where "
-            "exactly one must be: copy nothing and report it"
+    @model_validator(mode="after")
+    def _answered(self) -> CopyOutcomeReceipt:
+        """A refusal carries its error and nothing it wrote; a write carries what it left."""
+        if (self.action == "failed") != (self.error is not None):
+            raise ValueError("an outcome carries an error exactly when its action is `failed`")
+        if self.action in COPIED_ACTIONS and self.result is None:
+            raise ValueError(f"a copy answered `{self.action}` carries the `result` it left")
+        return self
+
+
+class CommentOutcomeReceipt(BaseModel):
+    """A comment's receipt `outcome`: the comment the store answered it posted, the item it
+    named, and the root cause the body's own marker names."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: str
+    url: str | None = None
+    item: str | None = None
+    root_cause: str | None = None
+
+
+class ReEstimateWrite(BaseModel):
+    """One write a re-estimate made, and what the store answered it left."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    write: Literal["priority", "content", "metadata"]
+    result: ReceiptResult | None = None
+
+
+class ReEstimateOutcomeReceipt(BaseModel):
+    """A re-estimate's receipt `outcome`: what it computed, from what, and each write's answer."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    priority_estimate: Priority
+    occurrences: StrictInt = Field(ge=1)
+    severity_with_workaround: Severity
+    frequency: Frequency | None = None
+    estimate_line: str
+    priority: Priority
+    root_cause: str | None = None
+    writes: tuple[ReEstimateWrite, ...] = ()
+
+    @model_validator(mode="after")
+    def _an_estimate(self) -> ReEstimateOutcomeReceipt:
+        """An estimate is one of the four levels; `none` is only what a card holds."""
+        if self.priority_estimate not in ESTIMATES:
+            raise ValueError(f"`{ESTIMATE_FIELD}` is one of {', '.join(ESTIMATES)}")
+        return self
+
+
+#: The copy actions that wrote the ticket onto its card.
+COPIED_ACTIONS = ("created", "updated", "unchanged")
+#: A receipt's `outcome`, as the command it is the answer to shapes it.
+type ReceiptOutcome = CopyOutcomeReceipt | CommentOutcomeReceipt | ReEstimateOutcomeReceipt
+#: The outcome model of each command's receipt, by command.
+OUTCOME_MODELS: dict[ReceiptCommand, type[BaseModel]] = {
+    ReceiptCommand.COPY: CopyOutcomeReceipt,
+    ReceiptCommand.COMMENT: CommentOutcomeReceipt,
+    ReceiptCommand.RE_ESTIMATE: ReEstimateOutcomeReceipt,
+}
+
+
+def append_receipt(  # noqa: PLR0913 - each is one key of the receipt line
+    root: Path,
+    run: str,
+    command: ReceiptCommand,
+    ticket: str | None,
+    card: str | None,
+    outcome: ReceiptOutcome,
+) -> None:
+    """Append one receipt line to ``run``'s receipts, creating the file and its directory."""
+    path = receipts_path(root, run)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = {
+        "schema": RECEIPT_SCHEMA,
+        "run": run,
+        "command": command.value,
+        "ticket": ticket,
+        "card": card,
+        "outcome": outcome.model_dump(mode="json"),
+    }
+    with path.open("a", encoding="utf-8") as receipts:
+        receipts.write(json.dumps(line, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def drafts_root() -> Path:
+    """The `drafts` root the store is configured with: where a run's receipts are kept."""
+    return plan_store.source_root(SOURCE)
+
+
+def _result(result: BaseModel | None) -> ReceiptResult | None:
+    """A store write's `result` as a receipt holds it: its version, status and priority."""
+    if result is None:
+        return None
+    dumped = result.model_dump(mode="json")
+    return ReceiptResult.model_validate(
+        {key: dumped.get(key) for key in ("version", "status", "priority")}
+    )
+
+
+def _condition(condition: BaseModel | None) -> ReceiptCondition | None:
+    """A copy's status or priority condition as a receipt holds it: what it held, if met."""
+    if condition is None:
+        return None
+    dumped = condition.model_dump(mode="json")
+    return ReceiptCondition.model_validate({"held": dumped.get("held"), "met": dumped.get("met")})
+
+
+def copy_receipt(outcome: object) -> CopyOutcomeReceipt:
+    """A copy outcome of the store's as its receipt's `outcome`; :class:`OSError` for an answer
+    no receipt can hold — a refusal without its error, or a write without what it left."""
+    error = getattr(outcome, "error", None)
+    try:
+        return CopyOutcomeReceipt.model_validate(
+            {
+                "action": str(getattr(outcome, "action", "")),
+                "result": _result(getattr(outcome, "result", None)),
+                "status_condition": _condition(getattr(outcome, "status_condition", None)),
+                "priority_condition": _condition(getattr(outcome, "priority_condition", None)),
+                "error": (
+                    None
+                    if error is None
+                    else ReceiptError(kind=str(error.kind), message=str(error.message))
+                ),
+                "held": None if error is None else _result(getattr(outcome, "held", None)),
+            }
         )
-    (survivor,) = open_own
-    for one, held in carriers.items():
-        if one != survivor and str(_category(held.get("status"))) != Status.WITHDRAWN.value:
-            raise Misbound(
-                f"{len(carriers)} items of {board!r} carry this ticket's origin ({named}), and "
-                f"{one} is not withdrawn beside the open {survivor}: copy nothing and report it"
+    except ValidationError as exc:
+        raise OSError(f"the store answered the copy outside its own contract: {exc}") from exc
+
+
+#: The failure kinds of a copy's own target that no rule here re-finds a card for: its named
+#: card gone, no longer carrying the ticket's origin, a link the store cannot verify, or a card
+#: on a board the ticket's repositories no longer route it to, which only a person moves.
+TARGET_REFUSALS = frozenset(
+    {"target-task-missing", "target-task-origin", "stale-link", "misrouted"}
+)
+#: The categories a withdrawal is written over: a card nobody accepted, or one already withdrawn.
+WITHDRAWABLE = (Status.PROPOSED, Status.WITHDRAWN)
+
+
+def _creating_key(path: Path, destination: str) -> str | None:
+    """The key of the store's intent to create the ticket's card at ``destination``, if held."""
+    try:
+        held = read_ticket(path).creating
+    except (OSError, Refused):
+        return None
+    intents = json.loads(held) if held is not None else None
+    intent = intents.get(destination) if isinstance(intents, Mapping) else None
+    key = intent.get("key") if isinstance(intent, Mapping) else None
+    return key if isinstance(key, str) else None
+
+
+def _refusal(kind: str, message: str, outcome: object, path: Path, destination: str) -> Exception:
+    """The exception a copy refused as ``kind`` is reported as, naming the store's refusal."""
+    match kind:
+        case "destination-status":
+            held = getattr(getattr(getattr(outcome, "held", None), "status", None), "category", "")
+            return ProtectedFromWithdrawal(str(held))
+        case "creation-owner":
+            return OutsideOwner(message)
+        case "create-in-progress":
+            return CreateInProgress(message)
+        case "create-duplicated":
+            cards = list(
+                dict.fromkeys(
+                    found.rstrip(".,;)")
+                    for found in re.findall(rf"{re.escape(destination)}:[^\s,;]+", message)
+                )
             )
-    return survivor
-
-
-def _note_duplicate(duplicate: str, survivor: str, url: object, run: str) -> None:
-    """Leave the withdrawn ``duplicate`` the comment naming ``survivor``, at ``url``, once.
-
-    The store offers no edit of an item's origin — `metadata set` refuses the reserved
-    `onetaskgraph` namespace — so a withdrawn duplicate keeps the origin it carries. What
-    stops it corresponding is the copy steered to the survivor with `--target-task`, which
-    records the store's link to it and every later lookup follows; this comment says so on the
-    closed issue, for the person who finds it.
-    """
-    named = url if isinstance(url, str) and url else survivor
-    marker = DUPLICATE_MARKER.format(run=run, survivor=survivor)
-    listed = plan_store.sdk(plan_store.client().task_comment_list(duplicate)).comments
-    if any(comment.body.strip().endswith(marker) for comment in listed):
-        return
-    body = f"{DUPLICATE_OPENING.format(survivor=named, run=run)}\n\n{marker}\n"
-    plan_store.sdk(plan_store.client().task_comment_add(duplicate, body=body))
-
-
-def counterpart(
-    ticket: Ticket, location: Location, reads: BoardReads, *, note: bool = True
-) -> QualifiedTaskId | None:
-    """The item the ticket corresponds to where ``location`` places it, or `None` for none.
-
-    The store's own counterpart — its copy's lookup — unless its origin query found two
-    carriers or more: then the run's own open one beside withdrawn duplicates
-    (:func:`_survivor`), each duplicate read once through ``reads`` and, with ``note``, left
-    its comment once (:func:`_note_duplicate`); a copy is then steered to that survivor.
-    """
-    if len(location.carriers) < 2:  # noqa: PLR2004 - a duplicate takes a second carrier
-        return location.counterpart
-    held = {one: reads.item(one) for one in location.carriers}
-    survivor = _survivor(ticket, held, location.destination)
-    if note:
-        for one in location.carriers:
-            if one != survivor:
-                _note_duplicate(one, survivor, held[survivor].get("url"), ticket.created_by_run)
-    return survivor
-
-
-def place(ticket: Ticket, location: Location, reads: BoardReads, *, note: bool = True) -> Placement:
-    """The item ``location`` names for ``ticket``, the category the board holds it at, its record.
-
-    :func:`counterpart`'s item, read once by id through ``reads`` for its status, priority,
-    record and comments; :class:`Placement` of `None` for a ticket the store would create.
-    """
-    item = counterpart(ticket, location, reads, note=note)
-    if item is None:
-        return Placement(None, None)
-    held = reads.item(item)
-    return Placement(_native(item, location.destination), str(_category(held.get("status"))), held)
+            return CreateDuplicated(message, _creating_key(path, destination), cards)
+        case _ if kind in TARGET_REFUSALS:
+            return Misbound(
+                f"the store refused the card this ticket's record names as `{kind}` "
+                f"({message.rstrip('.')}), and wrote nothing: no other card is found or created "
+                "in its place, so copy nothing more for this ticket and report it"
+            )
+        case _:
+            return OSError(f"the store refused the copy as `{kind}`: {message}")
 
 
 def copy_ticket(path: Path, board: str) -> Copied:
-    """Copy the ticket at ``path`` onto the item the store places it on through ``board``.
+    """Copy the ticket at ``path`` with one store `task copy`, and receipt the store's answer.
 
-    One `task locate` (:func:`locate`) answers where the ticket lands and its item there, so
-    the copy names that destination and steers to that item with the store's `--target-task`,
-    which reads it by id and verifies it by origin and so looks nothing up a second time; a
-    ticket that locate found no item and no carrier for is created with `--create`, that
-    lookup being the store's own. Every copy but a withdrawal is made under the store's
-    `preserve-destination` status policy (:func:`status_policy`), so an item the board holds
-    keeps the status a person or a run gave it and a new one takes the ticket's proposal.
-    Refused before anything is written: a record carrying a :data:`BINDING_FIELD` it may not
-    (:func:`read_ticket`), a record whose `repository` is not where the store creates the issue
-    (:func:`filing_problems`), an issue outside its board's owner (:class:`OutsideOwner`),
-    carriers among which the run owns no one open item (:class:`Misbound`), and a status the
-    copy may not write (:func:`decided_before_copy`). A copy landing anywhere but that item or a
-    new one is :class:`Misbound` (:func:`copied_to`).
+    Its destination is the placement-only `task locate`'s (:func:`locate`), which reads nothing
+    at the board, and no read precedes the copy. The card the record names (:func:`named_card`)
+    — its store link, or the :data:`BINDING_FIELD` a record from before
+    :data:`BINDING_RETIRED_AT` still carries — is named as `--target-task`, which the store reads
+    by id and verifies by origin, refusing a card that does not verify; for a record naming none,
+    the store's own intent and origin rules decide the card. Every copy but a
+    withdrawal is made under the `preserve-destination` status policy, so a card keeps the status
+    a person or a run gave it; a withdrawal writes its closure under the store's status guard,
+    only over a card at `Proposal` or `Cancelled`, and is otherwise refused as
+    `destination-status` (:class:`ProtectedFromWithdrawal`). Every copy names the record's
+    :data:`BOARD_ESTIMATE_FIELD` — `none` where it holds none — as its priority guard, so a card
+    takes the ticket's estimate only while it holds the one it last received, and a priority a
+    person set stands.
 
-    A record from before :data:`BINDING_RETIRED_AT`, carrying its :data:`BINDING_FIELD`, is
-    brought forward here: its own locate hands the store that item under `--target-native`, the
-    copy steers to the item the store verified, and once it lands the record is rewritten at
-    :data:`SCHEMA` without the key or the origin it pointed at that item, so later commands
-    find the item by the store's link or origin query alone.
+    The estimate this copy writes is the one the card receives, so a record of the current
+    schema names it as :data:`BOARD_ESTIMATE_FIELD` as it is written, and a copy that lands
+    nothing puts the old value back. Refused before anything is written: a record whose
+    `repository` is not where the store creates the issue (:func:`filing_problems`), and a
+    ticket naming no card whose status is neither a proposal nor a withdrawal
+    (:class:`Undecided`). A card the store reached other than the one the record names is
+    :class:`Misbound`. Every answer of the store is appended to the run's receipts
+    (:func:`append_receipt`) before it is reported.
+
+    A record from before :data:`BINDING_RETIRED_AT` is brought forward once its copy lands: it is
+    rewritten at :data:`SCHEMA` without the key or the origin it pointed at that card, the
+    store's own link to that card recorded by the copy in its place. A record of
+    :data:`PRIOR_SCHEMA`, whose body is already the current schema's, is rewritten at
+    :data:`SCHEMA` once its copy lands too, every key the store holds on it carried through.
+    Either way the rewrite names the estimate the copy wrote as :data:`BOARD_ESTIMATE_FIELD`, so
+    the next copy's priority guard names it. Refused, a record is left as it was, byte for byte.
     """
-    ticket = read_ticket(path, for_copy=True)
-    location = locate(path, board, bound=ticket.board_item)
+    stored = stored_ticket(path)
+    ticket = ticket_from(path, stored, for_copy=True)
+    location = locate(path, board)
     if misfiled := filing_problems(ticket, location):
         raise Refused(misfiled)
-    if refusal := owner_refusal(location, board_owner(location.destination)):
-        raise refusal
-    item = counterpart(ticket, location, BoardReads())
-    decided_before_copy(ticket, item)
+    destination = location.destination
+    card = named_card(ticket, destination, board)
+    if card is not None:
+        # The copy goes where the card the record names is, which the store verifies by origin.
+        destination = card.partition(":")[0]
+    withdrawing = ticket.status is Status.WITHDRAWN
     run, root_cause = located_path(path.absolute())
-    report = plan_store.sdk(
-        plan_store.client().task_copy(
-            [qualified_id(run, root_cause)],
-            to=location.destination,
-            target_task=item,
-            create=True if item is None and not location.carriers else None,
-            status_policy=status_policy(ticket),
+    identifier = qualified_id(run, root_cause)
+    # A card this run's own copy already reached — on a private destination, which keeps no link
+    # — is one `board-status` read the status off, so the ticket creates nothing there.
+    reached = card or receipt_card(path.absolute().parents[3], run, identifier)
+    if reached is None and ticket.status not in WITHDRAWABLE:
+        raise Undecided(ticket.status)
+    guard = Priority.NONE if ticket.board_estimate is None else ticket.board_estimate
+    receiving = ticket.priority_estimate
+    # Staged only on a record of the current schema: rendering rewrites the record at it, which
+    # an older record's body is not written to, and only a current record carries the key.
+    written_at = _held_record(stored.item).get("schema")
+    current = written_at == SCHEMA
+    staged = current and receiving is not None and receiving != ticket.board_estimate
+    if staged:
+        path.write_text(render(dataclasses.replace(ticket, board_estimate=receiving)), "utf-8")
+
+    def unstage() -> None:
+        if staged:
+            now = read_ticket(path)
+            path.write_text(
+                render(dataclasses.replace(now, board_estimate=ticket.board_estimate)), "utf-8"
+            )
+
+    try:
+        report = plan_store.sdk(
+            plan_store.client().task_copy(
+                [identifier],
+                to=destination,
+                target_task=card,
+                status_policy=status_policy(ticket),
+                when_destination_status=(
+                    [Status.PROPOSED.value, Status.WITHDRAWN.value] if withdrawing else None
+                ),
+                otherwise="refuse" if withdrawing else None,
+                when_destination_priority=[guard.value],
+            )
         )
+    except OSError as exc:
+        unstage()
+        failure = getattr(exc.__cause__, "failure", None)
+        if failure is None:
+            raise
+        # The store refused the whole copy, as it refuses a card the record names that does not
+        # verify: its failure document is the answer, so it is the receipt too.
+        kind, message = str(failure.kind), str(failure.message)
+        refused = CopyOutcomeReceipt(
+            action="failed", error=ReceiptError(kind=kind, message=message)
+        )
+        append_receipt(
+            path.absolute().parents[3], run, ReceiptCommand.COPY, identifier, card, refused
+        )
+        raise _refusal(kind, message, None, path, destination) from exc
+    entries = report.items
+    outcome = entries[0].root if len(entries) == 1 else None
+    if outcome is None:
+        unstage()
+        raise OSError(f"the copy onto {destination} answered {entries!r}, naming no item")
+    reached = getattr(outcome, "destination", None)
+    reached_id = None if reached is None else str(reached.root)
+    root = path.absolute().parents[3]
+    append_receipt(
+        root, run, ReceiptCommand.COPY, identifier, reached_id or card, copy_receipt(outcome)
     )
-    copied = copied_to(report, location.destination, item)
-    if ticket.board_item is not None:
+    action = str(outcome.action)
+    error = getattr(outcome, "error", None)
+    if error is not None:
+        unstage()
+        raise _refusal(str(error.kind), str(error.message), outcome, path, destination)
+    if action not in ("created", "updated", "unchanged") or reached_id is None:
+        unstage()
+        raise OSError(f"the copy onto {destination} answered {action!r} for this ticket")
+    if card is not None and reached_id != card:
+        raise Misbound(
+            f"the store copied this ticket onto {reached_id}, where its record names {card}: "
+            "report it"
+        )
+    # A record carrying the retired binding, or one of the schema just before whose body is
+    # already the current one's, is rewritten at the current schema naming the estimate this
+    # copy wrote, re-read so the link and every other key the store wrote on it is carried.
+    if ticket.board_item is not None or written_at == PRIOR_SCHEMA:
         copied_from = read_ticket(path, for_copy=True)
         migrated = dataclasses.replace(
             copied_from,
             retired=(),
             origin=None if _points_at_item(copied_from.origin) else copied_from.origin,
+            board_estimate=receiving,
         )
         path.write_text(render(migrated), encoding="utf-8")
-    return copied
+    return Copied(cast(CopyAction, action), _native(reached_id, destination), destination)
 
 
 def status_policy(ticket: Ticket) -> Literal["source", "preserve-destination"]:
@@ -3334,7 +3689,8 @@ def status_policy(ticket: Ticket) -> Literal["source", "preserve-destination"]:
     `preserve-destination` for every copy but a withdrawal: the board's status belongs to the
     people and runs that moved it, and the store keeps it on an update while a create takes
     the ticket's own. A withdrawal writes its closure, so it carries the ticket's status, which
-    :func:`decided_before_copy` allows only onto an item nobody accepted or deferred.
+    the store's status guard writes only over a card nobody accepted or deferred
+    (:func:`copy_ticket`).
     """
     return "source" if ticket.status is Status.WITHDRAWN else "preserve-destination"
 
@@ -3347,62 +3703,6 @@ def _points_at_item(origin: str | None) -> bool:
     """
     matched = None if origin is None else QUALIFIED_ID.fullmatch(origin)
     return matched is not None and matched["source"] != SOURCE
-
-
-def decided_before_copy(ticket: Ticket, item: QualifiedTaskId | None) -> None:
-    """Refuse a copy writing a status nobody decided for the board, before it writes.
-
-    ``item`` is the item the copy reaches, as :func:`locate` placed it, and `None` for one it
-    creates. A withdrawal writes its closure, so the item it reaches is read once by id, its
-    comments left unread, and must be one nobody accepted or deferred; a create withdraws
-    nothing anybody holds. Any other copy keeps the status an existing item holds
-    (:func:`status_policy`), so only a create writes the ticket's status, which must be a
-    proposal. :class:`Unplaced`, :class:`ProtectedFromWithdrawal` or :class:`Undecided`
-    otherwise.
-    """
-    if ticket.status is Status.WITHDRAWN:
-        if item is not None:
-            status = plan_store.task_record(item, no_comments=True)["status"]
-            assert isinstance(status, Mapping)  # noqa: S101 - a task record's status is a record
-            status_before_copy(str(status["category"]), withdraw=True)
-        return
-    if item is None and ticket.status is not Status.PROPOSED:
-        raise Undecided(ticket.status)
-
-
-def copied_to(report: CopyReport, board: str, expected: QualifiedTaskId | None) -> Copied:
-    """The action one ticket's copy report names and the item of ``board`` it reached.
-
-    Held to ``expected``, the item :func:`locate` placed the ticket on: the copy must reach
-    exactly that item, or create one where ``expected`` is `None`. Any other item, or an
-    update where a create was expected, is :class:`Misbound` naming both, so a store answering
-    otherwise is refused by name rather than taken as the ticket's item.
-    """
-    entries = report.items
-    outcome = entries[0].root if len(entries) == 1 else None
-    # A `failed` outcome carries its error and no destination, so it is refused here too.
-    destination = getattr(outcome, "destination", None)
-    if outcome is None or destination is None:
-        raise OSError(f"the copy onto {board} answered {entries!r}, naming no item")
-    match str(outcome.action):
-        case "created" | "updated" | "unchanged" as action:
-            copied = Copied(action, _native(destination.root, board), board)
-        case action:
-            raise OSError(
-                f"the copy onto {board} answered {action!r} for this ticket, which is no copy of it"
-            )
-    reached = f"{board}:{copied.item}"
-    if expected is None and copied.action != "created":
-        raise Misbound(
-            f"the store {copied.action} {reached} for this ticket, where its `task locate` found "
-            "no item for it and the copy was to create one: report it"
-        )
-    if expected is not None and reached != expected:
-        raise Misbound(
-            f"the store copied this ticket onto {reached}, where its `task locate` placed it on "
-            f"{expected}: report it"
-        )
-    return copied
 
 
 def stored_estimate(item: Mapping[str, object]) -> Priority | None:
@@ -3448,59 +3748,44 @@ def held_priority(item: Mapping[str, object]) -> Priority:
     return Priority(str(priority))
 
 
-def _record_frequency(held: Mapping[str, object], issue: str) -> Frequency | None:
-    """The frequency judgment ``issue``'s record carries, `None` when it carries none.
+def _record_frequency(held: Mapping[str, object]) -> Frequency | None:
+    """The frequency judgment a record carries, `None` when it carries none.
 
-    :class:`Refused` for a value that is no judgment, which is never read as its absence: a
-    record anybody with the board's credential can edit would otherwise lose its raise.
+    Read only after :func:`_record_problems` held the record, which refuses a value that is no
+    judgment rather than reading it as its absence.
     """
-    if FREQUENCY_FIELD not in held:
-        return None
-    frequency = held[FREQUENCY_FIELD]
-    if frequency not in tuple(Frequency):
-        raise Refused(
-            [
-                f"{issue}'s `{KEY}` record carries the `{FREQUENCY_FIELD}` {frequency!r}, which is "
-                "not one of " + ", ".join(f"`{one}`" for one in Frequency)
-            ]
-        )
-    return Frequency(str(frequency))
+    frequency = held.get(FREQUENCY_FIELD)
+    return None if frequency is None else Frequency(str(frequency))
 
 
 def estimate_before_copy(
     path: Path,
-    board: str,
-    placement: Placement,
+    card: str | None,
     ticket: Ticket | None = None,
     reads: BoardReads | None = None,
 ) -> Ticket:
     """Write the ticket's estimate, its `## Impact` estimate line and its priority into ``path``.
 
     The estimate is :func:`estimate` over the ticket's severity with the workaround, its
-    frequency, and the occurrences recounted off the item ``placement`` names; the priority
-    is :func:`follows_estimate` over what that item holds and what its record stored. The
+    frequency, and the occurrences recounted off ``card``'s comments — the card the record
+    names, read once through ``reads`` — or one alone where it names none; the ticket's priority
+    is that estimate, which its copy's priority guard writes onto the card only while the card
+    holds the estimate it last received. Its :data:`BOARD_ESTIMATE_FIELD` is left as it is. The
     ticket is read as it was before this wrote anything, and written only when it changes.
     """
     ticket = read_ticket(path, pending=True) if ticket is None else ticket
     with_workaround = stated_with_workaround(ticket.body)
     # `read_ticket` has just held the `## Impact` section to its lines, and says so otherwise.
     assert with_workaround is not None  # noqa: S101
-    item = placement.record
-    issue = None if item is None else f"{board}:{item.get('id')}"
-    count = occurrences(issue, ticket.created_by_run, ticket.root_cause, reads)
+    count = occurrences(card, ticket.created_by_run, ticket.root_cause, reads)
     estimated = estimate(with_workaround, ticket.frequency, count)
-    priority = (
-        estimated
-        if item is None
-        else follows_estimate(held_priority(item), stored_estimate(item), estimated)
-    )
     decided = dataclasses.replace(
         ticket,
         priority_estimate=estimated,
         body=with_estimate_line(
             ticket.body, estimate_line(with_workaround, ticket.frequency, count)
         ),
-        priority=priority,
+        priority=estimated,
     )
     rendered = render(decided)
     if path.read_text(encoding="utf-8") != rendered:
@@ -3517,15 +3802,16 @@ class ReEstimated(NamedTuple):
     priority: Priority
 
 
-def re_estimate(board: str, issue: str) -> ReEstimated:
-    """Recompute one board item's estimate, and persist it and the lockstep rule's decision.
+def re_estimate(board: str, issue: str, run: str, root: Path | None = None) -> ReEstimated:
+    """Recompute one board item's estimate, persist it and the lockstep rule's decision, receipt it.
 
     ``issue`` is an item of ``board`` or of a board it routes to — a source `sources route`
     answers it can reach — qualified by the board it is on, which every read and write below
-    asks.
+    asks; ``run`` is the run making the writes, whose receipts under ``root`` (the store's
+    `drafts` root by default) take one line for it.
 
     The narrow write a run makes on an item another run owns, after it comments there: the
-    item is read as the board holds it, its occurrences recounted off its comments, and the
+    item is read once by id with its comments, its occurrences recounted off them, and the
     estimate recomputed from its body's severity with the workaround and its record's
     frequency. The priority is written with `task priority set` only when
     :func:`follows_estimate` has it follow to a new value, so a priority a person holds is
@@ -3533,8 +3819,9 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     after the severity lines where a schema-6 content has none — with `task content set`; and
     last the record, brought to :data:`ESTIMATE_AT` where it is older, with `task metadata
     set`. Nothing else about the item, its status and its schema's structure included, is
-    written. :class:`Refused` for an item that is no
-    follow-up ticket this reads.
+    written. The receipt holds each write's `result` with the estimate, the occurrence count,
+    the severity and frequency it was computed from, and the estimate line written.
+    :class:`Refused` for an item that is no follow-up ticket this reads.
     """
     matched = QUALIFIED_ID.fullmatch(issue)
     if matched is None or (
@@ -3550,19 +3837,48 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     item = reads.item(issue)
     decided = re_estimate_decision(issue, item, reads)
     client = plan_store.client()
+    writes: list[ReEstimateWrite] = []
     # The stored estimate is written last, because it is what the next re-estimate compares
     # the board's priority to: stored first, a refused priority write would leave it beside
     # the old priority, which every later touch would read as a person's and never raise.
     # Written last, a refusal leaves either the old priority beside the old estimate, still
     # following, or the priority already at the new estimate, which a retry leaves as it is.
     if decided.priority is not held_priority(item):
-        plan_store.sdk(client.task_priority_set(issue, decided.priority.value))
+        answered = plan_store.sdk(client.task_priority_set(issue, decided.priority.value))
+        writes.append(ReEstimateWrite(write="priority", result=_result(answered.result)))
     if decided.content != item_content(item):
         with tempfile.TemporaryDirectory(prefix="re-estimate-") as scratch:
             written = Path(scratch) / "content.md"
             written.write_text(decided.content, encoding="utf-8")
-            plan_store.sdk(client.task_content_set(issue, file=str(written)))
-    plan_store.sdk(client.task_metadata_set(issue, KEY, json.dumps(decided.record)))
+            content = plan_store.sdk(client.task_content_set(issue, file=str(written)))
+        writes.append(ReEstimateWrite(write="content", result=_result(content.result)))
+    metadata = plan_store.sdk(client.task_metadata_set(issue, KEY, json.dumps(decided.record)))
+    writes.append(ReEstimateWrite(write="metadata", result=_result(metadata.result)))
+    held = _held_record(item)
+    owner = issue_owner(item)
+    origin = cast(Mapping[str, object], item.get("metadata") or {}).get(ORIGIN_KEY)
+    append_receipt(
+        drafts_root() if root is None else root,
+        run,
+        ReceiptCommand.RE_ESTIMATE,
+        str(origin) if owner == run and isinstance(origin, str) else None,
+        issue,
+        ReEstimateOutcomeReceipt(
+            priority_estimate=decided.estimated,
+            occurrences=decided.occurrences,
+            # The decision refused content stating no severity, so this one states one.
+            severity_with_workaround=cast(Severity, stated_with_workaround(item_content(item))),
+            frequency=None
+            if (judged := held.get(FREQUENCY_FIELD)) is None
+            else Frequency(str(judged)),
+            estimate_line=decided.line,
+            priority=decided.priority,
+            # The card's own root cause, off the read this recount was made from: evidence filed
+            # under any other is no occurrence of it.
+            root_cause=str(held.get("root_cause")),
+            writes=tuple(writes),
+        ),
+    )
     return ReEstimated(issue, decided.estimated, decided.occurrences, decided.priority)
 
 
@@ -3574,6 +3890,7 @@ class Reestimate(NamedTuple):
     priority: Priority
     content: str
     record: dict[str, object]
+    line: str = ""
 
 
 def re_estimate_decision(issue: str, item: Mapping[str, object], reads: BoardReads) -> Reestimate:
@@ -3653,11 +3970,12 @@ def re_estimate_decision(issue: str, item: Mapping[str, object], reads: BoardRea
         search_retired=_search_retired_shape(held),
     ):
         raise Refused([f"{issue}'s content is not sound: {problem}" for problem in unsound])
-    frequency = _record_frequency(held, issue)
+    frequency = _record_frequency(held)
     count = occurrences(issue, str(creator), str(held["root_cause"]), reads)
     estimated = estimate(with_workaround, frequency, count)
     priority = follows_estimate(held_priority(item), stored_estimate(item), estimated)
-    rewritten = with_estimate_line(text, estimate_line(with_workaround, frequency, count))
+    line = estimate_line(with_workaround, frequency, count)
+    rewritten = with_estimate_line(text, line)
     # Brought forward only as far as the estimate this writes: restructuring a body is the
     # owning run's, so a schema the estimate already reaches stays what it is.
     record = {
@@ -3665,25 +3983,43 @@ def re_estimate_decision(issue: str, item: Mapping[str, object], reads: BoardRea
         "schema": max(schema, ESTIMATE_AT),
         ESTIMATE_FIELD: estimated.value,
     }
-    return Reestimate(estimated, count, priority, rewritten, record)
+    return Reestimate(estimated, count, priority, rewritten, record, line)
 
 
-def status_before_copy(held: str | None, *, withdraw: bool) -> Status:
-    """The status a ticket is copied with, given the category the board holds its item at.
+def _posted(  # noqa: PLR0913 - the comment, and everything its receipt names
+    board: str, run: str, card: str, body: str, root: Path | None = None
+) -> Mapping[str, object]:
+    """Post ``body`` on ``card`` as ``run``'s evidence comment or budget question, and receipt it.
 
-    A ticket the board holds no item for is a proposal; one it holds carries the board's
-    status, so a copy never undoes a person's decision; and a withdrawal closes an item only
-    while nobody has accepted or deferred it. :class:`Unplaced` or :class:`ProtectedFromWithdrawal`
-    otherwise.
+    :class:`Refused`, before anything is posted, for a body that is not this run's comment
+    shape (:func:`run_comment_problems`) or a card outside ``board``'s family.
     """
-    if held is None:
-        return Status.WITHDRAWN if withdraw else Status.PROPOSED
-    if held not in tuple(Status):
-        raise Unplaced(held)
-    status = Status(held)
-    if withdraw and status.protected_from_withdrawal:
-        raise ProtectedFromWithdrawal(status)
-    return Status.WITHDRAWN if withdraw else status
+    matched = QUALIFIED_ID.fullmatch(card)
+    if matched is None or (
+        matched["source"] != board and matched["source"] not in plan_store.reachable(board)
+    ):
+        raise Refused(
+            [
+                f"{card!r} is not an item of the board {board!r} or a board it routes to, as "
+                "`<board>:<id>`"
+            ]
+        )
+    if found := run_comment_problems(run, body):
+        raise Refused(found)
+    written = plan_store.sdk(plan_store.client().task_comment_add(card, body=body))
+    owner = comment_owner(body)
+    outcome = CommentOutcomeReceipt(
+        id=written.id.root if hasattr(written.id, "root") else str(written.id),
+        url=written.url,
+        item=None if written.item is None else written.item.root,
+        # The root cause the body's own marker names, which the closeout matches to the cause
+        # the account files the evidence under; `run_comment_problems` proved the marker.
+        root_cause=None if owner is None else owner.root_cause,
+    )
+    append_receipt(
+        drafts_root() if root is None else root, run, ReceiptCommand.COMMENT, None, card, outcome
+    )
+    return outcome.model_dump(mode="json")
 
 
 def comment_marker(run: str, root_cause: str) -> str:
@@ -3699,6 +4035,36 @@ def comment_opening(run: str) -> str:
 def render_comment(run: str, root_cause: str, evidence: str) -> str:
     """A whole comment ``run`` adds to another run's issue: opening, evidence, marker."""
     return f"{comment_opening(run)}\n\n{evidence.strip()}\n\n{comment_marker(run, root_cause)}\n"
+
+
+def run_comment_problems(run: str, body: str) -> list[str]:
+    """Every way ``body`` is not ``run``'s evidence comment or budget question, as `comment` posts.
+
+    Its opening line is :func:`comment_opening`, its last line ``run``'s evidence marker
+    (:func:`comment_marker`), and it carries no ticket section heading: an evidence comment
+    carries only the run's new occurrence, so one that re-renders the ticket is refused before it
+    reaches the board.
+    """
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    found = []
+    opening = comment_opening(run)
+    if not lines or lines[0] != opening:
+        found.append(
+            f"its opening line is {lines[0] if lines else ''!r}, where run {run}'s comment opens "
+            f"{opening!r}"
+        )
+    owner = comment_owner(body)
+    if owner is None or owner.run != run or owner.kind is not CommentKind.EVIDENCE:
+        found.append(
+            f"its last line is {lines[-1] if lines else ''!r}, where run {run}'s comment ends "
+            f"with its marker, {comment_marker(run, '<root-cause>')!r}"
+        )
+    found.extend(
+        f"it carries the ticket heading `## {heading}`; an evidence comment carries only this "
+        "run's new occurrence, so drop what repeats the ticket"
+        for heading in comment_ticket_headings(body)
+    )
+    return found
 
 
 def reply_marker(run: str, root_cause: str, answers: str, verdict: str) -> str:
@@ -4382,46 +4748,242 @@ def read_run_tickets(
 
 @dataclass
 class BoardReads:
-    """The records, comment bodies and placements one account check has already read.
+    """The card records and comment bodies one command has already read, each once.
 
-    Scoped to that check alone: a later check recounts comments afresh and locates every
-    ticket again. Bodies are enough for both marker ownership and occurrence recounting;
-    neither asks for comment identity.
+    A card is read by id with its comments in one `task show`, so a recount reuses the
+    comments that read returned; the comment pass hands in its own batched read instead.
     """
 
     items: dict[str, Mapping[str, object]] = dataclasses.field(default_factory=dict)
     bodies: dict[str, tuple[str, ...]] = dataclasses.field(default_factory=dict)
-    places: dict[Path, Location] = dataclasses.field(default_factory=dict)
-
-    def located(self, path: Path, board: str, ticket: Ticket) -> Location:
-        """Where the store places the ticket at ``path``: one :func:`locate` per check."""
-        held = path.absolute()
-        if held not in self.places:
-            self.places[held] = locate(held, board, bound=ticket.board_item, established=False)
-        return self.places[held]
 
     def item(self, issue: str) -> Mapping[str, object]:
-        """Keep a show's record and comments together, so the recount reuses its comments."""
-        if issue not in self.items:
-            answer = plan_store.complete(plan_store.sdk(plan_store.client().task_show(issue)))
-            if len(answer.items) != 1:
-                raise OSError(f"task show for {issue!r} returned {len(answer.items)} records")
-            self.items[issue] = answer.items[0].item.model_dump(mode="python")
-            if answer.comments is not None:
-                self.bodies[issue] = tuple(comment.body for comment in answer.comments)
+        """Read ``issue`` by id with its comments, keeping both so the recount reuses them."""
+        answer = plan_store.complete(plan_store.sdk(plan_store.client().task_show(issue)))
+        if len(answer.items) != 1:
+            raise OSError(f"task show for {issue!r} returned {len(answer.items)} records")
+        self.items[issue] = answer.items[0].item.model_dump(mode="python")
+        self.bodies[issue] = tuple(comment.body for comment in answer.comments or ())
         return self.items[issue]
 
     def comments(self, issue: str) -> tuple[str, ...]:
-        """Read an item's comments once for ownership and the estimate recount."""
+        """An item's comment bodies, from the read of it by id that returned them."""
         if issue not in self.bodies:
-            self.bodies[issue] = tuple(
-                comment.body
-                for comment in plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
-            )
+            self.item(issue)
         return self.bodies[issue]
 
 
-def filed_board_problems(
+@dataclass(frozen=True)
+class Receipt:
+    """One line of a run's receipts, held to its shape: ``at`` is its line number, from 1."""
+
+    at: int
+    command: ReceiptCommand
+    ticket: str | None
+    card: str | None
+    outcome: ReceiptOutcome
+
+    def named(self) -> str:
+        """How a refusal names this receipt."""
+        return f"receipt line {self.at} ({self.command} of {self.card or 'no card'})"
+
+
+def read_receipts(root: Path, run: str) -> tuple[list[Receipt], list[str]]:
+    """``run``'s receipts under ``root``, and every way a line of them is not one.
+
+    A line that is not a JSON object of exactly :data:`RECEIPT_KEYS` at :data:`RECEIPT_SCHEMA`,
+    naming a command of :class:`ReceiptCommand`, a qualified ticket or `null`, a qualified card
+    and the outcome that command's model (:data:`OUTCOME_MODELS`) reads, is malformed; one naming
+    another `run` is not this run's. An absent file holds no receipt.
+    """
+    path = receipts_path(root, run)
+    if not path.is_file():
+        return [], []
+    found: list[str] = []
+    held: list[Receipt] = []
+    for at, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            found.append(f"receipt line {at} of {path} is not JSON")
+            continue
+        if not isinstance(entry, dict) or sorted(entry) != sorted(RECEIPT_KEYS):
+            found.append(
+                f"receipt line {at} of {path} is not an object of exactly "
+                + ", ".join(f"`{key}`" for key in RECEIPT_KEYS)
+            )
+            continue
+        if entry["run"] != run:
+            found.append(
+                f"receipt line {at} of {path} names the run {entry['run']!r}, not {run!r}, so it "
+                "is no receipt of this run's"
+            )
+            continue
+        ticket, card, outcome = entry["ticket"], entry["card"], entry["outcome"]
+        if (
+            type(entry["schema"]) is not int
+            or entry["schema"] != RECEIPT_SCHEMA
+            or entry["command"] not in tuple(ReceiptCommand)
+            or not (ticket is None or (isinstance(ticket, str) and QUALIFIED_ID.fullmatch(ticket)))
+            or not (card is None or (isinstance(card, str) and QUALIFIED_ID.fullmatch(card)))
+            or not isinstance(outcome, dict)
+            or (card is None and entry["command"] != ReceiptCommand.COPY)
+        ):
+            found.append(
+                f"receipt line {at} of {path} is not a receipt of schema {RECEIPT_SCHEMA}: a "
+                "command, a qualified ticket or `null`, a qualified card and an object outcome"
+            )
+            continue
+        command = ReceiptCommand(entry["command"])
+        try:
+            read = OUTCOME_MODELS[command].model_validate(outcome)
+        except ValidationError as exc:
+            found.append(
+                f"receipt line {at} of {path} holds no {command} outcome this reads: "
+                + "; ".join(
+                    f"{'.'.join(map(str, one['loc']))}: {one['msg']}" for one in exc.errors()
+                )
+            )
+            continue
+        if card is None and isinstance(read, CopyOutcomeReceipt) and read.action in COPIED_ACTIONS:
+            # Only a copy the store refused before reaching a card names none: one that wrote
+            # names the card it wrote, or nothing says the write reached the ticket's card.
+            found.append(
+                f"receipt line {at} of {path} records a copy answered `{read.action}` naming no "
+                "card, so it says nothing about which card the write reached"
+            )
+            continue
+        held.append(Receipt(at, command, ticket, card, cast(ReceiptOutcome, read)))
+    return held, found
+
+
+def _category_of(result: ReceiptResult | None) -> str | None:
+    """The status category a receipt's `result` or `held` names, or `None`."""
+    return None if result is None or result.status is None else result.status.category
+
+
+def _priority_of(result: ReceiptResult | None) -> str:
+    """The priority a receipt's `result` names, `none` where it names none."""
+    priority = None if result is None else result.priority
+    return priority or Priority.NONE.value
+
+
+def copy_receipt_problems(ticket: Ticket, receipt: Receipt, named: str) -> list[str]:
+    """How a ticket's last copy receipt contradicts the account that calls the ticket filed.
+
+    A refusal contradicts it but for a withdrawal the store refused as `destination-status`,
+    which the account reports as protected. A created card is at `Proposal`, and a withdrawn
+    ticket's card at `Cancelled`. Its priority is the ticket's estimate where the store's
+    priority condition was met, or on a create; where it was not, the priority the card held.
+    """
+    outcome = cast(CopyOutcomeReceipt, receipt.outcome)
+    withdrawn = ticket.status is Status.WITHDRAWN
+    if outcome.error is not None:
+        if withdrawn and outcome.error.kind == "destination-status":
+            return []
+        return [
+            f"{named}: {receipt.named()} records the store's refusal `{outcome.error.kind}`, "
+            "where the account calls the ticket filed"
+        ]
+    if outcome.action not in COPIED_ACTIONS:
+        return [
+            f"{named}: {receipt.named()} records the store's `{outcome.action}`, which copied "
+            "nothing onto the card, where the account calls the ticket filed"
+        ]
+    found = []
+    category = _category_of(outcome.result)
+    if withdrawn and category != Status.WITHDRAWN.value:
+        found.append(
+            f"{named}: {receipt.named()} left the card at category {category!r}, where the "
+            f"ticket this run withdrew is `{Status.WITHDRAWN}`"
+        )
+    elif not withdrawn and outcome.action == "created" and category != Status.PROPOSED.value:
+        found.append(
+            f"{named}: {receipt.named()} created the card at category {category!r}, where a new "
+            f"ticket's card is created at `{board_option(Status.PROPOSED)}`"
+        )
+    estimate_held = (
+        Priority.NONE.value if ticket.priority_estimate is None else str(ticket.priority_estimate)
+    )
+    condition = outcome.priority_condition
+    if outcome.action == "created" or condition is None or condition.met:
+        expected = estimate_held
+    else:
+        expected = condition.held or Priority.NONE.value
+    if (priority := _priority_of(outcome.result)) != expected:
+        found.append(
+            f"{named}: {receipt.named()} left the card at priority `{priority}`, where the "
+            f"store's priority guard gives `{expected}` for a ticket estimated "
+            f"`{estimate_held}`"
+        )
+    return found
+
+
+def re_estimate_receipt_problems(receipt: Receipt, named: str) -> list[str]:
+    """How a `re-estimate` receipt states an estimate or count other than the one it wrote.
+
+    The estimate it states is :func:`estimate`'s for the severity, frequency and occurrence
+    count it states, its estimate line the one those render, and it wrote the record.
+    """
+    outcome = cast(ReEstimateOutcomeReceipt, receipt.outcome)
+    with_workaround, judged = outcome.severity_with_workaround, outcome.frequency
+    count, stated = outcome.occurrences, outcome.priority_estimate
+    found = []
+    if (rule := estimate(with_workaround, judged, count)) != stated:
+        found.append(
+            f"{named}: {receipt.named()} states the estimate `{stated}`, where the priority rule "
+            f"gives `{rule}` for its {_occurrence_words(count)}"
+        )
+    if (line := estimate_line(with_workaround, judged, count)) != outcome.estimate_line:
+        found.append(
+            f"{named}: {receipt.named()} wrote the estimate line {outcome.estimate_line!r}, "
+            f"where its {_occurrence_words(count)} render {line!r}"
+        )
+    if not any(one.write == "metadata" for one in outcome.writes):
+        found.append(f"{named}: {receipt.named()} records no write of the card's record")
+    return found
+
+
+def _disposition_carriers(details: Sequence[str], destination: str) -> list[str]:
+    """Every item of ``destination`` a disposition's details name, once each, in order."""
+    return list(
+        dict.fromkeys(
+            match[0].rstrip(".,;)")
+            for detail in details
+            for match in re.finditer(rf"(?<![\w:-]){re.escape(destination)}:[^\s`<>\"]+", detail)
+        )
+    )
+
+
+def _review_priority(result: ReceiptResult | None) -> Priority:
+    """The priority a card's last write left it at, for the review task: the receipt's model
+    refused any word that is no priority, so one it holds is a priority or none."""
+    return Priority(_priority_of(result))
+
+
+def _card_url(receipts: Sequence[Receipt], card: str, ticket: Ticket | None = None) -> str:
+    """Where a person opens ``card``: where the store's copy of ``ticket`` recorded it can be
+    opened, else a comment receipt's own URL, else its qualified id."""
+    for key, value in ticket.reserved if ticket is not None else ():
+        located = json.loads(value) if key == COPY_LOCATIONS_KEY else None
+        for entry in located.values() if isinstance(located, dict) else ():
+            where = entry.get("location") if isinstance(entry, dict) else None
+            url = where.get("url") if isinstance(where, dict) else None
+            if isinstance(entry, dict) and entry.get("id") == card and isinstance(url, str):
+                return url
+    for receipt in receipts:
+        if (
+            receipt.card == card
+            and isinstance(receipt.outcome, CommentOutcomeReceipt)
+            and receipt.outcome.url
+        ):
+            return receipt.outcome.url.partition("#")[0]
+    return card
+
+
+def receipt_problems(  # noqa: C901, PLR0912, PLR0913 - one pass over every filed cause's receipts
     root: Path,
     run: str,
     causes: Collection[str],
@@ -4430,57 +4992,131 @@ def filed_board_problems(
     details: Mapping[str, Sequence[str]] | None = None,
     touched: dict[str, ReviewTicket] | None = None,
 ) -> list[str]:
-    """Filed causes whose item or evidence comment did not reach the board soundly.
+    """Filed causes whose board writes the run's receipts do not show landing as the account says.
 
-    ``board`` is the family's root, and each cause is read where the store places its ticket
-    (:func:`locate`, once per ticket for the whole check). Local tickets, placements, board
-    records and comments are shared within this check. A copied item's priority still agrees
-    with its local ticket and every carrier's estimate is recounted.
+    Reads nothing from the board: every fact held here is one a write of this run returned
+    (:func:`read_receipts`). ``board`` is the family's root, and each ticket is placed with the
+    placement-only `task locate`, which reads nothing there either. A filed ticket whose record
+    names a card needs a copy receipt for that card, its last one agreeing with the account
+    (:func:`copy_receipt_problems`); one naming none filed evidence on the carrier its
+    disposition names, which needs this run's comment receipt there and a `re-estimate` receipt
+    after it, sound (:func:`re_estimate_receipt_problems`). A receipt naming a ticket this run
+    holds none of, or naming a card other than the one its ticket's record names, is refused,
+    and so is every malformed line and every line of another run.
 
-    ``touched`` collects every item this run created or updated — each filed cause's own item
-    or the item carrying its evidence comment — once per item, at the priority the board
-    holds it at, out of the reads this check already made, for the run's review task.
+    ``touched`` collects every card this run created or updated, or posted evidence on, once,
+    at the priority its last write's `result` holds, for the run's review task.
     """
-    found = []
-    reads = BoardReads()
-    for cause in sorted(causes):
-        ticket = tickets[cause]
+    receipts, found = read_receipts(root, run)
+    held = {qualified_id(run, cause): ticket for cause, ticket in tickets.items()}
+    placed: dict[str, str] = {}
+
+    def destination_of(cause: str) -> str:
+        """Where the store places the ticket of ``cause``: one placement-only locate each."""
+        if cause not in placed:
+            placed[cause] = locate(ticket_path(root, run, cause), board).destination
+        return placed[cause]
+
+    found.extend(
+        f"{receipt.named()} names the ticket {receipt.ticket}, which this run's account does "
+        "not hold"
+        for receipt in receipts
+        if receipt.ticket is not None and receipt.ticket not in held
+    )
+    for cause, ticket in sorted(tickets.items()):
         if ticket is None:
-            # The local shape was refused, so no board evidence can make this ticket sound.
+            continue
+        identifier = qualified_id(run, cause)
+        mine = [one for one in receipts if one.ticket == identifier]
+        if not any(one.command is ReceiptCommand.COPY for one in mine):
+            continue
+        card = named_card(ticket, destination_of(cause), board)
+        # A ticket on a destination declared private names no card — the store records no link
+        # from a public ticket to a private card — so only a record naming one is held to it.
+        found.extend(
+            f"{one.named()} names the card {one.card}, where the record of {identifier} names "
+            f"{card}"
+            for one in mine
+            if card is not None
+            and one.command is ReceiptCommand.COPY
+            and one.card is not None
+            and one.card != card
+        )
+    for cause in sorted(causes):
+        ticket = tickets.get(cause)
+        if ticket is None:
             raise Refused([f"the filed root cause {cause} has no readable local ticket"])
-        location = reads.located(ticket_path(root, run, cause), board, ticket)
-        routed = location.destination
-        try:
-            carrier = _own_carrier(ticket, qualified_id(run, cause), location, reads)
-        except Misbound as refusal:
-            found.append(f"the filed root cause {cause}: {refusal}")
-            continue
-        copied = carrier is not None
-        if carrier is None:
-            named = tuple(
-                dict.fromkeys(
-                    match[0].rstrip(".,;)")
-                    for detail in (details or {}).get(cause, ())
-                    for match in re.finditer(rf"(?<![\w:-]){re.escape(routed)}:[^\s`<>\"]+", detail)
+        named = f"the filed root cause {cause}"
+        identifier = qualified_id(run, cause)
+        destination = destination_of(cause)
+        copies = [
+            one
+            for one in receipts
+            if one.command is ReceiptCommand.COPY and one.ticket == identifier
+        ]
+        card = named_card(ticket, destination, board)
+        if card is None:
+            # A card the store created on a private destination, which the record cannot name:
+            # the one this run's own last copy of the ticket reached.
+            reached = [one.card for one in copies if one.card is not None]
+            card = QualifiedTaskId(reached[-1]) if reached else None
+        if card is not None:
+            if not copies:
+                found.append(
+                    f"{named}: its ticket's record names {card}, and the run's receipts hold no "
+                    "copy of it, so nothing this run wrote says the ticket reached the board"
                 )
-            )
-            carrier = _evidence_carrier(run, cause, routed, reads, named)
-        if carrier is None:
+                continue
+            found.extend(copy_receipt_problems(ticket, copies[-1], named))
+            if touched is not None:
+                last = cast(CopyOutcomeReceipt, copies[-1].outcome)
+                # A refused copy left the card as the store's read found it, which is `held`.
+                result = last.held if last.error is not None else last.result
+                touched[card] = ReviewTicket(
+                    _card_url(receipts, card, ticket), _review_priority(result)
+                )
+            continue
+        carriers = _disposition_carriers((details or {}).get(cause, ()), destination)
+        commented = [
+            one
+            for one in receipts
+            if one.command is ReceiptCommand.COMMENT
+            and one.card in carriers
+            and cast(CommentOutcomeReceipt, one.outcome).root_cause == cause
+        ]
+        if not commented:
             found.append(
-                f"the filed root cause {cause} has a local ticket but no item or evidence "
-                f"comment of run {run} on {routed}, so its evidence did not reach the board"
+                f"{named} has a local ticket naming no card, and the run's receipts hold no "
+                f"evidence comment on an item of {destination} its disposition names "
+                f"({', '.join(carriers) or 'none'}), so its evidence did not reach the board"
             )
             continue
-        if touched is not None:
-            touched[carrier] = review_ticket(carrier, reads.item(carrier))
-        found.extend(evidence_comment_problems(run, carrier, reads))
-        found.extend(board_estimate_problems(carrier, reads))
-        if copied and (held := held_priority(reads.item(carrier))) != ticket.priority:
+        comment = commented[-1]
+        carrier = str(comment.card)
+        later = [
+            one
+            for one in receipts
+            if one.command is ReceiptCommand.RE_ESTIMATE
+            and one.card == carrier
+            and one.at > comment.at
+        ]
+        if not later:
             found.append(
-                f"{carrier} holds the priority `{held}`, where the ticket this run copied onto it "
-                f"carries `{ticket.priority}`; copy the ticket again after `board-status`"
+                f"{named}: {comment.named()} posted evidence on {carrier}, and no `re-estimate` "
+                "receipt of that card follows it"
             )
-    found.extend(placed_status_problems(root, run, board, tickets, reads))
+            continue
+        found.extend(re_estimate_receipt_problems(later[-1], named))
+        if (carried := cast(ReEstimateOutcomeReceipt, later[-1].outcome).root_cause) != cause:
+            found.append(
+                f"{named}: its evidence on {carrier} is filed under {cause}, where "
+                f"{later[-1].named()} read the card as root cause {carried!r}, so its recount "
+                "counts none of it: take the card's root cause as the ticket's"
+            )
+        if touched is not None:
+            writes = cast(ReEstimateOutcomeReceipt, later[-1].outcome).writes
+            result = writes[-1].result if writes else None
+            touched[carrier] = ReviewTicket(_card_url(receipts, carrier), _review_priority(result))
     return found
 
 
@@ -4489,19 +5125,6 @@ class ReviewTicket(NamedTuple):
 
     url: str
     priority: Priority
-
-
-def review_ticket(carrier: str, item: Mapping[str, object]) -> ReviewTicket:
-    """``carrier``'s link and the priority the board holds, as the review task lists it.
-
-    The board's priority rather than the ticket's estimate, because a person's override is
-    the ticket's final priority; a priority the store reports no value for stays `none`, which
-    the engine lists under "No priority" and counts as Medium, and a word that is no priority
-    at all is the store's refusal to answer, raised as :func:`held_priority` raises it.
-    """
-    location = item.get("location")
-    url = location.get("url") if isinstance(location, Mapping) else None
-    return ReviewTicket(url if isinstance(url, str) and url else carrier, held_priority(item))
 
 
 #: The phase `.onepipeline/config.yaml` configures a run's follow-up review task under.
@@ -4555,95 +5178,6 @@ def review_raised(run: str, touched: Mapping[str, ReviewTicket]) -> str:
     )
 
 
-def placed_status_problems(
-    root: Path, run: str, board: str, tickets: Mapping[str, Ticket | None], reads: BoardReads
-) -> list[str]:
-    """Each item of ``run``'s that is not at the status its tooling's paired write leaves.
-
-    Each ticket's item is where the store places it (:func:`locate`, shared through
-    ``reads``). A ticket this run withdrew has its item at `Cancelled`, closed as not planned
-    with its status written beside the closure. An item this run created is at `Proposal`,
-    where its first copy put it, or at the status a person — or the engine closing its issue —
-    moved it to, which `board-status` then wrote as the ticket's. Anything else is an issue
-    created, closed or withdrawn some other way than `board-status` and `copy`, such as a raw
-    issue write, and is named with the status the board holds it at.
-    """
-    found = []
-    for cause, ticket in sorted(tickets.items()):
-        if ticket is None:
-            continue
-        location = reads.located(ticket_path(root, run, cause), board, ticket)
-        try:
-            item = counterpart(ticket, location, reads, note=False)
-        except Misbound:
-            # Carriers no one item of the run's own stands among: the filed check names it,
-            # and this one has no item of the run's to hold to a status.
-            continue
-        if item is None:
-            continue
-        status = reads.item(item).get("status")
-        held = status if isinstance(status, Mapping) else {}
-        category, shown = held.get("category"), held.get("name")
-        if ticket.status is Status.WITHDRAWN:
-            if category != Status.WITHDRAWN.value:
-                found.append(
-                    f"{item}, the item of the ticket {cause} this run withdrew, is at `{shown}` "
-                    f"(category `{category}`), not `{board_option(Status.WITHDRAWN)}`: a "
-                    "withdrawal is `board-status --withdraw` then `copy`, which closes the issue "
-                    "as not planned with its status beside it"
-                )
-            continue
-        if _own_carrier(ticket, qualified_id(run, cause), location, reads) is None:
-            continue
-        if category == Status.PROPOSED.value or (
-            category == ticket.status.value and ticket.status.protected_from_withdrawal
-        ):
-            continue
-        found.append(
-            f"{item}, which this run created for the ticket {cause}, is at `{shown}` (category "
-            f"`{category}`), not `{board_option(Status.PROPOSED)}`, and its ticket carries "
-            f"`{ticket.status}`: its issue was created, closed or withdrawn some other way than "
-            "`board-status` and `copy`"
-        )
-    return found
-
-
-def _own_carrier(ticket: Ticket, origin: str, location: Location, reads: BoardReads) -> str | None:
-    """The ticket's item where ``location`` places it, when its record says it is this run's own
-    copy; else `None`. :class:`Misbound` for carriers among which the run owns no one open item."""
-    item = counterpart(ticket, location, reads, note=False)
-    if item is None:
-        return None
-    metadata = reads.item(item).get("metadata")
-    metadata = metadata if isinstance(metadata, Mapping) else {}
-    if metadata.get(ORIGIN_KEY) == origin and metadata_owner(metadata) == ticket.created_by_run:
-        return item
-    return None
-
-
-def _evidence_carrier(
-    run: str, cause: str, board: str, reads: BoardReads, named: Sequence[str] = ()
-) -> str | None:
-    """The item carrying this run's evidence marker, among the root-cause query's answers."""
-    candidates = list(named)
-    if not named:
-        for item in board_items(board, metadata=[root_cause_query(cause)]):
-            reads.items.setdefault(item.id.root, item.item.model_dump(mode="python"))
-            candidates.append(item.id.root)
-    for issue in candidates:
-        if named and _held_record(reads.item(issue)).get("root_cause") != cause:
-            continue
-        if any(
-            (owner := comment_owner(body)) is not None
-            and owner.run == run
-            and owner.root_cause == cause
-            and owner.kind is CommentKind.EVIDENCE
-            for body in reads.comments(issue)
-        ):
-            return issue
-    return None
-
-
 def ticket_section_headings() -> tuple[str, ...]:
     """Every level-2 heading a ticket's body carries or once carried.
 
@@ -4666,24 +5200,6 @@ def comment_ticket_headings(body: str) -> list[str]:
         for line in body.splitlines()
         if (matched := _LEVEL_TWO_HEADING.fullmatch(line)) is not None
         and matched["text"].casefold() in sections
-    ]
-
-
-def evidence_comment_problems(run: str, issue: str, reads: BoardReads) -> list[str]:
-    """Every ticket section heading an evidence comment of ``run`` on ``issue`` carries.
-
-    Only ``run``'s own evidence comments are judged: another run's comment is not this
-    run's to change, so it never makes this run's check refuse.
-    """
-    return [
-        f"{issue} holds an evidence comment of run {run} carrying the ticket heading "
-        f"`## {heading}`; an evidence comment carries only this run's new occurrence, so edit "
-        "it in place to drop what repeats the issue"
-        for body in reads.comments(issue)
-        if (owner := comment_owner(body)) is not None
-        and owner.run == run
-        and owner.kind is CommentKind.EVIDENCE
-        for heading in comment_ticket_headings(body)
     ]
 
 
@@ -4880,6 +5396,13 @@ def _budget_run(value: str) -> str:
     """A single account filename component, so CLI input cannot escape its root."""
     if not value or value in (".", "..") or Path(value).name != value:
         raise argparse.ArgumentTypeError("RUN-ID must be one safe path component")
+    return value
+
+
+def _run_id(value: str) -> str:
+    """A run id as a receipt's file name holds it: one record component, so it names no path."""
+    if not RECORD_COMPONENT.fullmatch(value):
+        raise argparse.ArgumentTypeError(f"{value!r} is not a run id")
     return value
 
 
@@ -5372,76 +5895,50 @@ class _Filed(NamedTuple):
     item: str
 
 
-def _question_problems(
-    named: str, item: str, cause: str, standing: OverrunBudget, reads: BoardReads
-) -> list[str]:
-    """Whether ``item`` is the closed root-cause item a `budget-question` may name."""
+def _question_problems(named: str, standing: OverrunBudget) -> list[str]:
+    """Whether the budget a `budget-question` asks about still stands where it is registered.
+
+    Read from the repository's own budgets file through onebudgetspec, never from the board:
+    whether the closed item a question names holds this run's question is the run's comment
+    receipt's to say (:func:`budget_account_problems`).
+    """
+    found: list[str] = []
+    installs = Installs(Path(sys.executable).parent)
     try:
-        held = reads.item(item)
-    except OSError as exc:
-        return [f"{named} names {item}, which the board could not read: {exc}"]
-    found = []
-    if _category(held.get("status")) != Status.WITHDRAWN:
-        found.append(
-            f"{named} names {item}, which is not closed as not planned (`{Status.WITHDRAWN}`), "
-            "so the overrun is filed rather than asked about"
+        checkout = publication_checkout(str(standing.repository), installs)
+        if checkout is None:
+            raise OSError("no registered publication checkout")
+        listed = _ran(
+            [
+                installs.tool("onebudgetspec"),
+                "list",
+                standing.file,
+                "--id",
+                standing.id,
+                "--output",
+                "json",
+            ],
+            cwd=checkout,
         )
-    record_held = _held_record(held)
-    if record_held.get("root_cause") != cause:
-        found.append(f"{named} names {item}, whose record is not for the root cause {cause}")
-    recorded = record_held.get(BUDGET_FIELD)
-    if recorded is None or budget_problems(recorded, BUDGET_FIELD):
-        found.append(
-            f"{named} names {item}, whose record states no budget, so nothing says the budget "
-            "it was closed under still stands"
-        )
-    # `budget_problems(recorded, ...)` found nothing, which it does only for a mapping.
-    elif (closed := overrun_budget(cast(Mapping[str, object], recorded))) != standing:
-        found.append(
-            f"{named} names {item}, whose recorded budget {closed.record()} "
-            f"differs from the one standing in {standing.repository}'s {standing.file}, "
-            f"{standing.record()}: the budget changed, so the overrun is filed as usual"
-        )
-    if not found:
-        installs = Installs(Path(sys.executable).parent)
-        try:
-            checkout = publication_checkout(str(standing.repository), installs)
-            if checkout is None:
-                raise OSError("no registered publication checkout")
-            listed = _ran(
-                [
-                    installs.tool("onebudgetspec"),
-                    "list",
-                    standing.file,
-                    "--id",
-                    standing.id,
-                    "--output",
-                    "json",
-                ],
-                cwd=checkout,
-            )
-            if listed.returncode != 0:
-                raise OSError(_said(listed))
-            registered = json.loads(listed.stdout)["budgets"]
-            match registered:
-                case [Mapping() as held] if not budget_problems(
-                    {
-                        "repository": str(standing.repository),
-                        "file": standing.file,
-                        **{key: held.get(key) for key in ("id", "threshold", "direction")},
-                    },
-                    named,
-                ) and all(
-                    held.get(key) == standing.record()[key]
-                    for key in ("id", "threshold", "direction")
-                ):
-                    pass
-                case _:
-                    found.append(
-                        f"{named}: the recorded budget no longer stands in {standing.file}"
-                    )
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            found.append(f"{named}: the standing budget could not be read: {exc}")
+        if listed.returncode != 0:
+            raise OSError(_said(listed))
+        registered = json.loads(listed.stdout)["budgets"]
+        match registered:
+            case [Mapping() as held] if not budget_problems(
+                {
+                    "repository": str(standing.repository),
+                    "file": standing.file,
+                    **{key: held.get(key) for key in ("id", "threshold", "direction")},
+                },
+                named,
+            ) and all(
+                held.get(key) == standing.record()[key] for key in ("id", "threshold", "direction")
+            ):
+                pass
+            case _:
+                found.append(f"{named}: the recorded budget no longer stands in {standing.file}")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        found.append(f"{named}: the standing budget could not be read: {exc}")
     return found
 
 
@@ -5450,16 +5947,15 @@ def budget_account_problems(  # noqa: C901, PLR0912 - one pass over every entry'
     root: Path,
     run: str,
     tickets: Mapping[str, Ticket | None],
-    reads: BoardReads,
     *,
     board: str | None = None,
     measured: Mapping[str, object] | None = None,
 ) -> list[str]:
     """Every way a budget account fails to dispose of the run's overruns, naming each entry.
 
-    ``tickets`` is this run's local tickets by root cause, ``reads`` the board reads this
-    check shares, ``board`` the root board whose evidence is read back when the check is
-    asked to, and ``measured`` the account as it was written before the dispatch, whose
+    ``tickets`` is this run's local tickets by root cause, ``board`` the root board whose
+    evidence the run's receipts are held to when the check is asked to — reading nothing from
+    the board — and ``measured`` the account as it was written before the dispatch, whose
     every value but the dispositions is the library's and the engine's and so is held equal.
     """
     found = _envelope_problems(document, run, BUDGET_KEYS, "entries", BUDGETS_SCHEMA)
@@ -5528,7 +6024,7 @@ def budget_account_problems(  # noqa: C901, PLR0912 - one pass over every entry'
                     f"{named} is a `{BudgetDisposition.BUDGET_QUESTION}` naming no closed item"
                 )
                 continue
-            problems = _question_problems(named, str(link), cause, standing, reads)
+            problems = _question_problems(named, standing)
             found.extend(problems)
             if not problems:
                 questions.append((named, _Filed(cause, str(link))))
@@ -5558,7 +6054,7 @@ def budget_account_problems(  # noqa: C901, PLR0912 - one pass over every entry'
         return found
     causes = {one.cause for one in filed}
     found.extend(
-        filed_board_problems(
+        receipt_problems(
             root,
             run,
             causes,
@@ -5567,14 +6063,18 @@ def budget_account_problems(  # noqa: C901, PLR0912 - one pass over every entry'
             {cause: [one.item for one in filed if one.cause == cause] for cause in causes},
         )
     )
-    for named, question in questions:
-        if _evidence_carrier(run, question.cause, board, reads, (question.item,)) is None:
-            found.append(
-                f"{named} names {question.item}, which holds no evidence comment of run {run} "
-                f"for {question.cause}, so the question never reached the board"
-            )
-        else:
-            found.extend(evidence_comment_problems(run, question.item, reads))
+    receipts, _malformed = read_receipts(root, run)
+    asked = {
+        (one.card, cast(CommentOutcomeReceipt, one.outcome).root_cause)
+        for one in receipts
+        if one.command is ReceiptCommand.COMMENT
+    }
+    found.extend(
+        f"{named} names {question.item}, and the run's receipts hold no evidence comment of its "
+        f"on that card, so the question for {question.cause} never reached the board"
+        for named, question in questions
+        if (question.item, question.cause) not in asked
+    )
     return found
 
 
@@ -5905,56 +6405,6 @@ def response_problems(
             f"{', '.join(one.comment for one in quoted)}"
         )
     return found, answered
-
-
-def board_estimate_problems(issue: str, reads: BoardReads | None = None) -> list[str]:
-    """How the board item ``issue`` carries an estimate other than its comments recount to now.
-
-    Its record's :data:`ESTIMATE_FIELD` has to be :func:`estimate` over its body's severity
-    with the workaround, its record's frequency and the occurrences recounted off its
-    comments at this moment; and its `## Impact` estimate line has to be that estimate's line.
-    """
-    reads = BoardReads() if reads is None else reads
-    item = reads.item(issue)
-    held = _held_record(item)
-    text = item_content(item)
-    with_workaround = stated_with_workaround(text)
-    creator = held.get("created_by_run")
-    schema = held.get("schema")
-    if type(schema) is not int or schema not in range(ESTIMATE_AT, SCHEMA + 1):
-        return [
-            f"{issue} carries no `{KEY}` record of schema {ESTIMATE_AT} or later: it declares "
-            f"schema {schema!r}; run `re-estimate` on it"
-        ]
-    cause = held.get("root_cause")
-    if with_workaround is None or not _is_run(creator) or not _is_slug(cause):
-        return [
-            f"{issue} carries no `{KEY}` record of schema {ESTIMATE_AT} or later with a "
-            "severity to estimate from; run `re-estimate` on it"
-        ]
-    try:
-        frequency = _record_frequency(held, issue)
-    except Refused as refusal:
-        return list(refusal.problems)
-    count = 1 + sum(
-        counts_as_occurrence(body, str(creator), str(cause)) for body in reads.comments(issue)
-    )
-    estimated = estimate(with_workaround, frequency, count)
-    found = []
-    if held.get(ESTIMATE_FIELD) != estimated:
-        found.append(
-            f"{issue}'s record stores the estimate {held.get(ESTIMATE_FIELD)!r}, where its "
-            f"{_occurrence_words(count)} recount to `{estimated}`; run `re-estimate` on it"
-        )
-    span = _impact_span(text)
-    written = [as_written(line[0]) for line in _ESTIMATE_AT.finditer(text, *span)] if span else []
-    line = estimate_line(with_workaround, frequency, count)
-    if written != [line]:
-        found.append(
-            f"{issue}'s `## {IMPACT}` estimate line reads {written!r}, where its record and "
-            f"its {_occurrence_words(count)} render {line!r}; run `re-estimate` on it"
-        )
-    return found
 
 
 #: The concision rule every `## Impact` part and `## Suggested fix` unit is written to.
@@ -6308,6 +6758,10 @@ def shape(run: str) -> dict[str, object]:
         "dependency_kind": DEPENDENCY_KIND,
         "origin_key": ORIGIN_KEY,
         "copies_key": COPIES_KEY,
+        "creating_key": CREATING_KEY,
+        "board_estimate_field": BOARD_ESTIMATE_FIELD,
+        "receipts_directory": RECEIPTS_DIRECTORY,
+        "receipt_suffix": RECEIPT_SUFFIX,
         "headings": ", ".join(f"`## {heading}`" for heading in HEADINGS),
         "root_cause_bar": ROOT_CAUSE_BAR,
         "root_cause_parts": ", ".join(f"`**{part}.**`" for part in ROOT_CAUSE_PARTS),
@@ -6375,6 +6829,8 @@ def shape(run: str) -> dict[str, object]:
             "not_accepted": NOT_ACCEPTED,
             "misbound": MISBOUND,
             "undecided": UNDECIDED,
+            "create_in_progress": CREATE_IN_PROGRESS,
+            "create_duplicated": CREATE_DUPLICATED,
         },
     }
 
@@ -6460,6 +6916,7 @@ def answers(
     board_items: str,
     copy: str,
     re_estimate: str,
+    comment: str,
     checkout: Path,
     plan_store: str,
     feedback: str | None,
@@ -6503,6 +6960,7 @@ def answers(
                 "board-items": board_items,
                 "copy": copy,
                 "re-estimate": re_estimate,
+                "comment": comment,
             },
         )
     )
@@ -6534,6 +6992,7 @@ def answers(
         "board_items": board_items,
         "copy": copy,
         "re_estimate": re_estimate,
+        "comment": comment,
         "shape": shape(run),
         "evidence_marker": comment_marker(run, "<root-cause>"),
         "evidence_opening": comment_opening(run),
@@ -6790,6 +7249,11 @@ def _realias_records(root: Path, run: str, public: str) -> list[str]:
         held.rmdir()
     texts = []
     accounts = [(root / one / f"{run}.json", root / one / f"{public}.json") for one in _RUN_FILES]
+    # The run's receipts name it and its tickets on every line, so they move with its accounts;
+    # they are no account naming the items carrying its evidence.
+    receipts = receipts_path(root, run)
+    if receipts.is_file():
+        _moved(receipts, receipts_path(root, public), alias(receipts.read_text(encoding="utf-8")))
     feedback = root / FEEDBACK_DIRECTORY / run
     if feedback.is_dir():
         for path in sorted(one for one in feedback.rglob("*") if one.is_file()):
@@ -6867,6 +7331,9 @@ def _recopied(path: Path, board: str, item: BoardItemId, held: Mapping[str, obje
                         match_by=REALIAS_MATCH,
                         dry_run=dry_run or None,
                         status_policy="preserve-destination",
+                        # The staged ticket carries the priority the card holds, so the guard
+                        # names it: a priority a person set is kept even here.
+                        when_destination_priority=[held_priority(held).value],
                     )
                 ),
                 board,
@@ -6931,7 +7398,7 @@ class _Realiasing:
         """Every item of the run: by the store's metadata query, and where its tickets are placed.
 
         Each board the root reaches (`sources route`'s `reachable`) is asked, and each ticket's
-        own item is the counterpart its `task locate` answers.
+        own item is the card its record names (:func:`named_card`) where the store places it.
 
         The query asks `created_by_run` alone. The store's metadata query matches a string at
         a path and no member of a list, so `owning_runs` is no question it answers; and every
@@ -6945,7 +7412,7 @@ class _Realiasing:
         ]
         for path in sorted((self.root / TASKS_DIRECTORY / self.public / TICKETS).glob("*.md")):
             ticket = read_ticket(path)
-            item = locate(path, self.board, bound=ticket.board_item, established=False).counterpart
+            item = named_card(ticket, locate(path, self.board).destination, self.board)
             if item is not None:
                 found.append(item)
         return list(dict.fromkeys(found))
@@ -7028,7 +7495,9 @@ def edited_version(written: CommentWritten, sent: str, version: str | None) -> s
     :class:`OSError` for an answer showing another body than ``sent``, or a part of an
     expected write that did not land; the version it reports, else ``version`` as it was.
     """
-    parts = [] if written.result is None else [one.root.outcome for one in written.result.parts]
+    parts = (
+        [] if written.result is None else [one.root.outcome for one in written.result.parts or ()]
+    )
     if written.body != sent or any(one != "landed" for one in parts):
         raise OSError(
             f"the edit of comment {written.id.root} answered a body or parts other than it sent "
@@ -7172,20 +7641,21 @@ def _parser() -> _Parser:
     )
     realiased.add_argument("run", metavar="RUN-ID")
     placed = commands.add_parser(
-        # The follow-up task has this command write the ticket's estimate and note withdrawn
-        # duplicates before it answers; `board-status` is the name the template, the
-        # journeys and AGENTS.md already publish, and the help below states both writes.
+        # The follow-up task has this command write the ticket's estimate before it answers;
+        # `board-status` is the name the template, the journeys and AGENTS.md already publish,
+        # and the help below states the write.
         # llmlint: ignore[names_match_behavior] see the note above this line
         "board-status",
         description=(
-            "Ask the store once where the ticket lands and which item is its own: `task locate`, "
-            "which follows the store's link by id and asks the destination's origin query only "
-            "for a ticket it links to nothing, including on re-dispatch. Reuse its answer: never "
-            "repeat an origin search."
+            "Ask the store once where the ticket lands — a placement-only `task locate`, which "
+            "reads nothing at the board — and read the card the ticket's record names, which "
+            "follows the store's link by id, once, with its comments. A ticket naming no card "
+            "reads nothing: the store's own copy finds its card by origin, so never repeat an "
+            "origin search."
         ),
         help=(
-            "print the status a ticket is copied with, decided from the item the store places it "
-            "on, after writing the ticket's estimate and noting any withdrawn duplicate"
+            "print the status a ticket is copied with, decided from the card its record names, "
+            "after writing the ticket's estimate"
         ),
     )
     placed.add_argument("--board", required=True, metavar="SOURCE")
@@ -7210,7 +7680,33 @@ def _parser() -> _Parser:
         ),
     )
     estimated.add_argument("--board", required=True, metavar="SOURCE")
+    estimated.add_argument(
+        "--run",
+        required=True,
+        type=_run_id,
+        metavar="RUN-ID",
+        help="the run whose receipts take its writes",
+    )
+    estimated.add_argument(
+        "--root", type=Path, help="the drafts root; the store's `drafts` root by default"
+    )
     estimated.add_argument("item", metavar="ITEM", help="the board item, as `<board>:<id>`")
+    commented = commands.add_parser(
+        "comment",
+        help=(
+            "post a run's evidence comment or budget question on a card, refusing a body that is "
+            "not the run's comment shape before anything is posted, and receipt the store's answer"
+        ),
+    )
+    commented.add_argument("--board", required=True, metavar="SOURCE")
+    commented.add_argument(
+        "--run", required=True, type=_run_id, metavar="RUN-ID", help="the run whose comment it is"
+    )
+    commented.add_argument(
+        "--root", type=Path, help="the drafts root; the store's `drafts` root by default"
+    )
+    commented.add_argument("--body-file", type=Path, required=True, metavar="PATH")
+    commented.add_argument("card", metavar="CARD", help="the card, as `<board>:<id>`")
     listing = commands.add_parser(
         "board-items",
         description=(
@@ -7218,7 +7714,8 @@ def _parser() -> _Parser:
             "then once per further distinct text question, the failing file or function last; "
             "ask by root-cause slug only for a budget overrun, whose slug is derived; reuse "
             "answers already obtained by tooling or the agent. Never duplicate-search a ticket "
-            "board-status found an item for: board-status owns its origin query."
+            "whose record already names its card: the store's own copy finds an unlinked "
+            "ticket's card by origin."
         ),
         help=(
             "print every item of a board one narrowing query selects, every page, as one JSON "
@@ -7418,6 +7915,7 @@ def _parser() -> _Parser:
     task.add_argument("--board-items", required=True, metavar="COMMAND")
     task.add_argument("--copy", required=True, metavar="COMMAND")
     task.add_argument("--re-estimate", required=True, metavar="COMMAND")
+    task.add_argument("--comment", required=True, metavar="COMMAND")
     task.add_argument("--checkout", type=Path, required=True, help="the launching checkout")
     task.add_argument(
         "--plan-store",
@@ -7447,9 +7945,7 @@ def _validated(paths: Sequence[Path], *, pending: bool = False) -> int:
             # A ticket listing one repository is held to it by its shape, which every answer
             # the store can give satisfies — its issue is created there or in no repository —
             # so the store is asked only where its answer can refuse the record.
-            if ticket.changes and (
-                misfiled := filing_problems(ticket, locate(path, BOARD, counterpart=False))
-            ):
+            if ticket.changes and (misfiled := filing_problems(ticket, locate(path, BOARD))):
                 raise Refused(misfiled)
         except OSError as exc:
             status = UNRUNNABLE
@@ -7492,8 +7988,8 @@ def _accounted(
 ) -> int:
     """Validate a run's disposition artifact, for the `check-dispositions` command.
 
-    ``touched`` collects the items the board check read as this run's, for the closeout's
-    review task.
+    ``touched`` collects the cards the run's receipts show it created, updated or posted
+    evidence on, for the closeout's review task.
     """
     path = dispositions_path(arguments.root, arguments.run)
     if touched is None and getattr(arguments, "review", False):
@@ -7522,7 +8018,7 @@ def _accounted(
             # JSON starts as objects, so these casts carry that proof into the board read.
             entries = cast(list[dict[str, object]], document["dispositions"])
             filed = {cause for entry in entries for cause in cast(list[str], entry["root_causes"])}
-            problems = filed_board_problems(
+            problems = receipt_problems(
                 arguments.root,
                 arguments.run,
                 filed,
@@ -7585,7 +8081,6 @@ def _budgets_checked(arguments: argparse.Namespace) -> int:
             arguments.root,
             arguments.run,
             read_run_tickets(arguments.root, arguments.run),
-            BoardReads(),
             board=arguments.board,
             measured=measured,
         )
@@ -7848,6 +8343,7 @@ def _answered_template(arguments: argparse.Namespace) -> int:
             board_items=arguments.board_items,
             copy=arguments.copy,
             re_estimate=arguments.re_estimate,
+            comment=arguments.comment,
             checkout=arguments.checkout,
             plan_store=arguments.plan_store,
             feedback=feedback,
@@ -7890,7 +8386,12 @@ def _listed(arguments: argparse.Namespace) -> int:
 
 
 def _placed(arguments: argparse.Namespace) -> int:
-    """Print the status a ticket is copied with, for the `board-status` command."""
+    """Print the status a ticket is copied with, for the `board-status` command.
+
+    The ticket's destination is the placement-only `task locate`'s, which reads nothing at the
+    board; the one board read is of the card its record names, by id with its comments, for the
+    occurrence recount — none for a ticket whose record names no card, which is a proposal.
+    """
     try:
         run, root_cause = located_path(arguments.path.absolute())
         ticket = qualified_id(run, root_cause)
@@ -7900,17 +8401,30 @@ def _placed(arguments: argparse.Namespace) -> int:
         # refused as the record it is rather than by an answer about a board.
         ticket_repository(ticket, item)
         local = ticket_from(arguments.path, stored, pending=True)
-        location = locate(arguments.path, arguments.board, bound=local.board_item)
-        if refusal := owner_refusal(location, board_owner(location.destination)):
-            raise refusal
+        location = locate(arguments.path, arguments.board)
+        if location.refused is not None:
+            raise OutsideOwner(location.refused)
         if unheld := dependency_problems(ticket, item, arguments.board, stored.edges):
             raise NotAccepted(unheld)
         if misfiled := filing_problems(local, location):
             raise Refused(misfiled)
         reads = BoardReads()
-        placement = place(local, location, reads)
-        status = status_before_copy(placement.category, withdraw=arguments.withdraw)
-        estimate_before_copy(arguments.path, location.destination, placement, local, reads)
+        card = named_card(local, location.destination, arguments.board)
+        held = None if card is None else reads.item(card)
+        if card is None:
+            # A ticket on a destination declared private names no card: the card this run's own
+            # last copy reached stands in, read once and only while it carries the ticket's origin.
+            root = arguments.path.absolute().parents[3]
+            reached = receipt_card(root, run, ticket)
+            shown = None if reached is None else reads.item(reached)
+            if shown is not None and carries_origin(shown, ticket):
+                card, held = reached, shown
+        # A withdrawal is decided by the store's status guard at the copy, never by this read.
+        if arguments.withdraw:
+            status = Status.WITHDRAWN
+        else:
+            status = Status.PROPOSED if held is None else card_status(held)
+        estimate_before_copy(arguments.path, card, local, reads)
     except OutsideOwner as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return OUTSIDE_OWNER
@@ -7920,12 +8434,6 @@ def _placed(arguments: argparse.Namespace) -> int:
     except Unplaced as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return UNPLACED
-    except ProtectedFromWithdrawal as refusal:
-        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
-        return PROTECTED
-    except Misbound as refusal:
-        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
-        return MISBOUND
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE
@@ -7936,7 +8444,7 @@ def _placed(arguments: argparse.Namespace) -> int:
 def _re_estimated(arguments: argparse.Namespace) -> int:
     """Recompute and persist one board item's estimate, for the `re-estimate` command."""
     try:
-        decided = re_estimate(arguments.board, arguments.item)
+        decided = re_estimate(arguments.board, arguments.item, arguments.run, arguments.root)
     except Refused as refusal:
         print(f"{PROG}: {arguments.item}: {refusal}", file=sys.stderr)
         return UNSOUND
@@ -7956,8 +8464,24 @@ def _re_estimated(arguments: argparse.Namespace) -> int:
     return SOUND
 
 
+def _commented(arguments: argparse.Namespace) -> int:
+    """Post a run's evidence comment or budget question, for the `comment` command."""
+    try:
+        body = arguments.body_file.read_text(encoding="utf-8")
+        posted = _posted(arguments.board, arguments.run, arguments.card, body, arguments.root)
+    except Refused as refusal:
+        print(f"{PROG}: {arguments.card}: refused, nothing posted: {refusal}", file=sys.stderr)
+        return UNSOUND
+    except OSError as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    json.dump(dict(posted), sys.stdout)
+    sys.stdout.write("\n")
+    return SOUND
+
+
 def _copied(arguments: argparse.Namespace) -> int:
-    """Copy a ticket onto its bound board item, for the `copy` command."""
+    """Copy a ticket with one guarded store copy, for the `copy` command."""
     try:
         copied = copy_ticket(arguments.path, arguments.board)
     except OutsideOwner as refusal:
@@ -7966,15 +8490,18 @@ def _copied(arguments: argparse.Namespace) -> int:
     except Misbound as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return MISBOUND
-    except Unplaced as refusal:
-        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
-        return UNPLACED
     except ProtectedFromWithdrawal as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return PROTECTED
     except Undecided as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return UNDECIDED
+    except CreateInProgress as refusal:
+        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
+        return CREATE_IN_PROGRESS
+    except CreateDuplicated as refusal:
+        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
+        return CREATE_DUPLICATED
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE
@@ -7998,6 +8525,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _copied(arguments)
         case "re-estimate":
             return _re_estimated(arguments)
+        case "comment":
+            return _commented(arguments)
         case "statuses":
             sys.stdout.write(status_vocabulary())
             return SOUND

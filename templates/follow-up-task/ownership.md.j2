@@ -1,5 +1,5 @@
 {#- Who owns what on the board, which both modes of `follow-up-task.md.j2` carry whole. -#}
-{% set re_estimate_command = "`" ~ re_estimate ~ " --board " ~ board ~ " <the issue's id, as `<its board>:<id>`>`" %}
+{% set re_estimate_command = "`" ~ re_estimate ~ " --board " ~ board ~ " --run " ~ run ~ " <the issue's id, as `<its board>:<id>`>`" %}
 ## Ownership on the board
 
 - **Ownership is by run.** An issue on `{{ board }}`, or on a board it routes to, belongs to the run its `{{ shape.record_key }}`
@@ -48,9 +48,11 @@
 
   It never repeats what the issue already says — its root cause, impact, examples,
   suggested fix, rejected fixes or owning runs — and never carries a ticket's level-2
-  section heading, current or retired ({{ shape.ticket_headings }}): the post-settlement `--board` checks
-  refuse an evidence comment of this run carrying one as a level-2 heading, naming the
-  item and the heading.
+  section heading, current or retired ({{ shape.ticket_headings }}). Post it with
+  `{{ comment }} --board {{ board }} --run {{ run }} <the issue's id> --body-file <the comment>`, which
+  refuses, before posting anything, a body whose first line is not the opening above, whose
+  last line is not this run's marker, or that carries one of those headings as a level-2
+  heading.
 
   It goes only on an open issue another run created for the same root cause, which
   receives at most **one** from this run — whatever status the board holds it at, so an

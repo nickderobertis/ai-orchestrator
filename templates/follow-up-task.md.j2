@@ -44,7 +44,7 @@ variables:
     type: string
     required: true
   board_status:
-    description: The command that decides the status a ticket is copied with from the item the store places it on, and writes its priority estimate.
+    description: The command that decides the status a ticket is copied with from the card its record names, and writes its priority estimate.
     type: string
     required: true
   board_items:
@@ -52,11 +52,15 @@ variables:
     type: string
     required: true
   copy:
-    description: The command that copies a ticket onto the board item the store's task locate places it on, or a new one.
+    description: The command that copies a ticket with one guarded store copy onto the card its record names, or a new one, and receipts the store's answer.
     type: string
     required: true
   re_estimate:
-    description: The command that recomputes one board item's priority estimate from its comments.
+    description: The command that recomputes one board item's priority estimate from its comments, and receipts each write.
+    type: string
+    required: true
+  comment:
+    description: The command that posts this run's evidence comment or budget question on a card, refusing a body that is not this run's comment shape, and receipts the store's answer.
     type: string
     required: true
   shape:
@@ -240,8 +244,10 @@ louder rather than duplicated.
   none, reads every page the store answers, and prints the result as one JSON document. `--status <word>`, repeated, keeps only the items at those statuses of
   what the other flags selected, and never selects on its own. Never ask with a bare
   `{{ plan_store }} task list`, which answers one page and a `next` cursor. Read one item with
-  `{{ plan_store }} task show <id> --json`, and comment with
-  `{{ plan_store }} task comment add|list|edit|delete`.
+  `{{ plan_store }} task show <id> --json`. Post this run's evidence comment or budget question
+  with `{{ comment }} --board {{ board }} --run {{ run }} <id> --body-file <the comment>`, never a bare
+  `{{ plan_store }} task comment add`, and read or edit comments with
+  `{{ plan_store }} task comment list|edit`.
 
 ## What each board status means
 
@@ -323,13 +329,12 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    validate it only after that: `{{ validate }}` refuses a ticket without them. Then delete
    the draft files that ticket consumed, under `{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.drafts_directory }}/`.
 7. **Search the board for the same root cause, and for the accepted fixes that bear on it.**
-   A ticket the store already links to its item — its `onetaskgraph.copies` link, or the
+   A ticket whose record already names its card — its `{{ shape.copies_key }}` link, or the
    `{{ shape.binding_field }}` a ticket recorded before schema {{ shape.binding_retired_at }} still carries — is
    already placed: do not run metadata, text or origin searches for it, including on a
-   re-dispatch. Step 8's `{{ board_status }}` asks the store where it is, recovers it by origin
-   where that item is gone, and applies the duplicate rule; copy onto the item it reads.
-   For a ticket with no item yet, ask each distinct question once, and never by origin: step 8's
-   `{{ board_status }}` asks by origin, and nothing else does. The ticket's record, written at step
+   re-dispatch; copy onto the card its record names. For a ticket with no card yet, ask each
+   distinct question once, and never by origin: the store's own copy at step 9 is what looks
+   a ticket up by origin, and nothing else does. The ticket's record, written at step
    6, is what says which board to ask: every question is a text search,
    `{{ board_items }} --board {{ board }} --ticket <path of the ticket> --search <text>`,
    asked in this order:
@@ -358,8 +363,8 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    other you drop — is deleted before you record that draft's disposition, so no record is left
    that no board holds. Keep search results out of the ticket. Never mention a rejected
    irrelevant candidate anywhere in its body, including Evidence; persist no query or candidate
-   log. The existing disposition account, the store's placements and marked comments supply the
-   proof for check-dispositions.
+   log. The disposition account and the run's receipts of its board writes supply the proof
+   for check-dispositions.
    <!-- llmlint: ignore-block[changed_behavior_has_e2e] Whether an item's stated root cause meets the bar is the agent's judgment of two reports, which the suite never scripts a verdict for: it doubles the agent's turn, so a journey could only assert what its own script chose. What the tooling decides is driven: `tests/test_follow_up_tickets.py` holds the rendered task to this rule and drives `check-dispositions --board` and `re-estimate` accepting this run's evidence on another run's item under the slug this ticket adopted, and refusing it under a slug it kept, over a real `local-md` board; `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` holds that the invariant-phrased search a real dispatch is handed answers an earlier run's item filed under a different slug. -->
    - **The same root cause.** An open item, at any open status, whose stated root cause meets
      the bar of step 5 — one change to the rule would remove this ticket's instances and its
@@ -418,8 +423,9 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
 8. **Decide each ticket's status from the board, before every copy.** For every ticket
    step 7 left, run `{{ board_status }} --board {{ board }} <path of the ticket>`, adding
    `--withdraw` for a ticket this run withdraws, which asks the store where it lands, checks its
-   `{{ shape.dependency_field }}` entries, and writes the ticket's priority estimate, its
-   estimate line and its priority; write the word it prints as the ticket's `status`, then
+   `{{ shape.dependency_field }}` entries, reads the card its record names once with its comments,
+   and writes the ticket's priority estimate, its estimate line and its priority; write the
+   word it prints as the ticket's `status`, then
    run `{{ validate }} <path of the ticket>` and correct the ticket until that command reports
    it sound. Whenever you change a ticket's `## {{ shape.impact }}`, `{{ shape.frequency_field }}` or
    `{{ shape.dependency_field }}` after that, run `{{ board_status }}` on it again, then validate it,
@@ -429,14 +435,22 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    item that does is this run's own, copy the ticket with
    `{{ copy }} --board {{ board }} <path of the ticket>`, as "The verified ticket" states. When
    that copy refuses, copy nothing more for that ticket and keep what it printed for your
-   report. Where an
+   report — but for exit {{ shape.exits.create_in_progress }}, `create-in-progress`, where another
+   attempt holds the create of its card: run the same `{{ copy }}` again once the lease it names
+   has ended. Where an
    open item for it was created by another run — found under this ticket's slug, or by the
-   searches of step 7 under the slug this ticket then took from it — copy nothing: add this
-   run's one comment to that item, or edit the comment this run already left there, under
-   "Ownership on the board" below, its marker naming that item's `root_cause`, and **after
-   every such comment, re-estimate that item** with
-   `{{ re_estimate }} --board {{ board }} <that item's id>`, which recounts its occurrences, stores
-   its estimate and rewrites its estimate line. Keep what it printed for your report.
+   searches of step 7 under the slug this ticket then took from it — copy nothing: post this
+   run's one comment to that item with
+   `{{ comment }} --board {{ board }} --run {{ run }} <that item's id> --body-file <the comment>`, or edit
+   the comment this run already left there, under "Ownership on the board" below, its marker
+   naming that item's `root_cause`, and **after every such comment, re-estimate that item** with
+   `{{ re_estimate }} --board {{ board }} --run {{ run }} <that item's id>`, which recounts its
+   occurrences, stores its estimate and rewrites its estimate line. Keep what each printed for
+   your report.
+   `{{ copy }}`, `{{ comment }}` and `{{ re_estimate }}` each append one line, built from the store's
+   answer to the write, to this run's receipts at
+   `{{ drafts_root }}/{{ shape.receipts_directory }}/{{ run }}{{ shape.receipt_suffix }}`. That file is the run's record of what
+   its writes did: never write, edit or delete it.
 10. **Account for every draft this dispatch was given.** Write one disposition per draft
     into `{{ dispositions }}`, to the shape under "The account of every draft" below, then run
     `{{ check_dispositions }}` and correct the account until it reports it sound. It is what
@@ -469,9 +483,9 @@ written before you were dispatched, and it is not yours to change. Yours is
   run wrote, or as this run's evidence comment on another run's open issue for the same
   root cause. `root_causes` names every root cause it supports, each the root cause of a
   ticket this run holds under its `{{ shape.tickets_directory }}/` whose `drafts` names this draft — which it
-  keeps in both cases, under the issue's own slug where it took it. For new evidence-only dispositions, `detail` names the carrier as
-  `{{ board }}:<native id>` so validation reads that item directly. Older accounts naming
-  no carrier retain metadata discovery; do not omit the carrier in a new account.
+  keeps in both cases, under the issue's own slug where it took it. An evidence-only
+  disposition's `detail` names the carrier as `{{ board }}:<native id>`, the id its comment was
+  posted on, which is what its receipt is matched to.
 - **`{{ shape.not_reproducible }}`** — its claim does not hold at the basis commit, or nothing in
   the tree or the transcript bears it out.
 - **`{{ shape.already_fixed }}`** — the basis already carries the fix, or an accepted ticket's fix
@@ -496,12 +510,12 @@ carries exactly one disposition with everything that disposition owes, and {{ sh
 each draft that is absent, that carries more than one, or whose disposition links it to no
 root cause where it must, to one this run holds no ticket for, or to a ticket whose
 `drafts` does not name it. This dispatch is not finished while it refuses.
-The attached recipe runs the sole `check-dispositions --board` after settlement: it also
-refuses a filed carrier whose estimate or estimate line disagrees with its comment recount,
-a copied item whose priority disagrees with its ticket, an item this run created that is not
-at `Proposal` — or at the status a person moved it to, which its ticket carries — and a
-withdrawn ticket's item that is not at `Cancelled`. Correct local accounts here;
-board changes after the dispatch's last local check are still checked after settlement.
+The attached recipe runs the sole `check-dispositions --board` after settlement, against this
+run's receipts and nothing on the board: it also refuses a filed ticket whose record names a
+card with no copy receipt, or whose last copy the store refused, created off `Proposal`, left
+a withdrawn ticket's card off `Cancelled`, or left at a priority other than the store's
+priority guard gives; and a filed carrier with no comment receipt, or no `re-estimate`
+receipt after it, or one stating an estimate other than its occurrence count gives.
 
 ## The verified ticket
 
@@ -514,10 +528,10 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   origin**, and the store places it by them — by their visibility as well as their names. A
   fix that changes one repository lists that one, and the record's `repository` — the
   repository its issue is filed in — names it too: on a GitHub board its issue is created in
-  that one repository and added to the board as an item. The repository the issue is created
-  in must belong to the owner the board the store places it on files under, as
-  `github.com/<owner>/<name>`; a board filing no issue in a repository, such as a Linear
-  tracker, bounds nothing.
+  that one repository and added to the board as an item. The store creates an issue only in a
+  repository of the owners the board it places the ticket on declares it creates for, and
+  refuses any other as `creation-owner`; a board filing no issue in a repository, such as a
+  Linear tracker, bounds nothing.
 - **A ticket listing several repositories is filed where the store says it creates its
   issue**: the store's `task locate` answers that repository as `creates_in` — on a GitHub
   board, the repository that board's configuration names, rather than any one of those listed
@@ -534,26 +548,26 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   holds, so a copy never undoes that decision: a ticket the board
   holds at `Deferred` (Linear's `Backlog`) is copied carrying `{{ shape.deferred }}`. A ticket this run withdraws is
   `{{ shape.withdrawn }}`, which the board holds as closed as not planned, unless the board shows it
-  as accepted or deferred: this run never withdraws a deferred item or an accepted one, so
-  copy nothing, leave the local ticket as it is, and report that you would have withdrawn
-  it and why. No issue is ever deleted.
+  as accepted or deferred: this run never withdraws a deferred item or an accepted one. Its
+  copy is written only over a card at `Proposal` or `Cancelled`, which the store decides on
+  its own read at the write; it exits {{ shape.exits.protected }} having written nothing for any other, and then
+  leave the local ticket as it is and report that you would have withdrawn it and why. No
+  issue is ever deleted.
 - **Before every copy, run `{{ board_status }} --board {{ board }} <path of the ticket>`** (adding
   `--withdraw` for a ticket this run withdraws, before you change that ticket), write the
-  word it prints as the ticket's `status`, then validate the ticket. It reads the
-  board item's `{{ shape.priority_field }}`, its record's `{{ shape.estimate_field }}` and its comments in the
-  same step, and writes the ticket's `{{ shape.estimate_field }}`, its estimate line and its
-  `{{ shape.priority_field }}` as the rule above decides, which the copy carries onto the board. It exits
-  {{ shape.exits.sound }} with that word; {{ shape.exits.unplaced }} when the board holds the item at a status no ticket carries;
-  {{ shape.exits.protected }} for a withdrawal of an item the board shows as accepted or deferred; {{ shape.exits.outside_owner }} when
-  the repository the store would create the ticket's issue in is not one of the owner the board
-  it places it on files under, before anything is written; {{ shape.exits.not_accepted }} when a `{{ shape.dependency_field }}` entry does not resolve on the board as the
-  dependency rule below states, naming every such entry and what the board holds; and
-  {{ shape.exits.misbound }} when the ticket's item cannot be established, as the placement
-  rule below states. On any of these refusals, copy nothing and report what it printed.
+  word it prints as the ticket's `status`, then validate the ticket. It reads the card its
+  record names once, by id with its comments — nothing, for a ticket naming none, which is a
+  proposal — and writes the ticket's `{{ shape.estimate_field }}`, its estimate line and its
+  `{{ shape.priority_field }}`, which is that estimate. It exits
+  {{ shape.exits.sound }} with that word; {{ shape.exits.unplaced }} when the board holds the card at a status no ticket carries;
+  {{ shape.exits.outside_owner }} when the store refuses to create the ticket's issue in the repository it would file it in
+  (`creates_in.refused`), before anything is written; and {{ shape.exits.not_accepted }} when a `{{ shape.dependency_field }}` entry does not resolve on the board as the
+  dependency rule below states, naming every such entry and what the board holds. On any of
+  these refusals, copy nothing and report what it printed.
 - **A refusal is reported, never worked around.** When `board-status` exits {{ shape.exits.outside_owner }}, or
-  `{{ copy }}` refuses the ticket — for a repository the token cannot see, or one the board
-  will not create an issue in — copy nothing for that ticket, never retry it with
-  `repositories` removed or changed to get it filed, and report what was printed.
+  `{{ copy }}` refuses the ticket — for a repository the token cannot see, or one the store
+  will not create an issue in, `creation-owner` — copy nothing for that ticket, never retry it
+  with `repositories` removed or changed to get it filed, and report what was printed.
 - Its front matter carries the `{{ shape.record_key }}` record with every key present, and its body
   the headings {{ shape.headings }}, in that order, each with content. `created_by_run` is this
   run, and `owning_runs` includes it.
@@ -588,17 +602,19 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   `{{ shape.intermittent }}` when it fires only sometimes or only in certain situations. `{{ validate }}`
   refuses a ticket without it. The record's `{{ shape.estimate_field }}`, the `## {{ shape.impact }}` section's
   `- {{ shape.estimate_line }}:` line and the front matter's `{{ shape.priority_field }}` are `{{ board_status }}`'s to
-  write and never yours; when you rewrite a ticket, keep them as it wrote them. The
+  write and never yours, and its `{{ shape.board_estimate_field }}` is `{{ copy }}`'s; when you rewrite a ticket,
+  keep them as they wrote them. The
   estimate is the severity with the workaround, one level for one level
   ({{ shape.estimate_levels }}), raised one level, capped at `{{ shape.raise_cap }}`, when `{{ shape.frequency_field }}` is
   `{{ shape.consistent }}` or the root cause has {{ shape.raise_at }} or more occurrences — once, when both hold —
   so `{{ shape.urgent }}` comes only from a severity still `critical` with the workaround: the ticket's own
   evidence, plus each evidence comment another run left on its board issue and each reply
   whose marker carries `verdict="{{ shape.confirms }}"`, recounted off the issue's comments every time
-  and stored nowhere. The board item's priority follows the estimate while it holds the
-  estimate its record stored — or holds none, where its record stored none — and is
-  otherwise a person's decision, which every copy keeps: a person who sets it back to the
-  estimate hands it back to the estimate.
+  and stored nowhere. The card's priority follows the estimate while it holds the estimate
+  the card last received, the ticket's `{{ shape.board_estimate_field }}` — or holds none, where the ticket
+  records none — and is otherwise a person's decision, which every copy keeps, the store
+  deciding it at the write: a person who sets it back to that estimate hands it back to the
+  estimate.
 - **`## {{ shape.impact }}` states what the severities rest on, concisely**: its labelled parts,
   {{ shape.impact_parts }}, in that order before its lines, each in one or two sentences, the last
   carrying {{ shape.workaround_costs }} — or, with a workaround of `{{ shape.no_workaround }}`, saying there is
@@ -652,45 +668,39 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   against the dependency item that the refusal names, using its read by id — removing the entry and the assumption from the text
   where the item is no longer accepted — run `{{ board_status }}` on it again, validate it, and
   report what was printed.
-- **The store says where the ticket's item is; nothing in the ticket binds it.** `{{ board_status }}`
-  and `{{ copy }}` each ask the store once, through its `task locate`, which finds the ticket's item
-  as its copy would: by the store's own link to it, `{{ shape.copies_key }}` in the ticket's metadata,
-  which a copy records on the item it creates and follows with one read by id; else by the
-  destination's query for items carrying the ticket's origin. Where that query finds two or
-  more, this run's one open item among them, beside only withdrawn ones, is the survivor:
-  `{{ board_status }}` leaves each withdrawn duplicate one comment naming it, and `{{ copy }}` steers the
-  store's copy to it by id, which records the link. Both commands exit {{ shape.exits.misbound }}, naming the items,
-  when two or more carry the ticket's origin but not exactly one is this run's own open item
-  beside only withdrawn ones, and `{{ copy }}` after the copy when the store reports reaching any
-  item but the one it placed the ticket on, or updating one where it was to create one. When
-  you rewrite a ticket, keep `{{ shape.copies_key }}` exactly as it stands.
+- **The ticket's card is the one its record names.** That is the store's own link,
+  `{{ shape.copies_key }}` in the ticket's metadata, which a copy records on the card it reaches. A
+  ticket naming none is copied by the store's own rules, which create its card or update the
+  one carrying its origin, and its record then names it. When you rewrite a ticket, keep
+  `{{ shape.copies_key }}`, and the store's `{{ shape.creating_key }}` where it holds one, exactly as they stand.
+  `{{ copy }}` exits {{ shape.exits.misbound }} when the store refuses the card the record names — gone, or no
+  longer carrying the ticket's origin — or reaches another; nothing is then created in its place.
+  It exits {{ shape.exits.create_duplicated }} when the store finds more than one card carrying the key of the ticket's
+  create, `create-duplicated`: the ticket is not filed, so report the key and every card it
+  names for a person to choose between.
 - **A ticket recorded before schema {{ shape.binding_retired_at }} may still carry `{{ shape.binding_field }}`**, the
-  native id of the item it was copied onto, and the store's `{{ shape.origin_key }}` naming that item.
-  Keep both exactly as they stand: until its next copy every command hands that item to the
-  store, which reads it by id and checks it still carries the ticket's origin — recovering it by
-  origin where it is gone — and `{{ board_status }}` writes such a ticket at schema
-  {{ shape.binding_last_at }}. Its next `{{ copy }}` updates that item and rewrites the ticket at schema
-  {{ shape.schema }} without either; a schema-{{ shape.binding_retired_at }} ticket carrying `{{ shape.binding_field }}` is refused.
+  native id of the card it was copied onto, and the store's `{{ shape.origin_key }}` naming that card.
+  Keep both exactly as they stand: its next `{{ copy }}` names that card to the store, which reads
+  it by id and checks it still carries the ticket's origin, updates it, and rewrites the ticket
+  at schema {{ shape.schema }} without either; a schema-{{ shape.binding_retired_at }} or later ticket carrying `{{ shape.binding_field }}` is refused.
 - Every `{{ copy }}` but a withdrawal is made under the store's `preserve-destination` status
-  policy, so an item the board holds keeps its status and a new one takes the ticket's. So
-  `{{ copy }}` exits {{ shape.exits.undecided }} before it writes anything when it would create the ticket's
-  item at a `status` other than `{{ shape.proposed }}` or a withdrawal, and a withdrawal reads its item's
-  status once by id, exiting {{ shape.exits.unplaced }} and {{ shape.exits.protected }} as `{{ board_status }} --withdraw` does. On any of
-  these, run `{{ board_status }}` on the ticket again, write the word it prints, and copy it then.
-- It reaches the board only as `{{ copy }} --board {{ board }} <path of the ticket>`, which copies
-  `{{ shape.ticket_id }}` onto the item the store placed it on, or a new one, and prints the action and
-  the item it reached; never as a bare `{{ plan_store }} task copy`, which updates whichever carrier
-  the store lists first. That copy is the only way an issue is edited.
+  policy, so a card the board holds keeps its status and a new one takes the ticket's. So
+  `{{ copy }}` exits {{ shape.exits.undecided }} before it writes anything for a ticket whose record names no card
+  and whose `status` is neither `{{ shape.proposed }}` nor a withdrawal; then run `{{ board_status }}` on the
+  ticket again, write the word it prints, and copy it then.
+- It reaches the board only as `{{ copy }} --board {{ board }} <path of the ticket>`, one guarded store
+  copy of `{{ shape.ticket_id }}` that prints the action and the card it reached; never as a bare
+  `{{ plan_store }} task copy`, which carries none of these guards and leaves no receipt. That
+  copy is the only way an issue is edited.
 - **No issue is created, closed or withdrawn any other way.** Never write an issue, its state
   or its board item through the GitHub CLI (`gh issue create`, `gh issue close`, `gh issue edit`, `gh
   api`), through GitHub's API with the board credential this dispatch holds, or through a
   `{{ plan_store }}` write — `task create`, `task status set`, `task update`, `task copy` — on a
   board item: each writes an issue's state without the decision `{{ board_status }}` makes and the
   status its copy writes beside it, which leaves an item nobody can read, such as one closed
-  as not planned while its board still shows it as a proposal. A duplicate is withdrawn the
-  same way as any ticket: `{{ board_status }} --withdraw`, then `{{ copy }}`. The board check the
-  recipe runs after settlement refuses a run whose own item is not at `Proposal`, or whose
-  withdrawn ticket's item is not at `Cancelled`, naming the item and its status.
+  as not planned while its board still shows it as a proposal. The check the recipe runs after
+  settlement refuses a run whose receipt shows a card it created off `Proposal`, or a withdrawn
+  ticket's card off `Cancelled`, naming the card and its status.
 
 The shape, with every placeholder to fill:
 
@@ -753,7 +763,8 @@ budget account at `{{ budgets }}`, with the change's telemetry copied unchanged 
   (`{{ shape.withdrawn }}`), read its record's `{{ shape.budget_field }}`. When that is the budget this entry was
   measured against — the same repository, file, id, threshold and direction — the budget
   still stands only if the registered repository's budgets file still holds that id with
-  the same threshold and direction; read it with onebudgetspec `list`. Re-file nothing. Add this run's one evidence comment to that closed item,
+  the same threshold and direction; read it with onebudgetspec `list`. Re-file nothing. Post this
+  run's one evidence comment to that closed item with `{{ comment }}`,
   under "Ownership on the board", in the shape stated there, its occurrence being the
   entry's result line and the diagnosed cause, and asking whether the budget should change
   instead; it is the one evidence comment that
@@ -783,8 +794,9 @@ root cause whose ticket this run holds recording the budget it overran, or a
 `{{ shape.budget_question }}` naming an item closed as not planned whose recorded budget is the one the
 entry was measured against — and every other entry carries none; it exits {{ shape.exits.unsound }}
 naming each entry it refuses. This dispatch is not finished while it refuses. The attached
-recipe runs it again after settlement with `--board`, reading each evidence comment back,
-and against the account as it was measured.
+recipe runs it again after settlement with `--board`, holding each filed overrun and each
+question to this run's receipts rather than reading the board, and against the account as it
+was measured.
 
 {% include "follow-up-task/ownership.md.j2" %}
 
@@ -944,7 +956,7 @@ For each comment quoted below, in the order it is quoted:
    record carries an older `schema` — which `{{ validate }}` refuses, naming it — is brought
    forward first, by the rule the re-dispatch states for it, leaving its estimate to settle:
 
-{{ older_schema.rule(shape, board, board_status, re_estimate, settled=true) | indent(3, true) }}
+{{ older_schema.rule(shape, board, board_status, re_estimate, run, settled=true) | indent(3, true) }}
 
    Then run `{{ validate }} --pending <path of the ticket>` and correct the ticket until it reports
    it sound. Leave its `status`, `priority` and estimate as they stand, but for a withdrawal:
@@ -1063,7 +1075,7 @@ comments of this run may already exist. "Ownership on the board" above binds eve
 - an existing ticket of run `{{ run }}` is copied again carrying the board's status, which
   `{{ board_status }} --board {{ board }} <path of the ticket>` prints, never the status the ticket
   held before — the board may have been moved since the last copy;
-{{ older_schema.rule(shape, board, board_status, re_estimate) }}
+{{ older_schema.rule(shape, board, board_status, re_estimate, run) }}
 - a ticket's dependencies on accepted tickets, and the claims written against their fixes,
   are re-derived from step 7 for tickets with no item yet and from dependency items read by id
   for placed tickets — an accepted ticket may have moved or been un-accepted since the last pass, so `{{ shape.dependency_field }}` entries are

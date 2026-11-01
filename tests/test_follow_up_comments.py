@@ -156,6 +156,16 @@ def _filed(
     # The store records its link to the item on the ticket, which is all that places it.
     destination = getattr(copied.items[0].root, "destination", None)
     assert destination is not None, copied
+    # And the store's own answer is the receipt the agent's `copy` leaves, which is where a
+    # ticket on a private board, which keeps no link, finds the card its run's copy reached.
+    tickets.append_receipt(
+        root,
+        run,
+        tickets.ReceiptCommand.COPY,
+        tickets.qualified_id(run, cause),
+        str(destination.model_dump()),
+        tickets.copy_receipt(copied.items[0].root),
+    )
     return str(destination.model_dump())
 
 
@@ -541,15 +551,14 @@ def test_a_scoped_gathering_leaves_an_item_outside_proposal_and_deferred_not_ans
     assert "On the accepted one." not in report
 
 
-def test_a_run_scoped_gathering_reads_no_item_another_run_owns_a_legacy_binding_names(
+def test_a_run_scoped_gathering_launches_nothing_of_another_runs_item_a_legacy_binding_names(
     drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A `--run` ticket whose retired binding names another run's item is placed on none.
+    """A `--run` ticket whose retired binding names another run's item answers none of it.
 
-    The store, handed that item as `--target-native`, refuses it as carrying another ticket's
-    origin, and its origin query finds none of this ticket's: the item is never read, and
-    neither the comment selected for its owner nor this run's marked one is reported or
-    launched under this scope."""
+    The binding is the card its record names, so the pass reads that item; but the item's own
+    record names the other run as its creator, so neither the comment selected for its owner
+    nor this run's marked one is reported or launched under this scope."""
     own = _filed(drafts_root, RUN, CAUSE)
     others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
     _bound(drafts_root, RUN, "bound-to-another-runs-item", _native_of(others))
@@ -565,11 +574,12 @@ def test_a_run_scoped_gathering_reads_no_item_another_run_owns_a_legacy_binding_
 
     assert plan is not None and plan.scope == RUN
     assert [run for run, _ in plan.runs] == [RUN]
-    assert f"read {others}" not in report, report
-    assert (
-        f"run {RUN}'s ticket bound-to-another-runs-item is placed on no board item; nothing read"
-    ) in report
-    assert [one.id for one in plan.snapshot.items] == [own]
+    assert f"read {others} and its comments directly" in report, report
+    held = plan.snapshot
+    assert [(one.issue, one.comment) for one in held.selection[tickets.RunId(RUN)]] == [
+        (own, asked)
+    ]
+    assert list(held.selection) == [RUN]
     assert _id_line(report, own, asked).endswith(f"goes to run {RUN}")
     for unnamed in (theirs, marked):
         assert f"#comment-{unnamed} on {others}" not in report, report
@@ -1795,11 +1805,12 @@ def test_an_issue_no_run_of_this_host_owns_is_refused_naming_why_and_nothing_is_
 def test_a_run_scoped_gathering_says_which_of_its_tickets_is_placed_on_no_item(
     drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Each ticket's item is the store's `task locate` counterpart; one never copied has none.
+    """Each ticket's item is the card its record names; one never copied names none.
 
-    A record from before the binding retired, naming an item the board no longer holds or a
-    value that is no item's id, is placed where the store's own lookup places it — on none
-    here — and nothing is refused for it.
+    A record from before the binding retired carrying a value that is no item's id names no
+    card, and nothing is refused for it. One naming an item the board no longer holds names
+    that card, which the gathering copies by id and nothing looks up in its place: the store
+    refuses it, naming the item, and nothing is launched.
     """
     own = _filed(drafts_root, RUN, CAUSE)
     _bound(drafts_root, RUN, "never-copied", None)
@@ -1825,15 +1836,17 @@ def test_a_run_scoped_gathering_says_which_of_its_tickets_is_placed_on_no_item(
         f"read 1 item(s) run {RUN}'s tickets are placed on, each directly, and listed none"
     ), report
 
-    _bound(drafts_root, RUN, "bound-to-a-deleted-item", "deleted/item")
     _bound(drafts_root, RUN, "bound-to-no-id", "placeholder")
     path = tickets.ticket_path(drafts_root, RUN, "bound-to-no-id")
     path.write_text(
         path.read_text(encoding="utf-8").replace("placeholder", '"two words"'), encoding="utf-8"
     )
     report, plan = _gathered(drafts_root, capsys, "--run", RUN, "--dry-run")
-    for cause in ("bound-to-a-deleted-item", "bound-to-no-id"):
-        assert f"run {RUN}'s ticket {cause} is placed on no board item; nothing read" in report
+    assert f"run {RUN}'s ticket bound-to-no-id is placed on no board item; nothing read" in report
+
+    _bound(drafts_root, RUN, "bound-to-a-deleted-item", "deleted/item")
+    said = _refused(drafts_root, capsys, "--run", RUN, "--dry-run")
+    assert f"no task with the id {BOARD}:deleted/item" in said, said
 
 
 def test_a_run_scoped_gathering_honours_no_binding_a_current_record_carries(
@@ -2683,6 +2696,13 @@ def test_a_write_response_that_does_not_say_what_it_wrote_is_unknown() -> None:
     assert (silent.state, silent.error) == ("unknown", f"the response named None, not {written}")
     plain = comments.outcome(comments.StoreAnswer(0, {"id": written, "written": []}, ""), written)
     assert plain.state is None, "a write sent with no --expect answers with the task it wrote"
+    # The adopted store also reports a plain write's result — the version, status and priority
+    # the item holds after it — naming no part, which says nothing a plain answer does not.
+    summary = {"version": None, "status": {"category": "backlog", "name": "B"}, "priority": "low"}
+    summarised = comments.outcome(
+        comments.StoreAnswer(0, {"id": written, "written": [], "result": summary}, ""), written
+    )
+    assert summarised.state is None, summarised
     other = comments.outcome(
         comments.StoreAnswer(0, {"id": f"{BOARD}:y", "written": []}, ""), written
     )

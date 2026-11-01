@@ -58,6 +58,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, NamedTuple, cast
+from unittest import mock
 
 import budget_telemetry
 import delegation_checkout
@@ -432,6 +433,16 @@ def _item(bench: Bench, qualified: str) -> dict[str, object]:
     return item
 
 
+def _held_ticket(bench: Bench, path: Path) -> tickets.Ticket:
+    """The ticket at ``path`` as the store reads it under the launch's environment.
+
+    What an agent editing its ticket in place starts from: the record and the store's own keys
+    a copy wrote there — its link to the card among them — which a rewrite carries through.
+    """
+    with mock.patch.dict(os.environ, bench.environment, clear=True):
+        return tickets.read_ticket(path)
+
+
 def _comments(bench: Bench, qualified: str) -> list[dict[str, object]]:
     comments = _store(bench, "task", "comment", "list", qualified)["comments"]
     assert isinstance(comments, list)
@@ -633,39 +644,6 @@ def _board_item(
     return qualified
 
 
-def _withdrawn_duplicate(bench: Bench, qualified: str) -> str:
-    """A second item carrying ``qualified``'s origin, listed ahead of it and withdrawn: its id.
-
-    What a copy that timed out after writing leaves and a retry then duplicates: two items
-    of one board, each recording the same ticket as its `onetaskgraph.origin`. No store
-    verb makes that on purpose — a copy that finds the origin updates the item — so the
-    stand-in's `local-md` record is copied beside the original under a name the store lists
-    first, which is exactly what such an item is there; the withdrawal is the store's own
-    `task status set`, as the run that withdrew it made it.
-    """
-    location = _item(bench, qualified)["location"]
-    assert isinstance(location, dict), location
-    original = Path(str(location["path"]))
-    # llmlint: ignore-block[tests_mirror_real_usage] No store verb writes a second item
-    # carrying an origin a first already carries; a stand-in can only hold one as a record
-    # beside it, which is what a timed-out copy's duplicate is there.
-    shutil.copyfile(original, original.with_name(f"a-{original.name}"))
-    # llmlint: ignore-end[tests_mirror_real_usage]
-    native = qualified.removeprefix(f"{BOARD}:").rsplit("/", 1)
-    duplicate = f"{BOARD}:{native[0]}/a-{native[1]}"
-    _moved(bench, duplicate, tickets.Status.WITHDRAWN.value)
-    assert _origin(_item(bench, duplicate)) == _origin(_item(bench, qualified))
-    listed = _board_ids(bench)
-    assert listed.index(duplicate) < listed.index(qualified), listed
-    return duplicate
-
-
-def _origin(item: dict[str, object]) -> str:
-    metadata = item["metadata"]
-    assert isinstance(metadata, dict), item
-    return str(metadata[tickets.ORIGIN_KEY])
-
-
 def _deps(bench: Bench, qualified: str, *direction: str) -> list[tuple[str, str, str]]:
     """The edges the store walks from ``qualified``: each as (from, to, kind)."""
     edges = _store(bench, "task", "deps", qualified, *direction)["items"]
@@ -765,10 +743,38 @@ def _estimated_and_validated(python: str, *written: Path) -> list[str]:
     return ["bash", "-c", "".join(lines)]
 
 
-def _re_estimate(python: str, issue: str) -> list[str]:
-    """The re-estimate the task prescribes after each evidence comment on another run's issue."""
+def _re_estimate(python: str, run: str, issue: str) -> list[str]:
+    """The re-estimate the task prescribes after each evidence comment on another run's issue,
+    receipted under ``run``."""
     return _from_checkout(
-        python, "-m", "orchestrator.follow_up_tickets", "re-estimate", "--board", BOARD, issue
+        python,
+        "-m",
+        "orchestrator.follow_up_tickets",
+        "re-estimate",
+        "--board",
+        BOARD,
+        "--run",
+        run,
+        issue,
+    )
+
+
+def _commented(python: str, run: str, issue: str, body: Path) -> list[str]:
+    """The evidence comment the task prescribes on another run's issue: the module's `comment`,
+    which refuses a body that is not ``run``'s comment shape and receipts the store's answer,
+    never a bare `task comment add`."""
+    return _from_checkout(
+        python,
+        "-m",
+        "orchestrator.follow_up_tickets",
+        "comment",
+        "--board",
+        BOARD,
+        "--run",
+        run,
+        issue,
+        "--body-file",
+        str(body),
     )
 
 
@@ -1127,11 +1133,7 @@ class Followed(NamedTuple):
     other_after_second: dict[str, object]
     comments_after_second: list[dict[str, object]]
     board_after_second: list[str]
-    duplicate_issue: str
-    duplicate_before_second: dict[str, object]
     board_before_second: list[str]
-    duplicate_after_second: dict[str, object]
-    duplicate_comments_after_second: list[dict[str, object]]
     new_ticket_after_second: str
     later_passes: list[Pass]
     later_after: list[dict[str, object]]
@@ -1534,17 +1536,9 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 ["rm", str(new_draft), str(shared_draft), str(related_draft)],
                 _decided_and_copied(python, new_ticket),
                 _decided_and_copied(python, related_ticket),
-                _from_checkout(
-                    store,
-                    "task",
-                    "comment",
-                    "add",
-                    other_issue,
-                    "--body-file",
-                    str(_staged(bench, "comment.md", comment)),
-                ),
+                _commented(python, main, other_issue, _staged(bench, "comment.md", comment)),
                 # The re-estimate the task prescribes after every evidence comment.
-                _re_estimate(python, other_issue),
+                _re_estimate(python, main, other_issue),
                 # Where the turn runs its commands, written down there by the programs
                 # themselves: `pwd` says which directory, git whether a repository holds it.
                 ["sh", "-c", f"pwd -P > {TURN_DIRECTORY_WITNESS}"],
@@ -1582,7 +1576,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                             main,
                             tickets.Disposition.FILED,
                             (SHARED_CAUSE,),
-                            "The earlier run's open issue took this run's evidence.",
+                            f"The earlier run's open issue {other_issue} took this run's evidence.",
                         ),
                         _disposed(
                             related_draft,
@@ -1652,22 +1646,24 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             related=_dependency("some-service: the sweep stays inside its root", PROPOSED_URL),
         )
 
-        # A timed-out copy left a second item carrying the new ticket's origin, which the
-        # store lists ahead of the live one and which has since been withdrawn — the state
-        # in which a re-copy once updated the closed duplicate and left the live issue stale.
-        duplicate_issue = _withdrawn_duplicate(bench, new_issue)
-        duplicate_before_second = _item(bench, duplicate_issue)
         board_before_second = _board_ids(bench)
 
         # The manager's feedback, re-dispatched over the same run: this run's issue is edited
         # by copying its ticket again, and its comment on the earlier run's issue is edited.
-        # The ticket is rewritten whole, carrying no link to its item, so the store's origin
-        # query answers both carriers with the withdrawn duplicate first, and its own copy
-        # would follow that one; the run's own open carrier has to be chosen among them.
+        # The agent edits its ticket in place, so what the store's first copy recorded on it —
+        # its link to the card it created — still names that card, which the copy updates.
         edited = _ticket(
             main, NEW_CAUSE, first_ticket.drafts, title, "Verified, examples tightened"
         )
-        unlinked = dataclasses.replace(edited, links=(), origin=None)
+        as_copied = _held_ticket(bench, new_ticket)
+        assert as_copied.link(BOARD) is not None, "the first copy recorded no link to its card"
+        relinked = dataclasses.replace(
+            edited,
+            links=as_copied.links,
+            origin=as_copied.origin,
+            creating=as_copied.creating,
+            board_estimate=as_copied.board_estimate,
+        )
         edited_comment = tickets.render_comment(
             main, SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12` and `:40`."
         )
@@ -1699,7 +1695,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 # Re-derived against the board as it now is: no entry, no assumption, and
                 # staged as the proposal it was first written as; the board decides.
                 _placed(
-                    _staged(bench, "new-edited.md", tickets.render(unlinked)),
+                    _staged(bench, "new-edited.md", tickets.render(relinked)),
                     new_ticket,
                 ),
                 # The related ticket, evaporated by the newly accepted fix: withdrawn.
@@ -1710,7 +1706,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 _decided_and_copied(python, related_ticket, "--withdraw"),
                 _decided_and_copied(python, new_ticket),
                 ["bash", "-c", edit],
-                _re_estimate(python, other_issue),
+                _re_estimate(python, main, other_issue),
             ],
         )
         second = _pass(bench, "second", main, "--feedback", str(feedback))
@@ -1725,8 +1721,6 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         other_after_second = _item(bench, other_issue)
         comments_after_second = _comments(bench, other_issue)
         board_after_second = _board_ids(bench)
-        duplicate_after_second = _item(bench, duplicate_issue)
-        duplicate_comments_after_second = _comments(bench, duplicate_issue)
         new_ticket_after_second = new_ticket.read_text(encoding="utf-8")
 
         # Two later runs find the new ticket's root cause again. Each files its evidence as a
@@ -1753,16 +1747,13 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     ),
                     _estimated_and_validated(python, later_ticket),
                     ["rm", str(later_draft)],
-                    _from_checkout(
-                        store,
-                        "task",
-                        "comment",
-                        "add",
+                    _commented(
+                        python,
+                        later,
                         new_issue,
-                        "--body-file",
-                        str(_staged(bench, f"later-{at}-comment.md", later_comment)),
+                        _staged(bench, f"later-{at}-comment.md", later_comment),
                     ),
-                    _re_estimate(python, new_issue),
+                    _re_estimate(python, later, new_issue),
                     _accounting(
                         bench,
                         python,
@@ -1773,7 +1764,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                                 later,
                                 tickets.Disposition.FILED,
                                 (NEW_CAUSE,),
-                                "The main run's open issue took this run's evidence.",
+                                f"The main run's open issue {new_issue} took this run's evidence.",
                             )
                         ],
                         name=f"later-{at}-account.py",
@@ -1893,9 +1884,19 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         )
         # Its one fix is the one the evidence supports; the other options it offered are
         # rejected, each with why.
+        # The agent rewrites the ticket in place, so what the store's copy recorded on it — its
+        # link to the card that copy created — still names that card, which the copy updates.
+        # A schema-4 record is no ticket the module reads, so the link is read off the store.
+        filed_metadata = _item(bench, tickets.qualified_id(legacy_run, REWRITTEN_CAUSE))["metadata"]
+        assert isinstance(filed_metadata, dict), filed_metadata
+        filed_links = filed_metadata.get(tickets.COPIES_KEY)
+        assert filed_links == {BOARD: legacy_issue}, (
+            "the schema-4 copy recorded no link to its card"
+        )
         rewritten = dataclasses.replace(
             rewritten,
             body=rewritten.body.replace("Brought to the current shape (Suggested fix).", ONE_FIX),
+            links=(tickets.CopyLink(BOARD, tickets.QualifiedBoardId(legacy_issue)),),
         )
         _script(
             bench,
@@ -2011,11 +2012,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             other_after_second=other_after_second,
             comments_after_second=comments_after_second,
             board_after_second=board_after_second,
-            duplicate_issue=duplicate_issue,
-            duplicate_before_second=duplicate_before_second,
             board_before_second=board_before_second,
-            duplicate_after_second=duplicate_after_second,
-            duplicate_comments_after_second=duplicate_comments_after_second,
             new_ticket_after_second=new_ticket_after_second,
             later_passes=later_passes,
             later_after=later_after,
@@ -2372,7 +2369,9 @@ def test_a_filed_account_with_only_a_local_ticket_is_refused_after_the_dispatch(
     refused = _run(["just", "follow-ups", run, "--to", BOARD], bench)
 
     assert refused.returncode != OK
-    assert f"filed root cause {cause} has a local ticket but no item" in refused.stderr
+    flat = " ".join(refused.stderr.split())
+    assert f"filed root cause {cause} has a local ticket naming no card" in flat, flat
+    assert "so its evidence did not reach the board" in flat, flat
     assert ticket.is_file()
 
 
@@ -2513,6 +2512,8 @@ def _answers_command(bench: Bench, run: str, plan_store: str) -> list[str]:
         f"{written} copy",
         "--re-estimate",
         f"{written} re-estimate",
+        "--comment",
+        f"{written} comment",
         "--checkout",
         str(REPO_ROOT),
         "--plan-store",
@@ -2934,8 +2935,11 @@ def test_the_task_carries_every_instruction_and_both_contracts(
         "**judge from the original evidence whether the root cause fires consistently**",
         "record that as the ticket's `frequency`",
         "the estimate and the priority themselves are never yours to write",
+        f"-m orchestrator.follow_up_tickets comment --board {BOARD} --run {main} <that item's "
+        "id> --body-file <the comment>`",
         "**after every such comment, re-estimate that item**",
-        f"-m orchestrator.follow_up_tickets re-estimate --board {BOARD} <that item's id>`",
+        f"-m orchestrator.follow_up_tickets re-estimate --board {BOARD} --run {main} <that "
+        "item's id>`",
         "Run `hostname` on the machine you run on and write exactly what it prints, both as "
         "`host` and in the `## Evidence` section, never a value you type or recall",
     ):
@@ -2956,6 +2960,13 @@ def test_the_task_carries_every_instruction_and_both_contracts(
     assert copied is not None, task
     estimated = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets re-estimate) --board", task)
     assert estimated is not None, task
+    # Every evidence comment and budget question goes through the module's `comment`, which
+    # receipts it: the task names a bare `task comment add` only to forbid it, and for a reply
+    # to a person's comment, which is no evidence.
+    bare = f"{ONETASKGRAPH_BIN} task comment add"
+    for found in re.finditer(re.escape(bare), flat):
+        context = flat[max(0, found.start() - 60) : found.end()]
+        assert "never a bare" in context or "Post it with" in context, context
     assert f"````markdown\n{tickets.ticket_example(main, BOARD)}````" in task, (
         "the example ticket is not the one the module renders"
     )
@@ -2993,12 +3004,17 @@ def test_a_verified_ticket_lands_on_the_board_with_its_shape_its_one_repository_
     metadata = landed["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["onetaskgraph.origin"] == tickets.qualified_id(followed.main, NEW_CAUSE)
-    assert set(metadata[tickets.KEY]) == {*tickets.RECORD_KEYS, tickets.FREQUENCY_FIELD}
+    assert set(metadata[tickets.KEY]) == {
+        *tickets.RECORD_KEYS,
+        tickets.FREQUENCY_FIELD,
+        tickets.BOARD_ESTIMATE_FIELD,
+    }
     # Its estimate, read back off the board: the narrowed severity with the workaround, `low`,
     # an intermittent root cause and its one occurrence; the board held no item, so the
-    # priority is the estimate.
+    # priority is the estimate, which the copy records as the one the card received.
     low, intermittent = tickets.Severity.LOW, tickets.Frequency.INTERMITTENT
     assert metadata[tickets.KEY][tickets.ESTIMATE_FIELD] == "low"
+    assert metadata[tickets.KEY][tickets.BOARD_ESTIMATE_FIELD] == "low"
     assert landed["priority"] == "low"
     assert _estimate_line(landed) == tickets.estimate_line(low, intermittent, 1)
     assert not any(path.exists() for path in followed.consumed), "a consumed draft was left"
@@ -3207,7 +3223,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 13
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 14
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -3893,45 +3909,34 @@ def test_the_three_forbidden_shapes_are_refused_naming_each_problem_and_reach_no
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
-def test_a_re_copy_past_a_withdrawn_duplicate_reaches_the_live_item_and_binds_nothing(
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey runs in the
+# `plan-tooling-follow-ups` project's installed-engine `test` tier, beside every other journey
+# over the shared `followed` fixture; that tier's workspace input covers the recipe, task
+# module and store configuration this test exercises.
+def test_a_re_copy_of_the_edited_ticket_reaches_the_card_its_record_names(
     followed: Followed,
 ) -> None:
-    """Two items carry one ticket's origin; the re-dispatch's copy reaches the open one alone.
+    """The re-dispatch's copy of its edited ticket updates the card the store's link names.
 
-    The duplicate the store lists first was withdrawn, and the re-dispatch's ticket carries no
-    link — the state in which the store's own copy updated a closed duplicate and left the
-    live issue stale. The task's `board-status` and `copy`, run as the turn ran them, read both
-    carriers off the store's `task locate`, pick the run's open item, write nothing to the
-    ticket to hold it, leave the duplicate one comment naming that item, and copy the edit
-    there with `--target-task`, which records the store's link: the duplicate keeps the body it
-    was withdrawn with.
+    The agent edited its ticket in place, keeping the link the first copy recorded, so the
+    copy reaches that card and no other: the live item carries the edit, the board holds no
+    new item, and the ticket's record is at the current schema with the store's link and no
+    origin pointed at its item.
     """
-    main, duplicate = followed.main, followed.duplicate_issue
+    main = followed.main
     new_issue = f"{BOARD}:{main}/tickets/{NEW_CAUSE}"
-    before = followed.duplicate_before_second
-    after = followed.duplicate_after_second
-    assert _category(before) == _category(after) == tickets.Status.WITHDRAWN
-    assert _origin(before) == _origin(followed.new_after_first), "the premise: one origin, twice"
-    assert (after["title"], after["content"]) == (before["title"], before["content"]), (
-        "the re-copy wrote the withdrawn duplicate"
-    )
-
     local = followed.local_after_second
     assert followed.new_after_second["content"] == local["content"], "the live item is stale"
-    assert followed.new_after_second["content"] != after["content"]
+    assert followed.board_after_second == followed.board_before_second, "the copy made a card"
     metadata = local["metadata"]
     assert isinstance(metadata, dict), local
     assert tickets.BINDING_FIELD not in metadata[tickets.KEY]
     assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA
     assert tickets.ORIGIN_KEY not in metadata, "the ticket's own origin was pointed at its item"
     assert metadata[tickets.COPIES_KEY] == {BOARD: new_issue}, "the copy recorded no link"
-    assert duplicate not in followed.new_ticket_after_second
 
-    (notice,) = followed.duplicate_comments_after_second
-    body = str(notice["body"]).strip()
-    assert body.endswith(tickets.DUPLICATE_MARKER.format(run=main, survivor=new_issue)), body
-    assert f"continues on {new_issue}" in body, body
-    assert tickets.comment_owner(body) is None, "the notice reads as a run's own comment"
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_ticket_without_it(
@@ -3961,9 +3966,8 @@ def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_tick
 
     assert followed.new_deps_after_first != []
     assert followed.new_deps_after_second == []
-    # Only the withdrawn duplicate, which no copy reaches, keeps the edge it was left with.
     dependents = _deps(followed.bench, followed.narrowing_item, "--direction", "depended-on-by")
-    assert [edge for edge in dependents if edge[0] != followed.duplicate_issue] == [], dependents
+    assert dependents == [], dependents
     edited = tickets.from_store_item(followed.new_after_second)
     assert NARROWING_URL not in edited.body and ASSUMED not in edited.body
     impact = edited.body.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0]
@@ -4909,20 +4913,13 @@ def test_a_task_the_store_cannot_create_launches_nothing_and_the_next_launch_rec
 
 
 def _launch_follow_up_validation(
-    tmp_path: Path,
-    environment: dict[str, str],
-    root: Path,
-    trace: Path,
-    issue: str,
-    *,
-    corrupt: bool,
+    tmp_path: Path, environment: dict[str, str], root: Path, trace: Path
 ) -> None:
     """The real attached recipe, with its engine boundary exercising the dispatch's last check.
 
     Template resolution/rendering, the local validator, and post-settle validators are real.
-    Only the engine's launch is doubled, as in the recipe's delegated-boundary journey.
-    In the refusal case it changes board priority after the last local check: the post-settle
-    board check must catch that change, the concrete failure a pre-settle-only check misses.
+    Only the engine's launch is doubled, as in the recipe's delegated-boundary journey. Both
+    checks read the run's receipts, so the launch's whole validation sends the board nothing.
     """
     # llmlint: ignore-block[tests_mirror_real_usage, e2e_not_mocked] Only the published engine
     # CLI delegated to by the real recipe is doubled, the sanctioned boundary in AGENTS.md and the
@@ -4955,16 +4952,11 @@ def _launch_follow_up_validation(
             str(dispatch_check),
         ]
     )
-    mutate = shlex.join([str(store), "task", "priority", "set", issue, "high", "--json"])
     engine = Path(delegation_checkout.at(checkout, delegation_checkout.ENGINE))
     engine.write_text(
         engine.read_text(encoding="utf-8").replace(
             'exit "${FAKE_ENGINE_EXIT:-0}"',
-            'if [ "${1:-}" = start ]; then\n'
-            + last
-            + "\n"
-            + (mutate + "\n" if corrupt else "")
-            + 'fi\nexit "${FAKE_ENGINE_EXIT:-0}"',
+            'if [ "${1:-}" = start ]; then\n' + last + '\nfi\nexit "${FAKE_ENGINE_EXIT:-0}"',
         ),
         encoding="utf-8",
     )
@@ -4978,9 +4970,7 @@ def _launch_follow_up_validation(
         env={**environment, plan_root_variable.name(): str(checkout / ".plans")},
     )
     # llmlint: ignore-end[tests_mirror_real_usage, e2e_not_mocked]
-    assert result.returncode == (tickets.UNSOUND if corrupt else 0), result.stderr
-    if corrupt:
-        assert "holds the priority `high`" in result.stderr, result.stderr
+    assert result.returncode == 0, result.stderr
     task = _one_task_record(checkout, root=root / "runs")
     validators = re.findall(
         r"`([^`\n]*orchestrator\.follow_up_tickets check-dispositions[^`\n]*)`",
@@ -4989,7 +4979,7 @@ def _launch_follow_up_validation(
     assert validators and all("--board" not in command for command in validators), validators
     calls = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
     # The dispatch's own board-less check, then the closeout the attached recipe runs once
-    # the run returns, which makes the disposition check's one board read.
+    # the run returns, the one named the board, whose receipts it reads in place of the board.
     checks = [
         call["argv"]
         for call in calls
@@ -4999,15 +4989,14 @@ def _launch_follow_up_validation(
     assert len(checks) == 2 and sum("--board" in argv for argv in checks) == (
         host_board.LAUNCH_VALIDATION_BOARD_CHECKS
     ), checks
-    # Only one board check, plus the explicit corruption write in the refusal journey. What
-    # it spent is telemetry no budget's breakdown reads: reading it would couple the
-    # orchestrator project's budgets to this project's test target.
-    cost = host_board._bounded_step(
-        "launch validation", bound=True, writes=corrupt, invocations=trace
-    )
+    # Neither check sends the board a request. What the launch spent is telemetry no
+    # budget's breakdown reads: reading it would couple the orchestrator project's budgets to
+    # this project's test target.
+    cost = host_board._bounded_step("launch validation", bound=True, invocations=trace)
+    assert cost.requests == 0, "the launch's validation read the board"
     budget_telemetry.record(
         host_board.RUN_POINTS_BUDGET,
-        "refused launch's board check" if corrupt else "launch validation board check",
+        "launch validation board check",
         cost.points,
         unit="points",
         counted=False,
@@ -5020,11 +5009,13 @@ def _launch_follow_up_validation(
 # behind that project's own edge: its key names every file the board audit's launches read.
 # The task explicitly requires the loopback GitHub fixture with the installed store CLI:
 # the simulated remote protects the live board while requests and validators remain real.
-def test_follow_up_launch_validation_checks_the_board_once_and_refuses_a_late_change(
+def test_follow_up_launch_validation_reads_nothing_from_the_board(
     tmp_path: Path,
 ) -> None:
-    """Last dispatch check and attached closeout check the board once, including refusal.
+    """The last dispatch check and the attached closeout check the run's receipts alone.
 
+    The ticket's copy left the receipt its closeout reads, so neither check sends the board a
+    request: what the account says reached the board is what this run's own writes returned.
     Beside the run's ticket, an accepted card whose issue was closed outside the stack — the
     accepted lag — is left as it stands: neither launch of the recipe writes a Status, or
     anything else, to it, because nothing here reconciles a closure.
@@ -5040,11 +5031,23 @@ def test_follow_up_launch_validation_checks_the_board_once_and_refuses_a_late_ch
     lagging_path = host_board._written_ticket(root, lagging)
     with host_board._serving_followups(environment, fields=True):
         assert host_board._decided_status(environment, lagging_path) == tickets.Status.PROPOSED
-        placed = host_board._follow_up_step(
-            environment, "copy", "--board", tickets.BOARD, str(lagging_path)
+        # Put on the board by the store's own copy, outside this run's `copy`, so the run's
+        # receipts name nothing of it: a card of the board that this run's account never held.
+        placed = host_board._followups_command(
+            environment,
+            [
+                str(ONETASKGRAPH_BIN),
+                "task",
+                "copy",
+                tickets.qualified_id(host_board.PROPOSED_RUN, lagging.root_cause),
+                "--to",
+                tickets.BOARD,
+                "--json",
+            ],
         )
-        assert placed.returncode == 0, placed.stderr
-        lagging_issue = json.loads(placed.stdout)["destination"]
+        assert placed.returncode == 0, placed.stdout + placed.stderr
+        (placed_item,) = json.loads(placed.stdout)["items"]
+        lagging_issue = placed_item["destination"]
         # Its card stands on the board; its local ticket goes, so the run's account names it not.
         lagging_path.unlink()
         accepted = host_board._followups_command(
@@ -5088,14 +5091,11 @@ def test_follow_up_launch_validation_checks_the_board_once_and_refuses_a_late_ch
             ),
             encoding="utf-8",
         )
-        for corrupt in (False, True):
-            launch_root = tmp_path / ("unsound-launch" if corrupt else "sound-launch")
-            launch_root.mkdir()
-            _launch_follow_up_validation(
-                launch_root, environment, root, trace, issue, corrupt=corrupt
-            )
-            assert not host_board.writes_naming(lagging_row), host_board.writes_naming(lagging_row)
-            assert (lagging_row.status, lagging_row.state) == ("Todo", "CLOSED"), lagging_row
+        launch_root = tmp_path / "sound-launch"
+        launch_root.mkdir()
+        _launch_follow_up_validation(launch_root, environment, root, trace)
+        assert not host_board.writes_naming(lagging_row), host_board.writes_naming(lagging_row)
+        assert (lagging_row.status, lagging_row.state) == ("Todo", "CLOSED"), lagging_row
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked]  # noqa: E501 - directive rule lists occupy one line
@@ -5462,18 +5462,8 @@ def test_real_follow_ups_disposes_of_open_cancelled_and_changed_budget_causes(
                 + ("Should the budget change?" if i == 1 else "Repeated delivery cost."),
             ),
         )
-        commands.append(
-            _from_checkout(
-                str(ONETASKGRAPH_BIN),
-                "task",
-                "comment",
-                "add",
-                items[i],
-                "--body-file",
-                str(evidence),
-            )
-        )
-    commands.append(_re_estimate(python, items[0]))
+        commands.append(_commented(python, main, items[i], evidence))
+    commands.append(_re_estimate(python, main, items[0]))
     commands.append(_decided_and_copied(python, staged[1][1]))
     commands.append([python, str(update)])
     commands.append(

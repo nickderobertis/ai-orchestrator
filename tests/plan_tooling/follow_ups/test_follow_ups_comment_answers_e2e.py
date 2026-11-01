@@ -106,8 +106,9 @@ pytestmark = [pytest.mark.xdist_group("follow-ups-comment-answers")]
 #: `## Duplicate search`; and 10, whose `## Root cause` is its
 #: invariant and contributing locations and which closes with `## Duplicate search` rather than
 #: `## Evidence`; and 11, whose plain root cause and fix locations close with the historical
-#: search log then Evidence; and 12, the last whose record could carry the retired item binding,
-#: in today's shape. Schemas 7–12 stay readable and advance when their own run rewrites them.
+#: search log then Evidence; 12, the last whose record could carry the retired item binding,
+#: in today's shape; and 13, the last before a record could carry the estimate its card last
+#: received. Schemas 7–13 stay readable and advance when their own run rewrites them.
 PROPOSED_CAUSE = "listing-cursor-skips-last-page"
 UNSURE_CAUSE = "lock-file-left-after-crash"
 DEFERRED_CAUSE = "sweep-trailer-omits-a-family"
@@ -129,6 +130,7 @@ OLDER_CAUSES = dict(
             "queue-drops-a-late-job",
             "download-skips-a-chunk",
             "timer-fires-twice",
+            "invite-link-expires-early",
         ),
         strict=True,
     )
@@ -996,6 +998,8 @@ def test_a_comment_correcting_an_older_ticket_brings_it_to_the_current_schema_wi
     assert not any(heading in ticket.body for heading in retired), ticket.body
     assert ticket.frequency is tickets.Frequency.INTERMITTENT
     assert ticket.priority_estimate is not None, "settle wrote no estimate"
+    # The record names the estimate the card received, which the next copy's guard names.
+    assert ticket.board_estimate == ticket.priority_estimate, metadata
     assert ticket.host == HOST
     assert f"Verified on `{HOST}`." in ticket.body, ticket.body
     assert after["repositories"] == [REPOSITORY]
@@ -1101,7 +1105,7 @@ def test_from_its_launch_to_settle_the_dispatch_sends_the_board_nothing_but_its_
         + [read, field, issue]
         + [read, fields, issue]
         + [read, field, issue] * 6
-        + [read, issue] * 5
+        + [read, issue] * 6
         + [read, field]
         + [read, issue]
     ), answered.operations

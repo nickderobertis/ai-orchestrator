@@ -715,8 +715,13 @@ def test_a_verb_that_does_not_return_is_bounded_rather_than_waited_on(
 
 
 def test_a_hook_that_does_not_return_is_bounded_the_same_way(tmp_path: Path) -> None:
-    """The destination's own hook is another program, and is given the same bound."""
-    checkout = _checkout(tmp_path, hook="#!/usr/bin/env bash\nsleep 30\n")
+    """The destination's own hook is another program, and is given the same bound.
+
+    The hook execs its sleep, so the bound's kill reaches the sleeping process itself: a
+    `sleep` forked under bash would outlive the killed shell as an orphan carrying this
+    session's state home, and fail the session's teardown that runs within its 30 s.
+    """
+    checkout = _checkout(tmp_path, hook="#!/usr/bin/env bash\nexec sleep 30\n")
 
     with pytest.MonkeyPatch.context() as bounded:
         bounded.setattr(publication_guard, "TIMEOUT_SECONDS", 1)

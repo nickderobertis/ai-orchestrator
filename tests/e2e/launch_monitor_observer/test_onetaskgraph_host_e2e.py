@@ -53,6 +53,7 @@ from github_board import (
     REPOSITORY_NODE_IDS,
     REQUEST_PRICES,
     RUN_POINTS_BUDGET,
+    SEEDED_STATES,
     SIBLING_REPOSITORY,
     STATUS_OPTIONS,
     STORE_FIRST_SEARCH_PAGE,
@@ -61,7 +62,6 @@ from github_board import (
     _audit_follow_up_calls,
     _board_cost,
     _BoardField,
-    _BoardItemId,
     _bounded_step,
     _decided_status,
     _field_clears,
@@ -75,14 +75,15 @@ from github_board import (
     _hosted,
     _HumanTasksFixture,
     _Issue,
-    _IssueNodeId,
     _Operation,
     _plan_environment,
     _prepare_plan_sources,
     _Refusal,
     _Repository,
     _request_points,
+    _rewritten_ticket,
     _search_points,
+    _seeded_item,
     _sent,
     _serving_board,
     _serving_configured_boards,
@@ -1776,7 +1777,8 @@ def test_a_deferred_followups_item_reads_back_as_draft_and_a_re_copy_keeps_it_de
         )
         decided = _board_status(environment, ticket)
         assert decided.returncode == 0, decided.stderr
-        _written_ticket(
+        _rewritten_ticket(
+            environment,
             drafts_root,
             _follow_up_ticket(
                 SIBLING_REPOSITORY,
@@ -2042,9 +2044,29 @@ def _commented(environment: dict[str, str], qualified: str, body: str, scratch: 
     return str(json.loads(added.stdout)["id"])
 
 
+def _evidence_posted(
+    environment: dict[str, str], run: str, qualified: str, body: str, scratch: Path
+) -> str:
+    """Post ``run``'s evidence comment ``body`` on ``qualified`` through `comment`: its id."""
+    scratch.write_text(body, encoding="utf-8")
+    posted = _follow_up_module(
+        environment,
+        *("comment", "--board", follow_up_tickets.BOARD, "--run", run),
+        *("--body-file", str(scratch), qualified),
+    )
+    assert posted.returncode == 0, posted.stdout + posted.stderr
+    return str(json.loads(posted.stdout)["id"])
+
+
 def _re_estimated(environment: dict[str, str], qualified: str) -> dict[str, object]:
     ran = _follow_up_module(
-        environment, "re-estimate", "--board", follow_up_tickets.BOARD, qualified
+        environment,
+        "re-estimate",
+        "--board",
+        follow_up_tickets.BOARD,
+        "--run",
+        LATER_RUN,
+        qualified,
     )
     assert ran.returncode == 0, ran.stdout + ran.stderr
     printed = json.loads(ran.stdout)
@@ -2110,7 +2132,10 @@ def test_a_re_estimate_after_evidence_and_after_a_confirming_reply_reads_back_th
                         response="It confirms the root cause.",
                         verdict=follow_up_tickets.Verdict.CONFIRMS,
                     )
-                _commented(environment, item, body, scratch)
+                if step == "evidence":
+                    _evidence_posted(environment, LATER_RUN, item, body, scratch)
+                else:
+                    _commented(environment, item, body, scratch)
                 _re_estimated(environment, item)
             # llmlint: ignore-block[tests_mirror_real_usage] The no-write half of the property
             # above, read where it is observable; the held priority itself is read back below.
@@ -2165,7 +2190,7 @@ def test_a_re_estimate_refused_part_way_is_retried_into_a_following_priority(
         assert _followups_item(environment, item)["priority"] == "medium"
         for run in (LATER_RUN, "a-third-run"):
             body = follow_up_tickets.render_comment(run, PROPOSED_CAUSE, "Seen again.")
-            _commented(environment, item, body, scratch)
+            _evidence_posted(environment, run, item, body, scratch)
         # llmlint: ignore-block[tests_mirror_real_usage] GitHub refusing one write between two
         # it accepted is a failure of the remote, which no verb of the store can ask for; the
         # loopback board is the one place it can be induced. The re-estimate that meets it and
@@ -2173,7 +2198,7 @@ def test_a_re_estimate_refused_part_way_is_retried_into_a_following_priority(
         _GitHubFixture.refused_operation = refused
         _GitHubFixture.refused_after = served_before
         failed = _follow_up_module(
-            environment, "re-estimate", "--board", follow_up_tickets.BOARD, item
+            environment, "re-estimate", "--board", follow_up_tickets.BOARD, "--run", LATER_RUN, item
         )
         _GitHubFixture.refused_operation = None
         # llmlint: ignore-end[tests_mirror_real_usage]
@@ -2248,7 +2273,8 @@ def test_a_queued_followups_item_reads_back_claimed_and_a_re_copy_keeps_it_queue
         )
         decided = _board_status(environment, ticket)
         assert decided.returncode == 0, decided.stderr
-        _written_ticket(
+        _rewritten_ticket(
+            environment,
             drafts_root,
             _follow_up_ticket(
                 SIBLING_REPOSITORY,
@@ -2602,83 +2628,6 @@ def test_a_queued_ticket_onto_a_followups_board_without_a_queued_option_is_refus
     )
 
 
-#: The body slot the adopted store keeps an item's metadata in, as it writes one.
-METADATA_SLOT = "<!-- onetaskgraph.metadata\n{}\n-->"
-
-
-class _SeededState(NamedTuple):
-    """Where a seeded item stands: its Status option, its issue state, and why it was closed."""
-
-    option: _StatusOption
-    state: Literal["OPEN", "CLOSED"] = "OPEN"
-    reason: Literal["COMPLETED", "NOT_PLANNED"] | None = None
-
-
-#: Each board status a seeded item stands at, as GitHub holds an item at it.
-SEEDED_STATES: dict[follow_up_tickets.Status, _SeededState] = {
-    follow_up_tickets.Status.PROPOSED: _SeededState(PROPOSAL),
-    follow_up_tickets.Status.ACCEPTED: _SeededState(STATUS_OPTIONS[0]),
-    follow_up_tickets.Status.DEFERRED: _SeededState(DEFERRED),
-    follow_up_tickets.Status.FINISHED: _SeededState(DONE, "CLOSED", "COMPLETED"),
-    follow_up_tickets.Status.WITHDRAWN: _SeededState(CANCELLED, "CLOSED", "NOT_PLANNED"),
-}
-
-
-def _seeded_item(  # noqa: PLR0913 - each is one fact about the item a board already holds
-    at: int,
-    *,
-    run: str,
-    cause: str,
-    status: follow_up_tickets.Status,
-    origin: str | None,
-    origin_in_body: bool,
-    host: str = "verifier.example",
-) -> _Issue:
-    """One follow-up item already on the `followups` stand-in, put there without a request.
-
-    Written the way the store writes one — the ticket's body, then its metadata in the body's
-    slot — with its origin in the board's origin field. ``origin_in_body`` says whether the
-    slot carries that origin too, as the adopted store writes it; an item that reached the
-    board before the adoption carries it in the board field only. ``host`` is the machine its
-    ticket was verified on, which a comment pass narrows its search to.
-    """
-    written = _follow_up_ticket(SIBLING_REPOSITORY, cause=cause, verified_on=host)
-    medium, frequency = follow_up_tickets.Severity.MEDIUM, written.frequency
-    ticket = replace(
-        written,
-        created_by_run=follow_up_tickets.RunId(run),
-        owning_runs=(follow_up_tickets.RunId(run),),
-        drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{run}/drafts/noticed"),),
-        priority_estimate=follow_up_tickets.estimate(medium, frequency, 1),
-        body=follow_up_tickets.with_estimate_line(
-            written.body, follow_up_tickets.estimate_line(medium, frequency, 1)
-        ),
-    )
-    metadata: dict[str, object] = {
-        "onetaskgraph.item_kind": "task",
-        follow_up_tickets.KEY: follow_up_tickets.record(ticket),
-    }
-    if origin is not None and origin_in_body:
-        metadata[follow_up_tickets.ORIGIN_KEY] = origin
-    slot = METADATA_SLOT.format(json.dumps(metadata, separators=(",", ":"), sort_keys=True))
-    seeded = SEEDED_STATES[status]
-    issue = _Issue(
-        item_id=_BoardItemId(f"PVTI_seeded_{at}"),
-        content_id=_IssueNodeId(f"I_seeded_{at}"),
-        number=1000 + at,
-        title=ticket.title,
-        body=f"{ticket.body}\n\n{slot}",
-        repository=SIBLING_REPOSITORY,
-        origin=origin,
-        status=seeded.option.name,
-        state=seeded.state,
-        state_reason=seeded.reason,
-    )
-    issue.board = BOARD
-    BOARD.issues.append(issue)
-    return issue
-
-
 def _validated_and_copied(environment: dict[str, str], ticket: Path) -> dict[str, object]:
     validated = _follow_up_step(environment, "validate", str(ticket))
     assert validated.returncode == follow_up_tickets.SOUND, validated.stdout + validated.stderr
@@ -2686,114 +2635,6 @@ def _validated_and_copied(environment: dict[str, str], ticket: Path) -> dict[str
     assert copied.returncode == follow_up_tickets.SOUND, copied.stdout + copied.stderr
     answered: dict[str, object] = json.loads(copied.stdout)
     return answered
-
-
-def _local_ticket(environment: dict[str, str]) -> dict[str, object]:
-    """The ticket as the store reads it back from the drafts root."""
-    shown = _followups_command(
-        environment, [str(ONETASKGRAPH_BIN), "task", "show", PROPOSED_ID, "--json"]
-    )
-    assert shown.returncode == 0, shown.stdout + shown.stderr
-    item: dict[str, object] = json.loads(shown.stdout)["items"][0]["item"]
-    return item
-
-
-@pytest.mark.parametrize("carriers", ["withdrawn-beside-open", "both-open"])
-def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alone(
-    tmp_path: Path, carriers: str
-) -> None:
-    """Two board items carry one ticket's origin; `board-status` settles them without a board walk.
-
-    One carrier the adopted store wrote, by copying the ticket, and then withdrew; the other
-    reached the board before the adoption, its origin in the board's field alone, and is the
-    run's open item. The ticket carries no link, so its `task locate` asks the store's native
-    origin query once — the board's own field filter finds the older one — and answers both as
-    carriers: `board-status` picks the run's open one, writes nothing to the ticket to hold it,
-    and leaves the withdrawn one the duplicate comment; `copy` then steers the store's copy to
-    the open carrier with `--target-task`, which records the store's link to it. With both
-    carriers open, which one survives is a person's decision, so `board-status` refuses as
-    `MISBOUND`. None of it walks the board's items or sends an unnarrowed search.
-    """
-    environment, drafts_root = _followups_environment(tmp_path)
-    ticket = _follow_up_ticket(SIBLING_REPOSITORY)
-    path = _written_ticket(drafts_root, ticket)
-    with _serving_followups(environment):
-        copied = _copied_ticket(environment)
-        assert copied.returncode == 0, copied.stdout + copied.stderr
-        (adopted,) = BOARD.issues_created_and_kept()
-        assert adopted.origin == PROPOSED_ID
-        assert f'"{follow_up_tickets.ORIGIN_KEY}":"{PROPOSED_ID}"' in adopted.body, (
-            "the premise: the adopted store keeps the origin in the item's body as well"
-        )
-        if carriers != "both-open":
-            withdrawn = _followups_command(
-                environment,
-                [str(ONETASKGRAPH_BIN), "task", "status", "set"]
-                + [f"{follow_up_tickets.BOARD}:{adopted.content_id}", "cancelled", "--json"],
-            )
-            assert withdrawn.returncode == 0, withdrawn.stdout + withdrawn.stderr
-        earlier = _seeded_item(
-            0,
-            run=PROPOSED_RUN,
-            cause=PROPOSED_CAUSE,
-            status=follow_up_tickets.Status.PROPOSED,
-            origin=PROPOSED_ID,
-            origin_in_body=False,
-        )
-        for at in range(1, 1 + OTHER_ITEMS):
-            _seeded_item(
-                at,
-                run="another-run",
-                cause=f"another-cause-{at}",
-                status=follow_up_tickets.Status.PROPOSED,
-                origin=f"drafts:another-run/tickets/another-cause-{at}",
-                origin_in_body=True,
-            )
-        earlier_id = f"{follow_up_tickets.BOARD}:{earlier.content_id}"
-        # Written whole, carrying no link: the store's own copy would follow its origin query.
-        path.write_text(follow_up_tickets.render(ticket), encoding="utf-8")
-        _GitHubFixture.requests.clear()
-
-        decided = _board_status(environment, path)
-
-        if carriers == "both-open":
-            assert decided.returncode == follow_up_tickets.MISBOUND, decided.stdout + decided.stderr
-            flat = " ".join(decided.stderr.split())
-            assert "2 items of 'followups' carry this ticket's origin" in flat, flat
-            assert "and 2 of them is an open item of run" in flat, flat
-            assert (adopted.comments, earlier.comments) == ([], [])
-        else:
-            assert (decided.returncode, decided.stdout) == (0, "backlog\n"), decided.stderr
-            held = _local_ticket(environment)["metadata"]
-            assert isinstance(held, dict)
-            assert follow_up_tickets.BINDING_FIELD not in held[follow_up_tickets.KEY]
-            assert follow_up_tickets.ORIGIN_KEY not in held, "the ticket's origin was re-pointed"
-            assert held.get(follow_up_tickets.COPIES_KEY) is None, "a link was hand-written"
-            (notice,) = adopted.comments
-            assert (
-                str(notice["body"])
-                .strip()
-                .endswith(
-                    follow_up_tickets.DUPLICATE_MARKER.format(run=PROPOSED_RUN, survivor=earlier_id)
-                )
-            )
-            assert earlier.comments == []
-            assert len(_sent(_Operation.ORIGIN_LOOKUP)) == 1, "one native origin query"
-
-            edited = path.read_text(encoding="utf-8").replace("(Examples).", "(Examples, again).")
-            path.write_text(edited, encoding="utf-8")
-            answered = _validated_and_copied(environment, path)
-            assert answered == {"action": "updated", "destination": earlier_id}, answered
-            assert "(Examples, again)." in earlier.body
-            assert "(Examples, again)." not in adopted.body, "the withdrawn carrier was written"
-            linked = _local_ticket(environment)["metadata"]
-            assert isinstance(linked, dict)
-            assert linked[follow_up_tickets.COPIES_KEY] == {follow_up_tickets.BOARD: earlier_id}
-            assert len(adopted.comments) == 1, "the duplicate was noted twice"
-        walked, unnarrowed = _board_cost(_GitHubFixture.requests)
-        assert (walked, unnarrowed) == ([], []), (
-            f"settling two carriers read the whole board: walked {walked}, searched {unnarrowed}"
-        )
 
 
 #: What the adopted store's README says of its cache, which `AGENTS.md`'s plan-store section
@@ -2921,11 +2762,33 @@ def _per_step(step: str, cost: RequestCost) -> None:
     )
 
 
+def _store_calls(trace: Path) -> list[list[str]]:
+    """Every plan-store invocation the audited follow-up commands made since the trace was
+    last cleared, each as its argument list, in launch order."""
+    calls = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    return [call["argv"][1:] for call in calls if call["kind"] == "store"]
+
+
+def _counterpart_lookups(calls: list[list[str]]) -> list[list[str]]:
+    """Each `task locate` among ``calls`` that looks a counterpart up: one without
+    `--no-counterpart`, which reads the destination."""
+    return [one for one in calls if one[:2] == ["task", "locate"] and "--no-counterpart" not in one]
+
+
+def _card_reads(calls: list[list[str]], card: str) -> list[list[str]]:
+    """Each `task show` of ``card`` among ``calls``, which reads it by id with its comments."""
+    return [one for one in calls if one[:3] == ["task", "show", card]]
+
+
 def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_path: Path) -> None:
     """Real commands over many unrelated items, including another run's evidence carrier.
 
-    Each step's requests and points are recorded as the per-step breakdown of budget
-    `follow-up-run-points`.
+    `board-status` of a ticket whose record names no card sends the board nothing; of one whose
+    record names its card, it reads that card once by id with its comments. `copy` is one
+    `task copy`, its placement-only `task locate` sending nothing. `re-estimate` reads its card
+    once by id. No command looks a counterpart up, and the closeout's `check-dispositions
+    --board` sends the board nothing, holding the account to the run's receipts. Each step's
+    requests and points are recorded as the per-step breakdown of budget `follow-up-run-points`.
     """
     environment, root = _followups_environment(tmp_path)
     trace = _audit_follow_up_calls(tmp_path, environment)
@@ -2944,21 +2807,55 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
             )
         _GitHubFixture.requests.clear()
         assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        assert _GitHubFixture.requests == [], "board-status of an unlinked ticket read the board"
+        calls = _store_calls(trace)
+        assert _counterpart_lookups(calls) == [] and not [
+            one for one in calls if one[:2] == ["task", "show"] and one[2].startswith(board)
+        ], calls
         _per_step("unbound board-status", _bounded_step("unbound board-status", trace=trace))
         copied = _follow_up_step(environment, "copy", "--board", board, str(path))
         assert copied.returncode == 0, copied.stderr
         issue = json.loads(copied.stdout)["destination"]
-        _per_step("create copy", _bounded_step("creating copy"))
+        calls = _store_calls(trace)
+        assert [one[:2] for one in calls if one[:2] == ["task", "copy"]] == [["task", "copy"]]
+        assert _counterpart_lookups(calls) == [], calls
+        _per_step("create copy", _bounded_step("creating copy", trace=trace, writes=True))
+        # Another run's evidence lands on the card, which the next recount counts.
+        seen = tmp_path / "seen.md"
+        seen.write_text(
+            follow_up_tickets.render_comment("another-run", path.stem, "Seen elsewhere too."),
+            encoding="utf-8",
+        )
+        posted = _follow_up_step(
+            environment,
+            *("comment", "--board", board, "--run", "another-run", "--body-file", str(seen)),
+            issue,
+        )
+        assert posted.returncode == 0, posted.stderr
         trace.write_text("", encoding="utf-8")
+        _GitHubFixture.requests.clear()
         assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        calls = _store_calls(trace)
+        assert len(_card_reads(calls, issue)) == 1 and _counterpart_lookups(calls) == [], calls
+        medium = follow_up_tickets.Severity.MEDIUM
+        recounted = follow_up_tickets.estimate_line(medium, ticket.frequency, 2)
+        assert recounted in path.read_text(encoding="utf-8"), "board-status missed the comment"
         _per_step("bound status", _bounded_step("bound board-status", bound=True, trace=trace))
         copied = _follow_up_step(environment, "copy", "--board", board, str(path))
         assert copied.returncode == 0, copied.stderr
+        calls = _store_calls(trace)
+        assert [one for one in calls if one[:2] == ["task", "copy"]] != []
+        assert len([one for one in calls if one[:2] == ["task", "copy"]]) == 1, calls
         _per_step(
             "bound re-copy", _bounded_step("bound re-copy", bound=True, trace=trace, writes=True)
         )
-        estimated = _follow_up_step(environment, "re-estimate", "--board", board, issue)
+        estimated = _follow_up_step(
+            environment, "re-estimate", "--board", board, "--run", PROPOSED_RUN, issue
+        )
         assert estimated.returncode == 0, estimated.stderr
+        assert json.loads(estimated.stdout)["occurrences"] == 2, estimated.stdout
+        calls = _store_calls(trace)
+        assert len(_card_reads(calls, issue)) == 1 and _counterpart_lookups(calls) == [], calls
         _per_step("re-estimate", _bounded_step("re-estimate", bound=True, trace=trace, writes=True))
 
         other = _seeded_item(
@@ -2977,21 +2874,15 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
             ),
             encoding="utf-8",
         )
-        posted = _followups_command(
+        posted = _follow_up_step(
             environment,
-            [
-                str(ONETASKGRAPH_BIN),
-                "task",
-                "comment",
-                "add",
-                carrier,
-                "--body-file",
-                str(evidence),
-                "--json",
-            ],
+            *("comment", "--board", board, "--run", PROPOSED_RUN),
+            *("--body-file", str(evidence), carrier),
         )
         assert posted.returncode == 0, posted.stderr
-        estimated = _follow_up_step(environment, "re-estimate", "--board", board, carrier)
+        estimated = _follow_up_step(
+            environment, "re-estimate", "--board", board, "--run", PROPOSED_RUN, carrier
+        )
         assert estimated.returncode == 0, estimated.stderr
         _per_step(
             "evidence post",
@@ -3035,25 +2926,9 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
         checked = _follow_up_step(
             environment, "check-dispositions", "--root", str(root), "--board", board, PROPOSED_RUN
         )
-        assert checked.returncode == 0, checked.stderr
-        allowed = {other.content_id}
-        allowed.update(
-            one.content_id
-            for one in BOARD.issues
-            if one.origin and one.origin.startswith(f"drafts:{PROPOSED_RUN}/")
-        )
-        _per_step(
-            "account board check",
-            _bounded_step(
-                "account board check",
-                bound=True,
-                allowed_comments=allowed,
-                trace=trace,
-                # The shared cause's ticket was never copied: its evidence is on another run's
-                # item, so its `task locate` asks the origin query once.
-                origin_lookups=1,
-            ),
-        )
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        assert _GitHubFixture.requests == [], "the closeout check read the board"
+        _per_step("account board check", _bounded_step("account board check", trace=trace))
 
 
 #: The words the filing's text search asks the board for, which some accepted items of other
@@ -3399,8 +3274,9 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
     searched for by root cause and by text as the rendered task directs, then decided once,
     validated and copied to `Proposal`; 4 tickets an earlier dispatch bound to their
     items, edited and re-copied; 4 evidence comments on other runs' items, each followed by
-    its `re-estimate`; and the closeout's one `check-dispositions --board`, which then raises
-    the run's one review task over the twenty tickets it created or updated — projected by
+    its `re-estimate`; and the closeout's one `check-dispositions --board`, which reads nothing
+    of the board, holding the account to the run's receipts, and then raises the run's one
+    review task over the twenty tickets it created or updated — projected by
     the released engine into a human-task board beside `followups` — and that task completed,
     its terminal state projected. Every request is priced with the drift-checked prices, and
     each phase's points and requests, and each document's, are recorded as budget
@@ -3511,13 +3387,15 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
                 ),
                 encoding="utf-8",
             )
-            posted = _followups_command(
+            posted = _follow_up_step(
                 environment,
-                [str(ONETASKGRAPH_BIN), "task", "comment", "add", qualified]
-                + ["--body-file", str(evidence), "--json"],
+                *("comment", "--board", board, "--run", PROPOSED_RUN),
+                *("--body-file", str(evidence), qualified),
             )
             assert posted.returncode == 0, posted.stderr
-            estimated = _follow_up_step(environment, "re-estimate", "--board", board, qualified)
+            estimated = _follow_up_step(
+                environment, "re-estimate", "--board", board, "--run", PROPOSED_RUN, qualified
+            )
             assert estimated.returncode == 0, estimated.stderr
             _charged(spent, _RunPhase.WRITES, f"evidence on {qualified}", bound=True)
             filed.append(_Filed(ticket.drafts[0], cause, f"Posted evidence on {qualified}."))
@@ -3553,23 +3431,9 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
         spent[_RunPhase.REVIEW].extend(_HumanTasksFixture.requests)
         done = json.loads(completed.stdout)["item"]["item"]
         projected = [one for one in HUMAN_TASKS_BOARD.created if one.title == done["title"]]
-        allowed = {carrier.content_id for carrier in carriers}
-        allowed.update(
-            one.content_id
-            for one in BOARD.issues
-            if one.origin and one.origin.startswith(f"drafts:{PROPOSED_RUN}/")
-        )
-        # One read per item and per comment connection, no search for a bound item: the
-        # phase's cost is recorded below with the whole run's breakdown.
-        _bounded_step(
-            "realistic board check",
-            bound=True,
-            allowed_comments=allowed,
-            trace=trace,
-            # Each evidence ticket was never copied, so its `task locate` asks the origin
-            # query once; every ticket the run copied is found by the store's link.
-            origin_lookups=len(carriers),
-        )
+        # The check holds the account to the run's receipts and reads nothing of the board.
+        assert spent[_RunPhase.BOARD_CHECK] == [], spent[_RunPhase.BOARD_CHECK]
+        _bounded_step("realistic board check", bound=True, trace=trace)
 
     # One task over every ticket the run created or updated, once each, at the priority the
     # twenty Medium tickets derive, holding nothing, and its projection closed as completed.
@@ -3608,9 +3472,10 @@ def _reviewed_after_evidence(
 
     Each carrier is another run's proposal holding that board priority — ``None`` for one a
     person cleared — and this run posts its evidence and re-estimates it as the task directs,
-    then runs the closeout's `check-dispositions --board --review`. ``then``, when given, is a
-    board priority a person sets on the first carrier afterwards, before the closeout runs
-    again, as a re-dispatch's closeout does. Answers the review task after the first closeout,
+    then runs the closeout's `check-dispositions --board --review`, which takes each carrier's
+    priority from its `re-estimate` receipt. ``then``, when given, is a board priority a person
+    sets on the first carrier afterwards; a re-dispatch then re-estimates that carrier and its
+    closeout runs again. Answers the review task after the first closeout,
     after the second, and every open item afterwards.
     """
     run = PROPOSED_RUN
@@ -3648,13 +3513,15 @@ def _reviewed_after_evidence(
                 follow_up_tickets.render_comment(run, cause, "Reproduced at the basis."),
                 encoding="utf-8",
             )
-            posted = _followups_command(
+            posted = _follow_up_step(
                 environment,
-                [str(ONETASKGRAPH_BIN), "task", "comment", "add", qualified]
-                + ["--body-file", str(evidence), "--json"],
+                *("comment", "--board", board, "--run", run),
+                *("--body-file", str(evidence), qualified),
             )
             assert posted.returncode == 0, posted.stderr
-            estimated = _follow_up_step(environment, "re-estimate", "--board", board, qualified)
+            estimated = _follow_up_step(
+                environment, "re-estimate", "--board", board, "--run", run, qualified
+            )
             assert estimated.returncode == 0, estimated.stderr
             filed.append(_Filed(ticket.drafts[0], cause, f"Posted evidence on {qualified}."))
         account = follow_up_tickets.dispositions_path(root, run)
@@ -3701,6 +3568,12 @@ def _reviewed_after_evidence(
                 [str(ONETASKGRAPH_BIN), "task", "update", carriers[0], "--priority", then],
             )
             assert moved.returncode == 0, moved.stdout + moved.stderr
+            # The re-dispatch re-estimates that carrier, as its task directs after it edits its
+            # evidence comment there, and the store's answer to that write is its receipt.
+            again = _follow_up_step(
+                environment, "re-estimate", "--board", board, "--run", run, carriers[0]
+            )
+            assert again.returncode == 0, again.stdout + again.stderr
             second = closeout()
         listed = _followups_command(environment, ["just", "human-items", "list", "--json"])
         assert listed.returncode == 0, listed.stdout + listed.stderr
@@ -3777,7 +3650,11 @@ def test_a_runs_review_task_derives_its_priority_from_every_ticket_it_touched(
 def test_a_re_dispatchs_closeout_updates_the_runs_one_review_task_at_the_final_priorities(
     tmp_path: Path,
 ) -> None:
-    """A person moves a ticket after the first closeout; the retry updates the same task."""
+    """A person moves a ticket after the first closeout; the retry updates the same task.
+
+    The closeout reads no board: the priority it lists is the one the re-dispatch's own
+    re-estimate of that card answered, which keeps the person's.
+    """
     first, second, items = _reviewed_after_evidence(tmp_path, ["high", "high", "high"], then="low")
     assert second is not None
     before, after = first["item"], second["item"]
@@ -3786,6 +3663,71 @@ def test_a_re_dispatchs_closeout_updates_the_runs_one_review_task_at_the_final_p
     assert (before["priority"], after["priority"]) == ("high", "medium"), (before, after)
     assert _groups(after["body"]) == {"High": 2, "Low": 1}, after["body"]
     assert [one["id"] for one in items] == [after["id"]], items
+
+
+def test_a_closeout_reviews_a_protected_withdrawal_at_the_priority_its_card_kept(
+    tmp_path: Path,
+) -> None:
+    """A withdrawal the store refused as `destination-status` is reviewed at the card's priority.
+
+    A person accepts the run's card and gives it a priority other than its estimate; the run then
+    withdraws the ticket, which the store's status guard refuses, writing nothing. The closeout's
+    `check-dispositions --board --review` lists that card under the priority the refusal's `held`
+    read it at, never as one with no priority.
+    """
+    run = PROPOSED_RUN
+    environment, root = _followups_environment(tmp_path)
+    for variable in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CODEX_THREAD_ID"):
+        environment.pop(variable, None)
+    environment["ONEPIPELINE_LAUNCHER_SESSION"] = "review-manager"
+    board = follow_up_tickets.BOARD
+    ticket = _follow_up_ticket(SIBLING_REPOSITORY)
+    with (
+        _serving_followups(environment, fields=True),
+        _serving_human_tasks(tmp_path, environment) as human,
+    ):
+        environment.update(human)
+        path = _written_ticket(root, ticket)
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        copied = _follow_up_step(environment, "copy", "--board", board, str(path))
+        assert copied.returncode == follow_up_tickets.SOUND, copied.stderr
+        card = str(json.loads(copied.stdout)["destination"])
+        for verb in (("status", "set", card, "todo"), ("update", card, "--priority", "high")):
+            moved = _followups_command(environment, [str(ONETASKGRAPH_BIN), "task", *verb])
+            assert moved.returncode == 0, moved.stdout + moved.stderr
+        assert _decided_status(environment, path, "--withdraw") == (
+            follow_up_tickets.Status.WITHDRAWN
+        )
+        withdrawn = _follow_up_step(environment, "copy", "--board", board, str(path))
+        assert withdrawn.returncode == follow_up_tickets.PROTECTED, withdrawn.stderr
+        filed = _Filed(ticket.drafts[0], ticket.root_cause, "Withdrawn; its card was accepted.")
+        account = follow_up_tickets.dispositions_path(root, run)
+        account.parent.mkdir(parents=True, exist_ok=True)
+        account.write_text(
+            json.dumps(
+                {
+                    "schema": follow_up_tickets.DISPOSITIONS_SCHEMA,
+                    "run": run,
+                    "drafts": [filed.draft],
+                    "dispositions": [filed.entry()],
+                }
+            ),
+            encoding="utf-8",
+        )
+        checked = _follow_up_step(
+            environment,
+            *("check-dispositions", "--root", str(root), "--board", board, "--review", run),
+        )
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        found = re.search(r"review task (hi-[0-9a-f]+)", checked.stdout)
+        assert found is not None, checked.stdout
+        shown = _followups_command(
+            environment, ["just", "human-items", "show", found.group(1), "--json"]
+        )
+        assert shown.returncode == 0, shown.stdout + shown.stderr
+
+    task = json.loads(shown.stdout)["item"]
+    assert _groups(task["body"]) == {"High": 1}, task["body"]
 
 
 # llmlint: ignore-block[budgets_scoped_to_minimal_tree] The budget sits in orchestrator/budgets.yaml beside follow-up-run-points and ticket-lifecycle-points, whose journeys are this module's: all three price the loopback board through tests/github_board.py, and orchestrator:budgets reads the telemetry this project's test target records, an edge orchestrator/project.json states; orchestrator/ holds the package alone, as that budgets file says.  # noqa: E501 - llmlint reads a directive and its reason off one line
@@ -4417,43 +4359,73 @@ def test_a_follow_up_ticket_naming_a_repository_the_token_cannot_see_is_refused_
     assert not BOARD.created
 
 
-def test_board_status_refuses_a_ticket_outside_the_boards_owner_before_writing_anything(
+def test_a_ticket_outside_the_boards_creation_owners_is_refused_by_the_store_and_never_filed(
     tmp_path: Path,
 ) -> None:
-    """Exit 5 naming the repository and the owner `config show` reports, and nothing written.
+    """`board-status` exits 5 on `creates_in.refused`, and `copy` on `creation-owner`.
 
-    The store's `task locate` places the ticket on `followups` and answers the repository it
-    would create the issue in — the ticket's own, a third party's — asking the board no more
-    than its one origin query, and the refusal is decided before any write. The same board
-    answers a ticket about a sibling of that owner with the status it is copied with, so the
-    refusal is the owner rule and not a board that answers nothing.
+    `onetaskgraph.yaml` declares the `followups` board's `creation_owners` — the board's own
+    owner, which `config show` reports — so the store refuses to create the issue of a ticket
+    naming a third party's repository: `board-status` reads the refusal off the placement-only
+    `task locate`, which sends the board nothing, and `copy` off the store's own refusal of the
+    create, before anything is written. A ticket about a sibling of that owner is decided and
+    filed by the same board, so the refusal is the owner rule and not a board that answers
+    nothing; a ticket a host route sends elsewhere is filed through its route
+    (`test_a_ticket_whose_fix_changes_only_routed_repositories_is_filed_where_the_route_sends_them`).
     """
     environment, drafts_root = _followups_environment(tmp_path)
     shown = _followups_command(environment, [str(ONETASKGRAPH_BIN), "config", "show", "--json"])
     assert shown.returncode == 0, shown.stderr
-    (owner,) = [
+    (owners,) = [
         setting["value"]
         for setting in json.loads(shown.stdout)["settings"]
-        if setting["key"] == f"sources.{follow_up_tickets.BOARD}.config.owner"
+        if setting["key"] == f"sources.{follow_up_tickets.BOARD}.config.creation_owners"
     ]
+    assert owners == [CONFIGURED_OWNER], owners
     foreign = _written_ticket(drafts_root, _follow_up_ticket(FOREIGN_REPOSITORY))
 
-    with _serving_followups(environment):
+    with _serving_followups(environment, fields=True):
+        _GitHubFixture.requests.clear()
         refused = _board_status(environment, foreign)
         asked = list(_GitHubFixture.requests)
+        # Copied anyway, as an agent ignoring that refusal would: the store refuses the create.
+        written_foreign = _follow_up_ticket(FOREIGN_REPOSITORY)
+        medium = follow_up_tickets.Severity.MEDIUM
+        estimated = follow_up_tickets.estimate(medium, written_foreign.frequency, 1)
+        _written_ticket(
+            drafts_root,
+            replace(
+                written_foreign,
+                priority_estimate=estimated,
+                priority=estimated,
+                body=follow_up_tickets.with_estimate_line(
+                    written_foreign.body,
+                    follow_up_tickets.estimate_line(medium, written_foreign.frequency, 1),
+                ),
+            ),
+        )
+        _GitHubFixture.requests.clear()
+        copied = _follow_up_step(
+            environment, "copy", "--board", follow_up_tickets.BOARD, str(foreign)
+        )
+        written = [one for one in _GitHubFixture.requests if one.is_mutation]
         sibling_ticket = _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
         sibling = _board_status(environment, sibling_ticket)
+        filed = _validated_and_copied(environment, sibling_ticket)
 
     assert refused.returncode == follow_up_tickets.OUTSIDE_OWNER == 5, refused.stderr
     assert refused.stdout == ""
-    assert f"'{_hosted(FOREIGN_REPOSITORY)}'" in refused.stderr, refused.stderr
-    assert f"which is not a repository of the owner {owner!r}" in " ".join(
-        refused.stderr.split()
-    ), refused.stderr
-    assert [one.operation for one in asked] == [_Operation.ORIGIN_LOOKUP], (
-        f"a refused ticket asked the board {[one.operation for one in asked]}"
+    assert _hosted(FOREIGN_REPOSITORY).split("/", 1)[1] in refused.stderr, refused.stderr
+    assert asked == [], f"a refused ticket asked the board {[one.operation for one in asked]}"
+    assert copied.returncode == follow_up_tickets.OUTSIDE_OWNER, copied.stdout + copied.stderr
+    assert copied.stdout == "" and "creation-owner" not in copied.stdout
+    assert _hosted(FOREIGN_REPOSITORY).split("/", 1)[1] in copied.stderr, copied.stderr
+    assert written == [], "a ticket outside the board's owners was written to the board"
+    assert BOARD.created and all(one.repository == SIBLING_REPOSITORY for one in BOARD.created), (
+        "the refused ticket's issue was filed"
     )
     assert (sibling.returncode, sibling.stdout) == (0, "backlog\n"), sibling.stderr
+    assert filed["action"] == "created", filed
 
 
 def test_a_transferred_follow_up_issue_is_updated_in_place_by_a_re_copy_of_its_origin(

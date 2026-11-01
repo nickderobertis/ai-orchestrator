@@ -16,10 +16,10 @@ recipes:
   `Proposal`, and its attached closeout's board check across both destinations is green;
 * **re-dispatch** — the same run re-dispatched finds both tickets where the store places them,
   binds neither, and files no duplicate;
-* **each command's requests** — against the Linear destination, `board-status`, `copy` and the
-  dispositions check each ask the store's `task locate` once and the destination's origin
-  query at most once per ticket, a ticket still carrying the retired `board_item` none at all,
-  until its migration copy brings it forward;
+* **each command's requests** — against the Linear destination no command looks a counterpart
+  up: `board-status` reads the card the ticket names once by id with its comments, `copy` is
+  one `task copy`, a ticket still carrying the retired `board_item` names that card until its
+  migration copy brings it forward, and the dispositions check sends Linear nothing;
 * **the seeded search** — a later run whose root causes another run already filed on each
   destination finds each ticket through `board-items`' search by root cause, asking no
   question that lists the board or the scoped project, and comments its evidence there;
@@ -518,8 +518,9 @@ class Counted(NamedTuple):
     ``origin_queries`` are the destination's listings of its scoped project, which is how the
     loopback answers a query by origin; ``by_id`` its reads of one issue by id, and
     ``comments`` its reads of an issue's comments; ``locates`` the store's `task locate` the
-    command asked, and ``shows`` its `task show` of a destination's item, the local ticket's
-    own read aside; ``writes`` its creates and updates.
+    command asked, ``lookups`` those of them that look a counterpart up — any without
+    `--no-counterpart` — ``copies`` its `task copy`, and ``shows`` its `task show` of a
+    destination's item, the local ticket's own read aside; ``writes`` its creates and updates.
     """
 
     status: int
@@ -528,6 +529,8 @@ class Counted(NamedTuple):
     comments: int
     writes: int
     locates: int
+    lookups: int
+    copies: int
     shows: int
 
 
@@ -549,6 +552,10 @@ def _counted(bench: Bench, *arguments: str) -> Counted:
         ),
         writes=sum(1 for one in sent if one["operation"].endswith(("Create", "Update"))),
         locates=sum(1 for call in calls if call[:2] == ["task", "locate"]),
+        lookups=sum(
+            1 for call in calls if call[:2] == ["task", "locate"] and "--no-counterpart" not in call
+        ),
+        copies=sum(1 for call in calls if call[:2] == ["task", "copy"]),
         shows=sum(
             1
             for call in calls
@@ -837,6 +844,8 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
                 rewritten_texts[path] = tickets.render(current)
                 historical = dataclasses.replace(
                     current,
+                    # A record of an older schema carries no estimate a copy recorded.
+                    board_estimate=None,
                     body=(
                         before_schema_11(current.body)
                         if schema == 10
@@ -905,8 +914,11 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         # Each command's requests against Linear: first a record from before the binding
         # retired, bound to the item its first copy created, then that record brought forward.
         linear_native = filed_linear_item.partition(":")[2]
+        # A record from before the binding retired carries no estimate a copy recorded either.
         legacy = dataclasses.replace(
-            placements[FILED_LINEAR], retired=((tickets.BINDING_FIELD, linear_native),)
+            placements[FILED_LINEAR],
+            retired=((tickets.BINDING_FIELD, linear_native),),
+            board_estimate=None,
         )
         linear_path.write_text(tickets.render(legacy), encoding="utf-8")
         per_command: dict[str, Counted] = {}
@@ -929,11 +941,18 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         # and one more run left evidence on the Linear one.
         seeded_linear_item = _filed_earlier(bench, SEEDED_LINEAR, HIDDENCO)
         seeded_board_item = _filed_earlier(bench, SEEDED_BOARD, LIBRARY)
-        _commented(
+        witnessed = _staged(
             bench,
-            seeded_linear_item,
+            "evidence-witnessed.md",
             tickets.render_comment(WITNESSED, SEEDED_LINEAR, "Seen again in the nightly sync."),
         )
+        posted = _run(
+            bench,
+            bench.python,
+            *("-m", "orchestrator.follow_up_tickets", "comment", "--board", BOARD),
+            *("--run", WITNESSED, "--body-file", str(witnessed), seeded_linear_item),
+        )
+        assert posted.returncode == 0, posted.stdout + posted.stderr
         seeded_linear_before = _item(bench, seeded_linear_item)
         later_drafts = {
             SEEDED_LINEAR: _draft(bench, LATER, "The intake sync retries forever", HIDDENCO),
@@ -965,9 +984,9 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
                     f"{module} board-status --board {BOARD} {shlex.quote(str(local))} "
                     "> /dev/null\n"
                     f"{module} validate {shlex.quote(str(local))}\n"
-                    f"{shlex.quote(bench.store)} task comment add {item} --body-file "
-                    f"{shlex.quote(str(evidence))}\n"
-                    f"{module} re-estimate --board {BOARD} {item}\n",
+                    f"{module} comment --board {BOARD} --run {LATER} --body-file "
+                    f"{shlex.quote(str(evidence))} {item}\n"
+                    f"{module} re-estimate --board {BOARD} --run {LATER} {item}\n",
                 )
             )
         later_account = [
@@ -1002,11 +1021,18 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
 
         # A person sets the Linear ticket's priority, and one more run's evidence arrives.
         _store(bench, "task", "priority", "set", seeded_linear_item, HELD_PRIORITY.value)
-        _commented(
+        latest = _staged(
             bench,
-            seeded_linear_item,
+            "evidence-latest.md",
             tickets.render_comment(LATEST, SEEDED_LINEAR, "And once more on the next sync."),
         )
+        posted = _run(
+            bench,
+            bench.python,
+            *("-m", "orchestrator.follow_up_tickets", "comment", "--board", BOARD),
+            *("--run", LATEST, "--body-file", str(latest), seeded_linear_item),
+        )
+        assert posted.returncode == 0, posted.stdout + posted.stderr
         held = _run(
             bench,
             bench.python,
@@ -1015,6 +1041,8 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
             "re-estimate",
             "--board",
             BOARD,
+            "--run",
+            LATEST,
             seeded_linear_item,
         )
         seeded_linear_held = _item(bench, seeded_linear_item)
@@ -1314,44 +1342,35 @@ def test_a_re_dispatch_finds_both_tickets_binds_neither_and_files_no_duplicate(
         assert tickets.BINDING_FIELD not in metadata[tickets.KEY]
 
 
-def test_each_command_asks_linear_once_by_origin_and_a_legacy_binding_not_at_all(
+def test_each_command_reads_the_linear_card_once_and_looks_no_counterpart_up(
     life: Life,
 ) -> None:
-    """Per command against the Linear destination: one `task locate`, at most one origin query.
+    """Per command against the Linear destination: no counterpart lookup, one read of the card.
 
-    Brought forward, `board-status` and the dispositions check each ask the store's `task
-    locate` once — the destination's origin query once, since the private tracker keeps no
-    link — and read the located item once for its status, record and comments; `copy` asks the
-    same locate, its one origin query, reads no status of its own, since every copy but a
-    withdrawal keeps the status the destination holds, and the store's `--target-task` reads
-    the item once before writing it. A record
-    still carrying the retired `board_item` is read through `--target-native` by id, so neither
-    of its commands asks the origin query at all; its copy is the migration that rewrites it
-    without the key. No command files a second Linear issue.
+    Every command asks the store's `task locate` once, placement-only, which sends Linear
+    nothing. `board-status` of a ticket naming its card — a record still carrying the retired
+    `board_item`, then the record that copy brought forward, which names the card its own copy
+    receipt reached since the private tracker keeps no link — reads that card once by id with
+    its comments and asks no origin query. `copy` is one `task copy`; the record still carrying
+    `board_item` names that card as `--target-task`, so it asks no origin query and is the
+    migration that rewrites the record without the key. The dispositions check reads its
+    receipts and sends Linear nothing. No command files a second Linear issue.
     """
     counted = life.per_command
     for label, one in counted.items():
         assert one.status == tickets.SOUND, (label, one)
-    # One ticket each, but the dispositions check reads both of the run's tickets: the board's
-    # and Linear's, each located once and its item read once.
+        assert one.lookups == 0, (label, one)
     for label in ("legacy board-status", "legacy copy", "board-status", "copy"):
         assert counted[label].locates == 1, (label, counted[label])
+    for label in ("legacy board-status", "board-status"):
+        one = counted[label]
+        assert (one.shows, one.origin_queries, one.writes, one.copies) == (1, 0, 0, 0), (label, one)
+    for label in ("legacy copy", "copy"):
+        assert (counted[label].copies, counted[label].shows) == (1, 0), (label, counted[label])
+        assert counted[label].writes >= 1, (label, counted[label])
+    assert counted["legacy copy"].origin_queries == 0, counted["legacy copy"]
     checked = counted["check-dispositions"]
-    assert (checked.locates, checked.shows) == (2, 2), checked
-    for label in ("legacy board-status", "legacy copy"):
-        assert counted[label].origin_queries == 0, (label, counted[label])
-    for label in ("board-status", "check-dispositions", "copy"):
-        assert counted[label].origin_queries == 1, (label, counted[label])
-    assert counted["board-status"].shows == 1, counted["board-status"]
-    for label in ("board-status", "check-dispositions"):
-        assert counted[label].by_id <= 1, (label, counted[label])
-        assert counted[label].writes == 0, (label, counted[label])
-    # The copy reads no status of its own: the store's own `--target-task` read is its one read
-    # of the item, before the write.
-    assert (counted["copy"].shows, counted["copy"].by_id, counted["copy"].comments) == (0, 1, 0)
-    assert counted["copy"].writes >= 1, counted["copy"]
-    # The migration copy: the `--target-native` read, then the store's `--target-task` read.
-    assert (counted["legacy copy"].by_id, counted["legacy copy"].comments) == (2, 0)
+    assert checked == Counted(tickets.SOUND, 0, 0, 0, 0, 2, 0, 0, 0), checked
     assert life.migrated.board_item is None
     assert f'"schema": {tickets.SCHEMA}' in life.migrated_text
     assert tickets.BINDING_FIELD not in life.migrated_text
@@ -1467,7 +1486,7 @@ def test_new_and_rewritten_historical_bodies_publish_without_search_logs_on_both
     )
     for item in bodies:
         body = str(item["content"])
-        assert _record(item)["schema"] == tickets.SCHEMA == 13
+        assert _record(item)["schema"] == tickets.SCHEMA == 14
         assert "Duplicate search" not in body and "Queries:" not in body
         assert "Related tickets" not in body
         assert "Irrelevant old candidate" not in body and "/issues/999" not in body

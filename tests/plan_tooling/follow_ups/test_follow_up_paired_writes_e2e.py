@@ -14,18 +14,12 @@ real `github-projects` plugin:
   closed as done, are copied with the item's Status and its issue's state left as they stand.
 * **A copy after a person moved the item** — whenever `board-status` last ran, a copy reads no
   status of its own to write: one that is not a withdrawal keeps what the person chose, and a
-  withdrawal reads the item's live status and refuses one a person accepted or deferred. A copy
-  reads nothing beyond its one `task locate` and the store's own `--target-task` verification.
-* **A raw issue write with the board credential the agent holds** — an issue closed as not
-  planned with no Status write beside it — which nothing in this repository can refuse as it is
-  made: the rendered task forbids it (`tests/test_follow_up_tickets.py`), and
-  `check-dispositions --board` refuses the run after it, naming the item and its status. The
-  check accepts the run's items when they are in line, and refuses a withdrawn ticket whose
-  item was never closed.
-* **A direct plan-store CLI write on a board item** — the run's own proposal moved by `task
-  status set` with no `board-status` deciding it — which nothing here can refuse as it is made
-  either: the rendered task forbids it, and `check-dispositions --board` refuses the run after
-  it, naming the item and the status it holds.
+  withdrawal is refused by the store's own status guard, which holds it to an item at a
+  proposal or already withdrawn, and writes nothing. A copy's one read of the item is the
+  store's own, of the card the ticket's record names.
+* **`check-dispositions --board`** reads nothing from the board: it holds the run's account to
+  the receipts its copies left, accepting the run's items when their copies landed in line and
+  refusing a withdrawn ticket whose withdrawal no copy wrote.
 
 llmlint: ignore-file[tests_mirror_real_usage, e2e_not_mocked] Each command runs through
 `orchestrator.follow_up_tickets`' own `main` with the command's own arguments, in this process,
@@ -44,7 +38,6 @@ covers what they read; a project of their own would re-key that shared fixture f
 from __future__ import annotations
 
 import json
-import os
 from collections import Counter
 from pathlib import Path
 from typing import NamedTuple
@@ -230,7 +223,8 @@ def test_a_withdrawal_onto_an_item_at_a_status_no_ticket_carries_writes_nothing(
     loopback: Loopback, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A person moved the item to an option the store places at no ticket status: a withdrawal,
-    which reads the item's status to know it may close it, writes nothing."""
+    which the store's status guard admits only onto a proposal or a withdrawn item, writes
+    nothing."""
     path, issue = _filed(loopback, "moved-to-an-unmapped-option", capsys)
     # A person's move on github.com, to an option the `followups` mapping names for nothing.
     _row(issue).status = remote.NEEDS_ATTENTION.name
@@ -240,8 +234,9 @@ def test_a_withdrawal_onto_an_item_at_a_status_no_ticket_carries_writes_nothing(
 
     status, said = _copy(path, capsys)
 
-    assert status == tickets.UNPLACED, said
-    assert "at category 'unknown', which no ticket carries" in said, said
+    assert status == tickets.PROTECTED, said
+    assert "the store holds this ticket's card at `unknown`" in said, said
+    assert "the store wrote nothing" in said, said
     assert _card(issue) == before
     assert not [
         request for request in remote._GitHubFixture.requests[writes:] if request.is_mutation
@@ -253,21 +248,21 @@ def _operations(since: int) -> Counter[str]:
     return Counter(str(request.operation) for request in remote._GitHubFixture.requests[since:])
 
 
-def test_a_copy_reads_its_item_only_through_its_locate_and_the_stores_verification(
+def test_a_copy_reads_its_item_only_through_the_stores_own_copy(
     loopback: Loopback, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A copy straight after its `board-status` and one long after it read alike: its `task
-    locate` follows the store's link by id, and the store's `--target-task` verification reads
-    the item once more, and no status of the item is read for the copy to write."""
+    locate` reads nothing at the board, and the store's copy reads the card the ticket's link
+    names once, so no status of the item is read for the copy to write."""
     path, issue = _filed(loopback, "re-copied-after-its-board-status", capsys)
     _decided(path, capsys)
     paired = len(remote._GitHubFixture.requests)
     assert _copy(path, capsys)[0] == tickets.SOUND
-    assert _operations(paired)["issue"] == 2, _operations(paired)
+    assert _operations(paired)["issue"] == 1, _operations(paired)
 
     unpaired = len(remote._GitHubFixture.requests)
     assert _copy(path, capsys)[0] == tickets.SOUND
-    assert _operations(unpaired)["issue"] == 2, _operations(unpaired)
+    assert _operations(unpaired)["issue"] == 1, _operations(unpaired)
     assert _card(issue)[:2] == ("Proposal", "OPEN")
 
 
@@ -289,8 +284,8 @@ def test_a_copy_after_a_person_moved_the_item_keeps_what_they_chose(
     withdraw: bool,
 ) -> None:
     """`board-status` decides at `Proposal`; a person then moves the item; the copy that follows
-    keeps the person's status under `preserve-destination`, and a withdrawal reads the item's
-    live status and refuses, writing nothing: the card stays as the person left it either way."""
+    keeps the person's status under `preserve-destination`, and a withdrawal is refused by the
+    store's status guard, writing nothing: the card stays as the person left it either way."""
     path, issue = _filed(loopback, f"moved-after-{moved_to.value}-{withdraw}".lower(), capsys)
     decided = _decided(path, capsys, withdraw=withdraw)
     assert decided == (tickets.Status.WITHDRAWN if withdraw else tickets.Status.PROPOSED).value
@@ -303,8 +298,9 @@ def test_a_copy_after_a_person_moved_the_item_keeps_what_they_chose(
 
     if withdraw:
         assert status == tickets.PROTECTED, said
-        # Its `task locate` follows the store's link by id, then it reads the live status once.
-        assert _operations(reads)["issue"] == 2, "the copy did not read the item's live status"
+        # Its `task locate` reads nothing at the board; the store's copy reads the card its link
+        # names once, and its status guard refuses there.
+        assert _operations(reads)["issue"] == 1, _operations(reads)
         assert not [
             request for request in remote._GitHubFixture.requests[reads:] if request.is_mutation
         ], "a refused copy wrote to the board"
@@ -313,20 +309,12 @@ def test_a_copy_after_a_person_moved_the_item_keeps_what_they_chose(
     assert _card(issue) == before
 
 
-def _closed_by_raw_write(issue: str) -> remote.RestRequest:
-    """Close ``issue`` as not planned the way an agent holding the board credential could:
-    one `PATCH` to GitHub's REST issue endpoint, which writes the issue and no board field.
-    The request the loopback logged for it."""
-    return remote.closed_through_rest(_row(issue), os.environ, "not_planned")
-
-
-def test_check_dispositions_accepts_items_in_line_and_refuses_a_raw_close_naming_its_status(
+def test_check_dispositions_accepts_items_whose_copies_landed_in_line(
     loopback: Loopback, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The run's proposal and its withdrawal are in line; then the proposal's issue is closed
-    as not planned with the board credential, no Status written beside it, and the check
-    refuses the run naming the item and the status the board holds it at."""
-    _, proposal = _filed(loopback, "a-proposal-left-open", capsys)
+    """The run's proposal and its withdrawal are in line, by the receipts their copies left,
+    and the check reads nothing from the board to say so."""
+    _filed(loopback, "a-proposal-left-open", capsys)
     withdrawn = _written(loopback, "a-duplicate-withdrawn")
     _decided(withdrawn, capsys)
     assert _copy(withdrawn, capsys)[0] == tickets.SOUND
@@ -335,24 +323,12 @@ def test_check_dispositions_accepts_items_in_line_and_refuses_a_raw_close_naming
     withdrawn_item = f"{BOARD}:{tickets.read_ticket(withdrawn, pending=True).link(BOARD)}"
     assert _card(withdrawn_item) == ("Cancelled", "CLOSED", "NOT_PLANNED")
     _accounted(loopback, ["a-proposal-left-open", "a-duplicate-withdrawn"])
+    reads = len(remote._GitHubFixture.requests)
 
     status, said = _checked(loopback, capsys)
+
     assert status == tickets.SOUND, said
-
-    raw = _closed_by_raw_write(proposal)
-    assert raw.authorization == "Bearer fixture-token", raw
-    assert raw.body == {"state": "closed", "state_reason": "not_planned"}, raw
-    before = _card(proposal)
-    assert before == ("Proposal", "CLOSED", "NOT_PLANNED"), before
-
-    status, said = _checked(loopback, capsys)
-
-    assert status == tickets.UNSOUND, said
-    assert f"{proposal}, which this run created for the ticket a-proposal-left-open, is at " in said
-    assert "`Cancelled` (category `cancelled`), not `Proposal`" in said, said
-    assert withdrawn_item not in said, said
-    assert _card(proposal) == before, "the check wrote to the board"
-    assert _card(proposal).status == "Proposal", "the card's own Status option moved"
+    assert remote._GitHubFixture.requests[reads:] == [], "the check read the board"
 
 
 def test_check_dispositions_refuses_a_withdrawn_ticket_whose_item_was_never_closed(
@@ -367,36 +343,11 @@ def test_check_dispositions_refuses_a_withdrawn_ticket_whose_item_was_never_clos
 
     assert status == tickets.UNSOUND, said
     assert (
-        f"{issue}, the item of the ticket withdrawn-but-never-copied this run withdrew, is at "
-        "`Proposal` (category `backlog`), not `Cancelled`"
+        f"the filed root cause withdrawn-but-never-copied: receipt line 1 (copy of {issue}) left "
+        "the card at category 'backlog', where the ticket this run withdrew is `cancelled`"
     ) in said, said
     assert _card(issue) == before == ("Proposal", "OPEN", None)
 
     assert _copy(path, capsys)[0] == tickets.SOUND
     status, said = _checked(loopback, capsys)
     assert status == tickets.SOUND, said
-
-
-def test_check_dispositions_refuses_a_proposal_the_store_cli_moved_without_board_status(
-    loopback: Loopback, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The run's own proposal moved to `Todo` by the plan-store CLI's own status write, with no
-    `board-status` deciding it: the check refuses the run naming the item and the status it
-    holds, where the ticket still carries `backlog`."""
-    _, issue = _filed(loopback, "moved-by-the-store-cli", capsys)
-    _accounted(loopback, ["moved-by-the-store-cli"])
-    status, said = _checked(loopback, capsys)
-    assert status == tickets.SOUND, said
-
-    loopback.store("task", "status", "set", issue, tickets.Status.ACCEPTED.value)
-    before = _card(issue)
-    assert before == ("Todo", "OPEN", None), before
-
-    status, said = _checked(loopback, capsys)
-
-    assert status == tickets.UNSOUND, said
-    assert (
-        f"{issue}, which this run created for the ticket moved-by-the-store-cli, is at `Todo` "
-        "(category `todo`), not `Proposal`, and its ticket carries `backlog`"
-    ) in said, said
-    assert _card(issue) == before, "the check wrote to the board"

@@ -138,6 +138,14 @@ sources:
         - field: Host
           key: orchestrator.follow-up
           path: [host]
+      # The owners a create on this board may file a follow-up ticket's issue under: the
+      # board's own owner, so a ticket naming a repository of anybody else is refused by the
+      # store as `creation-owner` before anything is written — filing an issue in a third
+      # party's repository is an outward action nobody asked for — while an update of an issue
+      # that already exists is never refused for it, and a ticket a host route sends elsewhere
+      # is held to that destination's own setting. `task locate` reports the refusal as
+      # `creates_in.refused`, which `board-status` reads.
+      creation_owners: [nickderobertis]
     cache:
       enabled: true
   # The operator's two human-task boards, which the engine will project each human item's task

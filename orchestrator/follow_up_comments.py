@@ -109,8 +109,8 @@ What is read
   item no run of this host owns — one naming no ticket, or a ticket not here, or the board's
   record naming another creator or host — is refused with why, and nothing is launched.
 * **`--run RUN-ID`** copies, the same way, the item each of that run's local tickets is placed
-  on — the counterpart the store's `task locate` answers for it (:func:`follow_up_tickets.locate`)
-  — and lists no board.
+  on — the card its record names where the store's `task locate` places it
+  (:func:`follow_up_tickets.record_card`) — and lists no board.
 * **Unscoped**, every board of the family `--to` roots — the sources `sources route` answers it
   can reach (:func:`orchestrator.plan_store.reachable`) — is
   copied by the query the store narrows to this host's items, `--commented-since <its since>
@@ -1357,8 +1357,8 @@ class Binding(NamedTuple):
 
     run: tickets.RunId
     ticket: str
-    #: The item the store's `task locate` answers as the ticket's counterpart, qualified to the
-    #: board of the family it places the ticket on.
+    #: The card the ticket's record names, qualified to the board of the family the store's
+    #: `task locate` places the ticket on.
     item: QualifiedTaskId | None
 
 
@@ -1367,9 +1367,13 @@ def run_bindings(root: Path, board: str, run: tickets.RunId) -> list[Binding]:
 
     One narrowed listing of the drafts source, never of a board, selects the run's tickets; a
     ticket the store read from anywhere but the run's tickets directory under ``root`` is not
-    this root's. Each ticket's item is then the counterpart one `task locate` through ``board``
-    answers for it (:func:`follow_up_tickets.locate`) — through `--target-native` for a record
-    still carrying the retired binding — so it is the item the store's copy writes.
+    this root's. Each ticket's item is then the card its record names where the placement-only
+    `task locate` through ``board`` places it (:func:`follow_up_tickets.record_card`) — the
+    store's link, or a record still carrying the retired binding's item — which is the card the
+    store's copy writes; the locate reads nothing at the board. A ticket on a destination
+    declared private names none, since the store records no link to a private card, so the card
+    its run's own last copy receipt names stands in, read once by id and taken only while it
+    carries the ticket's origin.
     """
     query = f"{tickets.KEY}/created_by_run={run}"
     pages = plan_store.every_page(
@@ -1384,8 +1388,17 @@ def run_bindings(root: Path, board: str, run: tickets.RunId) -> list[Binding]:
         located = Path(str(location.get("path", "")))
         if located.parent != root / TASKS_DIRECTORY / run / tickets.TICKETS:
             continue
-        bound = tickets.legacy_binding(_record(held.item.model_dump(mode="python")))
-        item = tickets.locate(located, board, bound=bound, established=False).counterpart
+        destination = tickets.locate(located, board).destination
+        item = tickets.record_card(held.item.model_dump(mode="python"), destination, board)
+        if item is None:
+            # A ticket on a destination declared private names no card: the card the run's own
+            # last copy reached, read once by id and taken only while it carries the ticket.
+            ticket = tickets.qualified_id(run, located.stem)
+            reached = tickets.receipt_card(root, run, ticket)
+            if reached is not None and tickets.carries_origin(
+                plan_store.task_record(reached, no_comments=True), ticket
+            ):
+                item = reached
         found.append(Binding(run, located.stem, item))
     return sorted(found, key=lambda one: one.ticket)
 
@@ -2880,10 +2893,13 @@ def outcome(
     version = result.get("version") if isinstance(result, Mapping) else None
     version = version if isinstance(version, str) else None
     if result is not None and not (
-        isinstance(result, Mapping) and isinstance(parts_value, list) and parts_value
+        isinstance(result, Mapping)
+        and ("parts" not in result or (isinstance(parts_value, list) and parts_value))
     ):
-        # An `--expect` write answers with a result listing the parts it wrote; a result listing
-        # none, or of any other shape, is no plain answer either, so nothing says what it wrote.
+        # An `--expect` write answers with a result listing the parts it wrote, and a plain write
+        # with a result naming no parts at all — what the item holds once written, which the
+        # plain answer's own check below reads the task for. A result listing no part, or parts
+        # of any other shape, is neither, so nothing says what it wrote.
         return Outcome("unknown", version, (), f"the result was not described: {result!r}", reason)
     if None in read:
         return Outcome("unknown", version, (), f"a part was not described: {parts_value!r}", reason)
@@ -3055,12 +3071,17 @@ def _update_words(item: str, fields: Mapping[str, object], scratch: Path) -> lis
     return words
 
 
-def _copy_words(run: str, issue: str, item: Mapping[str, object]) -> list[str]:
+def _copy_words(
+    run: str, issue: str, item: Mapping[str, object], guard: tickets.Priority | Path
+) -> list[str]:
     """`task copy` of ``run``'s ticket of ``issue`` onto ``issue`` and nowhere else.
 
     The one write that sets an item's `repositories`, which `task update` cannot; ``item`` is
     the read of ``issue`` naming the ticket's root cause. It names ``issue`` as `--target-task`,
-    which the store reads by id and verifies by origin, so the copy looks nothing up.
+    which the store reads by id and verifies by origin, so the copy looks nothing up, and
+    ``guard`` — the ticket's :data:`follow_up_tickets.BOARD_ESTIMATE_FIELD`, or `none`, or the
+    drafts root to read it from once the item is known to be the run's (:func:`_guard`) — as its
+    `--when-destination-priority`, so a priority a person set on the card stands.
     """
     cause = _record(item).get("root_cause")
     if (
@@ -3069,6 +3090,8 @@ def _copy_words(run: str, issue: str, item: Mapping[str, object]) -> list[str]:
         or (tickets.issue_owner(item) != run)
     ):
         raise OSError(f"{issue} carries no root cause of a ticket of run {run}'s to copy")
+    if isinstance(guard, Path):
+        guard = _guard(guard, tickets.RunId(run), item)
     return [
         "task",
         "copy",
@@ -3077,7 +3100,25 @@ def _copy_words(run: str, issue: str, item: Mapping[str, object]) -> list[str]:
         issue.partition(":")[0],
         "--target-task",
         issue,
+        "--when-destination-priority",
+        guard.value,
     ]
+
+
+def _guard(root: Path, run: tickets.RunId, item: Mapping[str, object]) -> tickets.Priority:
+    """The priority guard a copy of ``run``'s ticket of ``item`` names: its record's estimate.
+
+    The ticket's :data:`follow_up_tickets.BOARD_ESTIMATE_FIELD` as its file under ``root`` holds
+    it, `none` where it holds none. :class:`OSError` for a file that cannot be read as a ticket,
+    which names no guard: the pending copy is kept rather than sent unguarded.
+    """
+    cause = str(_record(item).get("root_cause"))
+    path = tickets.ticket_path(root, run, cause)
+    try:
+        held = tickets.read_ticket(path, pending=True)
+    except tickets.Refused as refusal:
+        raise OSError(f"its ticket {path} cannot be read ({refusal})") from refusal
+    return held.board_estimate or tickets.Priority.NONE
 
 
 def _snapshot_projection(entry: PendingEntry) -> Projected | None:
@@ -3118,7 +3159,7 @@ def recover(state: Pass, entry: PendingEntry, scratch: Path) -> PendingEntry | N
             return entry
     try:
         arguments = (
-            _copy_words(entry.run, entry.item, item)
+            _copy_words(entry.run, entry.item, item, state.root)
             if "repositories" in unapplied
             else _update_words(entry.item, unapplied, scratch)
         )
@@ -3322,24 +3363,25 @@ def _settle_ticket(  # noqa: PLR0913 - the pass, the issue, and what decides its
     withdrawing = local.status is tickets.Status.WITHDRAWN
     category = str(now["status"])
     board_status = tickets.Status(category) if category in tuple(tickets.Status) else local.status
-    native = issue.partition(":")[2]
-    placement = tickets.Placement(tickets.BoardItemId(native), category, item)
     # The copy keeps the board's status, so a person's move stands; the withdrawal is a
     # write of its own, below, decided on the status the read shows.
     decided = tickets.estimate_before_copy(
-        path,
-        issue.partition(":")[0],
-        placement,
-        dataclasses.replace(local, status=board_status),
-        reads,
+        path, issue, dataclasses.replace(local, status=board_status), reads
     )
+    # The card's priority follows the estimate only while it holds the one its record stored,
+    # decided on the pass's own read; the estimate written is the one the card then received.
+    estimated = decided.priority_estimate or tickets.Priority.NONE
+    priority = tickets.follows_estimate(
+        tickets.held_priority(item), tickets.stored_estimate(item), estimated
+    )
+    received = dataclasses.replace(decided, board_estimate=decided.priority_estimate)
     wanted = project(
         {
             "title": decided.title,
             "content": decided.body,
             "status": {"category": board_status.value},
-            "priority": decided.priority.value,
-            "metadata": {tickets.KEY: tickets.record(decided)},
+            "priority": priority.value,
+            "metadata": {tickets.KEY: tickets.record(received)},
             "repositories": list(decided.repositories),
         }
     )
@@ -3375,12 +3417,17 @@ def _settle_ticket(  # noqa: PLR0913 - the pass, the issue, and what decides its
             "snapshot"
         )
     elif "repositories" in changes:
-        # The copy writes the ticket's file as it stands, so the file is the decided ticket.
-        path.write_text(tickets.render(decided), encoding="utf-8")
-        _write_once(state, snapshot, run, issue, write, changes, _copy_words(run, issue, item))
+        # The copy writes the ticket's file as it stands, so the file is the decided ticket,
+        # naming the estimate the card receives; one that lands nothing names the old one again.
+        path.write_text(tickets.render(received), encoding="utf-8")
+        guard = local.board_estimate or tickets.Priority.NONE
+        words = _copy_words(run, issue, item, guard)
+        if not _write_once(state, snapshot, run, issue, write, changes, words):
+            path.write_text(tickets.render(decided), encoding="utf-8")
     elif changes:
         arguments = _update_words(issue, changes, scratch)
-        _write_once(state, snapshot, run, issue, write, changes, arguments)
+        if _write_once(state, snapshot, run, issue, write, changes, arguments):
+            path.write_text(tickets.render(received), encoding="utf-8")
     if not withdrawing:
         return
     if category != tickets.Status.PROPOSED.value:

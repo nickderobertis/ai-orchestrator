@@ -1221,25 +1221,20 @@ def test_a_sources_reachable_family_is_the_stores_own_answer(
         plan_store.reachable("nowhere")
 
 
-def test_task_locate_answers_the_copys_placement_and_refuses_a_target_by_its_kind(
+def test_task_locate_answers_the_copys_placement_and_looks_nothing_up(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The store's `task locate`, writing nothing: its counterpart, and `--target-native`.
+    """The store's `task locate --no-counterpart`, writing nothing and looking nothing up.
 
-    A named item the store verifies is answered `target-task`; one gone, or one carrying
-    another task's origin, is :class:`plan_store.TargetRefused`, the store's own kinds for
-    them, while every other refusal stays a plain :class:`OSError`.
+    It answers the destination the copy places a task at, with no counterpart and no carriers
+    even where the destination holds the task's copy, and every refusal is an :class:`OSError`.
     """
     _routed_sources(monkeypatch, tmp_path, home="public")
-    home = _copied_home(
+    _copied_home(
         "located",
-        [
-            PlanNode(id="one", task="One task.", repo=HOME_REPOSITORY),
-            PlanNode(id="two", task="Another task.", repo=HOME_REPOSITORY),
-        ],
+        [PlanNode(id="one", task="One task.", repo=HOME_REPOSITORY)],
         tmp_path,
     )
-    copies = {task.node_id: str(task.qualified_id) for task in plan_store.read_tasks(home)}
     drafted = {
         task.node_id: str(task.qualified_id) for task in plan_store.read_tasks("draft:located")
     }
@@ -1247,24 +1242,10 @@ def test_task_locate_answers_the_copys_placement_and_refuses_a_target_by_its_kin
     before = sorted((tmp_path / "home").rglob("*.md"))
 
     found = plan_store.task_locate(source, "home")
-    assert found.destination.root == "home"
-    assert found.counterpart is not None and found.counterpart.id.root == copies["one"]
-    bare = plan_store.task_locate(source, "home", counterpart=False)
-    assert (bare.destination.root, bare.counterpart, bare.carriers) == ("home", None, None)
-    named = plan_store.task_locate(source, "home", target_native=copies["one"].partition(":")[2])
-    assert named.counterpart is not None
-    assert (named.counterpart.id.root, str(named.counterpart.via)) == (
-        copies["one"],
-        "target-task",
-    )
-    with pytest.raises(plan_store.TargetRefused, match="does not exist"):
-        plan_store.task_locate(source, "home", target_native="not-on-the-board")
-    with pytest.raises(plan_store.TargetRefused, match="has no origin naming"):
-        plan_store.task_locate(source, "home", target_native=copies["two"].partition(":")[2])
+    assert (found.destination.root, found.counterpart, found.carriers) == ("home", None, None)
     assert sorted((tmp_path / "home").rglob("*.md")) == before, "locating wrote to the board"
-    with pytest.raises(OSError) as unconfigured:
+    with pytest.raises(OSError):
         plan_store.task_locate(source, "nowhere")
-    assert not isinstance(unconfigured.value, plan_store.TargetRefused)
 
 
 def test_task_locate_refuses_an_answer_about_another_task_or_count(

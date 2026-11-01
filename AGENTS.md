@@ -1247,8 +1247,9 @@ happens to quote a board comment does not narrow the dispatch silently.
   marker says a run wrote it.
 
 Initial dispatches correct their accounts with the local, board-less validator. An attached
-`just follow-ups` runs the sole board disposition check after settlement, including the
-comment recount for items this run created. Feedback dispatches require their reply validator
+`just follow-ups` runs the sole board disposition check after settlement, holding every card
+the run wrote and every evidence comment and re-estimate to the run's receipts of those writes,
+reading nothing of the board. Feedback dispatches require their reply validator
 green, and the recipe's settle re-runs it and verifies every reply on the board.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
@@ -1282,9 +1283,9 @@ takes.
 **The board is searched, never listed: every query of it is `python -m
 orchestrator.follow_up_tickets board-items`.** Reading every item of the board spends a share
 of GitHub's hourly allowance that grows with the board and that every session here shares,
-so a ticket the store already places on its item makes no duplicate or origin search,
-including on re-dispatch. A ticket with no item yet has its `board-status` ask the origin
-query once, and the agent asks with `--ticket <its path>`, which searches the destination the
+so a ticket whose record already names its card makes no duplicate or origin search,
+including on re-dispatch. A ticket with no card yet is looked up by origin only by the store's
+own copy, and the agent asks with `--ticket <its path>`, which searches the destination the
 store's `task locate --no-counterpart` answers for that record — so an owner's private ticket
 is searched on the private board it lands on — first by text in the invariant's words, then
 once per further distinct text question, the failing file last, and by root-cause slug only
@@ -1294,14 +1295,17 @@ which may not yet list an item written seconds ago — and one naming none is re
 in the task lists the board. A bare `task list` answers one page and a cursor, so a search
 over it reads the board as smaller than it is.
 
-**A ticket is copied onto the item the store places it on, and nowhere else.** Where it
-lands, which item is its own and where its issue is created are the store's `task locate`
-answers, which every follow-up command asks once per ticket; nothing on the ticket binds it.
-Every copy the task prescribes goes through `python -m orchestrator.follow_up_tickets copy`,
-which refuses a copy landing anywhere but that item or a new one: a bare `task copy` updates
-whichever carrier the store lists first. **A record from before schema 13 may still carry
-`board_item`**: leave it as it stands, since the store reads that item until the ticket's
-next `copy` brings the record forward without it; a schema-13 record carrying it is refused.
+**A ticket's card is the one its record names, written by one guarded store copy.** Where it
+lands and where its issue is created are the store's placement-only `task locate` answers,
+which read nothing at the board; its card is the store's own link on its record — on a
+destination declared private, which keeps no link, the card its run's last copy receipt names,
+taken only while it carries the ticket's origin. Every copy goes through `python -m
+orchestrator.follow_up_tickets copy`: one `task copy` naming that card, whose status guard
+refuses a withdrawal over a card a person accepted or deferred, whose priority guard keeps a
+priority a person set, and whose answer is receipted; a bare `task copy` carries none of it.
+**A record from before schema 13 may still carry `board_item`**: leave it as it stands, since
+its next `copy` names that card and brings the record forward without it; a later record
+carrying it is refused.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 
 <!-- llmlint: ignore-block[instruction_layer_localized] This paragraph is the manager's own loop rather than an `orchestrator/` implementation constraint: the manager reads it to know which board and repository a follow-up run files each ticket in, and so which links to relay and who accepts each item, and no nested instruction file is one the manager reads; `tests/plan_guidance/test_follow_up_ticket_docs.py` holds the commands it names to `orchestrator/follow_up_tickets.py`. -->
@@ -1311,9 +1315,9 @@ in its user layer file an organization's root cause in that organization's own t
 its team triages it under the same contract, and an owner's private work on a board declared
 private. Its issue is created where the store's `task locate` answers it creates one — the
 one repository it lists, or for several the destination's configured repository — which its
-record's `repository` names; that repository must be under the owner the destination files
-under, and a ticket whose issue would be created outside it is refused and reported, never
-filed. A ticket's record's `host` names the
+record's `repository` names; the store creates it only for the owners the destination
+declares in `creation_owners`, and a ticket whose issue would be created outside them is
+refused by the store and reported, never filed. A ticket's record's `host` names the
 machine its verification ran on, and its evidence states the same host. The `followups`
 source projects it onto the board's `Host` text field, which filters like a ticket's origin.
 That field is created through the plan-store verb, like every board field (see where a plan
@@ -1388,13 +1392,15 @@ workaround always lowers a severity above low. The estimate is that severity one
 one level, raised one level, capped at high, when it fires consistently or has 3 or more
 occurrences — the ticket's own evidence, plus each other run's evidence comment and each
 reply marked as confirming, recounted off the issue's comments every time and stored
-nowhere — so only a severity still critical with the workaround estimates urgent. `board-status` writes it before every copy, as the
-record's `priority_estimate`, the `## Impact` estimate line and the ticket's priority; a run
-that comments on another run's issue, or replies confirming one, runs `re-estimate` on it.
-The item's priority follows the estimate only while the board holds the estimate its record
-stored, or none for a record without one, so a person's priority is never rewritten, and
-setting it back to the estimate hands it back. `check-dispositions` and `check-responses`
-hold the board to the recount.
+nowhere — so only a severity still critical with the workaround estimates urgent.
+`board-status` writes it before every copy, as the record's `priority_estimate`, the
+`## Impact` estimate line and the ticket's priority; a run that comments on another run's
+issue, or replies confirming one, runs `re-estimate` on it. The card's priority follows the
+estimate only while it holds the estimate the card last received — the record's
+`board_estimate`, or none for a record without one — which the store's priority guard decides
+at the write, so a person's priority is never rewritten, and setting it back to that estimate
+hands it back. `check-dispositions` and `check-budgets` hold the account to the run's receipts
+of its writes and read nothing of the board; `check-responses` holds replies to the board.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 
 **A brief for a run that works accepted tickets has each node's task record name its

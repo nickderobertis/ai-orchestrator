@@ -503,28 +503,6 @@ def test_the_installed_command_runs_the_adapter_protocol_end_to_end() -> None:
     assert ran.returncode == 1 and "nothing was approved" in ran.stderr, ran.stderr
 
 
-@pytest.mark.parametrize(
-    ("item", "expected"),
-    [
-        (
-            {"location": {"url": "https://github.invalid/i/1"}, "priority": "high"},
-            ReviewTicket("https://github.invalid/i/1", Priority.HIGH),
-        ),
-        ({"location": {}, "priority": "none"}, ReviewTicket("followups:I_1", Priority.NONE)),
-    ],
-    ids=["linked", "unlinked-unprioritized"],
-)
-def test_a_review_ticket_is_the_items_link_and_board_priority(
-    item: dict[str, object], expected: ReviewTicket
-) -> None:
-    assert follow_up_tickets.review_ticket("followups:I_1", item) == expected
-
-
-def test_a_priority_that_is_no_priority_is_the_stores_refusal_not_a_review_ticket() -> None:
-    with pytest.raises(OSError, match="which is no priority"):
-        follow_up_tickets.review_ticket("followups:I_1", {"priority": "P1"})
-
-
 def test_the_review_task_is_raised_once_per_run_and_updated_in_place(store: Path) -> None:
     touched = {"followups:I_1": ReviewTicket("https://github.invalid/i/1", Priority.HIGH)}
     first = follow_up_tickets.review_raised("run-b", touched)

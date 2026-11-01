@@ -18,7 +18,7 @@ import time
 import urllib.request
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -454,6 +454,10 @@ class _Issue:
     #: board items before then finds none, and a later `addProjectV2ItemById` is refused.
     filed_by_create: bool = field(default=False, compare=False)
     placed_at: float | None = field(default=None, compare=False)
+    #: When a create made this issue, on the wall clock, which the store's listing of a
+    #: repository's issues newest first reads to find a create it lost the answer to; `None`
+    #: for an issue planted on the board, which answers the fixed creation moment.
+    created_at: str | None = field(default=None, compare=False)
     _seen: _IssueState | None = field(default=None, compare=False, repr=False)
     _seen_row: _RowState | None = field(default=None, compare=False, repr=False)
     _seen_edges: frozenset[_Edge] | None = field(default=None, compare=False, repr=False)
@@ -575,7 +579,7 @@ class _Issue:
             "title": self.title,
             "body": self.body,
             "url": f"https://github.com/{self.repository}/issues/{self.number}",
-            "createdAt": ISSUE_CREATED_AT,
+            "createdAt": self.created_at or ISSUE_CREATED_AT,
             "updatedAt": self.updated_at(),
             "state": self.state,
             "stateReason": self.state_reason,
@@ -1253,6 +1257,7 @@ class _Board:
             title=title,
             body=body,
             repository=_repository_of(payload.get("repositoryId")),
+            created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         )
         created.board = self
         # Filed on this board by the create itself, as a copy's `projectV2Ids` does — and,
@@ -1277,6 +1282,49 @@ class _Board:
                         "id": created.content_id,
                         "number": created.number,
                         "url": created.content()["url"],
+                    }
+                }
+            }
+        }
+
+    def issues_by_creation(self, variables: dict[str, object]) -> dict[str, object]:
+        """A repository's issues newest first, a page at a time: the store's `ISSUES_BY_CREATION`.
+
+        What a copy reads to find a create whose answer it lost, by the create key in each
+        body's metadata slot; an issue planted on the board answers the fixed creation moment.
+        """
+        owner, name, first = variables.get("owner"), variables.get("name"), variables.get("first")
+        if not isinstance(first, int):
+            raise ValueError("issues(first:) requires a page size")
+        listed = sorted(
+            (
+                one
+                for one in self.issues
+                if (one.repository.owner, one.repository.name) == (owner, name)
+            ),
+            key=lambda one: one.created_at or ISSUE_CREATED_AT,
+            reverse=True,
+        )
+        after = variables.get("after")
+        start = int(after) if isinstance(after, str) and after.isdigit() else 0
+        page = listed[start : start + first]
+        more = start + first < len(listed)
+        return {
+            "data": {
+                "repository": {
+                    "issues": {
+                        "nodes": [
+                            {
+                                "id": one.content_id,
+                                "createdAt": one.created_at or ISSUE_CREATED_AT,
+                                "body": one.body,
+                            }
+                            for one in page
+                        ],
+                        "pageInfo": {
+                            "hasNextPage": more,
+                            "endCursor": str(start + first) if more else None,
+                        },
                     }
                 }
             }
@@ -2144,6 +2192,7 @@ class _Operation(StrEnum):
     DELETE_ISSUES = "deleteIssues"
     CLOSED_ITEMS = "closedItems"
     ISSUES_BY_REFERENCE = "issuesByReference"
+    ISSUES_BY_CREATION = "issuesByCreation"
 
 
 #: Each operation's marker in the document the source sends, in the order they are
@@ -2214,6 +2263,7 @@ _OPERATIONS: dict[str, _Operation] = {
     "i0:node(id:$id0)": _Operation.ISSUE_DETAILS,
     "node(id:$id){__typename ...BoardIssue ... on Issue{comments(": _Operation.ISSUE_DETAIL,
     "comments(first:": _Operation.COMMENTS,
+    "orderBy:{field:CREATED_AT,direction:DESC}": _Operation.ISSUES_BY_CREATION,
     "{repository(owner:": _Operation.REPOSITORY,
     "blockedBy(first:": _Operation.DEPENDENCIES,
     "createIssue(": _Operation.CREATE_ISSUE,
@@ -2452,6 +2502,11 @@ class _GitHubFixture(BaseHTTPRequestHandler):
     #: One operation whose response is lost: the connection closes with no answer, after the
     #: write was applied (`"after"`) or before it reached the board (`"before"`), or `None`.
     dropped_operation: ClassVar[tuple[_Operation, Literal["before", "after"]] | None] = None
+    #: A `createIssue` the board holds rather than answering: `True` arms it, and the next
+    #: create's connection then closes with no answer and nothing applied, its input kept here;
+    #: the create after that is applied, and then the held one completes too, as a create
+    #: GitHub committed late does.
+    held_create: ClassVar[dict[str, object] | bool | None] = None
     #: The board this handler answers for. A class attribute rather than an argument
     #: because the stdlib constructs a handler per request; a second board is served by
     #: a subclass of this one carrying its own board and its own request log, which is
@@ -2563,6 +2618,10 @@ class _GitHubFixture(BaseHTTPRequestHandler):
         edit = _GitHubFixture.before_operation.pop(operation, None) if operation else None
         if edit is not None:
             edit()
+        if operation is _Operation.CREATE_ISSUE and _GitHubFixture.held_create is True:
+            _GitHubFixture.held_create = dict(request.variables)
+            self.close_connection = True
+            return
         dropped = _GitHubFixture.dropped_operation
         if dropped is not None and dropped[0] is operation:
             _GitHubFixture.dropped_operation = None
@@ -2676,10 +2735,17 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.clear_field(request.variables)
             case _Operation.REPOSITORY:
                 return self._repository(request.repository)
+            case _Operation.ISSUES_BY_CREATION:
+                return self.board.issues_by_creation(request.variables)
             case _Operation.DEPENDENCIES:
                 return self.board.dependencies_response(request.variables.get("id"))
             case _Operation.CREATE_ISSUE:
-                return self.board.create_issue(request.variables)
+                answer = self.board.create_issue(request.variables)
+                if isinstance(held := _GitHubFixture.held_create, dict):
+                    # The original create completes at the board once the re-create has run.
+                    _GitHubFixture.held_create = None
+                    self.board.create_issue(held)
+                return answer
             case _Operation.ADD_TO_BOARD:
                 return self.board.add_to_board(request.variables)
             case _Operation.UPDATE_ISSUE:
@@ -2869,6 +2935,7 @@ def _serving_board(
         _GitHubFixture.refused_after = 0
         _GitHubFixture.before_operation = {}
         _GitHubFixture.dropped_operation = None
+        _GitHubFixture.held_create = None
 
 
 @contextmanager
@@ -3256,12 +3323,116 @@ def _follow_up_ticket(
     )
 
 
+#: The body slot the adopted store keeps an item's metadata in, as it writes one.
+METADATA_SLOT = "<!-- onetaskgraph.metadata\n{}\n-->"
+
+
+class _SeededState(NamedTuple):
+    """Where a seeded item stands: its Status option, its issue state, and why it was closed."""
+
+    option: _StatusOption
+    state: Literal["OPEN", "CLOSED"] = "OPEN"
+    reason: Literal["COMPLETED", "NOT_PLANNED"] | None = None
+
+
+#: Each board status a seeded item stands at, as GitHub holds an item at it.
+SEEDED_STATES: dict[follow_up_tickets.Status, _SeededState] = {
+    follow_up_tickets.Status.PROPOSED: _SeededState(PROPOSAL),
+    follow_up_tickets.Status.ACCEPTED: _SeededState(STATUS_OPTIONS[0]),
+    follow_up_tickets.Status.DEFERRED: _SeededState(DEFERRED),
+    follow_up_tickets.Status.FINISHED: _SeededState(DONE, "CLOSED", "COMPLETED"),
+    follow_up_tickets.Status.WITHDRAWN: _SeededState(CANCELLED, "CLOSED", "NOT_PLANNED"),
+}
+
+
+def _seeded_item(  # noqa: PLR0913 - each is one fact about the item a board already holds
+    at: int,
+    *,
+    run: str,
+    cause: str,
+    status: follow_up_tickets.Status,
+    origin: str | None,
+    origin_in_body: bool,
+    host: str = "verifier.example",
+) -> _Issue:
+    """One follow-up item already on the `followups` stand-in, put there without a request.
+
+    Written the way the store writes one — the ticket's body, then its metadata in the body's
+    slot — with its origin in the board's origin field. ``origin_in_body`` says whether the
+    slot carries that origin too, as the adopted store writes it; an item that reached the
+    board before the adoption carries it in the board field only. ``host`` is the machine its
+    ticket was verified on, which a comment pass narrows its search to.
+    """
+    written = _follow_up_ticket(SIBLING_REPOSITORY, cause=cause, verified_on=host)
+    medium, frequency = follow_up_tickets.Severity.MEDIUM, written.frequency
+    ticket = replace(
+        written,
+        created_by_run=follow_up_tickets.RunId(run),
+        owning_runs=(follow_up_tickets.RunId(run),),
+        drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{run}/drafts/noticed"),),
+        priority_estimate=follow_up_tickets.estimate(medium, frequency, 1),
+        body=follow_up_tickets.with_estimate_line(
+            written.body, follow_up_tickets.estimate_line(medium, frequency, 1)
+        ),
+    )
+    metadata: dict[str, object] = {
+        "onetaskgraph.item_kind": "task",
+        follow_up_tickets.KEY: follow_up_tickets.record(ticket),
+    }
+    if origin is not None and origin_in_body:
+        metadata[follow_up_tickets.ORIGIN_KEY] = origin
+    slot = METADATA_SLOT.format(json.dumps(metadata, separators=(",", ":"), sort_keys=True))
+    seeded = SEEDED_STATES[status]
+    issue = _Issue(
+        item_id=_BoardItemId(f"PVTI_seeded_{at}"),
+        content_id=_IssueNodeId(f"I_seeded_{at}"),
+        number=1000 + at,
+        title=ticket.title,
+        body=f"{ticket.body}\n\n{slot}",
+        repository=SIBLING_REPOSITORY,
+        origin=origin,
+        status=seeded.option.name,
+        state=seeded.state,
+        state_reason=seeded.reason,
+    )
+    issue.board = BOARD
+    BOARD.issues.append(issue)
+    return issue
+
+
 def _written_ticket(root: Path, ticket: follow_up_tickets.Ticket, text: str | None = None) -> Path:
     """Write ``ticket`` under a drafts root at ``root``, rendered unless ``text`` says otherwise."""
     path = follow_up_tickets.ticket_path(root, ticket.created_by_run, ticket.root_cause)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(follow_up_tickets.render(ticket) if text is None else text, encoding="utf-8")
     return path
+
+
+def _rewritten_ticket(
+    environment: dict[str, str], root: Path, ticket: follow_up_tickets.Ticket
+) -> Path:
+    """Write ``ticket`` over the one already under ``root``, keeping what the store wrote there.
+
+    The agent edits its ticket in place, so the store's own link to the card, its origin, the
+    estimate the card last received and any intent to create stay as the store left them.
+    """
+    shown = _followups_command(
+        environment,
+        [str(ONETASKGRAPH_BIN), "task", "show"]
+        + [follow_up_tickets.qualified_id(ticket.created_by_run, ticket.root_cause), "--json"],
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    held = follow_up_tickets.from_store_item(
+        json.loads(shown.stdout)["items"][0]["item"], pending=True
+    )
+    kept = replace(
+        ticket,
+        links=held.links,
+        origin=held.origin,
+        board_estimate=held.board_estimate,
+        creating=held.creating,
+    )
+    return _written_ticket(root, kept)
 
 
 def _followups_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
@@ -3566,6 +3737,7 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.ISSUE_DETAILS: DocumentPrice("ISSUE_DETAILS", 1),
     _Operation.FIELD_SNAPSHOT: DocumentPrice("STATUS_OPTIONS_SNAPSHOT", 1),
     _Operation.REPOSITORY: DocumentPrice("REPOSITORY", 1),
+    _Operation.ISSUES_BY_CREATION: DocumentPrice("ISSUES_BY_CREATION", 1),
     _Operation.DEPENDENCIES: DocumentPrice("ISSUE_DEPENDENCIES", 1),
     _Operation.CREATE_ISSUE: DocumentPrice("CREATE_ISSUE", 1),
     _Operation.ADD_TO_BOARD: DocumentPrice("ADD_TO_BOARD", 1),
@@ -3659,6 +3831,7 @@ REQUEST_KINDS: dict[_Operation, RequestKind] = {
     _Operation.COMMENT_ISSUE: RequestKind.ITEM_READ,
     _Operation.DEPENDENCIES: RequestKind.ITEM_READ,
     _Operation.REPOSITORY: RequestKind.ITEM_READ,
+    _Operation.ISSUES_BY_CREATION: RequestKind.ITEM_READ,
     _Operation.BOARD_FIELDS: RequestKind.ITEM_READ,
     _Operation.PROJECT_VISIBILITY: RequestKind.ITEM_READ,
     _Operation.CREATION_CONTEXT: RequestKind.ITEM_READ,

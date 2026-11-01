@@ -80,11 +80,13 @@ OWN_CAUSE = "the-session-token-is-never-rotated"
 SHARED_CAUSE = "the-login-page-retries-without-backoff"
 
 #: The command the agent posts or edits its evidence comment with: it lists the issue's
-#: comments, keeps the one whose marker names this run and cause, and edits it, or adds one.
+#: comments, keeps the one whose marker names this run and cause, and edits it with the store's
+#: `task comment edit`, or posts one with the module's `comment`, as the task prescribes — never
+#: a bare `task comment add`, so the post leaves the run's receipt.
 COMMENT_PROGRAM = """\
 import json, pathlib, subprocess, sys
 
-store, issue, run, cause, body = sys.argv[1:6]
+store, board, issue, run, cause, body = sys.argv[1:7]
 listed = json.loads(subprocess.run(
     [store, "task", "comment", "list", issue, "--json"], check=True, capture_output=True, text=True
 ).stdout)["comments"]
@@ -95,9 +97,11 @@ mine = [one for one in listed
 path = pathlib.Path(body)
 if mine:
     command = [store, "task", "comment", "edit", issue, mine[0]["id"], "--body-file", str(path)]
+    command.append("--json")
 else:
-    command = [store, "task", "comment", "add", issue, "--body-file", str(path)]
-subprocess.run(command + ["--json"], check=True)
+    command = [sys.executable, "-m", "orchestrator.follow_up_tickets", "comment", "--board", board]
+    command += ["--run", run, issue, "--body-file", str(path)]
+subprocess.run(command, check=True)
 """
 
 #: What the agent writes its account with: the dispositions, under the run the task names.
@@ -183,10 +187,10 @@ def _turn(bench: Bench, key: str, draft: Path | None, other_issue: str) -> list[
         f"{module} board-status --board {BOARD} {shlex.quote(str(shared))} > /dev/null",
         f"{module} validate {shlex.quote(str(shared))}",
         shlex.join(
-            [python, str(helper), str(ONETASKGRAPH_BIN), other_issue, key, SHARED_CAUSE]
+            [python, str(helper), str(ONETASKGRAPH_BIN), BOARD, other_issue, key, SHARED_CAUSE]
             + [str(comment)]
         ),
-        f"{module} re-estimate --board {BOARD} {shlex.quote(other_issue)}",
+        f"{module} re-estimate --board {BOARD} --run {shlex.quote(key)} {shlex.quote(other_issue)}",
     ]
     if draft is not None:
         entries = [

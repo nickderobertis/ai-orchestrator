@@ -470,9 +470,15 @@ def test_real_store_copy_and_person_edit(tmp_path: Path, monkeypatch: pytest.Mon
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses the filesystem write refusal")
 @pytest.mark.parametrize("kind", ["project", "task", "document"])
-def test_a_source_link_failure_rolls_back_the_created_item(
+def test_a_source_that_cannot_hold_the_copy_leaves_no_item_on_the_board(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
+    """A copy whose source refuses its write leaves the board holding none of what it copied.
+
+    The store holds the item being copied, and writes its create intent onto it, before any
+    create of that item is sent, so a source it cannot write refuses the copy before the item's
+    own create; a project a task's copy created first is taken back.
+    """
     layer = onetaskgraph_user_layer.example()
     source = "sandbox-linear"
     layer["sources"] = {source: layer["sources"][onetaskgraph_user_layer.ORGANIZATION_PLANS]}
@@ -528,6 +534,7 @@ def test_a_source_link_failure_rolls_back_the_created_item(
             assert copied.returncode == 0, copied.stderr
         protected = root / {"task": "tasks", "project": "projects", "document": "documents"}[kind]
         mode = protected.stat().st_mode & 0o777
+        before = len(board.requests())
         try:
             protected.chmod(0o555)
             refused = (
@@ -539,12 +546,13 @@ def test_a_source_link_failure_rolls_back_the_created_item(
             protected.chmod(mode)
         assert refused.returncode != 0
         assert str(protected) in refused.stderr + refused.stdout
-        operation = {
-            "task": "issueDelete",
-            "project": "projectDelete",
-            "document": "documentDelete",
-        }[kind]
-        assert operation in [request["operation"] for request in board.requests()]
+        sent = [request["operation"] for request in board.requests()[before:]]
+        creates = {"task": "issueCreate", "project": "projectCreate", "document": "documentCreate"}
+        assert creates[kind] not in sent, sent
         assert not {"task": board.issues, "project": board.projects, "document": board.documents}[
             kind
         ]()
+        if kind == "task":
+            # The task's project was created before the task's own hold refused, and taken back.
+            assert "projectDelete" in sent, sent
+            assert not board.projects()

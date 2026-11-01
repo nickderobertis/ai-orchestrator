@@ -545,6 +545,7 @@ answering=(answers --mode "$mode" --root "$drafts_root" --run "$key"
     --board-items "\"$python\" -m orchestrator.follow_up_tickets board-items"
     --copy "\"$python\" -m orchestrator.follow_up_tickets copy" --checkout "$checkout"
     --re-estimate "\"$python\" -m orchestrator.follow_up_tickets re-estimate"
+    --comment "\"$python\" -m orchestrator.follow_up_tickets comment"
     --plan-store "$store_cli")
 [ -z "$feedback" ] || answering+=(--feedback "$feedback")
 if [ "$comments" -eq 1 ]; then

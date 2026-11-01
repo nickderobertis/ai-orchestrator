@@ -149,8 +149,8 @@ def test_each_follow_up_section_files_a_tickets_issue_where_the_store_files_its_
     document: str, heading: str
 ) -> None:
     """Each section says the store's `task locate` answers where a ticket's issue is created,
-    for one repository and for several, and that it must be under the owner its board files
-    under."""
+    for one repository and for several, and that the store creates it only for the owners its
+    destination declares."""
     flat = " ".join(section(document, heading).split())
 
     for described in (
@@ -160,7 +160,7 @@ def test_each_follow_up_section_files_a_tickets_issue_where_the_store_files_its_
         "the one repository it lists, or for several the destination's configured repository"
         if document == "AGENTS.md"
         else "the one it lists, or for several the destination's configured one",
-        "under the owner",
+        "only for the owners the destination declares",
         "an owner's private work on a board declared private",
     ):
         assert described in flat, f"{document}'s section {heading!r} does not say {described!r}"
@@ -370,16 +370,15 @@ def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -
         "written seconds ago — and one naming none is refused; nothing in the task lists the "
         "board",
         "reads the accepted tickets its searches for a ticket returned for other root causes",
-        "**A ticket is copied onto the item the store places it on, and nowhere else.** Where it "
-        "lands, which item is its own and where its issue is created are the store's `task "
-        "locate` answers, which every follow-up command asks once per ticket; nothing on the "
-        "ticket binds it.",
-        "which refuses a copy landing anywhere but that item or a new one: a bare `task copy` "
-        "updates whichever carrier the store lists first",
+        "**A ticket's card is the one its record names, written by one guarded store copy.** "
+        "Where it lands and where its issue is created are the store's placement-only `task "
+        "locate` answers, which read nothing at the board",
+        "one `task copy` naming that card, whose status guard refuses a withdrawal over a card "
+        "a person accepted or deferred, whose priority guard keeps a priority a person set, and "
+        "whose answer is receipted; a bare `task copy` carries none of it",
         f"**A record from before schema {tickets.BINDING_RETIRED_AT} may still carry "
-        f"`{tickets.BINDING_FIELD}`**: leave it as it stands, since the store reads that item "
-        "until the ticket's next `copy` brings the record forward without it; a "
-        f"schema-{tickets.SCHEMA} record carrying it is refused.",
+        f"`{tickets.BINDING_FIELD}`**: leave it as it stands, since its next `copy` names that "
+        "card and brings the record forward without it; a later record carrying it is refused.",
         "asks with `--ticket <its path>`, which searches the destination the store's `task "
         "locate --no-counterpart` answers for that record",
         "Its issue is created where the store's `task locate` answers it creates one",
@@ -390,6 +389,8 @@ def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -
         "ticket_board",
         f"`{tickets.BINDING_FIELD}` key holds",
         "binds the run's own open item",
+        "whichever carrier the store lists first",
+        "the destination's origin query",
     ):
         assert retired not in flat, retired
 
@@ -399,7 +400,7 @@ def test_follow_up_prose_keeps_only_qualifying_related_work_before_evidence(
     document: str, heading: str
 ) -> None:
     prose = " ".join(section(document, heading).split()).lower()
-    assert tickets.SCHEMA == 13 and tickets.PLAIN_AT == 11
+    assert tickets.SCHEMA == 14 and tickets.PLAIN_AT == 11
     assert "`## duplicate search`" not in prose
     assert "optional `## related tickets` directly before" in prose
     for required in (

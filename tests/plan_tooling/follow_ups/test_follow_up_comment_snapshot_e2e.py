@@ -385,7 +385,11 @@ def test_an_issue_scoped_pass_gives_its_comments_to_the_run_its_items_origin_nam
     for verb in ("board-status", "copy"):
         assert tickets.main([verb, "--board", BOARD, str(path)]) == tickets.SOUND
     os.utime(path, (0, 0))
-    issue = tickets.locate(path, BOARD).counterpart
+    # The card is the one the store's copy answered it reached, as the run's receipt holds it:
+    # onto a folder board the store records no link, so the receipt is what names it.
+    receipts, malformed = tickets.read_receipts(loopback.root, RUN)
+    assert not malformed, malformed
+    (issue,) = [one.card for one in receipts if one.command is tickets.ReceiptCommand.COPY]
     assert issue is not None
     assert issue.startswith("routedfollowups:" if routed else f"{BOARD}:"), issue
     shown = loopback.store("task", "show", issue)["items"]
@@ -1302,6 +1306,15 @@ def test_a_ticket_whose_repositories_differ_is_copied_whole_and_a_refused_copy_r
     assert _repositories(loopback, issue) == []
 
     _GitHubFixture.refused_operation = None
+    # A ticket that cannot be read names no priority guard, so its copy is kept, never sent
+    # unguarded; once it reads again the next pass sends it.
+    readable = path.read_text(encoding="utf-8")
+    path.write_text("not a ticket\n", encoding="utf-8")
+    status, said, sent = _next_pass(loopback)
+    assert status == comments.UNANSWERED, said
+    assert sent == [BATCHED_READ], sent
+    assert "cannot be read" in "\n".join(said) and "nothing was written; kept" in "\n".join(said)
+    path.write_text(readable, encoding="utf-8")
     before = loopback.mark()
     status, said, sent = _next_pass(loopback)
 
@@ -1313,6 +1326,36 @@ def test_a_ticket_whose_repositories_differ_is_copied_whole_and_a_refused_copy_r
     assert f"  pending ticket-copy of {issue}: retried " in "\n".join(said), said
     assert comments.read_pending(loopback.root) == []
     assert _repositories(loopback, issue) == [repository]
+
+
+def test_settles_whole_copy_of_a_ticket_whose_repositories_changed_keeps_a_persons_priority(
+    loopback: Loopback,
+) -> None:
+    """The copy that sets `repositories` names the estimate the card last received as its
+    priority guard, so a priority a person set on the card stands while the ticket lands."""
+    issue = _filed(loopback)
+    path = tickets.ticket_path(loopback.root, RUN, remote.PROPOSED_CAUSE)
+    brought_forward = path.read_text(encoding="utf-8")
+    path.write_text(
+        re.sub(r"(?m)^repositories: .*\n", "", brought_forward, count=1), encoding="utf-8"
+    )
+    loopback.store("task", "copy", tickets.qualified_id(RUN, remote.PROPOSED_CAUSE), "--to", BOARD)
+    os.utime(path, (0, 0))
+    repository = str(remote._hosted(remote.SIBLING_REPOSITORY))
+    held = _row(issue).priority
+    loopback.store("task", "priority", "set", issue, "low")
+    assert _row(issue).priority == "Low" != held
+    _said(loopback, issue, ASKED)
+
+    def bring_forward(ticket: Path) -> None:
+        ticket.write_text(brought_forward, encoding="utf-8")
+
+    _, status, said, _sent = _one_pass(loopback, edit=bring_forward)
+
+    assert status == comments.DONE, said
+    assert _repositories(loopback, issue) == [repository]
+    assert _row(issue).priority == "Low", "the settle copy overwrote a priority a person set"
+    assert comments.read_pending(loopback.root) == []
 
 
 def _input(request: remote._GraphQLRequest) -> dict[str, object]:

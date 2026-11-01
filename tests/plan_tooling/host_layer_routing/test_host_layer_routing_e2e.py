@@ -73,6 +73,8 @@ from orchestrator.root import REPO_ROOT
 PUBLIC = boundary_home.THIS_REPOSITORY
 #: An organization's repository, registered private and matched by the layer's routes.
 ORGANIZATION = "github.com/hiddenco/qh-api"
+#: The owner the tracked `followups` board creates issues for (`onetaskgraph.yaml`).
+TRACKED_OWNER = "nickderobertis"
 #: A personal private repository under a public owner, which no route matches.
 PERSONAL = "github.com/unrouted-owner/pebblecraft"
 OWNER_PRIVATE = "github.com/sample-owner/hidden-library"
@@ -317,8 +319,12 @@ def test_an_organization_s_ticket_reaches_its_own_tracker_by_the_layer_s_route(
     """A ticket of the organization copied to `followups` lands in its tracker, not the board.
 
     A personal private ticket copied the same way is refused at the board: no route
-    matches it, and nothing places a private item on a public source.
+    matches it, and nothing places a private item on a public source — whose owner the board
+    is told it creates issues for, so the boundary rather than that rule is what refuses it.
     """
+    layer.environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__CREATION_OWNERS"] = (
+        f"{PERSONAL.split('/')[1]},{TRACKED_OWNER}"
+    )
     _plan(layer, "tickets", [ORGANIZATION])
     _plan(layer, "personal-tickets", [PERSONAL])
     folder = layer.folders[onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS]
@@ -577,11 +583,16 @@ def _follow_ups(layer: Layer, *arguments: str) -> subprocess.CompletedProcess[st
 def _owned_followups(layer: Layer) -> None:
     """`followups` filed under the mixed owner, with its configured repository the owner's own.
 
-    The tracked board files under this repository's owner; a host doing the mixed owner's work
-    files under that owner, which is what makes its public repository a repository of the
-    board's owner. The loopback serves `followups` under the number it answers.
+    The tracked board files under this repository's owner and creates issues for it alone; a
+    host doing the mixed owner's work files under that owner and declares it the board's
+    creation owner, which is what lets its public repository hold the board's issues. The
+    loopback serves `followups` under the number it answers.
     """
     layer.environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__OWNER"] = "sample-owner"
+    # A comma is what makes the environment layer's value a list.
+    layer.environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__CREATION_OWNERS"] = (
+        f"sample-owner,{TRACKED_OWNER}"
+    )
     layer.environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__REPOSITORY"] = (
         "sample-owner/public-library"
     )
@@ -743,17 +754,17 @@ def test_a_third_partys_ticket_is_refused_as_outside_the_owner_before_anything_i
     layer: Layer,
 ) -> None:
     """A third party's public repository is placed on `followups` and its issue would be
-    created in that repository, outside the owner `followups` files under: `board-status` and
-    `copy` each refuse it, and neither the ticket nor any board is written."""
+    created in that repository, outside the owners `followups` creates issues for: the store
+    refuses that create, `board-status` reads its refusal and `copy` refuses too, and neither
+    the ticket nor any board is written."""
     _owned_followups(layer)
     ticket = _ticket(layer, THIRD_PARTY, "work-drops-a-page")
     before = ticket.read_text(encoding="utf-8")
 
     refused = _follow_ups(layer, "board-status", "--board", "followups", str(ticket))
     assert refused.returncode == tickets.OUTSIDE_OWNER, refused.stderr
-    assert (f"{THIRD_PARTY!r}, which is not a repository of the owner 'sample-owner'") in " ".join(
-        refused.stderr.split()
-    ), refused.stderr
+    said = " ".join(refused.stderr.split())
+    assert THIRD_PARTY.removeprefix("github.com/") in said and "sample-owner" in said, said
     # Its copy refuses too: `board-status` refused it before writing its estimate.
     copied = _follow_ups(layer, "copy", "--board", "followups", str(ticket))
     assert copied.returncode != tickets.SOUND, copied.stdout
