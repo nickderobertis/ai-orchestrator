@@ -775,6 +775,17 @@ def batched_slot_drift(query: str) -> list[str]:
     return drift
 
 
+#: What the double accepts of an `updateProjectV2Field` request's `input`, GitHub's
+#: `UpdateProjectV2FieldInput` as the store's guarded field setup sends it: the field's id
+#: and the option list that replaces its options, each option an existing one sent with its
+#: id or a new one sent without. `tests/test_github_board.py` holds every input these accept
+#: to GitHub's complete published schema, through onetaskgraph's own validator at the pinned
+#: release, so the double accepts nothing GitHub would refuse.
+STATUS_UPDATE_INPUT_KEYS = frozenset({"fieldId", "singleSelectOptions"})
+KEPT_OPTION_KEYS = frozenset({"id", "name", "color", "description"})
+ADDED_OPTION_KEYS = KEPT_OPTION_KEYS - {"id"}
+
+
 class _Board:
     """One Projects v2 board, mutated by the writes the source performs against it.
 
@@ -1526,6 +1537,61 @@ class _Board:
         }
         return {"data": {"createProjectV2Field": {"projectV2Field": created}}}
 
+    def update_status_options(self, variables: dict[str, object]) -> dict[str, object]:
+        """Replace the `Status` field's whole option list, as GitHub's `updateProjectV2Field`
+        does, refusing every input its schema refuses.
+
+        GitHub's `UpdateProjectV2FieldInput` takes the field's id and the list that *replaces*
+        its options: an option sent with its id keeps it, and one sent without is minted a new
+        one. It has no `projectId`, which the store's field setup sent before onetaskgraph
+        0.13.1 and live GitHub refused, so a document carrying one is refused here too, as is an
+        option missing the colour and description the schema requires. An item whose option
+        was dropped or re-minted loses its status, which is why the setup preserves every id,
+        and an update that would do that to an item is refused here rather than applied.
+        """
+        match variables.get("input"):
+            case {"fieldId": _BoardField.STATUS, "singleSelectOptions": list(sent)} as payload if (
+                set(payload) == STATUS_UPDATE_INPUT_KEYS
+            ):
+                pass
+            case payload:
+                raise ValueError(
+                    f"UpdateProjectV2FieldInput takes the Status field's id and its options "
+                    f"alone: {payload!r}"
+                )
+        held = {option.id: option for option in self.options}
+        replaced: list[_StatusOption] = []
+        for at, option in enumerate(sent):
+            if not isinstance(option, dict) or not all(
+                isinstance(value, str) for value in option.values()
+            ):
+                raise ValueError(f"a Status option is an object of strings: {option!r}")
+            match option:
+                case {"id": str(kept), "name": str(name)} if (
+                    set(option) == KEPT_OPTION_KEYS and kept in held
+                ):
+                    replaced.append(_StatusOption(id=_FieldOptionId(kept), name=name))
+                case {"name": str(name)} if set(option) == ADDED_OPTION_KEYS:
+                    minted = _FieldOptionId(f"OPT_added_{len(self.options)}_{at}")
+                    replaced.append(_StatusOption(id=minted, name=name))
+                case _:
+                    raise ValueError(
+                        f"a Status option names an id this field holds, or none, with its "
+                        f"name, colour and description: {option!r}"
+                    )
+        kept_names = {option.name for option in replaced if option.id in held}
+        cleared = [issue.title for issue in self.issues if issue.status not in kept_names]
+        if cleared:
+            # GitHub would clear these items' status without a word; the guarded setup exists
+            # so that never happens, so a list that would is a defect to fail on here.
+            raise ValueError(f"the update drops or re-mints the Status of {cleared!r}")
+        self.options = tuple(replaced)
+        answered = {
+            "id": _BoardField.STATUS,
+            "options": [option.rendered_in_full() for option in self.options],
+        }
+        return {"data": {"updateProjectV2Field": {"projectV2Field": answered}}}
+
     def clear_field(self, variables: dict[str, object]) -> dict[str, object]:
         """Clear one field value on a row, as a standalone write answers it."""
         item_id = self._cleared(variables.get("input"))
@@ -2152,6 +2218,7 @@ class _Operation(StrEnum):
     CREATION_CONTEXT = "creationContext"
     FIELD_SNAPSHOT = "fieldSnapshot"
     CREATE_FIELD = "createField"
+    UPDATE_STATUS_OPTIONS = "updateStatusOptions"
     SEARCH = "search"
     ORIGIN_LOOKUP = "originLookup"
     ISSUE = "issue"
@@ -2249,6 +2316,7 @@ _OPERATIONS: dict[str, _Operation] = {
     "visibility:repositoryOwner(": _Operation.PROJECT_VISIBILITY,
     "optionId field{": _Operation.FIELD_SNAPSHOT,
     "createProjectV2Field(": _Operation.CREATE_FIELD,
+    "updateProjectV2Field(": _Operation.UPDATE_STATUS_OPTIONS,
     # Before the board read's own marker, which this root also carries: the adopted store's
     # read of what one item depends on asks for the board's id beside it, to place a draft.
     "board:repositoryOwner(": _Operation.DEPENDENCIES,
@@ -2695,6 +2763,8 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.snapshot_response()
             case _Operation.CREATE_FIELD:
                 return self.board.create_field(request.variables)
+            case _Operation.UPDATE_STATUS_OPTIONS:
+                return self.board.update_status_options(request.variables)
             case _Operation.SEARCH:
                 answer = self.board.search_response(
                     request.string("search"),
@@ -3746,6 +3816,7 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.UPDATE_FIELDS: DocumentPrice("UPDATE_FIELDS", 1),
     _Operation.CLEAR_FIELD: DocumentPrice("CLEAR_FIELD", 1),
     _Operation.CREATE_FIELD: DocumentPrice("CREATE_FIELD", 1),
+    _Operation.UPDATE_STATUS_OPTIONS: DocumentPrice("STATUS_OPTIONS_UPDATE", 1),
     _Operation.ADD_SUB_ISSUE: DocumentPrice("ADD_SUB_ISSUE", 1),
     _Operation.ADD_BLOCKED_BY: DocumentPrice("ADD_BLOCKED_BY", 1),
     _Operation.DELETE_ISSUE: DocumentPrice("DELETE_ISSUE", 1),
@@ -3816,6 +3887,7 @@ ALIASED_MUTATIONS_PER_CHARGE = 11
 REQUEST_KINDS: dict[_Operation, RequestKind] = {
     _Operation.BOARD: RequestKind.BOARD_PAGE,
     _Operation.FIELD_SNAPSHOT: RequestKind.BOARD_PAGE,
+    _Operation.UPDATE_STATUS_OPTIONS: RequestKind.MUTATION,
     _Operation.SEARCH: RequestKind.SEARCH_PAGE,
     _Operation.ISSUE_DETAILS: RequestKind.BATCHED_READ,
     _Operation.ISSUE_COPY_DETAILS: RequestKind.BATCHED_READ,

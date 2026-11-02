@@ -3646,6 +3646,11 @@ def test_a_runs_review_task_derives_its_priority_from_every_ticket_it_touched(
     assert task["block"] == {"scope": "nothing"}, task
     assert first["blocked"] == {"total": 0, "plans": []}, first
     assert _groups(task["body"]) == groups, task["body"]
+    # Each ticket is one markdown link named by its title, never by its board id.
+    links = [line for line in str(task["body"]).splitlines() if line.startswith("- ")]
+    assert all(
+        re.fullmatch(r"- \[[^\]]*: shared cause \d+\]\(https://\S+\)", one) for one in links
+    ), links
     findings = [one for one in items if one["id"] != task["id"]]
     (projected,) = [one for one in HUMAN_TASKS_BOARD.created if one.title == task["title"]]
     # The wire keeps `urgent`; the board shows the operator's word for it.
@@ -3653,9 +3658,8 @@ def test_a_runs_review_task_derives_its_priority_from_every_ticket_it_touched(
     if None in priorities:
         (finding,) = findings
         assert finding["block"] == {"scope": "nothing"}, finding
-        assert "No priority" not in str(finding["body"]) and "- followups:" in str(
-            finding["body"]
-        ), finding
+        assert "No priority" not in str(finding["body"]) and "- [" in str(finding["body"]), finding
+        assert "followups:" not in str(finding["body"]), finding
     else:
         assert findings == [], findings
 

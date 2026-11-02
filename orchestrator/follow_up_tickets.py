@@ -3425,12 +3425,18 @@ class Copied(NamedTuple):
 #: account to what each write returned instead of reading the board back. The file is the
 #: run's, written by those commands alone: the task tells the agent never to write or edit it.
 #: Schema 2 added a copy's optional `digest` and the `skipped-unchanged` receipt naming the copy
-#: it stands on (:func:`copy_digest`); a schema-1 line, which carries neither, is still read.
+#: it stands on (:func:`copy_digest`); schema 3 added a re-estimate's optional `title`, the title
+#: of the card it re-estimated, which the run's review task links that card by. A line of an
+#: older schema, which carries neither, is still read.
 RECEIPTS_DIRECTORY = "receipts"
-RECEIPT_SCHEMA = 2
-#: Every receipt schema a reader takes: the current one, and the one before it, whose lines a
-#: run written before the digest still holds.
-RECEIPT_SCHEMAS = (1, RECEIPT_SCHEMA)
+RECEIPT_SCHEMA = 3
+#: The schema that added a copy's `digest` and `unchanged_since`, and the one that added a
+#: re-estimate's `title`: a line older than each carries none of what it added.
+DIGEST_SCHEMA = 2
+TITLE_SCHEMA = 3
+#: Every receipt schema a reader takes: the current one, and the ones before it, whose lines a
+#: run written before the digest or the title still holds.
+RECEIPT_SCHEMAS = (1, 2, RECEIPT_SCHEMA)
 RECEIPT_KEYS = ("schema", "run", "command", "ticket", "card", "outcome")
 RECEIPT_SUFFIX = ".jsonl"
 
@@ -3573,6 +3579,16 @@ class ReEstimateOutcomeReceipt(BaseModel):
     priority: Priority
     root_cause: str | None = None
     writes: tuple[ReEstimateWrite, ...] = ()
+    #: The re-estimated card's title, as the read the recount was made from held it; omitted
+    #: when it held none, and absent from every line before schema 3.
+    title: str | None = Field(default=None, min_length=1)
+
+    def dumped(self) -> dict[str, object]:
+        """The outcome as a receipt line holds it, its schema-3 `title` omitted when empty."""
+        held = self.model_dump(mode="json")
+        if held["title"] is None:
+            del held["title"]
+        return held
 
     @model_validator(mode="after")
     def _an_estimate(self) -> ReEstimateOutcomeReceipt:
@@ -3613,7 +3629,7 @@ def append_receipt(  # noqa: PLR0913 - each is one key of the receipt line
         "card": card,
         "outcome": (
             outcome.dumped()
-            if isinstance(outcome, CopyOutcomeReceipt)
+            if isinstance(outcome, CopyOutcomeReceipt | ReEstimateOutcomeReceipt)
             else outcome.model_dump(mode="json")
         ),
     }
@@ -4199,6 +4215,7 @@ def re_estimate(board: str, issue: str, run: str, root: Path | None = None) -> R
             # under any other is no occurrence of it.
             root_cause=str(held.get("root_cause")),
             writes=tuple(writes),
+            title=title if isinstance(title := item.get("title"), str) and title.strip() else None,
         ),
     )
     return ReEstimated(issue, decided.estimated, decided.occurrences, decided.priority)
@@ -5184,6 +5201,16 @@ def read_receipts(root: Path, run: str) -> tuple[list[Receipt], list[str]]:
         ):
             found.append(f"receipt line {at} of {path} {problem}")
             continue
+        if (
+            isinstance(read, ReEstimateOutcomeReceipt)
+            and read.title
+            and entry["schema"] < TITLE_SCHEMA
+        ):
+            found.append(
+                f"receipt line {at} of {path} is of schema {entry['schema']}, which carries no "
+                "`title`"
+            )
+            continue
         held.append(Receipt(at, command, ticket, card, cast(ReceiptOutcome, read)))
     return held, found
 
@@ -5196,7 +5223,7 @@ def _schema_two_problem(
     earlier: Sequence[Receipt],
 ) -> str | None:
     """How a copy receipt's schema-2 keys contradict its line, or `None` where they do not."""
-    if schema < RECEIPT_SCHEMA and (outcome.digest or outcome.unchanged_since):
+    if schema < DIGEST_SCHEMA and (outcome.digest or outcome.unchanged_since):
         return f"is of schema {schema}, which carries no `digest` or `unchanged_since`"
     if outcome.action != SKIPPED_UNCHANGED:
         return None
@@ -5438,7 +5465,7 @@ def receipt_problems(  # noqa: C901, PLR0912, PLR0913 - one pass over every file
                 # A refused copy left the card as the store's read found it, which is `held`.
                 result = last.held if last.error is not None else last.result
                 touched[card] = ReviewTicket(
-                    _card_url(receipts, card, ticket), _review_priority(result)
+                    _card_url(receipts, card, ticket), _review_priority(result), ticket.title
                 )
             continue
         carriers = _disposition_carriers((details or {}).get(cause, ()), destination)
@@ -5479,17 +5506,25 @@ def receipt_problems(  # noqa: C901, PLR0912, PLR0913 - one pass over every file
                 "counts none of it: take the card's root cause as the ticket's"
             )
         if touched is not None:
-            writes = cast(ReEstimateOutcomeReceipt, later[-1].outcome).writes
-            result = writes[-1].result if writes else None
-            touched[carrier] = ReviewTicket(_card_url(receipts, carrier), _review_priority(result))
+            # `later` holds only `re-estimate` receipts, and `read_receipts` validated each one's
+            # outcome through that command's model, so the outcome is that model's; the cast
+            # only tells the checker what the command filter above already established.
+            recounted = cast(ReEstimateOutcomeReceipt, later[-1].outcome)
+            result = recounted.writes[-1].result if recounted.writes else None
+            touched[carrier] = ReviewTicket(
+                _card_url(receipts, carrier), _review_priority(result), recounted.title
+            )
     return found
 
 
 class ReviewTicket(NamedTuple):
-    """One ticket a run's review task links: where a person opens it, and its board priority."""
+    """One ticket a run's review task links: where a person opens it, its board priority, and
+    its title, the text the link reads — `None` for a card whose receipts recorded none, which
+    the review links by its short repository reference instead."""
 
     url: str
     priority: Priority
+    title: str | None = None
 
 
 #: The phase `.onepipeline/config.yaml` configures a run's follow-up review task under.
@@ -5500,9 +5535,10 @@ def review_raised(run: str, touched: Mapping[str, ReviewTicket]) -> str:
     """Raise, update or retire ``run``'s one review task over the tickets it ``touched``.
 
     The engine's `ticket_review` hook does the rest: it deduplicates, derives the task's
-    priority, groups the links by priority with a separate "No priority" group, raises a
-    finding naming the tickets that have none, and retires the task when there are no
-    tickets. The dedup key is the run, so a re-dispatch's closeout updates the run's one task.
+    priority, groups the links by priority with a separate "No priority" group, each a markdown
+    link whose text is the ticket's title, raises a finding naming the tickets that have none,
+    and retires the task when there are no tickets. The dedup key is the run, so a
+    re-dispatch's closeout updates the run's one task.
     Answers one line saying what happened; never refuses a closeout whose checks passed.
     """
     try:
@@ -5516,6 +5552,8 @@ def review_raised(run: str, touched: Mapping[str, ReviewTicket]) -> str:
             "id": carrier,
             "url": ticket.url,
             "priority": None if ticket.priority is Priority.NONE else ticket.priority.value,
+            # Omitted rather than null: the engine reads a context without it unchanged.
+            **({"title": ticket.title} if ticket.title and ticket.title.strip() else {}),
         }
         for carrier, ticket in sorted(touched.items())
     ]

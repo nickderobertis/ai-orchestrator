@@ -985,10 +985,11 @@ limited attention, running several managers, who may not have read any earlier m
 - **It relays only this session's human items**: the items of this session and its runs,
   plus an item from another session only when it blocks this session's work. Each is one
   short line saying what is needed, its priority and what it blocks, any link a markdown
-  link named by what it links to; when nothing waits on the user, one line says so. An
-  item's full detail is given only when the user asks for it. `just human-items report`,
-  the engine's one report of every open human item, is where those lines are read from —
-  never pasted into the update whole, and never replaced by a list of your own.
+  link named by what it links to; when nothing waits on the user, one line says so.
+  `just human-items report` with no flags is the engine's short view of exactly those
+  items, and its short, scoped entries are the summary the update relays — never replaced
+  by a list of your own. An item's full detail goes to the user only when they ask for it,
+  read with `--full`; `--all` is the whole host's, never the update's.
 
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that adopted human items requires this document to state the manager's half — its own items relayed on every update, questions through items, worker-to-manager asks, acting for the user, dismissal, reconnect, the shared view, source and blocking — and to restate the engine's priority and authoring definitions, which `tests/test_human_items_guidance.py` holds word for word to the pinned engine's contract; the mechanics are `docs/orchestration.md`'s. -->
 **Human items are the one queue of what a person must do or decide**, shared by every

@@ -10,8 +10,10 @@ two boards' endpoints and the projection directories moved, so every other value
 tracked one:
 
 * **the fields**: `just plans sources fields <board> --apply`, the one verb a board's fields
-  are set up through, creates each board's `Priority` field with the four options the tracked
-  mapping names — Critical, High, Medium, Low — over a board that carried none;
+  are set up through, adds the `Status` options each board lacks and creates its `Priority`
+  field with the four options the tracked mapping names — Critical, High, Medium, Low — over a
+  board that carried neither, without moving any item's status; the verb's dry run then
+  reports nothing missing;
 * **the selection**, through `onetaskgraph task project-human`, the store verb the engine's
   projection links: a task naming a public repository of the owner lands on `human-public`; one
   naming a private repository lands on `human-private`; one naming a public and a private
@@ -87,6 +89,12 @@ ORGANIZATION_PROJECT = "rollout"
 #: Done or Cancelled, and moved to In Progress by a person.
 HUMAN_STATUSES = ("Todo", "In Progress", "Done", "Cancelled")
 
+#: Each board as it stands before an operator sets it up: GitHub's new-board options, without
+#: the `In Progress` and `Cancelled` the tracked mapping names, and no `Priority` field.
+UNSET_STATUS_OPTIONS = tuple(
+    option for option in STATUS_OPTIONS if option.name not in ("In Progress", "Cancelled")
+)
+
 
 class Boards(NamedTuple):
     """One journey's environment over both boards, and the organization's loopback tracker."""
@@ -148,7 +156,8 @@ def boards(
     tmp_path: Path, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[Boards]:
     """Both tracked boards served on loopback under the example layer, a registry answering
-    each repository's visibility, and every board without a `Priority` field yet."""
+    each repository's visibility, and every board without a `Priority` field or two of its
+    tracked `Status` options yet."""
     routes = getattr(request, "param", True)
     # GitHub knows the owner's private repository and the private board's issue repository the
     # example layer names, and answers both private, as it would.
@@ -181,10 +190,13 @@ def boards(
     with (
         linear_board() as tracker,
         _served(
-            _HumanTasksFixture, HUMAN_TASKS_BOARD, STATUS_OPTIONS, NUMBERS[PUBLIC_BOARD]
+            _HumanTasksFixture, HUMAN_TASKS_BOARD, UNSET_STATUS_OPTIONS, NUMBERS[PUBLIC_BOARD]
         ) as public,
         _served(
-            _PrivateBoardFixture, PRIVATE_BOARD, STATUS_OPTIONS, NUMBERS[PRIVATE_BOARD_SOURCE]
+            _PrivateBoardFixture,
+            PRIVATE_BOARD,
+            UNSET_STATUS_OPTIONS,
+            NUMBERS[PRIVATE_BOARD_SOURCE],
         ) as private,
     ):
         _seed_private_project()
@@ -219,6 +231,17 @@ def _fields(environment: Mapping[str, str], source: str) -> dict[str, list[str]]
         str(field["field"]): [str(option["name"]) for option in field["existing"]]
         for field in json.loads(planned.stdout)["fields"]
     }
+
+
+def _missing(environment: Mapping[str, str], source: str) -> list[str]:
+    """Every option the verb's dry run plans to add on ``source``'s board, field by field."""
+    planned = _run(environment, [str(ONETASKGRAPH_BIN), "sources", "fields", source, "--json"])
+    assert planned.returncode == 0, planned.stdout + planned.stderr
+    return [
+        f"{field['field']}: {name}"
+        for field in json.loads(planned.stdout)["fields"]
+        for name in field["missing"]
+    ]
 
 
 def _projected(
@@ -264,15 +287,31 @@ def _titles(board: github_board._Board) -> list[str]:
 # (`tests/github_board.py`) and so is the organization's Linear tracker
 # (`tests/linear_board.py`), because no check may reach a live board or Linear workspace; the
 # store, `onevcs`, the recipe and the committed configuration are real.
-def test_sources_fields_creates_each_board_s_four_priority_options(boards: Boards) -> None:
-    """Each board starts with no `Priority` field and ends with Critical, High, Medium, Low.
+def test_sources_fields_sets_up_each_board_s_status_options_and_priority_field(
+    boards: Boards,
+) -> None:
+    """Each board starts without `In Progress`, `Cancelled` or a `Priority` field and ends with
+    every tracked `Status` option and Critical, High, Medium, Low, every item's status where it
+    was; the verb's dry run then reports nothing missing.
 
-    The tracked `Status` options a human task reaches are satisfied by the board as it is, so
-    the verb's only change is the `Priority` field the tracked mapping names.
+    The double refuses an `updateProjectV2Field` input GitHub's schema refuses — the
+    `projectId` the store sent before 0.13.1 among them — and one that would move an item's
+    status, so a green apply is one the live boards would take.
     """
+    for board in (HUMAN_TASKS_BOARD, PRIVATE_BOARD):
+        board.issues[0].status = "Done"
+    held = {
+        source: {issue.title: issue.status for issue in board.issues}
+        for source, board in (
+            (PUBLIC_BOARD, HUMAN_TASKS_BOARD),
+            (PRIVATE_BOARD_SOURCE, PRIVATE_BOARD),
+        )
+    }
     for source in (PUBLIC_BOARD, PRIVATE_BOARD_SOURCE):
         before = _fields(boards.environment, source)
         assert before.get("Priority", []) == [], (source, before)
+        assert {"In Progress", "Cancelled"}.isdisjoint(before["Status"]), (source, before)
+        assert _missing(boards.environment, source), source
         applied = _run(
             boards.environment, ["just", "plans", "sources", "fields", source, "--apply"]
         )
@@ -281,8 +320,14 @@ def test_sources_fields_creates_each_board_s_four_priority_options(boards: Board
         assert after["Priority"] == list(HUMAN_PRIORITY_LABELS.values()), (source, after)
         assert after["Priority"] == ["Critical", "High", "Medium", "Low"], after
         assert set(HUMAN_STATUSES) <= set(after["Status"]), (source, after)
-    for board in (HUMAN_TASKS_BOARD, PRIVATE_BOARD):
+        # The options the board already carried keep their places; the added ones follow.
+        assert after["Status"][: len(before["Status"])] == before["Status"], (source, after)
+        dry_run = _run(boards.environment, ["just", "plans", "sources", "fields", source])
+        assert dry_run.returncode == 0, dry_run.stdout + dry_run.stderr
+        assert _missing(boards.environment, source) == [], source
+    for source, board in ((PUBLIC_BOARD, HUMAN_TASKS_BOARD), (PRIVATE_BOARD_SOURCE, PRIVATE_BOARD)):
         assert [option.name for option in board.priorities] == ["Critical", "High", "Medium", "Low"]
+        assert {issue.title: issue.status for issue in board.issues} == held[source], source
 
 
 def test_public_and_private_own_account_tasks_land_on_their_own_boards(boards: Boards) -> None:

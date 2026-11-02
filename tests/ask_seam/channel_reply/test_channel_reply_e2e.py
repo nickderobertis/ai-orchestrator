@@ -436,6 +436,20 @@ def _records(replying: Replying, queue: str) -> int:
     return int(status["records"])
 
 
+def _waiting(replying: Replying, queue: str) -> list[Any]:
+    """What the run's `queue` still holds for a consumer, as the bus's own `status` names it.
+
+    `waiting` and `pending` together: a record nobody has claimed, and the one claimed and
+    not yet answered.
+    """
+    # `cast` for the reason `_records` gives: the bus's own answer, one object per queue.
+    (status,) = cast(list[dict[str, Any]], json.loads(_bus(replying, "status", queue)))
+    held = list(status["waiting"])
+    if status["pending"] is not None:
+        held.append(status["pending"])
+    return held
+
+
 def _journal(replying: Replying) -> list[dict[str, Any]]:
     """Every record the run's own journal holds, oldest first.
 
@@ -830,10 +844,11 @@ def test_a_valid_edit_to_a_run_nothing_drives_is_applied_by_the_reply_itself(
     """With nothing driving the run, the reply is its single writer and applies the edit.
 
     No adopt, and no queue left waiting for one: the envelope is piped in, the receipt says
-    the commands were applied — by this process, so there is no queue id to name and
-    nothing is appended to the run's command queue — the journal records the edit as the
-    planner's, on a stream other than the one the launch's driver wrote, and the run is
-    still one nothing drives.
+    the commands were applied — by this process, which records the envelope in the run's
+    command record under the next id that record numbers envelopes by and answers it there,
+    so the receipt names that durable id and nothing is left waiting for a driver — the
+    journal records the edit as the planner's, on a stream other than the one the launch's
+    driver wrote, and the run is still one nothing drives.
     """
     assert _unfinished_and_undriven(replying), "the premise is a run nothing drives"
     node = "added-undriven"
@@ -841,8 +856,9 @@ def test_a_valid_edit_to_a_run_nothing_drives_is_applied_by_the_reply_itself(
 
     receipt = _receipt(_send(replying, _settling(node, GATE_NODE)))
 
-    assert receipt == {"reply": 0, "state": "applied", "commands": "applied"}, receipt
-    assert _records(replying, "commands") == commands, "the edit was queued for a driver"
+    assert receipt == {"reply": commands, "state": "applied", "commands": "applied"}, receipt
+    assert _records(replying, "commands") == commands + 1, "the envelope was never recorded"
+    assert not _waiting(replying, "commands"), "the edit was left queued for a driver"
     assert _authored_by_the_planner(replying, node) != _driver_stream(replying, "node-held"), (
         "the edit was journalled on the launch driver's stream, which had exited"
     )

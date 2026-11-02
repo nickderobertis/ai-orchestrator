@@ -148,10 +148,10 @@ sources:
       creation_owners: [nickderobertis]
     cache:
       enabled: true
-  # The operator's two human-task boards, which the engine will project each human item's task
-  # into once `.onepipeline/config.yaml` names `human-public` as its `task_source` (it names
-  # none yet; that file says why): public own-account work on `human-public`, and work the
-  # public boundary classifies private on `human-private`. Like `plans` and `followups`, neither carries `routes` here, because a
+  # The operator's two human-task boards, which the engine projects each human item's task into
+  # through `human-public`, the `task_source` `.onepipeline/config.yaml` names: public
+  # own-account work on `human-public`, and work the public boundary classifies private on
+  # `human-private`. Like `plans` and `followups`, neither carries `routes` here, because a
   # list this document sets replaces a user layer's whole list: the host's user layer
   # declares `human-public`'s routes — the `purpose: human-task` entry sending a private task
   # to `human-private`, and any organization's — and without one a private task is refused,

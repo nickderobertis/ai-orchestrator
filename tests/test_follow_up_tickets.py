@@ -4665,8 +4665,8 @@ def test_a_filed_drafts_evidence_comment_on_a_matching_issue_satisfies_its_accou
 
     assert status == tickets.SOUND, capsys.readouterr().err
     assert "accounts for every draft" in capsys.readouterr().out
-    # The review task links the carrier where a person opens it, at the priority its
-    # re-estimate left, both read off this run's receipts.
+    # The review task links the carrier where a person opens it, by its title, at the priority
+    # its re-estimate left, all read off this run's receipts.
     touched: dict[str, tickets.ReviewTicket] = {}
     local = {CAUSE: tickets.read_ticket(ticket)}
     details = {CAUSE: [f"Evidence commented on {issue}."]}
@@ -4676,8 +4676,10 @@ def test_a_filed_drafts_evidence_comment_on_a_matching_issue_satisfies_its_accou
         issue: tickets.ReviewTicket(
             str(posted["url"]).partition("#")[0] if posted["url"] else issue,
             tickets.Priority(str(_board_item(issue)["priority"])),
+            str(_board_item(issue)["title"]),
         )
     }
+    assert str(_board_item(issue)["title"]).endswith("the cursor skips the last page")
 
 
 def _receipt(
@@ -4846,6 +4848,165 @@ def test_a_re_estimate_receipt_stating_another_estimate_line_or_no_record_write_
     )
     (unwritten,) = found(writes=[{"write": "priority", "result": None}])
     assert unwritten.endswith("records no write of the card's record")
+
+
+def test_a_re_estimate_receipt_carries_its_cards_title_only_from_schema_three(
+    drafts_root: Path,
+) -> None:
+    """A `re-estimate` receipt names the card's title, which the review links it by; the key is
+    omitted when there is none, and a line of an older schema carrying one is refused."""
+    severity, frequency = tickets.Severity.MEDIUM, tickets.Frequency.INTERMITTENT
+    outcome = tickets.ReEstimateOutcomeReceipt(
+        priority_estimate=tickets.estimate(severity, frequency, 1),
+        occurrences=1,
+        severity_with_workaround=severity,
+        frequency=frequency,
+        estimate_line=tickets.estimate_line(severity, frequency, 1),
+        priority=tickets.Priority.MEDIUM,
+        root_cause=CAUSE,
+        title="some-service: the cursor skips the last page",
+    )
+    card = f"{BOARD}:{OTHER_RUN}/tickets/{CAUSE}"
+    command = tickets.ReceiptCommand.RE_ESTIMATE
+    for written in (outcome, outcome.model_copy(update={"title": None})):
+        tickets.append_receipt(drafts_root, RUN, command, None, card, written)
+    path = tickets.receipts_path(drafts_root, RUN)
+    titled, untitled = (json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
+    assert titled["schema"] == tickets.RECEIPT_SCHEMA == 3
+    assert titled["outcome"]["title"] == outcome.title
+    assert "title" not in untitled["outcome"], untitled
+    held, found = tickets.read_receipts(drafts_root, RUN)
+    assert found == [] and [one.outcome for one in held] == [
+        outcome,
+        outcome.model_copy(update={"title": None}),
+    ]
+    # An older line without the key still reads; one claiming a title it could not carry does not.
+    with path.open("a", encoding="utf-8") as receipts:
+        receipts.write(json.dumps(untitled | {"schema": 2}) + "\n")
+        receipts.write(json.dumps(titled | {"schema": 2}) + "\n")
+    held, found = tickets.read_receipts(drafts_root, RUN)
+    assert len(held) == 3, held
+    assert found == [f"receipt line 4 of {path} is of schema 2, which carries no `title`"]
+
+
+#: The committed schema-3 `re-estimate` receipt lines, exactly as `append_receipt` writes them:
+#: a titled re-estimate that made two writes, then an untitled one that made none. A change to
+#: what a receipt line holds moves these bytes, so it is made deliberately, with the schema.
+RECEIPT_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "receipts" / "re-estimate-schema-3.jsonl"
+GOLDEN_CARDS = (
+    "followups:earlier-run/tickets/cursor-skips-last-page",
+    "followups:earlier-run/tickets/export-drops-trailing-rows",
+)
+
+
+def _golden_re_estimates() -> tuple[
+    tickets.ReEstimateOutcomeReceipt, tickets.ReEstimateOutcomeReceipt
+]:
+    """The two re-estimates the golden holds: one naming its card's title, one naming none."""
+    severity, frequency = tickets.Severity.MEDIUM, tickets.Frequency.CONSISTENT
+    estimated = tickets.estimate(severity, frequency, 1)
+    proposal = tickets.ReceiptStatus(category="backlog", name="Proposal")
+    titled = tickets.ReEstimateOutcomeReceipt(
+        priority_estimate=estimated,
+        occurrences=1,
+        severity_with_workaround=severity,
+        frequency=frequency,
+        estimate_line=tickets.estimate_line(severity, frequency, 1),
+        priority=estimated,
+        root_cause=CAUSE,
+        writes=(
+            tickets.ReEstimateWrite(
+                write="priority",
+                result=tickets.ReceiptResult(version="v-2", status=proposal, priority=estimated),
+            ),
+            tickets.ReEstimateWrite(write="metadata"),
+        ),
+        title="some-service: the cursor skips the last page",
+    )
+    severity, frequency = tickets.Severity.LOW, tickets.Frequency.INTERMITTENT
+    untitled = tickets.ReEstimateOutcomeReceipt(
+        priority_estimate=tickets.estimate(severity, frequency, 3),
+        occurrences=3,
+        severity_with_workaround=severity,
+        frequency=frequency,
+        estimate_line=tickets.estimate_line(severity, frequency, 3),
+        priority=tickets.Priority.LOW,
+    )
+    return titled, untitled
+
+
+def test_re_estimate_receipts_serialize_to_the_committed_schema_three_golden(
+    drafts_root: Path,
+) -> None:
+    """The lines `append_receipt` writes for a titled and an untitled re-estimate are the
+    golden's bytes: schema 3, the title carried where the card held one and the key absent
+    where it held none."""
+    for card, outcome in zip(GOLDEN_CARDS, _golden_re_estimates(), strict=True):
+        tickets.append_receipt(
+            drafts_root, RUN, tickets.ReceiptCommand.RE_ESTIMATE, None, card, outcome
+        )
+
+    written = tickets.receipts_path(drafts_root, RUN).read_text(encoding="utf-8")
+
+    assert written == RECEIPT_GOLDEN.read_text(encoding="utf-8")
+    titled, untitled = (json.loads(line) for line in written.splitlines())
+    assert titled["schema"] == untitled["schema"] == tickets.RECEIPT_SCHEMA == 3
+    assert titled["outcome"]["title"] == "some-service: the cursor skips the last page"
+    assert "title" not in untitled["outcome"], untitled
+
+
+def test_the_schema_three_golden_reads_back_to_the_re_estimates_that_wrote_it(
+    drafts_root: Path,
+) -> None:
+    """The golden read as a run's receipts is the two re-estimates it was written from, the
+    title round-tripping and an absent one reading as none, and each re-dumps to its line."""
+    path = tickets.receipts_path(drafts_root, RUN)
+    path.parent.mkdir(parents=True)
+    shutil.copyfile(RECEIPT_GOLDEN, path)
+
+    held, found = tickets.read_receipts(drafts_root, RUN)
+
+    assert found == [], found
+    assert [one.outcome for one in held] == list(_golden_re_estimates())
+    assert [one.card for one in held] == list(GOLDEN_CARDS)
+    titled, untitled = (one.outcome for one in held)
+    assert isinstance(titled, tickets.ReEstimateOutcomeReceipt), titled
+    assert isinstance(untitled, tickets.ReEstimateOutcomeReceipt), untitled
+    assert titled.title == "some-service: the cursor skips the last page"
+    assert untitled.title is None
+    lines = [json.loads(line) for line in RECEIPT_GOLDEN.read_text(encoding="utf-8").splitlines()]
+    assert [titled.dumped(), untitled.dumped()] == [line["outcome"] for line in lines]
+
+
+def test_a_schema_two_copy_receipt_and_its_unchanged_skip_still_satisfy_the_account(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run written before schema 3 holds schema-2 copy lines, a digest and the skip naming it
+    among them; the closeout's check reads them as it did, and refuses a digest only on schema 1.
+    """
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    ticket = _write(drafts_root, _carrying())
+    tickets.open_dispositions(drafts_root, RUN).write_text(
+        json.dumps(_account(_disposed())), encoding="utf-8"
+    )
+    assert _copied(ticket, capsys)[0] == tickets.SOUND
+    assert _copied(ticket, capsys)[0] == tickets.SOUND
+    path = tickets.receipts_path(drafts_root, RUN)
+    written = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert written[0]["outcome"]["digest"], written
+    assert written[-1]["outcome"]["action"] == tickets.SKIPPED_UNCHANGED, written
+    path.write_text(
+        "".join(json.dumps(line | {"schema": 2}) + "\n" for line in written), encoding="utf-8"
+    )
+    arguments = ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN]
+
+    assert tickets.main(arguments) == tickets.SOUND, capsys.readouterr().err
+    capsys.readouterr()
+    path.write_text(json.dumps(written[0] | {"schema": 1}) + "\n", encoding="utf-8")
+    assert tickets.main(arguments) == tickets.UNSOUND
+    assert "is of schema 1, which carries no `digest` or `unchanged_since`" in (
+        " ".join(capsys.readouterr().err.split())
+    )
 
 
 def test_a_runs_receipts_that_are_not_its_own_well_formed_lines_refuse_its_account(
@@ -9798,7 +9959,10 @@ def test_the_closeout_raises_the_runs_review_task_only_once_every_check_passed(
         assert done.returncode == tickets.SOUND, done.stdout + done.stderr
         assert raised in done.stdout, done.stdout
         (task,) = [item for item in human_items.open_items() if "Accept or defer" in item.title]
-        assert task.kind == "task" and f"\n- {BOARD}:" in task.body, task
+        # The ticket is linked by its title, where a person opens it: a `local-md` card has no
+        # address, so its qualified id stands in for one.
+        assert task.kind == "task", task
+        assert f"\n- [{_carrying().title}]({BOARD}:" in task.body, task.body
     else:
         assert done.returncode != tickets.SOUND, done.stdout + done.stderr
         assert raised not in done.stdout, done.stdout

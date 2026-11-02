@@ -55,8 +55,8 @@ sources:
         to: hiddenco-followups
   # The human-task boards the tracked document declares. A task the public boundary classifies
   # private goes to human-private; an organization's private task goes to its own tracker by a
-  # combined entry, tried before the classification-only one, filed under the plan's project
-  # there; public own-account work stays on human-public. With no private entry a private task
+  # combined entry, tried before the classification-only one, filed under the project that
+  # tracker's `task_projection` names; public own-account work stays on human-public. With no private entry a private task
   # is refused, never written publicly.
   human-public:
     routes:
@@ -104,11 +104,13 @@ sources:
         cancelled: Canceled
     cache:
       enabled: true
-    # Its human tasks are filed under the plan's own project here, which each request names,
-    # so it declares the authority and no `project`.
+    # Its human tasks are filed under this project of the team: the engine names no project
+    # when it projects a task, so each destination places it under its own, and a plan-owned
+    # task carries a link back to its plan in its body instead.
     task_projection:
       host: workstation-1
       directory: /home/operator/.local/state/onetaskgraph/human-intents
+      project: 7b2e4f10-3c8d-4a5e-9f61-2d0c8b9a4e57
   # The organization's tracker for follow-up tickets: one project of the same team, so every
   # read and create of this source is scoped to it. The same eight states as its plans source,
   # because both write the team's one workflow.

@@ -23,9 +23,11 @@ module borrows their checkout reader rather than opening a second one.
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 import yaml
+from published_tools import ENGINE_BIN
 from test_engine_contracts import ONEPIPELINE_DOCS, ONEPIPELINE_SCHEMAS, _source
 
 from orchestrator import human_items
@@ -102,9 +104,10 @@ UPDATE_RULE = (
     "Each is one short line saying what is needed, its priority and what it blocks",
     "any link a markdown link named by what it links to",
     "when nothing waits on the user, one line says so",
-    "An item's full detail is given only when the user asks for it",
-    "`just human-items report`, the engine's one report of every open human item, is where "
-    "those lines are read from — never pasted into the update whole",
+    "`just human-items report` with no flags is the engine's short view of exactly those items",
+    "its short, scoped entries are the summary the update relays",
+    "An item's full detail goes to the user only when they ask for it, read with `--full`",
+    "`--all` is the whole host's, never the update's",
 )
 
 
@@ -117,9 +120,30 @@ def test_the_manager_relays_its_own_items_in_short_lines_read_from_the_report(sa
     assert whole.count(said) == 1, f"AGENTS.md states {said!r} outside the manager loop"
 
 
+def test_the_report_the_rule_relays_is_the_pinned_engines_short_session_scoped_view() -> None:
+    """The view the rule calls short and scoped is what the pinned engine's `report` prints by
+    default, with complete bodies and the whole host each one flag away."""
+    shown = subprocess.run(
+        [str(ENGINE_BIN), "human-items", "report", "--help"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert shown.returncode == 0, shown.stderr
+    said = _flat(shown.stdout)
+    assert "this session's own and those holding its work" in said, said
+    assert "each in brief unless `--full`" in said, said
+    assert "Print every item's complete body instead of a one-line description" in said, said
+    assert "list every item on the host rather than this session's own" in said, said
+
+
 def test_no_guidance_still_has_the_manager_paste_the_whole_report() -> None:
     manager, mechanics = _manager(), _mechanics()
     assert "It prints `just human-items report`" not in manager
+    assert "the engine's one report of every open human item" not in manager
+    assert "each with its full body" not in mechanics
     assert "what a manager prints on every update" not in mechanics
     assert "is where a manager reads the items its update relays" in mechanics
     assert "report is the one printable manager report" in _contract()

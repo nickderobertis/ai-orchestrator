@@ -207,8 +207,7 @@ _STOP = (
 _SHUTDOWN = "`just shutdown` is outside it for the same reason and more so"
 _APPROVE = "record their decision with `just approve-design <source>:<project>`"
 _HUMAN_ITEMS = (
-    "`just human-items report`, the engine's one report of every open human item, is where "
-    "those lines are read from"
+    "`just human-items report` with no flags is the engine's short view of exactly those items"
 )
 _HUMAN_ITEMS_QUEUE = "Put a question that is genuinely the user's as a question item where it fits"
 _HUMAN_ITEMS_DISMISS = (

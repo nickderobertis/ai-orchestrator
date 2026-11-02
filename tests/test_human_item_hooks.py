@@ -504,14 +504,22 @@ def test_the_installed_command_runs_the_adapter_protocol_end_to_end() -> None:
 
 
 def test_the_review_task_is_raised_once_per_run_and_updated_in_place(store: Path) -> None:
-    touched = {"followups:I_1": ReviewTicket("https://github.invalid/i/1", Priority.HIGH)}
+    touched = {
+        "followups:I_1": ReviewTicket("https://github.invalid/i/1", Priority.HIGH, "Retry drops")
+    }
     first = follow_up_tickets.review_raised("run-b", touched)
-    touched["followups:I_2"] = ReviewTicket("https://github.invalid/i/2", Priority.NONE)
+    touched["followups:I_2"] = ReviewTicket(
+        "https://github.invalid/i/2", Priority.NONE, "Watch never re-arms"
+    )
     second = follow_up_tickets.review_raised("run-b", touched)
     (task, finding) = sorted(human_items.open_items(), key=lambda item: item.title)
     assert "review task" in first and "at priority medium" in first, first
     assert task.id in second and "2 ticket(s)" in second, second
-    assert "No priority" in task.body and "followups:I_2" in finding.body
+    # Every ticket is linked by its title, never by its board id or its bare address.
+    assert "- [Retry drops](https://github.invalid/i/1)" in task.body, task.body
+    assert "No priority\n- [Watch never re-arms](https://github.invalid/i/2)" in task.body
+    assert "[Watch never re-arms](https://github.invalid/i/2)" in finding.body, finding.body
+    assert "followups:I_" not in task.body + finding.body
     assert follow_up_tickets.review_raised("run-b", {}).endswith("has no review task")
     assert human_items.open_items() == []
 

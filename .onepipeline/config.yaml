@@ -16,16 +16,19 @@
 #     created or updated; the engine's `ticket_review` aggregation derives its priority,
 #     groups the links, and retires it when there are none. It holds nothing.
 #
-# Human items are on for every host of this repository: the item store, holds, the CLI and
-# the browser's Action items page. No `task_source` is named yet, so no task is projected into
-# any tracker. `onetaskgraph.yaml` declares the boards they will go to, `human-public` and
-# `human-private`, but nothing writes to them until two upstream gaps are fixed, released and
-# pinned: the plan store's field setup sends a mutation live GitHub rejects, so the boards'
-# fields cannot be created, and the engine projects a plan-owned task under the plan's own
-# project and with no repositories, which the store refuses. The engine's own default stays
-# off, and a host turns human items off for itself in its host-local file.
+# Human items are on for every host of this repository: the item store, holds, the CLI, the
+# browser's Action items page, and each task's projection into `human-public`, the shared
+# human-task source `onetaskgraph.yaml` declares. The store routes a task from there by the
+# repositories it names — the engine files a plan-owned task with its plan's repositories and a
+# link back to the plan — so public own-account work stays on `human-public`, and private or
+# mixed work, or an organization's, goes where the host's user layer routes it
+# (`config/onetaskgraph.user-layer.example.yaml`). A host with no such route has a private
+# task refused, never written publicly. Each destination's `task_projection` is host-local too,
+# so a host that declares none projects nothing. The engine's own default stays off, and a host
+# turns human items off for itself in its host-local file.
 human_items:
   enabled: true
+  task_source: human-public
   hooks:
     - phase: design-review
       kind: task
