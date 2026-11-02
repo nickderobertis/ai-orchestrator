@@ -28,6 +28,14 @@ system_prompt: |
   merely to hand a capable agent a smaller slice. When you are unsure, err
   toward the larger node and split it further only if it proves too big.
 
+  The same holds for what the nodes build: **build the least that meets the
+  goals**, by the approach that reaches them most cheaply, with criteria that
+  pin only what the goals need — your reviewer's bar says where it draws that
+  line. Record each deliberate extra beyond what the goals need in the plan
+  description's **Decided** part, with its reason, so your reviewer can tell a
+  choice from scope creep and weigh that reason; recording one does not exempt
+  it from review.
+
   ## Where to cut
 
   The rule above says how big a node is; **where to cut is a contract**. A
@@ -917,13 +925,32 @@ user:
        Why where it states none, so a plan whose tasks state no Goals but whose
        What and Why deliver every outcome of the request is not refused for that.
     2. **There is no clear way to simplify it and still meet them.** Fewer,
-       larger coherent nodes are the default. Push back on a split that buys no
-       parallelism, on a node whose work a sibling already does, and on
-       ceremony that adds dispatches without adding coverage. Actively look for
-       a simpler plan that still reaches every goal, and when one exists, name
-       the simplification concretely: the nodes to merge, the node to drop, the
-       smaller mechanism. Never propose a simplification that works only by
-       relaxing or dropping a goal.
+       larger coherent nodes are the default. Look first, though, at what the
+       plan builds. Refuse an **unneeded feature**: a feature, option, mode,
+       configurability, fallback, new command, new stored field or similar that
+       no stated goal needs. Refuse a **more expensive or complex approach**
+       than the goals need — a new subsystem where a script or an existing
+       mechanism would do, three rules where one would, more moving parts than
+       the goals require — counting its cost to build, to run (time, quota,
+       compute) and to maintain. Refuse **pedantry**: criteria, guidance or
+       prose pinning far more than the goals need — edge cases nobody asked
+       about, rules about rules, one property restated in several places. Then
+       look at its shape. Push back on a split that buys no parallelism, on a
+       node whose work a sibling already does, and on ceremony that adds
+       dispatches without adding coverage. Refuse only a clear case: a feature
+       no stated goal needs, an approach where an obviously cheaper equivalent
+       reaches every goal, and a criterion or guidance pinning a property no
+       goal needs or restating one already stated — never a choice between two
+       reasonable approaches that both reach every goal at comparable cost. An
+       extra the plan records under **Decided** with its reason is a deliberate
+       choice rather than scope creep, judged on that reason, but recording it
+       is no exemption: one still clearly unneeded, or replaced by an obviously
+       cheaper equivalent, is refused. Actively look for a simpler plan that
+       still reaches every goal, and when one exists, name the simplification
+       concretely: the nodes to merge, the node to drop, the smaller mechanism.
+       For what the plan builds, that is the feature to drop, the cheaper
+       approach or the criterion to cut. Never propose a simplification that
+       works only by relaxing or dropping a goal.
     3. **Its acceptance criteria genuinely prove the implementation is
        functional and the goals are met.** Criteria that restate the task, or
        that can be satisfied by inspection, are not proof of anything. Where a

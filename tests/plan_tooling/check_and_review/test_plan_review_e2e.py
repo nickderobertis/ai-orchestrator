@@ -57,7 +57,14 @@ from project_fixtures import (
 from published_tools import LOCKED_INSTALLS_PATH
 from waits import timeout as e2e_timeout
 
-from orchestrator import npm_installs, plan_budgets, plan_checklist_budgets, plan_review, plan_store
+from orchestrator import (
+    envelope_review,
+    npm_installs,
+    plan_budgets,
+    plan_checklist_budgets,
+    plan_review,
+    plan_store,
+)
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project, write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -2040,6 +2047,163 @@ def test_a_plan_omitting_the_adoption_its_goal_needs_is_refused_whole(tmp_path: 
     assert "the project record" in refused.stderr, refused.stderr
     assert f"just review-plan {project}" in refused.stderr, refused.stderr
     assert "no review record" not in refused.stderr, "a recorded task was refused"
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These three journeys extend this module's review-plan journeys and drive the same `just review-plan` recipe and the live-edit validator that spends the same review turn, so they sit behind the edge this module already sits behind, `plan-tooling-check-and-review`, whose inputs are that project's split as `tests/plan_tooling/AGENTS.md` states it; a project of their own would be keyed on the same inputs and add only a target.  # noqa: E501
+#: The deliverable-simplicity question each turn asks, by a clause only that turn's prompt
+#: carries: the per-task turn asks whether a criterion is pedantic, and the whole-plan turn
+#: whether the plan builds an unneeded feature or takes a costlier approach.
+PEDANTRY_QUESTION = "does it pin far more than the goals the task states"
+BUILDS_MORE_QUESTION = (
+    "does the plan build a feature no part of its goal needs, or take a clearly costlier "
+    "or more complex approach than one that reaches every goal?"
+)
+#: Where both turns send the reviewer for the kinds and the line rather than restating them.
+POINTS_AT_THE_BAR = "the clear case point 2 of the bar draws"
+
+#: A whole-plan refusal naming a node that builds a feature no goal needs, and the
+#: simpler form: the plan without it.
+REFUSES_AN_UNNEEDED_FEATURE = {
+    "passes": False,
+    "findings": [
+        {
+            "criterion": "csv-export",
+            "why": "no goal needs a CSV export of the checkout route; drop the node and the "
+            "plan still delivers the route",
+        }
+    ],
+}
+
+#: A criterion pinning an edge case no goal asks about, and the per-task refusal of it.
+PEDANTIC = (
+    f"{STATES_ITS_BAR}\n"
+    "- A request whose body carries a trailing byte-order mark is rejected with the same "
+    "message as one carrying a leading one."
+)
+REFUSES_AS_PEDANTIC = {
+    "passes": False,
+    "findings": [
+        {
+            "criterion": "a request whose body carries a trailing byte-order mark is rejected "
+            "with the same message as one carrying a leading one",
+            "why": "no goal asks about byte-order marks; rejecting an invalid request, which "
+            "the criteria already pin, is the bar that would do",
+        }
+    ],
+}
+
+
+def test_a_plan_building_an_unneeded_feature_is_refused_whole_by_the_question_it_was_asked(
+    tmp_path: Path,
+) -> None:
+    """Each turn asks its own part of the simplicity question, and a refusal blocks approval.
+
+    Both prompts are read out of the provider's own log: the per-task turn carries the
+    pedantry question and not the whole-plan one, the whole-plan turn the reverse, and
+    each points at point 2 of the bar. The scripted whole-plan refusal names a node that
+    builds a feature no goal needs; it reaches the operator, the tasks' own passes stand,
+    no plan-level record is written, and `just check-plan` refuses the plan.
+    """
+    project = _project("review-unneeded-feature", STATES_ITS_BAR, "csv-export")
+    prompts = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES, PASSES, REFUSES_AN_UNNEEDED_FEATURE)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(prompts)
+
+    review = _just("review-plan", project, environment=environment)
+
+    assert review.returncode == 1, review.stdout + review.stderr
+    (finding,) = REFUSES_AN_UNNEEDED_FEATURE["findings"]
+    assert f"review-plan: {finding['criterion']} — {finding['why']}" in review.stderr, review.stderr
+    assert "no plan-level record was written" in review.stderr, review.stderr
+    assert _launches(tmp_path) == 3, "two tasks and one plan should cost three turns"
+    for node in ("route", "csv-export"):
+        assert isinstance(_record_of(project, node), dict), f"{node}'s own pass was lost"
+    assert _plan_record_of(project) is None, "a refusal recorded a plan-level pass"
+
+    *task_turns, plan_turn = _prompts(prompts)
+    assert plan_turn == _plan_prompt_given(tmp_path)
+    assert len(task_turns) == 2, task_turns
+    for turn in task_turns:
+        assert PEDANTRY_QUESTION in turn and POINTS_AT_THE_BAR in turn, turn
+        assert BUILDS_MORE_QUESTION not in turn, "the per-task turn asks the whole-plan question"
+    assert BUILDS_MORE_QUESTION in plan_turn and POINTS_AT_THE_BAR in plan_turn, plan_turn
+    assert PEDANTRY_QUESTION not in plan_turn, "the whole-plan turn asks the per-task question"
+
+    refused = _just("check-plan", project)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "no plan-level review record" in refused.stderr, refused.stderr
+    assert f"just review-plan {project}" in refused.stderr, refused.stderr
+    assert "no review record" not in refused.stderr, "a recorded task was refused"
+
+
+def test_a_task_carrying_a_pedantic_criterion_is_refused_and_left_unrecorded(
+    tmp_path: Path,
+) -> None:
+    """The per-task refusal quoting a pedantic criterion leaves that task unrecorded."""
+    project = _project("review-pedantic", PEDANTIC)
+
+    prompt, refused = _reviewed_prompt(tmp_path, project, REFUSES_AS_PEDANTIC)
+
+    assert PEDANTRY_QUESTION in prompt, prompt
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    (finding,) = REFUSES_AS_PEDANTIC["findings"]
+    assert f"route: {finding['criterion']} — {finding['why']}" in refused.stderr, refused.stderr
+    assert _launches(tmp_path) == 1, "a plan-level turn was spent beside a refused task"
+    assert _record_of(project, "route") is None, "a refusal recorded a pass"
+    assert _plan_record_of(project) is None, "a refused task's plan earned a plan-level record"
+
+    still = _just("check-plan", project)
+    assert still.returncode == 1, still.stdout + still.stderr
+    assert "no review record" in still.stderr, still.stderr
+    assert f"just review-plan {project}" in still.stderr, still.stderr
+
+
+#: The live-edit frame's exception to the pedantry question.
+NOT_PEDANTRY_ON_A_LIVE_EDIT = (
+    "A clause tied to a goal, or to a misreading its judge actually made, is not pedantry"
+)
+
+
+def test_a_live_edit_amending_a_node_is_asked_the_pedantry_question_and_refused_on_it(
+    tmp_path: Path,
+) -> None:
+    """The per-task question reaches a manager's live edit, with the live-edit exception.
+
+    Driven through the validator the bus runs on a reply, `scripts/envelope-review.sh`,
+    with a `requeue` amending a parked node's whole task on stdin and only the paid
+    provider scripted: the judged turn's prompt carries the pedantry question and the
+    exception, and a refusal of the pedantic clause refuses the whole envelope.
+    """
+    log = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, REFUSES_AS_PEDANTIC)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+    envelope = {
+        "version": 2,
+        "author": "planner",
+        "commands": [{"op": "requeue", "id": "route", "amend": {"task": _task(PEDANTIC)}}],
+    }
+
+    reviewed = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "envelope-review.sh")],
+        cwd=REPO_ROOT,
+        env=environment,
+        input=json.dumps(envelope),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+
+    (prompt,) = _prompts(log)
+    assert PEDANTRY_QUESTION in prompt and POINTS_AT_THE_BAR in prompt, prompt
+    assert NOT_PEDANTRY_ON_A_LIVE_EDIT in prompt, prompt
+    assert reviewed.returncode == envelope_review.REFUSED, reviewed.stdout + reviewed.stderr
+    (finding,) = REFUSES_AS_PEDANTIC["findings"]
+    assert "the amended task for node 'route' was refused by its judged review" in reviewed.stderr
+    assert f"{finding['criterion']} — {finding['why']}" in reviewed.stderr, reviewed.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_the_task_reviewer_is_handed_every_fact_the_pin_path_question_turns_on(

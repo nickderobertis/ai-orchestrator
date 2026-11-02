@@ -788,8 +788,10 @@ them reach you; `manager` names the session role and is never a command.
    one settle silently into the plan.
 4. **Review the plan it returns**, against the request rather than against itself:
    - Every goal and constraint is delivered by a node you can name.
-   - Nothing simpler would do: a split that buys no parallelism, or a node a sibling
-     covers, spends a dispatch for nothing.
+   - Nothing simpler would do, in what it builds or how it is split: an unneeded
+     feature, a costlier or more complex approach than the goals need, pedantic
+     criteria, a split that buys no parallelism, or a node a sibling covers — each
+     held to the clear-case line point 2 of `personas/planner.yaml`'s bar draws.
    - Each node's `## Acceptance criteria` would prove the goal and could not all be
      satisfied while the goal is missed; unrealistic testing is where that gap hides.
    - Criteria name the checks that exercise the change — the tests over what it

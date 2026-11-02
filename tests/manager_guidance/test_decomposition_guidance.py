@@ -68,6 +68,21 @@ OWNED_STATEMENTS = (
     # owns, how its task and its review bar are written, and how it reaches the
     # manager. All of it travels with the dispatch.
     Owned(PLANNER.document, "never merely to hand a capable agent a smaller slice"),
+    # What the nodes build is held to the goals as their split is: the instruction to the
+    # planner, the record it keeps of a deliberate extra, and the reviewer's clear-case
+    # line are the planner's, stated once, and the manager's bullet only points at them.
+    Owned(PLANNER.document, "build the least that meets the goals"),
+    Owned(
+        PLANNER.document,
+        "Record each deliberate extra beyond what the goals need in the plan description's "
+        "**Decided** part, with its reason",
+    ),
+    Owned(
+        PLANNER.document,
+        "never a choice between two reasonable approaches that both reach every goal at "
+        "comparable cost",
+    ),
+    Owned(PLANNER.document, "but recording it is no exemption"),
     Owned(PLANNER.document, "where to cut is a contract"),
     Owned(PLANNER.document, "a shared interface is never changed unilaterally"),
     Owned(PLANNER.document, "Never split implementation and those tests"),
@@ -377,3 +392,28 @@ def test_the_planner_grants_a_carve_out_in_the_words_the_criteria_guard_reads(
         "guard does not read; a plan written under it would be refused for a criterion its "
         "task had granted"
     )
+
+
+#: The manager's review bullet on simplicity, by the words it opens with.
+SIMPLER_BULLET = "- Nothing simpler would do"
+
+
+def test_the_managers_simplicity_bullet_covers_what_is_built_and_points_at_the_persona() -> None:
+    """The bullet names the thing being built beside the split, and defers to the persona.
+
+    A bullet about node structure alone is the review this change widened, and one that
+    restated the persona's kinds and line in full would be the copy the split forbids, so
+    it names each case and points at the one full statement.
+    """
+    section = _section(MANAGER)
+    assert SIMPLER_BULLET in section, f"{MANAGER.document} no longer carries {SIMPLER_BULLET!r}"
+    bullet = _flat(section.split(SIMPLER_BULLET, 1)[1].split("\n   - ", 1)[0])
+    for case in (
+        "unneeded feature",
+        "costlier or more complex approach",
+        "pedantic criteria",
+        "split that buys no parallelism",
+        "a node a sibling covers",
+        PLANNER.document,
+    ):
+        assert case in bullet, f"{MANAGER.document}'s simplicity bullet no longer names {case!r}"

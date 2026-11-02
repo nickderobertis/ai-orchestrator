@@ -317,6 +317,12 @@ repository's root `budgets.yaml` is a repo-wide budget, enforced on the merge pa
 criterion asking the worker to have met a repo-wide budget's threshold is refused, while
 one owning its registration is not. A node owning no budget is not asked this.
 
+One question is asked of every criterion of this task: does it pin far more than the
+goals the task states — or its What and Why — need, or restate one already stated?
+Refuse such a criterion only in the clear case point 2 of the bar draws, quoting it, and
+say in `why` the simpler bar that would do. Whether the plan builds more than its goals
+need is asked of the plan whole, not here.
+
 Do not rewrite the task and do not judge it on style. Answer with the JSON object the
 response schema declares: whether it passes, and one finding for **every** criterion
 you would refuse — not the first one, and not the worst one. Each finding names the
@@ -834,7 +840,8 @@ worker's judge exactly as a plan's task would. Hold it to the same bar. It carri
 title, no dependencies, no repository and no adoption fields to show you — so the
 pin-path question above is asked of it only as far as its own prose says which
 repository it is of and what it adopts; the persona beside it is the role whose review
-bar its judge is given, and `null` means the base config's generic contract.
+bar its judge is given, and `null` means the base config's generic contract. A clause
+tied to a goal, or to a misreading its judge actually made, is not pedantry.
 """
 
 
@@ -1142,8 +1149,9 @@ def _host_sections() -> str:
 #: key: rewording this moves every plan record and no task record.
 PLAN_REVIEW_PROMPT = """\
 You are reviewing ONE plan whole, after every task in it has passed its own review,
-for the two properties no single task can show: whether the plan puts the change its
-goal needs in force on this host, and whether its budgets are what its work needs.
+for the three properties no single task can show: whether the plan puts the change its
+goal needs in force on this host, whether it builds more than its goal needs, and whether
+its budgets are what its work needs.
 Below is the review bar, then the plan's goal, then the table of what this host
 installs from each producer it depends on — the wheel, and the `config/<pin>.version`
 file that wheel governs — with the two rungs a node waits on a release under, then the
@@ -1186,6 +1194,14 @@ A plan that omits the adoption its goal needs is refused with a finding whose
 `criterion` is `the plan`. A plan that declares it wrongly — the wrong pin for the fix,
 `fast` where the release is needed, a `consumes` on a node of this repository, a
 version literal — is refused with a finding whose `criterion` names the node's id.
+
+On what it builds, ask one question: does the plan build a feature no part of its goal
+needs, or take a clearly costlier or more complex approach than one that reaches every
+goal? Judge it against the plan's goal — its description, **Requested** and **Decided**
+included — across every node, opening a task file where the judgment turns on it, and
+refuse only the clear case point 2 of the bar draws. A finding names `the plan` or the
+node's id as its `criterion`, and its `why` names the simpler form. Whether a single
+criterion pins more than its task needs is each task's own review, not this one.
 
 First decide whether the work needs an added/changed task budget. Only then is full budget
 analysis required; with none and no existing analysis, overview alone suffices. Preserve
