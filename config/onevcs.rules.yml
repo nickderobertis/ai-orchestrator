@@ -226,6 +226,10 @@ rules:
     approvals: none
     checks: {wait_seconds: 6300}  # recorded max 4960 s (run 38912988989) + 25% margin
 
+  - match: {host: github.com, owner: nickderobertis, name: privateterms}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: screencomp}
     publication: change-auto
     approvals: none

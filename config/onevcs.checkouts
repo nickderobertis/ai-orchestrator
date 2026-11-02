@@ -96,6 +96,13 @@
 ~/.ai-orchestrator/repos/nickderobertis__printobserver
 ~/.ai-orchestrator/repos/nickderobertis__printobserver-isolated
 
+# `privateterms`, the open specification and Rust crate every tool that detects or
+# rewrites private terms shares. Consumers install its crate release themselves, so this
+# host installs nothing from it; it is registered so plans can dispatch work into it.
+# Listed under both layouts.
+~/.ai-orchestrator/repos/nickderobertis__privateterms
+~/projects/privateterms
+
 ~/.ai-orchestrator/repos/nickderobertis__screencomp
 ~/.ai-orchestrator/repos/nickderobertis__skilltest
 ~/.ai-orchestrator/repos/nickderobertis__spanish-language-tutor

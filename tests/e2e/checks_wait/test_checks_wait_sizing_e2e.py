@@ -67,11 +67,15 @@ class SizedRun(TypedDict):
 
 
 class SizedIdentity(TypedDict):
-    """What one identity's checks wait was sized from."""
+    """What one identity's checks wait was sized from.
+
+    `max_seconds` and `max_run` are absent on an identity with no measured run, which
+    has no slowest run to name.
+    """
 
     runs_used: int
-    max_seconds: int
-    max_run: int
+    max_seconds: NotRequired[int]
+    max_run: NotRequired[int]
     wait_seconds: int | str
     runs: list[SizedRun]
 
@@ -91,7 +95,8 @@ def checks_wait_record() -> dict[RepoIdentity, SizedIdentity]:
 
     Every figure is recomputed from the timestamps beside it, so a hand-edited maximum
     or wait that no longer follows from the named runs fails here rather than sizing a
-    rule from a number nothing measured.
+    rule from a number nothing measured. An identity with no measured run names no
+    maximum and stays on the default wait, since nothing measured sizes it past it.
     """
     record = cast(
         "ChecksWaitRecord", yaml.safe_load(TRACKED_CHECKS_WAIT.read_text(encoding="utf-8"))
@@ -119,6 +124,10 @@ def checks_wait_record() -> dict[RepoIdentity, SizedIdentity]:
             ) - datetime.fromisoformat(run["created_at"])
             assert run["seconds"] == int(elapsed.total_seconds()), (identity, run)
             assert run["last_required_completed_at"] <= record["cutoff"], (identity, run)
+        if not runs:
+            assert "max_seconds" not in sized and "max_run" not in sized, identity
+            assert sized["wait_seconds"] == "default", identity
+            continue
         slowest = max(runs, key=lambda run: run["seconds"])
         assert (sized["max_seconds"], sized["max_run"]) == (slowest["seconds"], slowest["id"])
         needed = sized["max_seconds"] * (1 + record["margin"])

@@ -31,6 +31,9 @@
 #   `max_seconds`, plus the 25% `margin`, exceeds the 3600 s default carries that
 #   figure rounded up to a multiple of 300 s as its rule's `wait_seconds`; any other
 #   stays on the default, `wait_seconds: default` here.
+# - An identity with no such run by the cutoff records `runs_used: 0`, an empty
+#   `runs`, no `max_seconds` or `max_run`, and `wait_seconds: default`: nothing was
+#   measured to size it past the default. Its first CI runs re-size it like any other.
 #
 # `tests/e2e/checks_wait/test_checks_wait_sizing_e2e.py` holds the rules file to this
 # record through the installed `onevcs rules check`. Re-measure and re-size together.
@@ -408,6 +411,10 @@ identities:
       - {id: 38918447494, workflow: "ci", event: pull_request, attempt: 1, created_at: "2026-10-16T14:46:11Z", last_required_completed_at: "2026-10-16T15:27:07Z", seconds: 2456, last_required_check: "gate (macos-aarch64)"}
       - {id: 38917762819, workflow: "ci", event: pull_request, attempt: 1, created_at: "2026-10-16T14:41:11Z", last_required_completed_at: "2026-10-16T15:38:29Z", seconds: 3438, last_required_check: "gate (windows-aarch64)"}
       - {id: 38912988989, workflow: "ci", event: pull_request, attempt: 2, created_at: "2026-10-16T14:05:39Z", last_required_completed_at: "2026-10-16T15:28:19Z", seconds: 4960, last_required_check: "integration (windows-aarch64)"}
+  github.com/nickderobertis/privateterms:
+    runs_used: 0
+    wait_seconds: default
+    runs: []
   github.com/nickderobertis/screencomp:
     runs_used: 10
     max_seconds: 1314
