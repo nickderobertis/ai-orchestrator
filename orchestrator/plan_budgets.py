@@ -40,6 +40,7 @@ import dataclasses
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -54,7 +55,7 @@ import yaml
 
 from orchestrator import design_approval, npm_installs, plan_store, task_body
 from orchestrator.plan_store import QualifiedProjectId, StoreTask
-from orchestrator.project_store import hosted_origin
+from orchestrator.project_store import DOCUMENTS_DIRECTORY, hosted_origin
 from orchestrator.root import REPO_ROOT
 
 #: The task metadata key holding the budgets a task owns, as a JSON list of :class:`Budget`.
@@ -157,10 +158,50 @@ _BUDGET_ID = re.compile(BUDGET_ID_PATTERN)
 def budget_anchor(budget_id: str) -> str:
     """The anchor of a schema-2 budget's heading in its task's `## Budgets` section.
 
-    The one definition of it: the slug of the heading `Budget <id>` the partial renders,
-    which a GitHub rendering prefixes with `user-content-` for the element's id.
+    The one definition of it: GitHub's slug of the heading `Budget <id>` the partial renders,
+    which GitHub's file view and VS Code's preview both land a `#<slug>` fragment on. A
+    design document's link to the budget carries it as that fragment, whatever the task's
+    location (:func:`budget_link`); translating it into a tracker's own form is the copy's.
     """
     return f"budget-{budget_id}"
+
+
+def budget_link(location: str, anchor: str, document_directory: Path | None) -> str:
+    """The destination of a design document's reference link to a budget's section.
+
+    The one definition of it. A task whose ``location`` is an absolute path — a local-md
+    record's file, wherever it sits — is linked relative to ``document_directory``, the
+    directory the design document's own file is written in, because an absolute machine path
+    resolves in neither GitHub's file view nor VS Code's preview; any other location, and any
+    location when there is no local document directory, is linked as it stands. The fragment
+    is ``anchor`` — :func:`budget_anchor` for a schema-2 budget — and a legacy budget's empty
+    anchor writes none. Never `#user-content-` and never anchor markup.
+    """
+    target = location
+    if document_directory is not None and PurePosixPath(location).is_absolute():
+        target = PurePosixPath(os.path.relpath(location, document_directory)).as_posix()
+    return f"{target}#{anchor}" if anchor else target
+
+
+def design_directory(project: str) -> Path | None:
+    """The directory ``project``'s design document's file is, or will be, written in.
+
+    The held design document's own file's directory when the project holds one at a local
+    path; otherwise the documents directory of the project's source, where a local-md source
+    writes every document; and ``None`` for a source with no local root, whose task locations
+    are not files to link relative to.
+    """
+    try:
+        held = design_approval.design_document(project).location
+    except OSError:
+        held = None
+    path = plan_store.local_file(plan_store.located(held, "")) if held else None
+    if path is not None:
+        return Path(path).parent
+    try:
+        return plan_store.source_root(plan_store.qualified(project).source) / DOCUMENTS_DIRECTORY
+    except OSError:
+        return None
 
 
 class BudgetsError(OSError):
@@ -311,7 +352,8 @@ class TaskBudgets(NamedTuple):
 
 class BudgetAnswer(TypedDict):
     """One budget as the design document's `budgets` answer states it: its record's fields,
-    flattened beside the node owning it, that task's location and its heading's anchor."""
+    flattened beside the node owning it, that task's location, its heading's anchor and the
+    link to that heading."""
 
     node: str
     location: str
@@ -335,10 +377,17 @@ class BudgetAnswer(TypedDict):
     check_runtime_seconds: NotRequired[int | float]
     #: :func:`budget_anchor` of a schema-2 budget's id, and `""` for a legacy one.
     anchor: str
+    #: :func:`budget_link` of the location and anchor: the reference link's destination.
+    link: str
 
 
-def budget_answer(node: str, location: str, budget: Budget) -> BudgetAnswer:
-    """``budget``, owned by ``node`` at ``location``, as the writer's answer states it."""
+def budget_answer(
+    node: str, location: str, budget: Budget, document_directory: Path | None
+) -> BudgetAnswer:
+    """``budget``, owned by ``node`` at ``location``, as the writer's answer states it.
+
+    Its `link` is relative to ``document_directory``, :func:`design_directory`'s answer.
+    """
     answer = BudgetAnswer(
         node=node,
         location=location,
@@ -357,12 +406,14 @@ def budget_answer(node: str, location: str, budget: Budget) -> BudgetAnswer:
         evidence=budget.evidence,
         command=budget.command,
         anchor="",
+        link="",
     )
     if isinstance(budget, ModernBudget):
         answer["schema_version"] = budget.schema_version
         answer["source"] = budget.source
         answer["check_runtime_seconds"] = budget.check_runtime_seconds
         answer["anchor"] = budget_anchor(budget.id)
+    answer["link"] = budget_link(location, answer["anchor"], document_directory)
     return answer
 
 
@@ -373,8 +424,9 @@ class WriterAnswers(TypedDict):
     predates_budgets: str
     #: The plan's :data:`PLAN_RECORD`, or `{}` when project analysis is absent.
     plan_budgets: Mapping[str, object]
-    #: Every budget of every task, each with its owning node, that task's location and its
-    #: heading's anchor: :func:`budget_anchor` for a schema-2 budget, `""` for a legacy one.
+    #: Every budget of every task, each with its owning node, that task's location, its
+    #: heading's anchor — :func:`budget_anchor` for a schema-2 budget, `""` for a legacy one —
+    #: and the link to it, :func:`budget_link`.
     budgets: list[BudgetAnswer]
 
 
@@ -1165,8 +1217,8 @@ def writer_answers(project: str) -> WriterAnswers:
 
     The migration list's reason when it names the plan; otherwise the plan's
     :data:`PLAN_RECORD`, and every budget of every task, each with its owning node id, the
-    location the plan store reports for that task and its `anchor`, sorted by node. Raises
-    :class:`BudgetsError` for missing analysis when a task adds/changes a budget.
+    location the plan store reports for that task, its `anchor` and its `link`, sorted by
+    node. Raises :class:`BudgetsError` for missing analysis when a task adds/changes a budget.
     With no such budget, absent analysis returns an empty object and all task budgets.
     """
     reason = migrated(project)
@@ -1178,13 +1230,15 @@ def writer_answers(project: str) -> WriterAnswers:
     if present:
         parse_plan(held)
     budgets: list[BudgetAnswer] = []
+    directory = design_directory(project)
     for task in sorted(plan_store.read_tasks(project), key=lambda task: task.node_id):
         record = task_record(task.metadata)
         if record is None:
             continue
         location = task.location or str(task.qualified_id)
         budgets.extend(
-            budget_answer(task.node_id, location, budget) for budget in parse_budgets(record)
+            budget_answer(task.node_id, location, budget, directory)
+            for budget in parse_budgets(record)
         )
     if not present and any(budget["file_change"] in ("add", "change") for budget in budgets):
         raise BudgetsError(

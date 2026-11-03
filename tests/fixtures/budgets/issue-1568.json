@@ -154,7 +154,8 @@
       "schema_version": 2,
       "source": "telemetry",
       "check_runtime_seconds": 1,
-      "anchor": "budget-github-asset-requests-per-new-asset"
+      "anchor": "budget-github-asset-requests-per-new-asset",
+      "link": "https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-asset-requests-per-new-asset"
     },
     {
       "node": "otg-assets-github",
@@ -176,7 +177,8 @@
       "schema_version": 2,
       "source": "telemetry",
       "check_runtime_seconds": 1,
-      "anchor": "budget-github-asset-requests-per-unchanged-asset"
+      "anchor": "budget-github-asset-requests-per-unchanged-asset",
+      "link": "https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-asset-requests-per-unchanged-asset"
     },
     {
       "node": "otg-assets-linear",
@@ -198,7 +200,8 @@
       "schema_version": 2,
       "source": "telemetry",
       "check_runtime_seconds": 1,
-      "anchor": "budget-linear-asset-requests-per-new-asset"
+      "anchor": "budget-linear-asset-requests-per-new-asset",
+      "link": "https://github.com/nickderobertis/onetaskgraph/issues/3305#budget-linear-asset-requests-per-new-asset"
     },
     {
       "node": "otg-assets-linear",
@@ -220,7 +223,8 @@
       "schema_version": 2,
       "source": "telemetry",
       "check_runtime_seconds": 1,
-      "anchor": "budget-linear-asset-requests-per-unchanged-asset"
+      "anchor": "budget-linear-asset-requests-per-unchanged-asset",
+      "link": "https://github.com/nickderobertis/onetaskgraph/issues/3305#budget-linear-asset-requests-per-unchanged-asset"
     },
     {
       "node": "otg-assets-github",
@@ -242,7 +246,8 @@
       "schema_version": 2,
       "source": "telemetry",
       "check_runtime_seconds": 1,
-      "anchor": "budget-github-asset-copy-seconds"
+      "anchor": "budget-github-asset-copy-seconds",
+      "link": "https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-asset-copy-seconds"
     },
     {
       "node": "otg-assets-github",
@@ -264,7 +269,8 @@
       "schema_version": 2,
       "source": "telemetry",
       "check_runtime_seconds": 1,
-      "anchor": "budget-github-concurrent-copies-refused"
+      "anchor": "budget-github-concurrent-copies-refused",
+      "link": "https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-concurrent-copies-refused"
     },
     {
       "node": "otg-assets-github",
@@ -286,7 +292,8 @@
       "schema_version": 2,
       "source": "telemetry",
       "check_runtime_seconds": 1,
-      "anchor": "budget-github-concurrent-copy-seconds"
+      "anchor": "budget-github-concurrent-copy-seconds",
+      "link": "https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-concurrent-copy-seconds"
     },
     {
       "node": "otg-assets-linear",
@@ -308,7 +315,8 @@
       "schema_version": 2,
       "source": "direct",
       "check_runtime_seconds": 20,
-      "anchor": "budget-linear-asset-copy-seconds"
+      "anchor": "budget-linear-asset-copy-seconds",
+      "link": "https://github.com/nickderobertis/onetaskgraph/issues/3305#budget-linear-asset-copy-seconds"
     },
     {
       "node": "otg-assets-linear",
@@ -327,7 +335,8 @@
       "workload": "3 processes start the same copy as linear-asset-copy-seconds within 1 s of each other, sharing one key. Each copy's 24 images are generated PNGs of about 500 KB (450,000 to 500,000 bytes), about 36 MB across the three copies; the journey records each image's size and the analysis fails without a figure when the count or any size differs.",
       "evidence": "Design: about 72 asset requests per copy, about 216 across three, waited out within a bounded retry. No spike; the published limit is the node's to read and record.",
       "command": "Analysis of the telemetry the Linear (`onetaskgraph-linear-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
-      "anchor": ""
+      "anchor": "",
+      "link": "https://github.com/nickderobertis/onetaskgraph/issues/3305"
     }
   ]
 }

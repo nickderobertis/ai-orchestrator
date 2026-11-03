@@ -909,13 +909,24 @@ def test_the_writers_answers_are_the_records_with_each_budgets_owner_and_its_loc
     assert stated == {
         "predates_budgets": "",
         "plan_budgets": ANSWERS,
-        "budgets": [{"node": NODE, "location": task.location, **BUDGET, "anchor": ""}],
+        "budgets": [
+            {
+                "node": NODE,
+                "location": task.location,
+                **BUDGET,
+                "anchor": "",
+                "link": plan_budgets.budget_link(
+                    str(task.location), "", plan_budgets.design_directory(project)
+                ),
+            }
+        ],
     }
     assert task.location is not None and Path(task.location).is_absolute()
 
     modern = _budget(schema_version=2, source="direct", check_runtime_seconds=0)
     (written,) = _writer(_plan(budgets=[modern]), capsys)["budgets"]
     assert written["anchor"] == "budget-listing-latency" == plan_budgets.budget_anchor(BUDGET["id"])
+    assert written["link"].endswith("#budget-listing-latency"), written
 
     predated = _writer("authoring:approved-budgets", capsys)
     assert predated == {
@@ -927,6 +938,138 @@ def test_the_writers_answers_are_the_records_with_each_budgets_owner_and_its_loc
     bare = _plan(None)
     assert plan_budgets.main([bare]) == 2
     assert f"{bare} carries no `orchestrator.plan-budgets` metadata" in capsys.readouterr().err
+
+
+def _github_slugs(markdown: str) -> list[tuple[str, str]]:
+    """Every heading of ``markdown`` with GitHub's slug of it, by the authored-link rule.
+
+    Lowercased; every character that is not a letter, a digit, a space, `-` or `_`
+    removed; each space a `-`; and the n-th repeat of a slug in the record suffixed `-<n>`.
+    """
+    seen: dict[str, int] = {}
+    slugs = []
+    for heading in re.findall(r"^#{1,6} (.+?)\s*$", markdown, re.MULTILINE):
+        slug = re.sub(r"[^\w\- ]", "", heading.lower()).replace(" ", "-")
+        repeat = seen.get(slug, 0)
+        seen[slug] = repeat + 1
+        slugs.append((heading, f"{slug}-{repeat}" if repeat else slug))
+    return slugs
+
+
+def test_a_local_design_documents_budget_link_lands_on_its_tasks_budget_heading(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The authored link, through the real writer answers, template and store, both halves.
+
+    The task is regenerated from this host's `plan-task` with a schema-2 budget, the writer's
+    answers are what `python -m orchestrator.plan_budgets` prints, and the design document is
+    regenerated in place by the store's own `document render` from the resolved `design-doc`
+    loader. Its reference link resolves, against the document's own file, to the task's file,
+    and its fragment is GitHub's slug of that file's `### Budget <id>` heading.
+    """
+    modern = _budget(schema_version=2, source="direct", check_runtime_seconds=0)
+    project = _plan(budgets=[modern])
+    native = plan_store.qualified(project).native
+    owning(
+        plan_fixture_source.SOURCE,
+        native,
+        NODE,
+        [modern],
+        answers={
+            "what": "Page the listing.",
+            "why": "A person waits on the first page.",
+            "acceptance_criteria": ["The first page arrives within its budget."],
+        },
+    )
+    (task,) = plan_store.read_tasks(project)
+    assert task.location is not None
+    answers = _writer(project, capsys)
+    document = _design(project, capsys)
+    loader = subprocess.run(
+        [str(REPO_ROOT / "node_modules/.bin/onepipeline"), "template", "resolve", "design-doc"]
+        + ["--json", "--template-root", str(REPO_ROOT / "templates")],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    written = plan_fixture_source.root() / f"{native}-answers.json"
+    written.write_text(json.dumps(answers), encoding="utf-8")
+    rendered = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "document", "render", document, "--template-loader", "-"]
+        + ["--answers", str(written), "--no-interactive"],
+        cwd=REPO_ROOT,
+        input=loader,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+
+    held = design_approval.design_document(project)
+    assert held.location is not None
+    path = Path(str(held.location["path"]))
+    body = path.read_text(encoding="utf-8")
+    (link,) = re.findall(r"^\[1\]: (\S+)$", body, re.MULTILINE)
+    target, _, fragment = link.partition("#")
+    assert not Path(target).is_absolute(), link
+    assert (path.parent / target).resolve() == Path(task.location).resolve(), link
+    slugs = dict(_github_slugs(Path(task.location).read_text(encoding="utf-8")))
+    assert fragment == slugs[f"Budget {modern['id']}"] == plan_budgets.budget_anchor(modern["id"])
+    assert "#user-content-" not in body and "<a " not in body
+    assert plan_budgets.main([project, "--check-design-document"]) == 0
+
+
+def test_a_budget_link_is_relative_only_for_a_local_task_file() -> None:
+    """A tracker's location keeps its own URL; a legacy budget writes no fragment."""
+    anchor = plan_budgets.budget_anchor("listing-latency")
+    documents = Path("/work/.plans/documents")
+    url = "https://linear.app/acme/issue/ACME-1"
+    assert plan_budgets.budget_link(url, anchor, documents) == f"{url}#budget-listing-latency"
+    board = "https://github.com/acme/app/issues/7"
+    assert plan_budgets.budget_link(board, anchor, documents) == f"{board}#budget-listing-latency"
+    assert (
+        plan_budgets.budget_link("plans:7", anchor, documents) == "plans:7#budget-listing-latency"
+    )
+    local = "/work/.plans/tasks/plan/listing.md"
+    assert (
+        plan_budgets.budget_link(local, anchor, documents) == "../tasks/plan/listing.md#" + anchor
+    )
+    assert plan_budgets.budget_link(local, "", documents) == "../tasks/plan/listing.md"
+    assert plan_budgets.budget_link(local, anchor, None) == f"{local}#{anchor}"
+
+
+def test_a_local_task_outside_the_store_layout_is_linked_relative_to_the_document() -> None:
+    """Whatever directory either file sits in, the link is the true relative path between them."""
+    anchor = plan_budgets.budget_anchor("listing-latency")
+    for location, documents in (
+        ("/work/notes/listing.md", Path("/work/.plans/documents")),
+        ("/work/.plans/tasks/listing.md", Path("/work/.plans/documents")),
+        ("/srv/elsewhere/deep/tree/listing.md", Path("/work/.plans/documents/nested")),
+        ("/work/.plans/documents/listing.md", Path("/work/.plans/documents")),
+    ):
+        link = plan_budgets.budget_link(location, anchor, documents)
+        target, _, fragment = link.partition("#")
+        assert not Path(target).is_absolute(), link
+        assert os.path.normpath(documents / target) == location, link
+        assert fragment == anchor, link
+    assert plan_budgets.budget_link(
+        "/work/notes/listing.md", anchor, Path("/work/.plans/documents")
+    ) == ("../../notes/listing.md#budget-listing-latency")
+
+
+def test_a_design_documents_directory_is_its_held_file_or_its_sources_documents(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Before a design document exists, the source's documents directory; after, its own file's."""
+    project = _plan()
+    expected = plan_store.source_root(plan_fixture_source.SOURCE) / "documents"
+    assert plan_budgets.design_directory(project) == expected
+    _design(project, capsys)
+    held = design_approval.design_document(project).location
+    assert held is not None
+    assert plan_budgets.design_directory(project) == Path(str(held["path"])).parent
+    assert plan_budgets.design_directory("unconfigured:7") is None
 
 
 def _design(project: str, capsys: pytest.CaptureFixture[str], **changed: object) -> str:
@@ -1343,7 +1486,16 @@ def test_absent_analysis_keeps_the_three_answer_contract(
         "predates_budgets": "",
         "plan_budgets": {},
         "budgets": [
-            {"node": NODE, "location": task.location, **entry, "anchor": ""} for entry in budgets
+            {
+                "node": NODE,
+                "location": task.location,
+                **entry,
+                "anchor": "",
+                "link": plan_budgets.budget_link(
+                    str(task.location), "", plan_budgets.design_directory(project)
+                ),
+            }
+            for entry in budgets
         ],
     }
     assert plan_budgets.plan_record(project) is None

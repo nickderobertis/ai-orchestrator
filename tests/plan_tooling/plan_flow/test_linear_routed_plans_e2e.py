@@ -1077,7 +1077,7 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
 
     Every task of a plan holding a private one is canonical in the private home, so the
     budgets each task owns — the public task's as well as the private one's — link to that
-    task's Linear issue, with no fragment, whatever anchor the writer prints for them.
+    task's Linear issue at the standard `#budget-<id>` fragment the writer prints for them.
     """
     from project_fixtures import owning
 
@@ -1171,7 +1171,8 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
             ).stdout
             assert "## Budgets\n" in rendered, rendered
             for index, budget in enumerate(writer["budgets"], 1):
-                assert f"[{index}]: {budget['location']}\n" in rendered
+                assert budget["link"] == f"{budget['location']}#{budget['anchor']}", budget
+                assert f"[{index}]: {budget['link']}\n" in rendered
             assert "#user-content-" not in rendered, rendered
         finally:
             _just(routed, bench, "stop", f"{name}-design", seconds=60)

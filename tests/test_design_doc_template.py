@@ -391,7 +391,7 @@ def test_each_section_and_its_guidance_is_a_block_of_its_own_in_order() -> None:
     assert defined == BLOCKS, f"{TEMPLATE.name} defines the blocks {defined}"
 
 
-def test_a_budget_answer_declares_every_budget_field_beside_its_owner_and_anchor() -> None:
+def test_a_budget_answer_declares_every_budget_field_beside_its_owner_anchor_and_link() -> None:
     """The typed `budgets` answer, whose keys the template declares, carries every record field.
 
     So a field a budget record gains reaches the design document's writer only once
@@ -402,6 +402,7 @@ def test_a_budget_answer_declares_every_budget_field_beside_its_owner_and_anchor
         "location",
         *plan_budgets.MODERN_BUDGET_KEYS,
         "anchor",
+        "link",
     }
 
 
@@ -692,7 +693,7 @@ def test_the_1568_fixture_holds_the_shape_the_budget_measures() -> None:
                     {
                         key: value
                         for key, value in entry.items()
-                        if key not in {"node", "location", "anchor"}
+                        if key not in {"node", "location", "anchor", "link"}
                     }
                 ]
             )[0]
@@ -789,6 +790,11 @@ def test_only_added_changed_budgets_have_sequential_links_and_modern_anchors(
             **answers["budgets"][0],
             "id": f"target-{i}",
             "anchor": plan_budgets.budget_anchor(f"target-{i}"),
+            "link": plan_budgets.budget_link(
+                f"https://github.com/acme/app/issues/{i + 1}",
+                plan_budgets.budget_anchor(f"target-{i}"),
+                None,
+            ),
             "name": f"Target {i}",
             "location": f"https://github.com/acme/app/issues/{i + 1}",
             "file_change": change,
@@ -803,7 +809,8 @@ def test_only_added_changed_budgets_have_sequential_links_and_modern_anchors(
     for index, entry in enumerate(displayed, 1):
         assert f"[{entry['name']}][{index}]" in section
         anchor = plan_budgets.budget_anchor(entry["id"])
-        assert f"[{index}]: {entry['location']}#user-content-{anchor}\n" in section
+        assert f"[{index}]: {entry['location']}#{anchor}\n" in section
+    assert "#user-content-" not in section
     for entry in budgets:
         if entry["file_change"] == "none":
             assert entry["name"] not in section and entry["location"] not in section
@@ -816,6 +823,29 @@ def test_only_added_changed_budgets_have_sequential_links_and_modern_anchors(
     ):
         assert text in section
     assert "Repo-wide effects" not in section
+
+
+def test_a_budget_answer_saved_before_link_still_renders_its_location(
+    tmp_path: Path, loader: str
+) -> None:
+    """Answers saved before `link` existed — every shipped example's — still render.
+
+    One with no `anchor` is linked at its location alone, as it always was; one carrying an
+    anchor is linked at its location and that standard fragment, never `#user-content-`.
+    """
+    answers = _budget_answers()
+    saved = [
+        {key: value for key, value in entry.items() if key not in {"link", "anchor"}}
+        for entry in answers["budgets"][:2]
+    ]
+    saved[0]["location"] = "examples/tasks/plan/one.md"
+    saved[1]["location"] = "https://github.com/acme/app/issues/2"
+    saved[1]["anchor"] = plan_budgets.budget_anchor(saved[1]["id"])
+    section = _section(_render(loader, {**ANSWERS, **answers, "budgets": saved}, tmp_path))
+
+    assert "[1]: examples/tasks/plan/one.md\n" in section, section
+    assert f"[2]: https://github.com/acme/app/issues/2#{saved[1]['anchor']}\n" in section
+    assert "#user-content-" not in section
 
 
 def test_a_plan_with_only_not_applicable_answers_renders_no_budgets_section(

@@ -580,6 +580,8 @@ def test_heading_anchor_capture_and_ordered_example_through_real_templates(tmp_p
                 "node": "listing",
                 "location": "https://github.com/nickderobertis/onetaskgraph/issues/3304",
                 "anchor": plan_budgets.budget_anchor(b["id"]),
+                "link": "https://github.com/nickderobertis/onetaskgraph/issues/3304"
+                f"#{plan_budgets.budget_anchor(b['id'])}",
             }
             for b in artifact["budgets"]
         ],
@@ -619,7 +621,7 @@ def test_heading_anchor_capture_and_ordered_example_through_real_templates(tmp_p
     for index, budget in enumerate(artifact["budgets"], 1):
         assert (
             f"[{index}]: https://github.com/nickderobertis/onetaskgraph/issues/3304"
-            f"#user-content-{plan_budgets.budget_anchor(budget['id'])}\n" in rendered
+            f"#{plan_budgets.budget_anchor(budget['id'])}\n" in rendered
         )
         assert f"[{budget['name']}][{index}]" in rendered
     expected = (REPO_ROOT / "tests/fixtures/design_doc/modern-body.txt").read_text()
@@ -690,7 +692,7 @@ def _writer(project: str) -> list[Record]:
     return budgets
 
 
-def test_budget_links_anchor_modern_github_budgets_and_fall_back_for_legacy_and_other_hosts(
+def test_budget_links_carry_the_heading_slug_whatever_the_location_and_none_for_legacy(
     tmp_path: Path,
 ) -> None:
     from urllib.parse import urlsplit
@@ -719,16 +721,21 @@ def test_budget_links_anchor_modern_github_budgets_and_fall_back_for_legacy_and_
     )
     loader.write_text(resolved.stdout, encoding="utf-8")
     base = json.loads((REPO_ROOT / "tests/fixtures/design_doc/modern-answers.json").read_text())
-    for budget, location, fragment in (
-        (printed_modern, "https://github.com/a/b/issues/1", "user-content-budget-listing-latency"),
-        (printed_modern, "https://linear.app/team/issue/ENG-1", ""),
-        (printed_modern, "authoring:listing", ""),
-        (printed_legacy, "https://github.com/a/b/issues/1", ""),
+    # A local task's file is linked relative to the document's directory, `<root>/documents/`.
+    local = "/r/.plans/tasks/plan/listing.md"
+    for budget, location, linked, fragment in (
+        (printed_modern, "https://github.com/a/b/issues/1", None, "budget-listing-latency"),
+        (printed_modern, "https://linear.app/team/issue/ENG-1", None, "budget-listing-latency"),
+        (printed_modern, "authoring:listing", None, "budget-listing-latency"),
+        (printed_modern, local, "../tasks/plan/listing.md", "budget-listing-latency"),
+        (printed_legacy, "https://github.com/a/b/issues/1", None, ""),
+        (printed_legacy, local, "../tasks/plan/listing.md", ""),
     ):
+        link = plan_budgets.budget_link(location, budget["anchor"], Path("/r/.plans/documents"))
         answers = {
             **base,
             "plan_budgets": ANSWERS,
-            "budgets": [{**budget, "location": location}],
+            "budgets": [{**budget, "location": location, "link": link}],
         }
         rendered = plan_store.sdk(
             plan_store.client().template_render(template_loader=str(loader), answers=answers)
@@ -736,9 +743,10 @@ def test_budget_links_anchor_modern_github_budgets_and_fall_back_for_legacy_and_
         url = next(
             line.removeprefix("[1]: ") for line in rendered.splitlines() if line.startswith("[1]: ")
         )
-        assert url == (f"{location}#{fragment}" if fragment else location)
-        parsed = urlsplit(url)
-        assert parsed.fragment == fragment
+        target = linked or location
+        assert url == (f"{target}#{fragment}" if fragment else target)
+        assert urlsplit(url).fragment == fragment
+        assert "user-content-" not in rendered
 
 
 @pytest.mark.parametrize("modern", [True, False])
@@ -801,7 +809,13 @@ def test_summary_keeps_scoped_omissions_with_added_budgets_and_omits_all_effects
                 **base,
                 "plan_budgets": record,
                 "budgets": [
-                    {**BUDGET, "node": NODE, "location": "https://github.com/acme/app/issues/1"}
+                    {
+                        **BUDGET,
+                        "node": NODE,
+                        "location": "https://github.com/acme/app/issues/1",
+                        "anchor": "",
+                        "link": "https://github.com/acme/app/issues/1",
+                    }
                 ],
             },
         )
@@ -848,6 +862,11 @@ def test_omitted_analysis_accepts_overview_only_and_preserves_task_budgets(
                 "node": NODE,
                 "location": task.location or str(task.qualified_id),
                 "anchor": "",
+                "link": plan_budgets.budget_link(
+                    task.location or str(task.qualified_id),
+                    "",
+                    plan_budgets.design_directory(project),
+                ),
             }
         ]
 

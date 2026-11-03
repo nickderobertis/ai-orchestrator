@@ -36,6 +36,7 @@ be keyed on those same inputs and add only a target.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -288,7 +289,10 @@ def test_a_budgeted_plans_writer_copies_the_budget_command_and_its_document_summ
     ]
     assert "**Sizing.** 2,000 nodes per plan, 3 runs at once." in stored, stored
     assert "| [Time to the first page][1] | ≤800 ms | measured | direct | ≈1 s |" in stored
-    assert f"[1]: {owner}\n" in stored and "#user-content-" not in stored
+    linked = os.path.relpath(owner, drafted.document_path.parent)
+    # The local document links its task relative to its own file, at the budget's heading.
+    assert f"[1]: {linked}#budget-listing-latency\n" in stored, stored
+    assert "#user-content-" not in stored
     assert "Authority and limits of this schema:" in stored
     assert "Printed landing argv selects" in stored
     assert "- spend: It calls no paid API." in stored, stored

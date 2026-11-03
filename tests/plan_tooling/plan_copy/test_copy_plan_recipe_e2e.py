@@ -877,8 +877,9 @@ def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
     Its answers are what `python -m orchestrator.plan_budgets` prints for the plan — each
     budget with its owning node and the location the drafting store reports for that task —
     rendered into the document through the design-doc template. After `just copy-plan`,
-    every linked budget name in the copied document uses the location the destination
-    reports for its task, with no fragment for local destinations, and none is the drafting store's.
+    every linked budget name in the copied document resolves, relative to that document's
+    own file, to the file the destination reports for its task, at the `#budget-<id>`
+    fragment of the budget's heading there, and none is the drafting store's location.
     """
     project = _project("copy-owned-links", "route", "worker")
     _, _, native = project.partition(":")
@@ -941,9 +942,23 @@ def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
     content = copied["content"]
     assert isinstance(content, str), copied
     assert "(see its Budgets section)" not in content
+    held = design_approval.design_document(copied_id)
+    assert held.location is not None, held
+    document_file = Path(str(held.location["path"]))
+    linked = {
+        (document_file.parent / target).resolve(): fragment
+        for target, _, fragment in (
+            line.partition(": ")[2].partition("#")
+            for line in content.splitlines()
+            if line.startswith("[") and "]: " in line
+        )
+    }
+    headed = {"route": "route-latency", "worker": "worker-throughput"}
     for node, where in landed.items():
         assert "\n## Budgets\n" in Path(where).read_text(encoding="utf-8")
-        assert f": {where}\n" in content and "#user-content-" not in content, (node, content)
+        anchor = plan_budgets.budget_anchor(headed[node])
+        assert linked.get(Path(where).resolve()) == anchor, (node, linked, content)
+        assert "#user-content-" not in content, content
         assert drafted[node] not in content, f"{node} still links the drafting store: {content}"
     recomputed = plan_budgets.writer_answers(copied_id)
     assert {entry["node"]: entry["location"] for entry in recomputed["budgets"]} == landed

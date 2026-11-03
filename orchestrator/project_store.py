@@ -38,12 +38,14 @@ class PlanDocument(TypedDict):
 #: no plan declared.
 ENGINE_PREFIX = "onepipeline."
 
-#: The two directories of a local-md root a record sits in: `<root>/projects/<project>.md`
-#: and `<root>/tasks/<project>/<task>.md`. Named once here, where the layout is written,
-#: because `orchestrator/plan_store.py` resolves a record to a path and a path back to its
-#: root through the same two names.
+#: The directories of a local-md root a record sits in: `<root>/projects/<project>.md`,
+#: `<root>/tasks/<project>/<task>.md` and `<root>/documents/<document>.md`. Named once here,
+#: where the layout is written, because `orchestrator/plan_store.py` resolves a record to a
+#: path and a path back to its root, and `orchestrator/plan_budgets.py` names the directory a
+#: design document is written in before the document exists, through these names.
 PROJECTS_DIRECTORY = "projects"
 TASKS_DIRECTORY = "tasks"
+DOCUMENTS_DIRECTORY = "documents"
 
 #: The shape of a normalized origin — `host/owner/name` — which is the one value a task
 #: record's top-level `repositories` list can hold. The scheme and a `.git` suffix are

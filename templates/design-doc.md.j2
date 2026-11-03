@@ -105,9 +105,11 @@ variables:
       `orchestrator.budgets` record holds it — `id`, `name`, `basis`, `repository`, `file`,
       `file_change`, `measure`, `inner_measure_reason`, `unit`, `direction`, `threshold`,
       `workload`, `evidence` and `command`, plus modern `schema_version`, `source` and
-      `check_runtime_seconds` — with three keys added, `node` (the id of the task
-      that owns it), `location` (where the plan store reports that task) and `anchor` (the
-      anchor of the budget's heading in that task, or `""` for a legacy budget).
+      `check_runtime_seconds` — with four keys added, `node` (the id of the task
+      that owns it), `location` (where the plan store reports that task), `anchor` (the
+      anchor of the budget's heading in that task, or `""` for a legacy budget) and `link`
+      (the destination of the budget's reference link: a local task's file relative to this
+      document's directory, any other location as it stands, then `#` and the anchor).
     type: list
     items: object
     required: false
@@ -363,7 +365,12 @@ variables:
   number is. Every detail of a budget — its workload, evidence, command and budgets file —
   lives in the `## Budgets` section of the task that owns it, which each row links to, and
   every plan-level answer in full lives in the plan's own description. So this section
-  carries none of that detail.
+  carries none of that detail. Each row's reference link is the budget's `link` answer as
+  it stands: a standard `<path>#<slug>` link to the owning task's `### Budget <id>` heading,
+  relative to this document's file when the task is a local file, never a `#user-content-`
+  fragment and never anchor markup; a tracker's own form is the plan copy's to write. A
+  budget answer saved before `link` existed is linked at its `location`, with `#` and its
+  `anchor` when it carries one, so a document saved then still renders its own body.
 
   The answers `predates_budgets`, `plan_budgets` and `budgets` are exactly what `python -m
   orchestrator.plan_budgets <project>` prints for the plan: copy them, and invent none. The
@@ -400,7 +407,7 @@ variables:
 {% endfor %}
 
 {% for budget in displayed.items %}
-[{{ loop.index }}]: {{ budget.location }}{% if (budget.anchor | default("")) and budget.location is startingwith("https://github.com/") %}#user-content-{{ budget.anchor }}{% endif %}{{ "\n" -}}
+[{{ loop.index }}]: {% if budget.link is defined %}{{ budget.link }}{% else %}{{ budget.location }}{% if budget.anchor | default("") %}#{{ budget.anchor }}{% endif %}{% endif %}{{ "\n" -}}
 {% endfor %}
 
 {% endif %}
