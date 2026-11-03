@@ -5,9 +5,9 @@
     "": {
       "name": "ai-orchestrator",
       "dependencies": {
-        "onepipeline-api-cli": "0.65.3",
-        "onepipeline-cli": "0.98.3",
-        "onepipeline-ui": "0.65.3",
+        "onepipeline-api-cli": "0.65.4",
+        "onepipeline-cli": "0.98.4",
+        "onepipeline-ui": "0.65.4",
       },
       "devDependencies": {
         "@expo-google-fonts/noto-sans": "0.4.2",
@@ -569,27 +569,27 @@
 
     "once": ["once@1.4.0", "", { "dependencies": { "wrappy": "1" } }, "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w=="],
 
-    "onepipeline-api-cli": ["onepipeline-api-cli@0.65.3", "", { "optionalDependencies": { "onepipeline-api-cli-darwin-arm64": "0.65.3", "onepipeline-api-cli-linux-arm64": "0.65.3", "onepipeline-api-cli-linux-x64": "0.65.3", "onepipeline-api-cli-win32-x64": "0.65.3" }, "bin": { "onepipeline-api": "bin/onepipeline-api.js" } }, "sha512-hGrLcqEZfuBJGqc4ORpTI6JiPbjIYuD9+zInkAKOzIhKDw7zwZLGRwASfqNwQIyW2sR5tMUC8oQuPeuwVT8K4g=="],
+    "onepipeline-api-cli": ["onepipeline-api-cli@0.65.4", "", { "optionalDependencies": { "onepipeline-api-cli-darwin-arm64": "0.65.4", "onepipeline-api-cli-linux-arm64": "0.65.4", "onepipeline-api-cli-linux-x64": "0.65.4", "onepipeline-api-cli-win32-x64": "0.65.4" }, "bin": { "onepipeline-api": "bin/onepipeline-api.js" } }, "sha512-TVfdivr2qTvdPDDKEuEzkLSJUtM9make/D9quOc40GR3rKl5HpYOyCo1Mdc4LQIS48uPVjqSnZ32vz1HnPJXIg=="],
 
-    "onepipeline-api-cli-darwin-arm64": ["onepipeline-api-cli-darwin-arm64@0.65.3", "", { "os": "darwin", "cpu": "arm64" }, "sha512-Tt/zKAiSn/IZaTPQdCkjKzI8Dppd48XxzNuS1RLEaPdh8+h2/qFowr7BPJ5JX1O5NOrtN5Y7yStpssgm2JpkDw=="],
+    "onepipeline-api-cli-darwin-arm64": ["onepipeline-api-cli-darwin-arm64@0.65.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-PtmekguQ9Z1+XeyVjfw4Uw8rNWsciWx5jY+sCTJw3mZC4PEC+UH5CoMDo9SiuKKJEbSGO1XZrO23QTcasJws/g=="],
 
-    "onepipeline-api-cli-linux-arm64": ["onepipeline-api-cli-linux-arm64@0.65.3", "", { "os": "linux", "cpu": "arm64" }, "sha512-/OfURVzdYc8zobPjxMlrBZGbi1qggwB9cnNhoARg9cSxFLo4PixQ2XnLCNIR0/tTcdZHuBko022/3Mr/f+coAQ=="],
+    "onepipeline-api-cli-linux-arm64": ["onepipeline-api-cli-linux-arm64@0.65.4", "", { "os": "linux", "cpu": "arm64" }, "sha512-c4YNzEzONHwlHz+aylS+31NMOe75y63BzgQbw2L1kxkMdSBX9zHwuR2eLoI0/LjycTud9I9SUnTDeXD++blt+g=="],
 
-    "onepipeline-api-cli-linux-x64": ["onepipeline-api-cli-linux-x64@0.65.3", "", { "os": "linux", "cpu": "x64" }, "sha512-VpuHF6mkNcQfmEx8j1/GhvJUrhbEy/LtrxNsfsdQzUwQ7T3/FQFO4gGiDAJfOdp0ZrKrK6UBrG/gqGaOgvynSg=="],
+    "onepipeline-api-cli-linux-x64": ["onepipeline-api-cli-linux-x64@0.65.4", "", { "os": "linux", "cpu": "x64" }, "sha512-NragIawKAgD6fCmI62z5ZFbzb4UNimvk6pT4V86s90DLbokgFmINMa7XSD73LduJWNrhHGSabdZq+xDkeatGag=="],
 
-    "onepipeline-api-cli-win32-x64": ["onepipeline-api-cli-win32-x64@0.65.3", "", { "os": "win32", "cpu": "x64" }, "sha512-+R2pJDR5TIiyFdcbxM7Ih0qP4fatIFdPjfzLRfqiTQwkuKDNPyMx4Oah04aiHlH7BFVoY0hzpLtyp7l1kRcChQ=="],
+    "onepipeline-api-cli-win32-x64": ["onepipeline-api-cli-win32-x64@0.65.4", "", { "os": "win32", "cpu": "x64" }, "sha512-+Adtqw8NIrR7LCTiT7wyKVcqNxTieyCE5upRq1Iyb10kFBB9+hmtCejyjQwQ58Umb61hJDPZ3ufFJP1Ks8W4FA=="],
 
-    "onepipeline-cli": ["onepipeline-cli@0.98.3", "", { "optionalDependencies": { "onepipeline-cli-darwin-arm64": "0.98.3", "onepipeline-cli-linux-arm64": "0.98.3", "onepipeline-cli-linux-x64": "0.98.3", "onepipeline-cli-win32-x64": "0.98.3" }, "bin": { "onepipeline": "bin/onepipeline.js" } }, "sha512-SjABZZ19MvcZrktz5uZTonHyZGit/knJvpo8efEwWfOCcreHU5l3c5pTUjBndMATWr/RJi/OgPkSDUvjkON3Jg=="],
+    "onepipeline-cli": ["onepipeline-cli@0.98.4", "", { "optionalDependencies": { "onepipeline-cli-darwin-arm64": "0.98.4", "onepipeline-cli-linux-arm64": "0.98.4", "onepipeline-cli-linux-x64": "0.98.4", "onepipeline-cli-win32-x64": "0.98.4" }, "bin": { "onepipeline": "bin/onepipeline.js" } }, "sha512-M6RlZHvOHm10HIHFWofRguYBPiRGj0ibrl6P0ZBl6EAX36UYO2TZEohir/0IRauVCoMN0wCtXeoI0ekAq20shQ=="],
 
-    "onepipeline-cli-darwin-arm64": ["onepipeline-cli-darwin-arm64@0.98.3", "", { "os": "darwin", "cpu": "arm64" }, "sha512-ARDnhHr9bM2ngLmd/qf0uyOafbi0a2sP01T4840uJTTswmqgZ7DkOG2tICHiNAMmeEGrLxDr8zfTbVfbKhBkHQ=="],
+    "onepipeline-cli-darwin-arm64": ["onepipeline-cli-darwin-arm64@0.98.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-dtyFf6eIpx4D33WvrtkRGBwYv0GyyNLcsOWhlCSMqOt1Pb9S1SiB0hh8ZAQde21tnBfsa13I1ZDBctGRGxR3zw=="],
 
-    "onepipeline-cli-linux-arm64": ["onepipeline-cli-linux-arm64@0.98.3", "", { "os": "linux", "cpu": "arm64" }, "sha512-TK0ibX7XIeaW6KCR0qgGAUUVE9k8s8dS0/ItkAQmhA9V8fSH3Almx2B/CK6Ol7wP5riBVS4887pt4ZGWxDX+1g=="],
+    "onepipeline-cli-linux-arm64": ["onepipeline-cli-linux-arm64@0.98.4", "", { "os": "linux", "cpu": "arm64" }, "sha512-8pOpfmonpCcvpeuSKLzIMb3Q9o2G2aqiR1/gdWlh0zgPNCVUuigSFRJwlJKXRIdny+CyJ7Nj8HRc9uUj5OfvYA=="],
 
-    "onepipeline-cli-linux-x64": ["onepipeline-cli-linux-x64@0.98.3", "", { "os": "linux", "cpu": "x64" }, "sha512-AyCZ1ImHLHOdAVXsU9ApQr3+lq1l1GhL2b6so6+JafTOGSQQyOENwfHdrdLTecCaqy2QdA85rz9IB4xByrMUIg=="],
+    "onepipeline-cli-linux-x64": ["onepipeline-cli-linux-x64@0.98.4", "", { "os": "linux", "cpu": "x64" }, "sha512-2WNRfezPblIY1yaTni27HVxislodywFPAticTuG4dDBqxZvZS3fofqtDTjKD6SKEJdYBBkQxZiudk9bXpMdw1g=="],
 
-    "onepipeline-cli-win32-x64": ["onepipeline-cli-win32-x64@0.98.3", "", { "os": "win32", "cpu": "x64" }, "sha512-MAyR2lw7DBEjsodcQOknBi+9TD3DINvxhMhsQ/4qlry6raMy5mfBzX0QghYjiILfR4stFyXXaK8WZlIEr1uxSg=="],
+    "onepipeline-cli-win32-x64": ["onepipeline-cli-win32-x64@0.98.4", "", { "os": "win32", "cpu": "x64" }, "sha512-JgmiB9r3zUfLWehOllisT9aGcvdZWwo5V5yUKFbdHC30NxL4Jp/cQz+UfA1LwOlXcOPoBPi0zPWRclB2Q7wuvA=="],
 
-    "onepipeline-ui": ["onepipeline-ui@0.65.3", "", {}, "sha512-z8pzuZCwL45PxGrtZkMmwWpk0v+icFHb+ZUUQ9UCwUxTVNM/mgsT5jUaKv51BskWOYLXOlqfZASJnKqozaU8CA=="],
+    "onepipeline-ui": ["onepipeline-ui@0.65.4", "", {}, "sha512-jYxONMUPneH6CpqMAQ2SIM8m7oMJG2sF7k5VRiAjeJgSlaaAvsE6neXRCDzrLFjXCSqI1AkDfmPxuhPOwDw4/Q=="],
 
     "onetime": ["onetime@5.1.2", "", { "dependencies": { "mimic-fn": "^2.1.0" } }, "sha512-kbpaSSGJTWdAY5KPVeMOKXSrPtr8C8C7wodJbcsd51jRnmD+GZu8Y0VoU6Dm5Z4vWr0Ig/1NKuWRKf7j5aaYSg=="],
 
