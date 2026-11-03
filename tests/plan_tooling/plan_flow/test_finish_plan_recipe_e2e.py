@@ -41,8 +41,11 @@ import plan_root_variable
 import pytest
 import short_state
 from fake_backend import (
+    DISPATCHED_MEMBER,
     ENVIRONMENT_KEYS_ENV,
     JUDGE_CONFIG_NAME,
+    OBSERVER_LOSES_ENV,
+    OBSERVER_MEMBER_ENV,
     PROMPT_LOG_ENV,
     RUN_ON_MARKER_ENV,
     RecordedTurn,
@@ -442,9 +445,8 @@ def _bench(tmp_path: Path, oneharness_bin: str, *answers: object) -> Bench:
     environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__PLUGIN"] = "local-md"
     environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__CONFIG__ROOT"] = str(destination)
-    # `authoring` is in this list because the tail *launches* out of it: the project it
-    # writes for the design-document node is an authoring project, and a run whose plan
-    # store cannot see that source reads a project with no tasks in it.
+    # The three sources this bench's store CLI answers about: the drafting fixture, the
+    # destination, and `authoring`, where the flow writes the design-document project.
     environment["ONETASKGRAPH_DEFAULT_SOURCES"] = (
         f"{AUTHORING_SOURCE},{FIXTURE_SOURCE},{DESTINATION}"
     )
@@ -1618,20 +1620,21 @@ def test_a_design_document_launch_that_does_not_settle_ends_the_flow_at_its_own_
 ) -> None:
     """The document was not written, so nothing is copied and the status says which step.
 
-    Reached the way an operator reaches it: a plan store whose configured sources do not
-    include the one this flow writes its own generated project into, so the engine reads
-    that project and finds no node in it. The plan and its document are unchanged where
-    they were drafted, the destination is untouched, and the message names the run to read
-    and says to run the command again once the document exists — because everything before
-    this step is already recorded and repeating it costs no second judged turn.
+    Reached the way an operator reaches it: the provider fails every turn of the dispatch
+    that writes the document, so its node fails and the run ends without settling. The
+    plan and its document are unchanged where they were drafted, the destination is
+    untouched, and the message names the run to read and says to run the command again
+    once the document exists — because everything before this step is already recorded and
+    repeating it costs no second judged turn.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     bench = _bench(tmp_path, oneharness_bin, PASSES)
-    # The source `scripts/finish-plan.sh` writes its own one-node project into, dropped
-    # from what the store answers about: the record is written, and the launch then reads
-    # a project with nothing in it.
-    bench.environment["ONETASKGRAPH_DEFAULT_SOURCES"] = f"{FIXTURE_SOURCE},{DESTINATION}"
+    # Every agent turn of the dispatched member is lost at the provider process, which is
+    # the paid boundary this suite doubles; the review before the launch is a codex turn
+    # outside that member and still passes, so the review this flow spends is recorded.
+    bench.environment[OBSERVER_MEMBER_ENV] = DISPATCHED_MEMBER
+    bench.environment[OBSERVER_LOSES_ENV] = "1"
     drafted = _draft("finish-plan-unlaunchable-document")
     named = RunId("finish-plan-e2e-launch-failed")
 

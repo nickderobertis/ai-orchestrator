@@ -472,9 +472,6 @@ export "$PLAN_RUN_ID_ENV=$follow_up_run"
 load plan-root-env.sh
 export_plan_authoring_root follow-ups || exit "$?"
 plan_root=${!PLAN_SOURCE_ROOT_ENV}
-# The engine reads a launched project's nodes from its default sources. Include this
-# launch's private source; every board operation in its task names its source explicitly.
-export ONETASKGRAPH_DEFAULT_SOURCES="${ONETASKGRAPH_DEFAULT_SOURCES:+$ONETASKGRAPH_DEFAULT_SOURCES,}$PLAN_SOURCE"
 
 # The repository layer `onepipeline template resolve` reads is the working directory this
 # was run from, which `just` makes this checkout: taken before anything below changes one.

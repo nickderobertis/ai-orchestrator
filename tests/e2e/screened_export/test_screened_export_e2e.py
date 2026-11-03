@@ -55,7 +55,6 @@ import fake_gh
 import onetaskgraph_user_layer
 import plan_root_variable
 import pytest
-import yaml
 from export_plan import ExportEdge, PlanSpec, TaskSpec
 from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from github_board import (
@@ -524,13 +523,6 @@ def bench(tmp_path_factory: pytest.TempPathFactory, module_tmpdir: Path) -> Iter
         local.mkdir(parents=True)
         environment[f"ONETASKGRAPH_SOURCES__{source}__CONFIG__ROOT"] = str(local)
     environment["ONETASKGRAPH_SECRETS_FILE"] = str(root / "no-secrets.env")
-    # The run reads the plan's tasks from its default sources, which the tracked document
-    # states and a layer beneath it cannot widen, so the tracker joins them in the environment,
-    # as `tests/plan_tooling/plan_flow/test_linear_routed_plans_e2e.py` has it join.
-    tracked = yaml.safe_load((REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8"))
-    environment["ONETASKGRAPH_DEFAULT_SOURCES"] = ",".join(
-        [*tracked["default_sources"], PRIVATE_TRACKER]
-    )
     gh_state = root / "gh-state"
     # The public base is unprotected, so the host merges an armed change as soon as it may.
     gh_state.mkdir()

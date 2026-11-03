@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import boundary_home
+import plan_fixture_source
 import pytest
 from conftest import git
 from criteria_examples import (
@@ -51,8 +52,16 @@ from nx_workspace import (
     copy_working_tree,
     share_this_checkouts_install,
 )
+from plan_sources import read_default_sources
+from project_fixtures import (
+    FIXTURE_UNIT,
+    budgeted,
+    no_budgets,
+    project_from_plan,
+    resolving,
+    reviewed,
+)
 from project_fixtures import older_engine as _older_engine
-from project_fixtures import project_from_plan, reviewed
 from published_tools import node_interpreter
 from scratch_identity import GIT_IDENTITY, registered, rules_for_hosted, seeded
 from waits import timeout as e2e_timeout
@@ -65,6 +74,7 @@ from orchestrator.criteria_guard import (
     Authorization,
     OutOfDispatch,
 )
+from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 
@@ -3663,3 +3673,95 @@ def test_a_release_this_host_cannot_ask_about_refuses_nothing(
     assert answered.returncode == 0, answered.stdout + answered.stderr
     assert json.loads(answered.stdout)["refusals"] == [], f"{what} refused: {answered.stdout}"
     # llmlint: ignore-end[tests_mirror_real_usage]
+
+
+#: A private home's own source, declared at the store's environment layer and named by
+#: no `default_sources`: the shape a private coordinating plan has on a host whose user
+#: layer declares its organization's tracker.
+OFF_DEFAULTS = "off-defaults"
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Its task requires this module,
+# so its edge is this module's Nx project, `plan-tooling-check-and-review`, keyed per project
+# on `planToolingCheckAndReviewWorkspace`. Every whole tree in that key is a read of a test
+# here, as `tests/nx_inputs.py` records from a traced run: `scripts/` (one test reads every
+# script, and the review journeys copy the tree), `graphs/` (persona refs resolve there),
+# `examples/` (the shipped-examples journeys) and `orchestrator/` (`python -m` children).
+# Narrowing it to this journey's reads would drop those tests' dependencies.
+def test_a_plan_homed_on_a_source_the_defaults_leave_out_is_read_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A qualified home is read from the source its id names, with its member from its own.
+
+    The engine this host once pinned read a plan's tasks from the default sources, which
+    the store narrows to the home's own source, so a home those defaults did not name read
+    as its member's tasks alone (onepipeline #636), and `scripts/follow-ups.sh` widened the
+    defaults to its launch's source to get past it. The installed engine reads the home
+    where its id says. Driven through the real recipe and the installed engine over real
+    `local-md` sources: the home on one the defaults leave out, its member project on the
+    suite's `test-fixtures` source, tied the way the store ties a split plan.
+    """
+    defaults = read_default_sources((REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8"))
+    assert OFF_DEFAULTS not in defaults, defaults
+    variable = OFF_DEFAULTS.upper().replace("-", "_")
+    home_root = tmp_path / OFF_DEFAULTS
+    home_root.mkdir()
+    monkeypatch.setenv("ONETASKGRAPH_DEFAULT_SOURCES", ",".join(defaults))
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{variable}__PLUGIN", "local-md")
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{variable}__CONFIG__ROOT", str(home_root))
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{variable}__VISIBILITY", "private")
+
+    native = f"off-defaults-{os.getpid()}"
+    home = f"{OFF_DEFAULTS}:{native}"
+    member = f"{plan_fixture_source.SOURCE}:{native}-member"
+    repository = "https://github.com/nickderobertis/some-service"
+    write_plan_project(
+        plan_fixture_source.root(),
+        {
+            "schema_version": 3,
+            "name": f"{native}-member",
+            "tasks": [
+                {
+                    "id": "docs",
+                    "persona": "engineer",
+                    "repo": repository,
+                    "unit": FIXTURE_UNIT,
+                    "title": "feat: document the checkout route",
+                    "task": _task(STATES_ITS_BAR),
+                }
+            ],
+        },
+        native_id=f"{native}-member",
+        project_metadata={"onetaskgraph.member_of": home},
+    )
+    plan = {
+        "schema_version": 3,
+        "goal": {"text": "Deliver the checkout route"},
+        "name": native,
+        "tasks": [
+            {
+                "id": "route",
+                "persona": "engineer",
+                "repo": repository,
+                "unit": FIXTURE_UNIT,
+                "title": "feat: add the checkout route",
+                "task": _task(STATES_ITS_BAR),
+            },
+            {"id": "approve", "kind": "human", "unit": FIXTURE_UNIT, "task": "Approve it."},
+        ],
+    }
+    write_plan_project(
+        home_root, plan, native_id=native, project_metadata={plan_store.MEMBERS_KEY: [member]}
+    )
+    budgeted(OFF_DEFAULTS, native, no_budgets([repository]), resolving(home))
+    # Each task is reviewed in the project that holds it, as a split plan's are before the
+    # copy that splits it: `just review-plan` records a review against its own project only.
+    reviewed(member)
+
+    checked = _check_project(home)
+
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    # Both engineer nodes, the home's and the member's: the human action is not counted.
+    assert "2 dispatched node(s)" in checked.stdout, checked.stdout
+    loaded = json.loads(_loaded_plan(home, tmp_path))
+    assert sorted(node["id"] for node in loaded["tasks"]) == ["approve", "docs", "route"], loaded
