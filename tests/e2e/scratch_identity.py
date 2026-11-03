@@ -30,6 +30,7 @@ dispatch runs.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
@@ -241,6 +242,89 @@ def seeded(
         rules = _declaring_public(rules, public)
         stubs = [_stub(root, other) for other in public]
     _register(root, identity, rules, workspaces, stubs)
+    return identity
+
+
+def onevcs_in(
+    identity: Identity, *arguments: str, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    """The installed `onevcs` over ``identity``'s scratch registry, run inside ``cwd``.
+
+    ``cwd`` is the publication checkout unless named. ``identity.environment`` carries the
+    transport that answers a hosted origin from the bare repository on disk, so every fetch
+    and push a verb makes stays on this machine.
+    """
+    return subprocess.run(
+        ["uv", "run", "--project", str(REPO_ROOT), "onevcs", *arguments],
+        cwd=cwd or identity.publication,
+        env={**os.environ, **identity.environment, "ONEVCS_HOME": str(identity.home)},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+
+def land(identity: Identity, branch: str, files: Mapping[str, str]) -> None:
+    """Commit ``files`` on ``branch``, land it through `onevcs publish-branch`, then sync.
+
+    A file whose text opens with a shebang is made executable. `onevcs sync` runs in each
+    registered checkout afterwards, because a declaration is read at whichever one
+    `onevcs` takes as the publication checkout, and one left behind its origin reads as
+    declaring nothing — the remedy `AGENTS.md` names for that state.
+    """
+    path = identity.publication
+    git("checkout", "-qb", branch, cwd=path)
+    for relative, text in files.items():
+        (path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (path / relative).write_text(text, encoding="utf-8")
+        if text.startswith("#!"):
+            (path / relative).chmod(0o755)
+    git("add", "-A", cwd=path)
+    git(*GIT_IDENTITY, "commit", "-qm", f"feat: {branch.rpartition('/')[2]}", cwd=path)
+    git("checkout", "-q", "main", cwd=path)
+    landed = onevcs_in(identity, "publish-branch", branch, "--repo", str(path))
+    assert landed.returncode == 0, landed.stdout + landed.stderr
+    for clone in (identity.publication, identity.execution):
+        synced = onevcs_in(identity, "sync", cwd=clone)
+        assert synced.returncode == 0, synced.stdout + synced.stderr
+
+
+def release_status(identity: Identity, *arguments: str) -> dict[str, object]:
+    """What `onevcs release status --json` answers for ``arguments`` over ``identity``.
+
+    Held to being one JSON object and no more, because callers compare the whole answer
+    by equality: any shape the installed `onevcs` drifts to fails that comparison.
+    """
+    asked = onevcs_in(identity, "release", "status", *arguments, "--json")
+    assert asked.returncode == 0, asked.stdout + asked.stderr
+    answer = json.loads(asked.stdout)
+    assert isinstance(answer, dict), answer
+    return answer
+
+
+#: A release probe answering that nothing is released yet: exit 0 with nothing printed.
+NO_RELEASE_PROBE = "#!/bin/sh\nexit 0\n"
+#: Where :data:`NO_RELEASE_PROBE` is carried, which is the probe path a declaration
+#: `tests/sibling_facts.py`'s `declaration` writes names.
+NO_RELEASE_PROBE_PATH = "scripts/release-probe.sh"
+
+
+def seeded_producer(root: Path, origin: str, declared: str | None) -> Identity:
+    """A hosted identity registered under ``origin``, its base declaring ``declared`` or nothing.
+
+    ``declared`` is a `release-targets.toml` naming :data:`NO_RELEASE_PROBE_PATH` as its
+    probe; it lands with :data:`NO_RELEASE_PROBE` through a publication, so the base
+    `onevcs` and the release-contradiction check both read it at is one a landing left and
+    what any later `release status` answers is decided by the landing and the override.
+    """
+    identity = seeded(root, origin=origin)
+    if declared is not None:
+        land(
+            identity,
+            "chore/declare-release-targets",
+            {DECLARATION: declared, NO_RELEASE_PROBE_PATH: NO_RELEASE_PROBE},
+        )
     return identity
 
 

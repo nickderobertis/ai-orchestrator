@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sibling_facts import (
     RELEASES,
     advance,
@@ -116,12 +117,22 @@ def test_an_installed_producer_resolves_the_default_its_row_installs() -> None:
     assert default_target_complaint(CONTRADICTING, "cli", defaults) is None
 
 
-def test_a_consumer_default_resolves_the_overrides_target_with_no_row() -> None:
-    """printobserver is resolved the override's default, which no row of the table names."""
-    printobserver = "github.com/nickderobertis/printobserver"
+@pytest.mark.parametrize(
+    "producer,target",
+    (
+        ("github.com/nickderobertis/printobserver", "github-release"),
+        ("github.com/nickderobertis/privateterms", "crate"),
+    ),
+    ids=("printobserver", "privateterms"),
+)
+def test_a_consumer_default_resolves_the_overrides_target_with_no_row(
+    producer: str, target: str
+) -> None:
+    """A consumer default is resolved the override's default, which no row of the table names."""
     defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
-    assert by_producer(printobserver) is None and printobserver in CONSUMER_DEFAULTS
+    assert by_producer(producer) is None and producer in CONSUMER_DEFAULTS
+    assert defaults[producer] == target
 
-    assert default_target_complaint(printobserver, "github-release", defaults) is None
-    unresolved = default_target_complaint(printobserver, None, defaults)
+    assert default_target_complaint(producer, target, defaults) is None
+    unresolved = default_target_complaint(producer, None, defaults)
     assert unresolved is not None and "CONSUMER_DEFAULTS" in unresolved, unresolved

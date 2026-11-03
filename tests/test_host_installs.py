@@ -31,13 +31,12 @@ from sibling_facts import (
     RELEASE_RULE,
     SiblingDrift,
     advance,
+    check_release_contradictions,
     declaration,
     declared_targets,
     default_target_accounting,
     held_checkouts,
     override_default_targets,
-    read_declarations,
-    registered_checkouts,
     release_contradictions,
     scratch_checkout,
     settle_drift,
@@ -335,9 +334,10 @@ def _override_default_targets() -> dict[RepoIdentity, str]:
 EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset()
 #: The producers whose override default is the artifact a consumer outside this repository
 #: waits on, stated in full for the same reason: printobserver, whose `github-release` is the
-#: program's own release.
+#: program's own release, and privateterms, whose `crate` is the specification's Rust crate.
 PRINTOBSERVER: RepoIdentity = "github.com/nickderobertis/printobserver"
-EXPECTED_CONSUMER_DEFAULTS: frozenset[RepoIdentity] = frozenset({PRINTOBSERVER})
+PRIVATETERMS: RepoIdentity = "github.com/nickderobertis/privateterms"
+EXPECTED_CONSUMER_DEFAULTS: frozenset[RepoIdentity] = frozenset({PRINTOBSERVER, PRIVATETERMS})
 #: A producer that has released nothing yet, standing in for the next one whose override
 #: rule precedes its first adoption: the set is empty, and what it admits still has to be
 #: shown on a copy holding one.
@@ -382,6 +382,7 @@ def test_the_overrides_default_target_per_producer_is_the_rows_target() -> None:
     assert AWAITING_FIRST_ADOPTION == EXPECTED_AWAITING
     assert CONSUMER_DEFAULTS == EXPECTED_CONSUMER_DEFAULTS
     assert _override_default_targets()[PRINTOBSERVER] == "github-release"
+    assert _override_default_targets()[PRIVATETERMS] == "crate"
     assert (
         override_complaints(_override_default_targets(), INSTALLED, AWAITING_FIRST_ADOPTION) == []
     )
@@ -397,13 +398,23 @@ def test_a_producer_in_the_override_with_neither_a_row_nor_an_entry_is_refused()
     ]
 
 
-def test_printobservers_rule_is_accounted_for_by_the_consumer_set_alone() -> None:
-    """Off `CONSUMER_DEFAULTS`, printobserver's tracked rule is a default nothing accounts for."""
-    assert by_producer(PRINTOBSERVER) is None
+@pytest.mark.parametrize(
+    "producer,target",
+    ((PRINTOBSERVER, "github-release"), (PRIVATETERMS, "crate")),
+    ids=("printobserver", "privateterms"),
+)
+def test_a_consumer_defaults_rule_is_accounted_for_by_the_consumer_set_alone(
+    producer: RepoIdentity, target: str
+) -> None:
+    """Off `CONSUMER_DEFAULTS`, a consumer default's tracked rule is one nothing accounts for."""
+    assert by_producer(producer) is None
     assert override_complaints(
-        _override_default_targets(), INSTALLED, AWAITING_FIRST_ADOPTION, frozenset()
+        _override_default_targets(),
+        INSTALLED,
+        AWAITING_FIRST_ADOPTION,
+        CONSUMER_DEFAULTS - {producer},
     ) == [
-        f"config/onevcs.releases.yml names {PRINTOBSERVER}'s default target 'github-release', "
+        f"config/onevcs.releases.yml names {producer}'s default target {target!r}, "
         "and neither a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it"
     ]
 
@@ -810,25 +821,12 @@ def test_a_held_producers_contradiction_fails_only_a_change_editing_the_registra
     that will not parse, refuses a change that edits the registration and is reported as
     drift for every other.
     """
-    held = registered_checkouts()
-    defaults = _override_default_targets()
-    read = read_declarations(
-        {producer: held[producer] for producer in defaults if producer in held}
-    )
-
     # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
     # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
     # refuses only a push changing one of the five registration files and reports the drift
     # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and
     # `tests/test_sibling_drift.py` drives both pushes through it.
-    settle_drift(
-        [
-            *read.unreadable,
-            *release_contradictions(
-                defaults, read.found, INSTALLED, AWAITING_FIRST_ADOPTION, CONSUMER_DEFAULTS
-            ),
-        ]
-    )
+    check_release_contradictions()
     # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 

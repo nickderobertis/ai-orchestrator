@@ -903,6 +903,7 @@ E2E_JOURNEYS: tuple[JourneyProject, ...] = (
         "hostLocalRegistrationWorkspace",
     ),
     JourneyProject("checks-wait", f"{E2E_ROOT}/checks_wait", "checksWaitWorkspace"),
+    JourneyProject("release-adoption", f"{E2E_ROOT}/release_adoption", "releaseAdoptionWorkspace"),
     # The installer journeys drive the real `scripts/setup-llmlint.sh` and `uv tool install`
     # against a throwaway tool directory, so they sit behind an edge of their own, keyed on
     # the script, the pin it reads and the lock that decides which `uv` resolves.

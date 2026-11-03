@@ -37,7 +37,9 @@
 #         artifact a consumer outside this repository waits on — named in
 #         `CONSUMER_DEFAULTS`. `printobserver`'s `github-release` is the program's own
 #         release, which lets a `published` node of a `local-direct` repository wait on
-#         it with no `consumes`, the field `local-direct` refuses.
+#         it with no `consumes`, the field `local-direct` refuses. `privateterms`'
+#         `crate` is the specification's Rust crate, which the tools that detect or
+#         rewrite private terms build against.
 #
 #   - A producer this host will install but has not yet adopted may carry its rule
 #     ahead of its first release, so a node adopting that release waits for the right
@@ -82,3 +84,6 @@ repositories:
   - match: {host: github.com, owner: nickderobertis, name: printobserver}
     declaration: merge
     default_target: github-release
+  - match: {host: github.com, owner: nickderobertis, name: privateterms}
+    declaration: merge
+    default_target: crate

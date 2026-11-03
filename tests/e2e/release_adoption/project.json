@@ -1,0 +1,49 @@
+{
+  "name": "release-adoption",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/release_adoption",
+  "tags": [
+    "scope:release-adoption",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-scratch-identity",
+    "support-sibling-facts",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "releaseAdoptionWorkspace": [
+      "{workspaceRoot}/config/onevcs.releases.yml",
+      "{workspaceRoot}/config/onevcs.rules.yml",
+      "{workspaceRoot}/config/onevcs.version",
+      "{workspaceRoot}/config/onevcs.workspaces.yml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/orchestrator/host_installs.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/workspaces_overlay.py",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/scripts/apply-repo-registry.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
+      "{workspaceRoot}/uv.lock",
+      "{projectRoot}/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/release_adoption -n 4 --dist loadgroup --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "releaseAdoptionWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

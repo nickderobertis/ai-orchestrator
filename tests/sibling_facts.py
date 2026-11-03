@@ -51,6 +51,7 @@ from registered_checkouts import (
 from orchestrator.host_installs import (
     AWAITING_FIRST_ADOPTION,
     CONSUMER_DEFAULTS,
+    INSTALLED,
     Installed,
     by_producer,
 )
@@ -488,6 +489,38 @@ def registered_checkouts(
         identity: paths[0]
         for identity, paths in held_checkouts(manifest, root=root, comparison=comparison).items()
     }
+
+
+def check_release_contradictions(
+    manifest: Path = TRACKED_CHECKOUTS,
+    *,
+    root: Path = REPO_ROOT,
+    comparison: Mapping[str, str] = ENCLOSING_COMPARISON,
+) -> None:
+    """The release-contradiction check, over the checkouts ``manifest`` lists, gating ``root``.
+
+    Every producer the tracked override gives a default target, held here, is read at its
+    fetched base; each unreadable declaration and every contradiction with the override,
+    the table and the three sets is settled by :func:`settle_drift` against the change at
+    ``root``, so it refuses a change editing the registration and is reported for any
+    other. The merge path runs it over this host's tracked list and this repository; a
+    journey hands it a scratch registration's list and a gated clone.
+    """
+    held = registered_checkouts(manifest, root=root, comparison=comparison)
+    defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
+    read = read_declarations(
+        {producer: held[producer] for producer in defaults if producer in held}
+    )
+    settle_drift(
+        [
+            *read.unreadable,
+            *release_contradictions(
+                defaults, read.found, INSTALLED, AWAITING_FIRST_ADOPTION, CONSUMER_DEFAULTS
+            ),
+        ],
+        root=root,
+        comparison=comparison,
+    )
 
 
 def scratch_checkout(
