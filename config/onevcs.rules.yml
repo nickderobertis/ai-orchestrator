@@ -211,6 +211,14 @@ rules:
     approvals: none
     checks: {wait_seconds: 27300}  # recorded max 21761 s (run 39382834193) + 25% margin
 
+  - match: {host: github.com, owner: nickderobertis, name: onebudgetspec-github-action}
+    publication: change-auto
+    approvals: none
+
+  - match: {host: github.com, owner: nickderobertis, name: onebudgetspec-plugin-onevcs}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: onetaskgraph}
     publication: change-auto
     approvals: none

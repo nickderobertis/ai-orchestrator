@@ -453,6 +453,8 @@ def single_owner_sibling(name: str) -> SingleOwnerSibling:
 SIBLINGS = (
     single_owner_sibling("cargo-prune-superseded"),
     single_owner_sibling("github-graphql-node-count"),
+    single_owner_sibling("onebudgetspec-plugin-onevcs"),
+    single_owner_sibling("onebudgetspec-github-action"),
 )
 sibling_cases = pytest.mark.parametrize(
     "sibling", SIBLINGS, ids=[sibling.identity.rsplit("/", 1)[1] for sibling in SIBLINGS]

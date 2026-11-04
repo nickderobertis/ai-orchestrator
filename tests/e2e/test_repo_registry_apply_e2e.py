@@ -182,6 +182,8 @@ ONEBUDGETSPEC_ARTIFACT = "pypi:onebudgetspec-cli"
 #: depend on.
 PRUNER: RepoIdentity = "github.com/nickderobertis/cargo-prune-superseded"
 GRAPHQL_NODE_COUNT: RepoIdentity = "github.com/nickderobertis/github-graphql-node-count"
+BUDGET_ONEVCS: RepoIdentity = "github.com/nickderobertis/onebudgetspec-plugin-onevcs"
+BUDGET_ACTION: RepoIdentity = "github.com/nickderobertis/onebudgetspec-github-action"
 
 RepoType = Literal["single-owner", "team"]
 Workflow = Literal["local", "remote"]
@@ -1775,7 +1777,9 @@ def test_the_tracked_registration_routes_onebudgetspec_and_names_the_wheel_its_r
 # A sibling of the routing journeys above, for the reason their directive states: every
 # journey of `just repos-apply` lives in this module, in the tier it already runs in.
 @pytest.mark.parametrize(
-    "identity", [PRUNER, GRAPHQL_NODE_COUNT], ids=["pruner", "graphql-node-count"]
+    "identity",
+    [PRUNER, GRAPHQL_NODE_COUNT, BUDGET_ONEVCS, BUDGET_ACTION],
+    ids=["pruner", "graphql-node-count", "budget-onevcs", "budget-action"],
 )
 def test_the_tracked_registration_routes_a_sibling_through_its_own_rule(
     tmp_path: Path, identity: RepoIdentity
@@ -1810,6 +1814,8 @@ def test_the_tracked_registration_routes_a_sibling_through_its_own_rule(
         assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
         assert reported(checked.stdout, "approvals") == "none", checked.stdout
         assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
+        if identity in (BUDGET_ONEVCS, BUDGET_ACTION):
+            assert reported(checked.stdout, "checks wait") == "3600 s", checked.stdout
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501
