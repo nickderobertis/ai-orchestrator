@@ -8,7 +8,7 @@ metadata:
   "orchestrator.unit": "Health endpoint"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:dc2a9217bfc72da6dc21cd511148eccd9577af71e90a1809422e4e1db86adeab","body_digest":"sha256:5dee8f0340984c9f31ebcf9fa69b825c43c698768512243881c8f7020a2debaf","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:dc2a9217bfc72da6dc21cd511148eccd9577af71e90a1809422e4e1db86adeab","body_digest":"sha256:75c0cc72f0cfc051fe638f91e02b0136622d908601f0d1eaf4955e74613b1ad8","digest":"sha256:a38f379f547dbf3a903caeb1e60b17c5ab8a4ce293bfab4bf6c861e067086df1","template":"onepipeline:plan-task"}
   "orchestrator.budgets": [{"basis":"estimate","check_runtime_seconds":3,"command":"python scripts/budgets/health_latency.py .budgets/health-requests.jsonl","direction":"max","evidence":"Estimate: the handler returns build metadata fixed at startup and reads no store, so its time is routing and serialization, a few milliseconds; 50 ms leaves headroom for a loaded test host.","file":"budgets.yaml","file_change":"add","id":"health-endpoint-p95-latency","inner_measure_reason":"","measure":"The 95th-percentile time a poller waits for `GET /health`, from the request sent to the response read through the service's real HTTP stack, over the requests the endpoint's request tests record; its analysis reports the median and the slowest request as its breakdown.","name":"Health endpoint p95 latency","repository":"github.com/nickderobertis/some-service","schema_version":2,"source":"telemetry","threshold":50,"unit":"ms","workload":"200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes."}]
 ---
 ## What
@@ -56,6 +56,29 @@ spends twenty to forty minutes of this dispatch learning what the merge path rep
 anyway. That is measured rather than estimated: one node in this workstream spent about
 84 minutes on three rounds of everything its repository could run, to reach lint findings
 a diff-scoped run reports in two.
+
+**Investigate performance within existing budgets.** Suspect the current change first
+when performance degrades, before intermittent slowness or the outside world. For a
+performance problem such as a CI timeout, read the PR report first through existing
+`onevcs change comments` or the host PR view; skip that duplicate read when a failing
+budget check already identifies the problem. Read earlier PR comments and job results
+when several changes may contribute. Never time base versus branch on a shared host:
+profile to investigate, and use CI comparisons through the repository's existing
+publication path, with its existing permissions.
+
+When reading a report or seeing a failing budget check, fix the regression as part of
+the work. For adverse movement of at least one standard deviation (≥1SD) in a report
+being read, make the change cheaper or make room in existing code, profiling to find
+where. This includes adverse constant-baseline changes and historical flags. Improvements
+show numbers without flags; even a large improvement is no reason to optimize further.
+Stay inside existing budgets: make room for new tests and code by speeding up existing
+work, never by raising limits or timeouts.
+
+A failed ordinary budget makes the required budgets check red; the engine's existing
+retry carries that refusal to the worker. Otherwise read the report only when
+investigating a performance problem. Informational flags fail no check and require no
+new read, notification or dispatch. Do not require a report arriving after a worker
+finishes before that worker can settle.
 
 **Pick those checks from your change, and take the narrowest scope each one supports.**
 One test module over the whole suite; the lint over your diff over the lint over the

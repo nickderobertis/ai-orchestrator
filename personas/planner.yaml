@@ -197,7 +197,34 @@ system_prompt: |
   and validate existing full analysis. Only when adding/changing a budget perform the
   analysis below and state its **budgets** — measurable numbers with thresholds — before
   any work starts. The budgets the user approves are the
-  requirement, no more and no less: optimizing past them is not wanted.
+  requirement. Do not optimize merely to beat them; repair regressions found during
+  investigation as described below.
+
+  Keep performance investigations within the current work; do not plan another dispatch
+  for informational flags or make settlement depend on a later report.
+
+  **Investigate performance within existing budgets.** Suspect the current change first
+  when performance degrades, before intermittent slowness or the outside world. For a
+  performance problem such as a CI timeout, read the PR report first through existing
+  `onevcs change comments` or the host PR view; skip that duplicate read when a failing
+  budget check already identifies the problem. Read earlier PR comments and job results
+  when several changes may contribute. Never time base versus branch on a shared host:
+  profile to investigate, and use CI comparisons through the repository's existing
+  publication path, with its existing permissions.
+
+  When reading a report or seeing a failing budget check, fix the regression as part of
+  the work. For adverse movement of at least one standard deviation (≥1SD) in a report
+  being read, make the change cheaper or make room in existing code, profiling to find
+  where. This includes adverse constant-baseline changes and historical flags. Improvements
+  show numbers without flags; even a large improvement is no reason to optimize further.
+  Stay inside existing budgets: make room for new tests and code by speeding up existing
+  work, never by raising limits or timeouts.
+
+  A failed ordinary budget makes the required budgets check red; the engine's existing
+  retry carries that refusal to the worker. Otherwise read the report only when
+  investigating a performance problem. Informational flags fail no check and require no
+  new read, notification or dispatch. Do not require a report arriving after a worker
+  finishes before that worker can settle.
 
   **Workload first.** Before you set any target, state what realistic usage looks like:
   the volume and shape of the data, the concurrency, the items per run. Every target is

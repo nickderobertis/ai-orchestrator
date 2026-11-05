@@ -15,7 +15,8 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
 ## Principles
 
 - **Approved budgets are the requirement, no more and no less.** What the user approves is
-  what must be met. Optimizing past an approved budget is not wanted.
+  what must be met. Do not optimize merely to beat that threshold; repairing regressions
+  found during an investigation follows the guidance below, even within budget.
 - **Which figure a budget measures** is the plan checklist's
   `plan_budget_inner_measure_has_reason`, read off the budget's `measure` and
   `inner_measure_reason`.
@@ -57,8 +58,9 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
 - **Host conditions are recorded for the manager's judgement.** Each result carries the
   conditions it was taken under, such as load, memory and other work running, so the
   manager can tell an extreme or unlikely circumstance from a regression.
-- **There are no baselines.** The approved budget is the line to stay within, so nothing
-  stores a previous measurement to compare against.
+- **Stored baselines are informational.** Reports can compare against stored previous
+  measurements, including constant baselines and historical measurements. An informational
+  baseline is never a line to hold: the approved budget remains the requirement.
 
 Those fragment rules are stated once, with worked examples, in dero-skills' create-repo
 reference: [When is a requirement a budget][budget-rule]. The rules a plan's budgets are judged by while the plan is reviewed are stated
@@ -66,6 +68,31 @@ once, in the plan checklist, `config/plan-checklist.llmlint.yml`, and where this
 touches one it names the rule rather than restating it.
 
 [budget-rule]: https://github.com/nickderobertis/dero-skills/blob/main/skills/bootstrap/create-repo/references/tools/onebudgetspec.md#when-is-a-requirement-a-budget
+
+## Investigating performance
+
+**Investigate performance within existing budgets.** Suspect the current change first
+when performance degrades, before intermittent slowness or the outside world. For a
+performance problem such as a CI timeout, read the PR report first through existing
+`onevcs change comments` or the host PR view; skip that duplicate read when a failing
+budget check already identifies the problem. Read earlier PR comments and job results
+when several changes may contribute. Never time base versus branch on a shared host:
+profile to investigate, and use CI comparisons through the repository's existing
+publication path, with its existing permissions.
+
+When reading a report or seeing a failing budget check, fix the regression as part of
+the work. For adverse movement of at least one standard deviation (≥1SD) in a report
+being read, make the change cheaper or make room in existing code, profiling to find
+where. This includes adverse constant-baseline changes and historical flags. Improvements
+show numbers without flags; even a large improvement is no reason to optimize further.
+Stay inside existing budgets: make room for new tests and code by speeding up existing
+work, never by raising limits or timeouts.
+
+A failed ordinary budget makes the required budgets check red; the engine's existing
+retry carries that refusal to the worker. Otherwise read the report only when
+investigating a performance problem. Informational flags fail no check and require no
+new read, notification or dispatch. Do not require a report arriving after a worker
+finishes before that worker can settle.
 
 ## The budgets files
 

@@ -1881,7 +1881,9 @@ every launch is refused without it save the bounded planning exemption above.
 [`docs/budgets.md`](docs/budgets.md) is the convention, and `config/budgets-migration.yaml`
 the one list of plans that predate it. `orchestrator/plan_budgets.py` owns the versioned
 record authority; reviewers establish concern scope and root-budget existence from the
-changed repositories, while read compatibility preserves older plans.
+changed repositories, while read compatibility preserves older plans. A performance
+problem starts from the PR budget report and stays with the current work; an informational
+flag is never a reason for the manager to dispatch.
 
 ### What every launch exports
 

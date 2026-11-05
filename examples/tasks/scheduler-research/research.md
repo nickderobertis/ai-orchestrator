@@ -6,7 +6,7 @@ metadata:
   "onepipeline.id": "research"
   "orchestrator.unit": "Scheduler research"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:ac50099f38c82be01f76152140154b816fad241b962671a7dac84b82a397d021","body_digest":"sha256:231aed76d26ddce28f2dff4bab0d6ad567fb4aefc5f9a6b029fe8139cf026a79","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:ac50099f38c82be01f76152140154b816fad241b962671a7dac84b82a397d021","body_digest":"sha256:147932a3d0499c950edbd8a03a3558dad35689cefc3ecd36d5b83cfdb5de56ae","digest":"sha256:a38f379f547dbf3a903caeb1e60b17c5ab8a4ce293bfab4bf6c861e067086df1","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -35,6 +35,29 @@ spends twenty to forty minutes of this dispatch learning what the merge path rep
 anyway. That is measured rather than estimated: one node in this workstream spent about
 84 minutes on three rounds of everything its repository could run, to reach lint findings
 a diff-scoped run reports in two.
+
+**Investigate performance within existing budgets.** Suspect the current change first
+when performance degrades, before intermittent slowness or the outside world. For a
+performance problem such as a CI timeout, read the PR report first through existing
+`onevcs change comments` or the host PR view; skip that duplicate read when a failing
+budget check already identifies the problem. Read earlier PR comments and job results
+when several changes may contribute. Never time base versus branch on a shared host:
+profile to investigate, and use CI comparisons through the repository's existing
+publication path, with its existing permissions.
+
+When reading a report or seeing a failing budget check, fix the regression as part of
+the work. For adverse movement of at least one standard deviation (≥1SD) in a report
+being read, make the change cheaper or make room in existing code, profiling to find
+where. This includes adverse constant-baseline changes and historical flags. Improvements
+show numbers without flags; even a large improvement is no reason to optimize further.
+Stay inside existing budgets: make room for new tests and code by speeding up existing
+work, never by raising limits or timeouts.
+
+A failed ordinary budget makes the required budgets check red; the engine's existing
+retry carries that refusal to the worker. Otherwise read the report only when
+investigating a performance problem. Informational flags fail no check and require no
+new read, notification or dispatch. Do not require a report arriving after a worker
+finishes before that worker can settle.
 
 **Pick those checks from your change, and take the narrowest scope each one supports.**
 One test module over the whole suite; the lint over your diff over the lint over the
