@@ -1017,7 +1017,7 @@ def _budgets_of(body: str) -> str:
 def test_a_mixed_plan_whose_public_task_carries_a_budget_copies_it_to_both_destinations(
     routed: Routed, tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """A public task's budget travels on its view, under a plain heading and no raw HTML.
+    """A public task's budget travels on its view, with GitHub's section anchors only.
 
     The task's budget section renders each schema-2 budget under `### Budget <id>`, plain
     Markdown a public view can carry, so a plan naming public and private repositories whose
@@ -1048,7 +1048,13 @@ def test_a_mixed_plan_whose_public_task_carries_a_budget_copies_it_to_both_desti
         (view,) = [issue for issue in BOARD_FIXTURE.created if issue.title == library.title]
         shown = _budgets_of(view.body)
         assert heading in shown, shown
-        assert re.search(r"<[A-Za-z/!?]", shown) is None, shown
+        # The adopted store makes GitHub headings addressable with explicit anchors.
+        # These two anchors are the only HTML allowed in this section, including the
+        # next heading's anchor, which the section slice keeps.
+        anchors = re.findall(r'^<a id="([^"]+)"></a>$', shown, re.MULTILINE)
+        assert anchors == [f"budget-{budget['id']}", "acceptance-criteria"], shown
+        plain = re.sub(r'^<a id="[^"]+"></a>\n?', "", shown, flags=re.MULTILINE)
+        assert re.search(r"<[A-Za-z/!?]", plain) is None, shown
         for issue in BOARD_FIXTURE.created:
             assert _private_named(f"{issue.title}\n{issue.body}") == [], issue
         (held,) = bench.linear.projects()
@@ -1680,7 +1686,7 @@ def test_a_public_task_naming_a_private_repository_is_refused_before_either_boar
 
         said = copied.stdout + copied.stderr
         assert copied.returncode != 0, said
-        assert f"{project}/library was not written to source {BOARD}" in said, said
+        assert f"{project}/library was not written to source <redacted source 1>" in said, said
         assert "a term of a private repository" in said, said
         written = [
             str(request["operation"])

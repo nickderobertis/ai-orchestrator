@@ -34,6 +34,7 @@
       "{workspaceRoot}/orchestrator/spike_flow.py",
       "{workspaceRoot}/orchestrator/project_store.py",
       "{workspaceRoot}/orchestrator/design_approval.py",
+      "{workspaceRoot}/orchestrator/accepted_opaque.py",
       "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/plan_locations.py",
       "{workspaceRoot}/oneharness.spike-brief.toml",

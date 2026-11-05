@@ -56,6 +56,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple, cast
 from unittest import mock
@@ -83,6 +84,14 @@ from orchestrator.plan_store import WRITABLE_PLUGIN, NodeId
 from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 from orchestrator.run_reading import RunId
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _private_inventory() -> Iterator[None]:
+    """Answer each public copy's private-address inventory without the real board."""
+    with host_board.answering_private_inventory():
+        yield
+
 
 #: The engine's human item store, which it keeps beside the runs under a runs root once
 #: `.onepipeline/config.yaml` turns human items on; it is no run.

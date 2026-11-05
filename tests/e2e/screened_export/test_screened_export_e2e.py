@@ -41,6 +41,7 @@ which no other project depends on.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -55,6 +56,7 @@ import fake_gh
 import onetaskgraph_user_layer
 import plan_root_variable
 import pytest
+from binary_files import files
 from export_plan import ExportEdge, PlanSpec, TaskSpec
 from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from github_board import (
@@ -275,9 +277,23 @@ class Bench(NamedTuple):
 
 def _registry(root: Path, environment: dict[str, str]) -> dict[str, Origin]:
     """Seed the three synthetic origins and register their clones in the journey's registry."""
+    _git("lfs", "version")  # Required adoption evidence: fail rather than skip without git-lfs.
+    store = root / "public-lfs.git"
+    _git("init", "--bare", "-q", str(store))
     origins = {
         PLANNING_ORIGIN: _seed(root, PLANNING_ORIGIN, {}),
-        PUBLIC_ORIGIN: _seed(root, PUBLIC_ORIGIN, {"src/listing.md": "A plain listing.\n"}),
+        PUBLIC_ORIGIN: _seed(
+            root,
+            PUBLIC_ORIGIN,
+            {
+                "src/listing.md": "A plain listing.\n",
+                ".gitattributes": "".join(
+                    f"*.{extension} filter=lfs diff=lfs merge=lfs -text\n"
+                    for extension in ("jpg", "png", "3mf", "gz")
+                ),
+                ".lfsconfig": f"[lfs]\n    url = {store.as_uri()}\n",
+            },
+        ),
         PRIVATE_ORIGIN: _seed(
             root, PRIVATE_ORIGIN, {f"internal/{CODENAME}.md": f"The {CODENAME} cursor.\n"}
         ),
@@ -388,6 +404,7 @@ def _plan_spec(root: Path, checkout: Path, temporary: Path) -> Path:
                 to=CONSUMER,
                 source_directory=SOURCE_DIRECTORY,
                 target_directory=TARGET_DIRECTORY,
+                accepted_opaque=["*.jpg", "*.png"],
             )
         ],
         tasks=[
@@ -571,6 +588,10 @@ def bench(tmp_path_factory: pytest.TempPathFactory, module_tmpdir: Path) -> Iter
                 **served,
                 "GH_PROJECTS_TOKEN": "fixture-token",
                 "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": public,
+                # The adopted store reads all private sources during copy; this source uses the
+                # same synthetic GitHub wire as PLANS, keeping routing and screening real.
+                # llmlint: ignore[e2e_not_mocked] Only the remote board wire is served locally.
+                "ONETASKGRAPH_SOURCES__HUMAN_PRIVATE__CONFIG__ENDPOINT": public,
                 "ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
             }
         )
@@ -611,6 +632,8 @@ def _brief(bench: Bench) -> Path:
         f"Plan project: authoring:{PROJECT}\n\n"
         f"Repositories: {PRIVATE_ORIGIN}, {PUBLIC_ORIGIN}\n\n"
         "## Why\n\nCallers page long listings without skipping a record.\n\n"
+        "The user accepts opaque export patterns *.jpg and *.png "
+        "on the producer-to-consumer edge.\n\n"
         "## Acceptance criteria\n\n- The public listing pages by an opaque cursor.\n",
         encoding="utf-8",
     )
@@ -759,6 +782,11 @@ def journey(bench: Bench) -> Journey:
             for issue in BOARD.issues
         ),
         "public origin": _public_history(bench),
+        "public LFS objects": "\n".join(
+            path.read_bytes().decode("latin1")
+            for path in (bench.root / "public-lfs.git/lfs/objects").rglob("*")
+            if path.is_file()
+        ),
         "public worktree branches": "\n".join(
             str(session["branch"]) for session in opened if session.get("identity") == PUBLIC_ORIGIN
         ),
@@ -784,7 +812,9 @@ def test_the_private_producer_preserves_its_generalized_example(
     assert _bare(bench, PRIVATE_ORIGIN, "rev-parse", f"refs/heads/{branch}").strip() == head
     assert _bare(bench, PRIVATE_ORIGIN, "show", f"{head}:{SOURCE_DIRECTORY}/README.md") == EXAMPLE
     changed = _bare(bench, PRIVATE_ORIGIN, "diff", "--name-only", "main", head).split()
-    assert changed == [f"{SOURCE_DIRECTORY}/README.md"], changed
+    assert sorted(changed) == sorted(
+        f"{SOURCE_DIRECTORY}/{name}" for name in ("README.md", *files())
+    ), changed
     assert (
         _bare(bench, PRIVATE_ORIGIN, "log", "--format=%s", "main").split("\n")[0] == "chore: seed"
     )
@@ -807,7 +837,16 @@ def test_one_neutral_export_commit_reaches_the_public_base_and_the_consumer_buil
     for field in (author, subject):
         assert not any(term in field for term in journey.private), field
     exported_tree = _bare(bench, PUBLIC_ORIGIN, "ls-tree", "-r", "--name-only", exported).split()
-    assert sorted(exported_tree) == ["README.md", f"{TARGET_DIRECTORY}/README.md", "src/listing.md"]
+    assert sorted(exported_tree) == sorted(
+        [
+            ".gitattributes",
+            ".lfsconfig",
+            "README.md",
+            f"{TARGET_DIRECTORY}/README.md",
+            "src/listing.md",
+            *(f"{TARGET_DIRECTORY}/{name}" for name in files()),
+        ]
+    )
     (change,) = [
         json.loads(path.read_text())
         for path in fake_gh.records(bench.gh_state, str(PUBLIC_REPOSITORY)).glob("pr-*.json")
@@ -846,7 +885,8 @@ def test_the_public_view_carries_its_task_s_budget_anchor_and_link(journey: Jour
     assert journey.home
     (view,) = [issue for issue in BOARD.issues if issue.number > 2 and issue.sub_issues == 0]
     assert f"### Budget {CONSUMER_BUDGET}\n" in view.body, view.body
-    assert BUDGET_LINK in view.body, view.body
+    assert BUDGET_LINK.replace("(#", "(#user-content-") in view.body, view.body
+    assert f'<a id="{budget_anchor(CONSUMER_BUDGET)}"></a>' in view.body
 
 
 def test_no_public_destination_carries_a_private_term_or_private_provenance(
@@ -932,3 +972,40 @@ def test_the_private_design_document_is_refused_by_the_public_source(
     assert copied.returncode != 0, f"the private design document was copied:\n{copied.stdout}"
     assert "private" in copied.stderr, copied.stderr
     assert [request for request in _GitHubFixture.requests if request.is_mutation] == writes
+
+
+def test_binary_exports_are_byte_identical_behind_public_lfs_pointers(
+    bench: Bench, journey: Journey
+) -> None:
+    exports = json.loads(
+        (Path(bench.environment["ONEPIPELINE_RUNS_DIR"]) / journey.run / "exports.json").read_text()
+    )
+    producer = _settled(bench, journey.run)[PRODUCER]
+    for name, content in files().items():
+        oid = hashlib.sha256(content).hexdigest()
+        pointer = (
+            f"version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {len(content)}\n"
+        )
+        for revision in (exports[0]["exported_head"], "main"):
+            assert (
+                _bare(bench, PUBLIC_ORIGIN, "show", f"{revision}:{TARGET_DIRECTORY}/{name}")
+                == pointer
+            )
+        held = bench.root / "public-lfs.git/lfs/objects" / oid[:2] / oid[2:4] / oid
+        assert held.read_bytes() == content
+        source = subprocess.run(
+            [
+                "git",
+                "--git-dir",
+                str(bench.origins[PRIVATE_ORIGIN].bare),
+                "show",
+                f"{producer['head']}:{SOURCE_DIRECTORY}/{name}",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        assert source.stdout == content
+    documents = bench.linear.documents()
+    rendered = "\n".join(json.dumps(document) for document in documents)
+    assert "Accepted opaque content" in rendered
+    assert "*.jpg" in rendered and "*.png" in rendered

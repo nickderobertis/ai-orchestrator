@@ -40,12 +40,14 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import plan_fixture_source
 import plan_root_variable
 import pytest
 from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
+from github_board import _serving_private_board
 from nx_workspace import (
     answering_this_checkouts_origin,
     copy_working_tree,
@@ -84,6 +86,19 @@ from orchestrator.root import REPO_ROOT
 # from a published tool they run, is this module's own and goes with it
 # (`tests/short_state.py`).
 pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
+
+@pytest.fixture(autouse=True)
+def private_human_board(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the adopted store's private-source reads on the journey's loopback wire."""
+    # Document copy now reads every declared private source. Keep the tracked board's
+    # configuration, and serve its remote wire just as the screened-export bench does.
+    # llmlint: ignore[e2e_not_mocked] Only the remote GitHub board wire is served locally.
+    with _serving_private_board(8) as endpoint:
+        monkeypatch.setenv("GH_PROJECTS_TOKEN", "fixture-token")
+        monkeypatch.setenv("ONETASKGRAPH_SOURCES__HUMAN_PRIVATE__CONFIG__ENDPOINT", endpoint)
+        yield
+
 
 #: The source plans are drafted in here: this process's own fixture store.
 FIXTURE_SOURCE = plan_fixture_source.SOURCE

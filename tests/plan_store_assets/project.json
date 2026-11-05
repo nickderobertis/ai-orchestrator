@@ -9,6 +9,7 @@
   ],
   "implicitDependencies": [
     "support-conftest",
+    "support-github-board",
     "support-published-tools"
   ],
   "namedInputs": {

@@ -96,6 +96,7 @@ BLOCKS = (DOCUMENT_GUIDANCE,) + tuple(
         *VISUAL_SECTIONS,
         SECTIONS[2],
         *BUDGET_SECTIONS,
+        ("accepted_opaque", "Accepted opaque content"),
         *SECTIONS[3:],
     )
     for name in (f"{block}_guidance", block)
@@ -167,6 +168,7 @@ GOAL_VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
 
 #: Every optional answer: the goals, the budgets, the visual changes and the graph image.
 OPTIONAL_VARIABLES = {
+    "accepted_opaque": ("list", "object", {"source": None, "to": None, "accepted_opaque": None}),
     **GOAL_VARIABLES,
     **BUDGET_VARIABLES,
     **VISUAL_VARIABLES,

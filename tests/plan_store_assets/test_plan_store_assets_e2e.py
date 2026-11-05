@@ -8,6 +8,10 @@ as `![alt](./<name>)`, are written into the drafting source with each image as a
 way the store's own environment layer declares a source. The images are generated per
 test from seeded pseudo-random pixels, so compression cannot shrink them below the size
 a real screenshot has and no two are alike.
+
+The second source is public to the store, so each copy first checks the private addresses
+the host's private sources hold, here on a loopback board: a copy lands only once they
+answer, and one that cannot read them is refused before it writes anything.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import github_board
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator.root import REPO_ROOT
@@ -69,9 +74,9 @@ def _environment(root: Path) -> dict[str, str]:
     return {**os.environ, **sources}
 
 
-def _store(environment: Mapping[str, str], *arguments: str) -> Any:
-    """Run the locked plan-store CLI from this checkout and answer its JSON document."""
-    ran = subprocess.run(
+def _ran(environment: Mapping[str, str], *arguments: str) -> subprocess.CompletedProcess[str]:
+    """Run the locked plan-store CLI from this checkout, answering however it ended."""
+    return subprocess.run(
         [str(ONETASKGRAPH_BIN), *arguments, "--json"],
         cwd=REPO_ROOT,
         env=dict(environment),
@@ -80,6 +85,11 @@ def _store(environment: Mapping[str, str], *arguments: str) -> Any:
         check=False,
         timeout=120,
     )
+
+
+def _store(environment: Mapping[str, str], *arguments: str) -> Any:
+    """Run the locked plan-store CLI from this checkout and answer its JSON document."""
+    ran = _ran(environment, *arguments)
     assert ran.returncode == 0, (arguments, ran.stdout, ran.stderr)
     return json.loads(ran.stdout)
 
@@ -121,6 +131,19 @@ def _shown(environment: Mapping[str, str], qualified: str) -> ShownDocument:
     return ShownDocument(content=content, assets=assets)
 
 
+def _draft_the_document(
+    environment: Mapping[str, str], body: Path, images: Path, generated: Mapping[str, bytes]
+) -> None:
+    """Create the project and the document, with each generated image as an asset."""
+    _store(environment, "project", "create", DRAFTED, "--id", PROJECT, "--title", "Visual plan")
+    _store(
+        environment,
+        *("document", "create", DRAFTED, "--project", PROJECT, "--title", "Spike report"),
+        *("--id", DOCUMENT, "--body-file", str(body), "--no-interactive"),
+        *(arg for name in generated for arg in ("--asset", str(images / name))),
+    )
+
+
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The plan-store-assets
 # leaf owns this real-store journey. Its support-conftest dependency supplies shared pytest
 # isolation; consumers of that support do not depend on this leaf or run its subprocesses.
@@ -148,16 +171,11 @@ def test_a_documents_images_survive_its_copy_into_a_second_source(tmp_path: Path
     )
     body = tmp_path / "report.md"
     body.write_text(content, encoding="utf-8")
-    environment = _environment(tmp_path / "sources")
-
-    _store(environment, "project", "create", DRAFTED, "--id", PROJECT, "--title", "Visual plan")
-    _store(
-        environment,
-        *("document", "create", DRAFTED, "--project", PROJECT, "--title", "Spike report"),
-        *("--id", DOCUMENT, "--body-file", str(body), "--no-interactive"),
-        *(arg for name in generated for arg in ("--asset", str(images / name))),
-    )
-    copied = _store(environment, "document", "copy", f"{DRAFTED}:{DOCUMENT}", "--to", COPIED)
+    with github_board.answering_private_inventory() as inventory_reads:
+        environment = _environment(tmp_path / "sources")
+        _draft_the_document(environment, body, images, generated)
+        copied = _store(environment, "document", "copy", f"{DRAFTED}:{DOCUMENT}", "--to", COPIED)
+    assert inventory_reads, "the copy wrote without checking the private addresses"
     (outcome,) = copied["items"]
     assert outcome["destination"] == f"{COPIED}:{DOCUMENT}", copied
 
@@ -173,6 +191,29 @@ def test_a_documents_images_survive_its_copy_into_a_second_source(tmp_path: Path
             assert asset.path.read_bytes() == image, (qualified, asset)
             paths.add(asset.path)
     assert len(paths) == 8, f"each source holds its own copy of each image: {paths}"
+
+
+def test_a_public_copy_whose_private_addresses_cannot_be_read_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """With no credential for the private source the copy is refused and its destination empty."""
+    images = tmp_path / "screenshots"
+    images.mkdir()
+    generated = {"before.png": _png(images / "before.png", 0)}
+    body = tmp_path / "report.md"
+    body.write_text("# Spike report\n\n![The page](./before.png)\n", encoding="utf-8")
+    sources = tmp_path / "sources"
+    with github_board.answering_private_inventory() as inventory_reads:
+        environment = _environment(sources)
+        _draft_the_document(environment, body, images, generated)
+        del environment[github_board.PRIVATE_INVENTORY_TOKEN]
+        refused = _ran(environment, "document", "copy", f"{DRAFTED}:{DOCUMENT}", "--to", COPIED)
+    told = refused.stdout + refused.stderr
+    assert refused.returncode != 0, told
+    assert "source human-private" in told and github_board.PRIVATE_INVENTORY_TOKEN in told, told
+    assert not inventory_reads, "nothing could authenticate, yet the inventory board was read"
+    written = [path for path in (sources / COPIED).rglob("*") if path.is_file()]
+    assert not written, f"the refused copy wrote {written}: {told}"
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

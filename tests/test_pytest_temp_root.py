@@ -14,8 +14,10 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
 import pytest_temp_root
 
 from orchestrator.root import REPO_ROOT
@@ -23,6 +25,8 @@ from orchestrator.root import REPO_ROOT
 #: Where a probe session reports to and waits on; unset in an ordinary run of this module.
 PROBE_ENV = "AIO_TEMP_ROOT_PROBE"
 PROBE = f"tests/{Path(__file__).name}::test_this_sessions_temporary_files_survive_its_neighbours"
+#: Where the release probes below report to; unset in an ordinary run of this module.
+RELEASE_PROBE_ENV = "AIO_TEMP_RELEASE_PROBE"
 #: How long either side waits for the other before calling the journey failed.
 HANDSHAKE_SECONDS = 180
 
@@ -60,6 +64,196 @@ def test_this_sessions_temporary_files_survive_its_neighbours(tmp_path: Path) ->
         mark.with_suffix(".json").write_text(
             json.dumps({"tmp_path": str(tmp_path), "root": str(own_root)}), encoding="utf-8"
         )
+
+
+def _left_by_a_failure(tmp_path: Path, name: str) -> str | None:
+    """Under the release probe, write a test's file and say where; else nothing."""
+    probe = os.environ.get(RELEASE_PROBE_ENV)
+    if probe is None:
+        return None
+    (tmp_path / "written").write_text("held", encoding="utf-8")
+    (Path(probe) / name).write_text(str(tmp_path), encoding="utf-8")
+    return probe
+
+
+@pytest.fixture
+def failing_setup(tmp_path: Path) -> None:
+    if _left_by_a_failure(tmp_path, "failed-setup") is not None:
+        raise AssertionError("this setup failure is the probe's case under test")
+
+
+@pytest.fixture
+def failing_teardown(tmp_path: Path) -> Iterator[None]:
+    probe = _left_by_a_failure(tmp_path, "failed-teardown")
+    yield
+    if probe is not None:
+        raise AssertionError("this teardown failure is the probe's case under test")
+
+
+def test_release_probe_1_passes(tmp_path: Path) -> None:
+    """A passed test's files; under the probe, it says where they are for the next test."""
+    (tmp_path / "tree" / "nested").mkdir(parents=True)
+    (tmp_path / "tree" / "nested" / "written").write_text("held", encoding="utf-8")
+    (tmp_path / "link").symlink_to(tmp_path / "tree")
+    (tmp_path / "written").write_text("held", encoding="utf-8")
+    probe = os.environ.get(RELEASE_PROBE_ENV)
+    if probe is not None:
+        (Path(probe) / "passed").write_text(str(tmp_path), encoding="utf-8")
+
+
+def test_release_probe_2_fails_only_under_the_probe(tmp_path: Path) -> None:
+    """Under the probe, the failed test whose files have to stay; otherwise it just passes."""
+    probe = os.environ.get(RELEASE_PROBE_ENV)
+    if probe is not None:
+        (tmp_path / "written").write_text("held", encoding="utf-8")
+        (Path(probe) / "failed").write_text(str(tmp_path), encoding="utf-8")
+        raise AssertionError("this failure is the probe's case under test")
+
+
+@pytest.mark.usefixtures("failing_setup")
+def test_release_probe_2_fails_in_its_setup_only_under_the_probe() -> None:
+    """Under the probe, a test whose setup failed, whose files have to stay."""
+
+
+@pytest.mark.usefixtures("failing_teardown")
+def test_release_probe_2_fails_in_its_teardown_only_under_the_probe() -> None:
+    """Under the probe, a test whose teardown failed, whose files have to stay."""
+
+
+def test_release_probe_3_reads_what_the_tests_before_it_left() -> None:
+    """Under the probe, this is what is held while the session goes on, in its own workers."""
+    probe = os.environ.get(RELEASE_PROBE_ENV)
+    if probe is not None:
+        passed = Path((Path(probe) / "passed").read_text(encoding="utf-8"))
+        assert passed.is_dir(), f"the passed test's directory itself went: {passed}"
+        assert not list(passed.iterdir()), f"the passed test's files were kept: {passed}"
+        for name in ("failed", "failed-setup", "failed-teardown"):
+            failed = Path((Path(probe) / name).read_text(encoding="utf-8"))
+            assert (failed / "written").is_file(), f"the {name} test's files went: {failed}"
+
+
+def test_a_passed_tests_files_go_when_it_ends_and_a_failed_tests_stay(tmp_path: Path) -> None:
+    """A session shaped like a target holds only what its failed and running tests still need."""
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    host_tmp = tmp_path / "host-tmp"
+    host_tmp.mkdir()
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in (pytest_temp_root.TEMPROOT_ENV, pytest_temp_root.RELEASED_BASE_ENV)
+    }
+    environment.update({"TMPDIR": str(host_tmp), RELEASE_PROBE_ENV: str(probe)})
+    ran = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            f"tests/{Path(__file__).name}",
+            "-k",
+            "test_release_probe",
+            "-n",
+            "1",
+            "--dist",
+            "loadgroup",
+            "--no-cov",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ran.returncode == 1, ran.stdout + ran.stderr
+    assert "this failure is the probe's case under test" in ran.stdout, ran.stdout
+    assert "this setup failure is the probe's case under test" in ran.stdout, ran.stdout
+    assert "this teardown failure is the probe's case under test" in ran.stdout, ran.stdout
+    assert "1 failed, 3 passed, 2 errors" in ran.stdout, ran.stdout
+    assert not list(host_tmp.iterdir()), "the session left its root behind"
+
+
+def test_a_session_given_a_basetemp_keeps_a_passed_tests_files(tmp_path: Path) -> None:
+    """Whoever named a base reads it afterwards, so a passed test's files are still there."""
+    base = tmp_path / "named-base"
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    ran = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            f"tests/{Path(__file__).name}::test_release_probe_1_passes",
+            f"--basetemp={base}",
+            "-p",
+            "no:xdist",
+            "--no-cov",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, RELEASE_PROBE_ENV: str(probe)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert (Path((probe / "passed").read_text(encoding="utf-8")) / "written").is_file()
+
+
+def test_a_module_fixtures_files_go_with_its_module_unless_a_test_in_it_failed(
+    tmp_path: Path,
+) -> None:
+    """Real modules in one session: a passed one's fixture has gone by the next module."""
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    module = (
+        "import pathlib, pytest, pytest_temp_root\n"
+        "@pytest.fixture(scope='module')\n"
+        "def held(tmp_path_factory, request):\n"
+        "    path = tmp_path_factory.mktemp('{name}')\n"
+        "    (path / 'written').write_text('held')\n"
+        "    with pytest_temp_root.held_until_scope_ends(request.session, path):\n"
+        "        yield path\n"
+        "def test_held(held):\n"
+        "    assert (held / 'written').is_file()\n"
+        "    assert {verdict}, 'this failure is the case under test'\n"
+    )
+    (nested / "test_a_passing.py").write_text(
+        module.format(name="passing", verdict="True"), encoding="utf-8"
+    )
+    (nested / "test_b_failing.py").write_text(
+        module.format(name="failing", verdict="False"), encoding="utf-8"
+    )
+    base = tmp_path / "base"
+    (nested / "test_c_reads.py").write_text(
+        "import pathlib\n"
+        f"base = pathlib.Path({str(base)!r})\n"
+        "def test_what_the_two_modules_before_this_one_left():\n"
+        "    assert not list(base.glob('passing*/written')), 'the passed module held its fixture'\n"
+        "    assert list(base.glob('failing*/written')), 'the failed module lost its fixture'\n",
+        encoding="utf-8",
+    )
+    ran = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            f"--basetemp={base}",
+            "-p",
+            "no:xdist",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=nested,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "tests")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert "this failure is the case under test" in ran.stdout, ran.stdout + ran.stderr
+    assert "1 failed, 2 passed" in ran.stdout, ran.stdout + ran.stderr
 
 
 def test_two_target_shaped_sessions_survive_the_shared_root_being_pruned(tmp_path: Path) -> None:

@@ -928,11 +928,25 @@ def test_the_writers_answers_are_the_records_with_each_budgets_owner_and_its_loc
     assert written["anchor"] == "budget-listing-latency" == plan_budgets.budget_anchor(BUDGET["id"])
     assert written["link"].endswith("#budget-listing-latency"), written
 
+    plan_store.sdk(
+        plan_store.client().project_create("authoring", "approved-budgets", "Existing plan")
+    )
     predated = _writer("authoring:approved-budgets", capsys)
     assert predated == {
         "predates_budgets": plan_budgets.migrated("authoring:approved-budgets"),
         "plan_budgets": {},
         "budgets": [],
+    }
+
+    grants = [{"from": "producer", "to": "consumer", "accepted_opaque": ["*.jpg"]}]
+    plan_store.sdk(
+        plan_store.client().project_metadata_set(
+            "authoring:approved-budgets", "onepipeline.export_edges", json.dumps(grants)
+        )
+    )
+    assert _writer("authoring:approved-budgets", capsys) == {
+        **predated,
+        "accepted_opaque": [{"source": "producer", "to": "consumer", "accepted_opaque": ["*.jpg"]}],
     }
 
     bare = _plan(None)
@@ -1542,3 +1556,59 @@ def test_stored_malformed_analysis_is_never_treated_as_omitted(
     assert plan_budgets.main([project]) == 2
     assert "does not hold exactly" in capsys.readouterr().err
     assert plan_budgets.PLAN_RECORD in plan_store.project_record(project)["metadata"]
+
+
+def test_writer_reads_export_grants_from_the_plan(capsys: pytest.CaptureFixture[str]) -> None:
+    project = _plan()
+    edges = [
+        {"from": "producer", "to": "consumer", "accepted_opaque": ["*.jpg", "images/[ab]*.png"]},
+        {"from": "other", "to": "last", "accepted_opaque": []},
+    ]
+    plan_store.sdk(
+        plan_store.client().project_metadata_set(
+            project, "onepipeline.export_edges", json.dumps(edges)
+        )
+    )
+    assert _writer(project, capsys)["accepted_opaque"] == [
+        {"source": edge["from"], "to": edge["to"], "accepted_opaque": edge["accepted_opaque"]}
+        for edge in edges
+    ]
+
+
+def test_a_design_document_written_before_an_export_grant_is_refused_for_it(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = _plan()
+    _design(project, capsys)
+    edges = [{"from": "producer", "to": "consumer", "accepted_opaque": ["*.jpg"]}]
+    plan_store.sdk(
+        plan_store.client().project_metadata_set(
+            project, "onepipeline.export_edges", json.dumps(edges)
+        )
+    )
+
+    assert plan_budgets.main([project, "--check-design-document"]) != 0
+    assert "`accepted_opaque` answer differs from the export edges" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "edges,reason",
+    [
+        ({}, "must be a list"),
+        ([None], "must be an object"),
+        ([{"from": 1, "to": "consumer"}], "must name from and to"),
+        ([{"from": "producer", "to": "consumer", "accepted_opaque": "*.jpg"}], "must be strings"),
+        ([{"from": "producer", "to": "consumer", "accepted_opaque": [1]}], "must be strings"),
+    ],
+)
+def test_writer_refuses_malformed_export_grants(
+    edges: object, reason: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = _plan()
+    plan_store.sdk(
+        plan_store.client().project_metadata_set(
+            project, "onepipeline.export_edges", json.dumps(edges)
+        )
+    )
+    assert plan_budgets.main([project]) == 2
+    assert reason in capsys.readouterr().err

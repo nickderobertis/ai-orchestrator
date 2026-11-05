@@ -22,6 +22,7 @@ class ExportEdge(BaseModel):
     to: str
     source_directory: str
     target_directory: str
+    accepted_opaque: list[str] = []
 
 
 class TaskSpec(BaseModel):

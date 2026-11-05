@@ -19,7 +19,7 @@ import io
 import os
 import re
 import subprocess
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -161,6 +161,24 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_unconfigure(config: pytest.Config) -> None:
     """Remove the root `pytest_configure` claimed, after everything else has let go of it."""
     pytest_temp_root.release()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item,
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """Note a test that failed, so that its temporary files stay to be read."""
+    report = yield
+    if report.failed:
+        item.stash[pytest_temp_root.FAILED] = True
+    return report
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Generator[None]:
+    """Release a passed test's temporary files once every fixture using them has torn down."""
+    yield
+    pytest_temp_root.release_passed(item)
 
 
 #: The directories under this checkout that git ignores and Nx therefore never hashes.

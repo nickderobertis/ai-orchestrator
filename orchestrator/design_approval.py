@@ -23,7 +23,7 @@ defends for the plan-review gate beside this one:
   bytes. Nothing re-asks about identical content.
 * **There is no escape hatch** — no flag, no option, no environment variable. An escape
   here is reached under exactly the time pressure that makes skipping this a mistake.
-* **The key covers the bar as well as the content, and nothing else.** It is a digest of
+* **The key covers the bar, the content and the accepted opaque export grants.** It is a digest of
   the document's title, the design-doc template's chain digest as it resolves *now*, the
   body digest the store recorded when it rendered the document, and — for a document that
   shows images — the SHA-256 of every image's bytes, by name: see :func:`approval_key` for
@@ -94,7 +94,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, NamedTuple, NewType, TypedDict, cast
 
-from orchestrator import design_chain, npm_installs, plan_store, spike_plan
+from orchestrator import accepted_opaque, design_chain, npm_installs, plan_store, spike_plan
 from orchestrator.plan_store import NodeId, StoreDocument
 from orchestrator.root import REPO_ROOT
 
@@ -485,11 +485,14 @@ def body_digest(
     if recorded != digest and not fits_in_place(document, repository):
         raise Unrendered(
             f"{document.qualified_id} was rendered from the {TEMPLATE_NAME} template at "
-            f"{recorded}, and that template now resolves to {digest}; "
-            + REWRITE.replace(RESOLVE, resolve)
+            f"{recorded}, and that template now resolves to {digest}; a template change means "
+            "every not-yet-launched plan needs its approval recorded again with "
+            "`just approve-design <source>:<project>`; " + REWRITE.replace(RESOLVE, resolve)
         )
     if recorded != digest:
         raise Unrendered(
+            "A design-doc template change requires every not-yet-launched plan to record "
+            "approval again with `just approve-design <source>:<project>`. "
             f"{document.qualified_id} was rendered from the {TEMPLATE_NAME} template at "
             f"{recorded}, and that template now resolves to {digest}, so what it says was "
             f"written against a template no longer in force; regenerate it with "
@@ -562,10 +565,11 @@ def approval_key(
     digest: ChainDigest,
     repository: str | None = None,
     drafted: spike_plan.DraftedPlan | None = None,
+    grants: list[accepted_opaque.Edge] | None = None,
 ) -> ApprovalKey:
     """The digest ``document`` hashes to as a rendering of the design-doc chain at ``digest``.
 
-    **The title, the template, and the rendered body — and nothing else.** The body is
+    **The title, the template, and the rendered body.** The body is
     named by the digest the store recorded when it rendered it, which :func:`body_digest`
     has held the content to, and the template by its chain digest resolved now, so a
     changed template leaves every approval granted under the previous one unapproved. The
@@ -591,6 +595,11 @@ def approval_key(
     was no longer what a person would see. A document holding no asset hashes exactly as
     it did before images existed, so the key's shape changes only where they do.
 
+    **Accepted opaque export grants are covered too**, as canonical JSON over every
+    edge's (from, to, accepted_opaque), in plan order. The extra digest is omitted when
+    no edge declares a pattern, preserving the old key exactly for such plans. Removing
+    all patterns therefore cannot match a key that approved any.
+
     One thing that costs is worth knowing rather than discovering, and it is the same one
     `orchestrator/plan_review.py`'s `review_key` names: a document **moved to another
     plan** after its approval keeps that approval. What a person approved is the document,
@@ -601,6 +610,8 @@ def approval_key(
         "digest": digest,
         "title": document.title,
     }
+    if grants and accepted_opaque.has_patterns(grants):
+        authored["accepted_opaque"] = accepted_opaque.digest(grants)
     assets = asset_digests(document)
     if assets:
         authored["assets"] = assets
@@ -938,7 +949,11 @@ def current(project: str) -> tuple[StoreDocument, ApprovalKey]:
     drafted = spike_plan.DraftedPlan(project)
     unshown(project, document, documents, record, drafted)
     repository = design_chain.plan_repository(project, record)
-    key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository, drafted)
+    grants = accepted_opaque.edges(record)
+    accepted_opaque.shown(document.content, grants)
+    key = approval_key(
+        document, resolved_digest(TEMPLATE_ROOT, repository), repository, drafted, grants
+    )
     # After the key, which refuses a document that is not a rendering of the chain in force:
     # only such a rendering's table is the one the template's shape is read against.
     ungraphed(project, document)
@@ -1151,17 +1166,30 @@ def assess(project: str) -> Assessment:
         unshown(project, document, all_documents, record, drafted)
         repository = design_chain.plan_repository(project, record)
         key = approval_key(
-            document, resolved_digest(TEMPLATE_ROOT, repository), repository, drafted
+            document,
+            resolved_digest(TEMPLATE_ROOT, repository),
+            repository,
+            drafted,
+            accepted_opaque.edges(record),
         )
     except OSError as exc:
         return Assessment(refusal=stated(str(exc), note))
     if recorded(document) == key:
         return Assessment()
+    grants = accepted_opaque.edges(record)
+    edges = accepted_opaque.names(grants)
+    changed = (
+        f" Accepted opaque content on export edge(s) {edges} must be re-approved in the design."
+        if edges
+        else ""
+    )
     return Assessment(
         refusal=stated(
             f"{project}'s design document {document.qualified_id} carries no approval for "
             f"what it currently says. It is at {located(document)}: read it, and record "
-            f"the approval with `{RECIPE} {project}`",
+            f"the approval with `{RECIPE} {project}`.{changed} A design-doc template change "
+            "requires every not-yet-launched plan to regenerate its design "
+            "and record approval again",
             note,
         )
     )

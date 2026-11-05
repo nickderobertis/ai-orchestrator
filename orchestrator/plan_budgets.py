@@ -53,7 +53,7 @@ from typing import Any, ClassVar, NamedTuple, NewType, NotRequired, Protocol, Ty
 
 import yaml
 
-from orchestrator import design_approval, npm_installs, plan_store, task_body
+from orchestrator import accepted_opaque, design_approval, npm_installs, plan_store, task_body
 from orchestrator.plan_store import QualifiedProjectId, StoreTask
 from orchestrator.project_store import DOCUMENTS_DIRECTORY, hosted_origin
 from orchestrator.root import REPO_ROOT
@@ -420,6 +420,7 @@ def budget_answer(
 class WriterAnswers(TypedDict):
     """The design document's budget answers, exactly as the writer copies them."""
 
+    accepted_opaque: NotRequired[list[accepted_opaque.Edge]]
     #: The migration list's reason when it names the plan, and `""` otherwise.
     predates_budgets: str
     #: The plan's :data:`PLAN_RECORD`, or `{}` when project analysis is absent.
@@ -1221,9 +1222,13 @@ def writer_answers(project: str) -> WriterAnswers:
     node. Raises :class:`BudgetsError` for missing analysis when a task adds/changes a budget.
     With no such budget, absent analysis returns an empty object and all task budgets.
     """
+    grants = accepted_opaque.edges(plan_store.project_record(project))
     reason = migrated(project)
     if reason is not None:
-        return WriterAnswers(predates_budgets=reason, plan_budgets={}, budgets=[])
+        answer = WriterAnswers(predates_budgets=reason, plan_budgets={}, budgets=[])
+        if accepted_opaque.has_patterns(grants):
+            answer["accepted_opaque"] = grants
+        return answer
     record = plan_store.project_record(project).get("metadata")
     present = isinstance(record, Mapping) and PLAN_RECORD in record
     held = record.get(PLAN_RECORD) if isinstance(record, Mapping) else None
@@ -1245,11 +1250,14 @@ def writer_answers(project: str) -> WriterAnswers:
             f"{project} carries no `{PLAN_RECORD}` metadata for its added/changed budgets; "
             f"`just check-plan {project}` refuses it for the same reason"
         )
-    return WriterAnswers(predates_budgets="", plan_budgets=held or {}, budgets=budgets)
+    answer = WriterAnswers(predates_budgets="", plan_budgets=held or {}, budgets=budgets)
+    if accepted_opaque.has_patterns(grants):
+        answer["accepted_opaque"] = grants
+    return answer
 
 
 #: The design document's three budget answers, whose values :func:`writer_answers` states.
-DESIGN_ANSWERS = tuple(WriterAnswers.__annotations__)
+DESIGN_ANSWERS = ("predates_budgets", "plan_budgets", "budgets")
 
 
 def design_refusals(project: str) -> tuple[str, list[str]]:
@@ -1274,6 +1282,10 @@ def design_refusals(project: str) -> tuple[str, list[str]]:
         )
         if answered.get(name) != expected
     ]
+    if answered.get("accepted_opaque", []) != stated.get("accepted_opaque", []):
+        found.append(
+            "its `accepted_opaque` answer differs from the export edges; regenerate the design"
+        )
     # A rendering of the design-doc chain in force always holds the list, `[]` by default, so
     # a document holding none was rendered under another chain and is refused as such.
     held = answered.get("budgets")

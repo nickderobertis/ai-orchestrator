@@ -421,8 +421,8 @@ def test_the_browsers_complete_approves_the_stored_version_through_the_same_auth
     assert status == 200, receipt
     completed = receipt["item"]["item"]
     assert completed["id"] == item["id"] and completed["state"] == "completed", completed
-    # The read API records its acting session as the actor, spelled as the session id alone.
-    assert completed["resolution"]["actor"] == MANAGER, completed
+    # The read API records its acting session with the authority's session prefix.
+    assert completed["resolution"]["actor"] == f"session:{MANAGER}", completed
     assert completed["resolution"]["on_behalf_of"] is None, completed
     assert recorded == item["approval"]["key"]
     assert gated.returncode == 0, gated.stdout + gated.stderr

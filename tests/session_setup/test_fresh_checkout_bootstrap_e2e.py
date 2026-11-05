@@ -14,10 +14,12 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import pytest_temp_root
 from nx_workspace import copy_working_tree, missing_plan_roots, read_a_plan_graph
 from offline_installs import NO_NETWORK
 from waits import until
@@ -64,7 +66,9 @@ def _browsers_path() -> str:
 
 
 @pytest.fixture(scope="module")
-def bootstrapped(tmp_path_factory: pytest.TempPathFactory) -> Bootstrapped:
+def bootstrapped(
+    tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest
+) -> Iterator[Bootstrapped]:
     """A copy of this checkout's tracked files, with no toolchain, after a real `just bootstrap`.
 
     `UV_NO_SYNC=1` is in force for the whole run, exported as every session here has it
@@ -72,6 +76,9 @@ def bootstrapped(tmp_path_factory: pytest.TempPathFactory) -> Bootstrapped:
     are the host's, and names its own state, caches and an empty sibling list. It reaches
     no package index or browser host (`NO_NETWORK`): every install comes from those caches
     and this host's Playwright browsers, and one that would have to download fails.
+
+    The whole toolchain is released with the module rather than held through the rest of
+    the session, unless one of its tests failed and left it to be read.
     """
     base = tmp_path_factory.mktemp("bootstrap")
     root = base / "checkout"
@@ -107,7 +114,8 @@ def bootstrapped(tmp_path_factory: pytest.TempPathFactory) -> Bootstrapped:
         check=False,
     )
     _await_host_sweeps([int(pid) for pid in HOST_SWEEP_JOB.findall(ran.stderr)])
-    return Bootstrapped(root=root, ran=ran, env=environment)
+    with pytest_temp_root.held_until_scope_ends(request.session, base):
+        yield Bootstrapped(root=root, ran=ran, env=environment)
 
 
 def _await_host_sweeps(jobs: list[int]) -> None:

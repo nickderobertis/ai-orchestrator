@@ -38,9 +38,11 @@ import re
 import shutil
 import struct
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import github_board
 import pytest
 from nx_workspace import (
     REAL_ENGINE,
@@ -70,6 +72,14 @@ from test_finish_plan_recipe_e2e import (
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _private_inventory() -> Iterator[None]:
+    """Answer each public copy's private-address inventory without the real board."""
+    with github_board.answering_private_inventory():
+        yield
+
 
 # What the recipes these journeys run leave in the temporary directory, by design or
 # from a published tool they run, is this module's own and goes with it

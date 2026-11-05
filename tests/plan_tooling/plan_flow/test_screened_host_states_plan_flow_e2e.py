@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
+import github_board
 import plan_fixture_source
 import pytest
 from fake_backend import PROMPT_LOG_ENV
@@ -43,6 +45,14 @@ from test_plan_flow_e2e import (
 )
 
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _private_inventory() -> Iterator[None]:
+    """Answer each public copy's private-address inventory without the real board."""
+    with github_board.answering_private_inventory():
+        yield
+
 
 #: What the pinned store's copy says in the uncredentialed state: it authenticates every
 #: private source, and the organization's cannot.

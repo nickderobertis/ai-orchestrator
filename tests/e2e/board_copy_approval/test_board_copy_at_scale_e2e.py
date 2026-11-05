@@ -54,6 +54,7 @@ import bisect
 import dataclasses
 import json
 import random
+import re
 import resource
 import statistics
 import struct
@@ -561,7 +562,10 @@ def _the_plan_landed_whole(copied: _Copied, scaled: _Scaled) -> None:
     for title, body in copied.bodies.items():
         task = copied.landed[title]
         assert task.parent_id == project.content_id, (title, task.parent_id)
-        assert body.strip() and body.strip() in task.body, (title, body, task.body)
+        anchors = re.findall(r'<a id="[^"]+"></a>\n', task.body)
+        assert anchors, task.body
+        authored = re.sub(r'<a id="[^"]+"></a>\n', "", task.body)
+        assert body.strip() and body.strip() in authored, (title, body, task.body)
     assert sorted(copied.bodies) == sorted(node.title for node in NODES), sorted(copied.bodies)
     first, second = (copied.landed[node.title] for node in NODES[:2])
     assert second.blocked_by == [first.content_id], second.blocked_by

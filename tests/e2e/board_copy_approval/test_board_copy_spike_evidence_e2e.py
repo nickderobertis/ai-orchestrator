@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import boundary_home
+import plan_fixture_source
 import pytest
 from github_board import (
     AUTHORING_ROOT_ENV,
@@ -53,6 +54,15 @@ REPOSITORY = "github.com/nickderobertis/ai-orchestrator"
 #: tracked document declares `authoring` private; a journey about the origin a copy out of a
 #: source not declared private carries states it public.
 AUTHORING_VISIBILITY_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__VISIBILITY"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_fixture_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep another journey's copy link from matching this board's reused item id."""
+    root = tmp_path / "fixture-plans"
+    root.mkdir()
+    monkeypatch.setenv(plan_fixture_source.ROOT_VARIABLE, str(root))
+
 
 CLOSING = (
     "Every claim the dispatch makes about the finished work is true of the tree as it "

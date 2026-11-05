@@ -28,6 +28,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import boundary_home
+import github_board
 import plan_fixture_source
 import pytest
 from project_fixtures import GraphImage, graph_image, reviewed
@@ -38,6 +39,13 @@ from orchestrator import plan_store, task_body
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _private_inventory() -> Iterator[None]:
+    """Answer each public copy's private-address inventory without the real board."""
+    with github_board.answering_private_inventory():
+        yield
 
 
 @pytest.fixture(autouse=True)

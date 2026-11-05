@@ -34,7 +34,8 @@ from typing import Any
 import boundary_home
 import pytest
 import yaml
-from github_board import _serving_board
+from github_board import _serving_board, _serving_private_board
+from nx_workspace import share_this_checkouts_install
 from project_fixtures import helper, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from visual_images import LARGE, TYPICAL, sized_like_screenshots, write_noise_png
@@ -561,7 +562,13 @@ def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Store]:
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{SOURCE.upper()}__PLUGIN", "local-md")
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{SOURCE.upper()}__CONFIG__ROOT", str(root))
     monkeypatch.setenv("ONETASKGRAPH_DEFAULT_SOURCES", SOURCE)
-    yield Store(SOURCE, root)
+    # The adopted store reads every private source during document copy. Serve that
+    # unused source on the existing board wire, as the screened-export bench does.
+    # llmlint: ignore[e2e_not_mocked] Only the remote GitHub wire is served locally.
+    with _serving_private_board(8) as endpoint:
+        monkeypatch.setenv("GH_PROJECTS_TOKEN", "fixture-token")
+        monkeypatch.setenv("ONETASKGRAPH_SOURCES__HUMAN_PRIVATE__CONFIG__ENDPOINT", endpoint)
+        yield Store(SOURCE, root)
 
 
 @pytest.fixture
@@ -2613,3 +2620,231 @@ def test_an_edged_plans_document_is_approved_only_once_it_opens_with_its_held_gr
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# These journeys extend the approval journey in the task's specified home,
+# plan-tooling-plan-flow, whose edge owns the same store, template, recipe and orchestrator
+# inputs. No toolchain is built and no model dispatch runs; another project over the same
+# inputs would not narrow invalidation.
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Own approval edge, as above.
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "first-pattern",
+        "change-jpg",
+        "change-png",
+        "change-stl",
+        "add-first",
+        "add-second",
+        "remove-one",
+        "remove-all",
+        "change-from",
+        "change-to",
+        "reorder-edges",
+        "reorder-patterns",
+        "add-empty",
+        "remove-empty",
+    ],
+)
+def test_export_patterns_are_visible_and_bound_to_design_approval(
+    store: Store, runs: Path, mutation: str, tmp_path: Path
+) -> None:
+    from orchestrator import accepted_opaque
+
+    # Copy exactly this project's declared workspace inputs. Only the published engine's
+    # start verb is doubled; approval, the launch recipe, wrapper and gate remain real.
+    checkout = tmp_path / "launch-checkout"
+    declaration = json.loads((Path(__file__).parent / "project.json").read_text())
+    for entry in declaration["namedInputs"]["planToolingPlanFlowWorkspace"]:
+        if not entry.startswith("{workspaceRoot}/"):
+            continue
+        relative = entry.removeprefix("{workspaceRoot}/")
+        if relative.endswith("/**/*"):
+            directory = relative.removesuffix("/**/*")
+            shutil.copytree(
+                REPO_ROOT / directory,
+                checkout / directory,
+                ignore=shutil.ignore_patterns("__pycache__"),
+                dirs_exist_ok=True,
+            )
+        elif (REPO_ROOT / relative).is_file():
+            target = checkout / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO_ROOT / relative, target)
+    installed = share_this_checkouts_install(checkout)
+    engine = checkout / "node_modules/.bin/onepipeline"
+    engine.unlink()
+    reached = tmp_path / "engine-starts.jsonl"
+    # The manager ruled that this journey doubles the published start CLI after the real
+    # recipe, wrapper and gate. The screened-export journey proves installed-engine execution.
+    # llmlint: ignore[e2e_not_mocked,tests_mirror_real_usage] CLI boundary; see manager ruling.
+    engine.write_text(
+        f"#!{REPO_ROOT / '.venv/bin/python'}\n"
+        "import json, os, sys\n"
+        "if sys.argv[1] != 'start':\n"
+        f"    os.execv({str(ENGINE)!r}, [{str(ENGINE)!r}, *sys.argv[1:]])\n"
+        "from orchestrator import plan_store\n"
+        f"with open({str(reached)!r}, 'a') as log:\n"
+        "    project = next(a for a in sys.argv if a.startswith('drafting:'))\n"
+        "    log.write(json.dumps(plan_store.project_record(project)) + '\\n')\n"
+    )
+    engine.chmod(0o755)
+
+    def launch() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["just", "orchestrate", project, *NO_OBSERVER],
+            cwd=checkout,
+            env=_environment(runs, installed),
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(240),
+            check=False,
+        )
+
+    native = "opaque-" + mutation
+    project = store.plan(native)
+    original = [
+        {
+            "from": "handoff",
+            "to": "publish",
+            "source_directory": "examples",
+            "target_directory": "examples",
+            "accepted_opaque": ["*.jpg", "*.png"],
+        },
+        {
+            "from": "publish",
+            "to": "finish",
+            "source_directory": "examples",
+            "target_directory": "examples",
+            "accepted_opaque": ["*.stl"],
+        },
+    ]
+
+    def set_edges(edges: list[dict[str, object]]) -> list[accepted_opaque.Edge]:
+        store._stored(
+            "project", "metadata", "set", project, "onepipeline.export_edges", json.dumps(edges)
+        )
+        return accepted_opaque.edges({"metadata": {"onepipeline.export_edges": edges}})
+
+    if mutation == "first-pattern":
+        for edge in original:
+            edge["accepted_opaque"] = []
+    if mutation == "remove-empty":
+        original.append({"from": "spare", "to": "unused", "accepted_opaque": []})
+    grants = set_edges(original)
+    visible = grants if accepted_opaque.has_patterns(grants) else []
+    document = store.document(native, {**DESIGN, "accepted_opaque": visible})
+    rendered = document.read_text()
+    assert ("## Accepted opaque content" in rendered) == bool(visible)
+    for edge in grants:
+        for pattern in edge["accepted_opaque"]:
+            assert json.dumps(pattern) in rendered
+            assert edge["source"] in rendered and edge["to"] in rendered
+    approved = _just("approve-design", project, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    launched = launch()
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+
+    changed = json.loads(json.dumps(original))
+    match mutation:
+        case "first-pattern":
+            changed[0]["accepted_opaque"] = ["*.jpg"]
+        case "change-jpg":
+            changed[0]["accepted_opaque"][0] = "*.jpeg"
+        case "change-png":
+            changed[0]["accepted_opaque"][1] = "*.apng"
+        case "change-stl":
+            changed[1]["accepted_opaque"][0] = "*.obj"
+        case "add-first":
+            changed[0]["accepted_opaque"].append("*.raw")
+        case "add-second":
+            changed[1]["accepted_opaque"].append("*.raw")
+        case "remove-one":
+            changed[0]["accepted_opaque"].pop()
+        case "remove-all":
+            for edge in changed:
+                edge["accepted_opaque"] = []
+        case "change-from":
+            changed[0]["from"] = "other-producer"
+        case "change-to":
+            changed[0]["to"] = "other-consumer"
+        case "reorder-edges":
+            changed.reverse()
+        case "reorder-patterns":
+            changed[0]["accepted_opaque"].reverse()
+        case "add-empty":
+            changed.append({"from": "spare", "to": "unused", "accepted_opaque": []})
+        case "remove-empty":
+            changed.pop()
+    grants = set_edges(changed)
+    visible = grants if accepted_opaque.has_patterns(grants) else []
+    checked = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv/bin/python"),
+            "-m",
+            "orchestrator.plan_budgets",
+            project,
+            "--check-design-document",
+        ],
+        cwd=REPO_ROOT,
+        env=_environment(runs),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert checked.returncode == 1, checked.stdout + checked.stderr
+    assert "`accepted_opaque` answer differs from the export edges" in checked.stderr
+    starts = reached.read_text()
+    record = json.loads(starts.splitlines()[-1])
+    assert record["metadata"]["onepipeline.export_edges"] == original
+    refused = launch()
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert f"{changed[0]['from']} -> {changed[0]['to']}" in refused.stderr
+    if mutation == "add-second":
+        assert "publish -> finish" in refused.stderr
+    assert "re-approved" in refused.stderr and "just approve-design" in refused.stderr
+    assert "nothing was dispatched" in refused.stderr
+    assert reached.read_text() == starts
+    # A new approval must follow regeneration; approving the stale visible grants refuses.
+    stale = _just("approve-design", project, runs=runs)
+    assert stale.returncode == 1, stale.stdout + stale.stderr
+    store.regenerate(native, "accepted_opaque=" + json.dumps(visible))
+    approved = _just("approve-design", project, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    launched = launch()
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    assert (
+        json.loads(reached.read_text().splitlines()[-1])["metadata"]["onepipeline.export_edges"]
+        == changed
+    )
+    if mutation == "remove-all":
+        assert "## Accepted opaque content" not in document.read_text()
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The task places approval coverage in this recipe module; these refusal cases reuse its installed store, repository template layer and approval recipe harness, alongside the opaque-grant journey above.  # noqa: E501
+@pytest.mark.parametrize("literal", ["opaque grants omitted", "```json\n{broken\n```"])
+def test_approval_refuses_a_repository_layer_that_hides_or_malforms_export_grants(
+    store: Store, runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, literal: str
+) -> None:
+    layer = (
+        '{% extends "onepipeline/host/design-doc.md.j2" %}\n'
+        "{% block accepted_opaque %}\n## Accepted opaque content\n\n"
+        + literal
+        + "\n{% endblock %}\n"
+    )
+    _registered(tmp_path, monkeypatch, SERVICE, layer)
+    native = "malformed-export-grants"
+    project = store.plan(native, repositories=[SERVICE])
+    store._stored(
+        "project",
+        "metadata",
+        "set",
+        project,
+        "onepipeline.export_edges",
+        json.dumps([{"from": "handoff", "to": "consumer", "accepted_opaque": ["*.jpg"]}]),
+    )
+    store.document(native, repository=SERVICE)
+    refused = _just("approve-design", project, runs=runs)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "Accepted opaque content" in refused.stderr
+    assert "regenerate the design and re-approve" in refused.stderr

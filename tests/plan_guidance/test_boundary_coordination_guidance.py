@@ -117,3 +117,14 @@ def test_the_planner_injection_quotes_the_guidance_rather_than_restating_it() ->
     for line in (line for lines in restated if isinstance(lines, list) for line in lines):
         assert str(line) not in template, f"the injection restates the engine's {line!r}"
     assert "one project in the `authoring` source" in " ".join(template.split())
+
+
+@pytest.mark.parametrize("surface", ["AGENTS.md", "personas/planner.yaml"])
+def test_only_the_users_word_grants_an_accepted_opaque_pattern(surface: str) -> None:
+    text = (REPO_ROOT / surface).read_text()
+    assert "accepted_opaque" in text
+    assert "manager’s brief or a manager ruling" in text
+    assert "user’s word" in text
+    assert "never propose one" in text and "unasked" in text
+    assert "**Accepted opaque content** section" in text
+    assert "user sees and approves it" in text

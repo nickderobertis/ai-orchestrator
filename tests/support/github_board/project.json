@@ -16,6 +16,7 @@
     "testSupport": [
       "{workspaceRoot}/tests/github_board.py",
       "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/orchestrator/accepted_opaque.py",
       "{workspaceRoot}/orchestrator/design_approval.py",
       "{workspaceRoot}/orchestrator/design_chain.py",
       "{workspaceRoot}/orchestrator/follow_up_comments.py",

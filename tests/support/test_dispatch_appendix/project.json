@@ -10,6 +10,7 @@
       "{workspaceRoot}/tests/test_dispatch_appendix.py",
       "{workspaceRoot}/orchestrator/adoption_guard.py",
       "{workspaceRoot}/orchestrator/criteria_guard.py",
+      "{workspaceRoot}/orchestrator/accepted_opaque.py",
       "{workspaceRoot}/orchestrator/design_approval.py",
       "{workspaceRoot}/orchestrator/design_chain.py",
       "{workspaceRoot}/orchestrator/host_installs.py",

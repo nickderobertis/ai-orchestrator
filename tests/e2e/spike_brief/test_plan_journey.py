@@ -719,11 +719,11 @@ def test_real_detached_flow_resumes_at_the_brief_boundary(tmp_path: Path, early:
             super().do_POST()
 
     name = "brief-resume-" + ("early" if early else "late")
-    with _served(ResumeBoard, BOARD, STATUS_OPTIONS, CONFIGURED_PROJECT_NUMBER) as endpoint:
-        remote = {
-            "GH_PROJECTS_TOKEN": "fixture-token",
-            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": endpoint,
-        }
+    with (
+        _serving_board() as configured,
+        _served(ResumeBoard, BOARD, STATUS_OPTIONS, CONFIGURED_PROJECT_NUMBER) as endpoint,
+    ):
+        remote = {**configured, "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": endpoint}
         environment, brief, scratch, log, project = prepare(
             tmp_path, name, remote, early=early, workspace=checkout(tmp_path / "checkout")
         )
@@ -948,11 +948,11 @@ def test_real_detached_planning_keeps_brief_failures_advisory(tmp_path: Path, fa
 
             return {key: corrupt(value, key) for key, value in answered.items()}
 
-    with _served(CloseoutBoard, BOARD, STATUS_OPTIONS, CONFIGURED_PROJECT_NUMBER) as endpoint:
-        remote = {
-            "GH_PROJECTS_TOKEN": "fixture-token",
-            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": endpoint,
-        }
+    with (
+        _serving_board() as configured,
+        _served(CloseoutBoard, BOARD, STATUS_OPTIONS, CONFIGURED_PROJECT_NUMBER) as endpoint,
+    ):
+        remote = {**configured, "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": endpoint}
         environment, brief, scratch, log, project = prepare(
             tmp_path, name, remote, early=True, workspace=checkout(tmp_path / "checkout")
         )

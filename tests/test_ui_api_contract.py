@@ -287,7 +287,12 @@ ACTION_ITEMS_AVAILABILITY = {
     "there is no sample mode": "There is no sample mode",
     "`503 human_items_unavailable`": "`503 human_items_unavailable`",
     "`Re-read the current document`": "Re-read the current document",
-    "records no `on_behalf_of`": "`on_behalf_of` is always `null`",
+    "records no `on_behalf_of`": "always `on_behalf_of: null`",
+    "host-wide queue of human tasks and questions": "Lists and details are host-wide",
+    "`browser` for an unattributed server": "literal `browser` for an unattributed server",
+    "any server can resolve any owner's item": (
+        "Any server may answer, complete or dismiss any owner's item"
+    ),
 }
 
 

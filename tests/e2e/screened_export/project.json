@@ -61,6 +61,7 @@
       "{workspaceRoot}/orchestrator/adoption_guard.py",
       "{workspaceRoot}/orchestrator/budgets.yaml",
       "{workspaceRoot}/orchestrator/criteria_guard.py",
+      "{workspaceRoot}/orchestrator/accepted_opaque.py",
       "{workspaceRoot}/orchestrator/design_approval.py",
       "{workspaceRoot}/orchestrator/design_chain.py",
       "{workspaceRoot}/orchestrator/host_installs.py",

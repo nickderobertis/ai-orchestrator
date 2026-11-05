@@ -403,10 +403,21 @@ class CopyOptions(TypedDict, total=False):
 #: the destination is the engine's write-back to make, not a manager's; and `status_policy`,
 #: because every plan copy fixes it to `preserve-destination`: board statuses and open/closed
 #: state belong to runs and people, while new items take their source status.
+#: `replace`, `reject` and `sanitize_dry_run` are invocation-specific write-policy controls;
+#: plan publication uses the configured policy and the ordinary copy verdict instead.
 #: Named rather than left out of the reconciliation, so a parameter the SDK adds later still
 #: fails it by name.
 UNEXPOSED: frozenset[str] = frozenset(
-    {"comments", "members_only", "no_link", "status_policy", "term_scope"}
+    {
+        "comments",
+        "members_only",
+        "no_link",
+        "status_policy",
+        "term_scope",
+        "replace",
+        "reject",
+        "sanitize_dry_run",
+    }
 )
 
 

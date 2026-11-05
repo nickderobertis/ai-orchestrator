@@ -239,6 +239,8 @@ def destination(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
     # root when it is built, so an absent one is refused as a broken source rather than
     # populated — which would report a sound copy as a destination that refused it.
     root.mkdir(parents=True)
+    # This local board stands in for a private destination, with no public publication.
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__VISIBILITY", "private")
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__PLUGIN", "local-md")
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__CONFIG__ROOT", str(root))
     monkeypatch.setenv("ONETASKGRAPH_DEFAULT_SOURCES", f"{DRAFTED_IN},{DESTINATION}")
@@ -706,6 +708,7 @@ def _write_design_document_pointing_at(
 # tree that was never run.
 def test_a_copied_design_document_points_its_task_references_at_the_destination(
     destination: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A copied document's planned-tasks table locates each task on the destination.
 
@@ -713,6 +716,7 @@ def test_a_copied_design_document_points_its_task_references_at_the_destination(
     reader the document exists for. Three readings share one copy because each would
     otherwise pay for its own plan and review turn.
     """
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__TEST_FIXTURES__VISIBILITY", "public")
     project = _project("copy-references", "route", "worker")
     _, _, native = project.partition(":")
     copied_id = f"{DESTINATION}:{native}"
@@ -871,6 +875,7 @@ def test_a_budget_changed_after_the_review_stops_the_copy_and_copies_nothing(
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingPlanCopyWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
 def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
     destination: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The design document's budget table links each owner where the copy put it.
 
@@ -881,6 +886,7 @@ def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
     own file, to the file the destination reports for its task, at the `#budget-<id>`
     fragment of the budget's heading there, and none is the drafting store's location.
     """
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__TEST_FIXTURES__VISIBILITY", "public")
     project = _project("copy-owned-links", "route", "worker")
     _, _, native = project.partition(":")
     copied_id = f"{DESTINATION}:{native}"

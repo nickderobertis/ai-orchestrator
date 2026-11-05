@@ -30,12 +30,13 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
 
 import boundary_home
+import github_board
 import plan_fixture_source
 import plan_root_variable
 import pytest
@@ -72,6 +73,14 @@ from orchestrator import design_approval, design_chain, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _private_inventory() -> Iterator[None]:
+    """Answer each public copy's private-address inventory without the real board."""
+    with github_board.answering_private_inventory():
+        yield
+
 
 # What the recipes these journeys run leave in the temporary directory, by design or
 # from a published tool they run, is this module's own and goes with it

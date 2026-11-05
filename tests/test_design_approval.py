@@ -36,7 +36,14 @@ import pytest
 from project_fixtures import ONEVCS_HOME, register_stand_in
 from registered_checkouts import discover_checkouts, sibling_git
 
-from orchestrator import design_approval, design_chain, design_review, npm_installs, plan_store
+from orchestrator import (
+    accepted_opaque,
+    design_approval,
+    design_chain,
+    design_review,
+    npm_installs,
+    plan_store,
+)
 from orchestrator.plan_store import (
     NodeId,
     QualifiedDocumentId,
@@ -1869,7 +1876,14 @@ def _served(digests: Mapping[str, str]) -> StoreDocument:
     return _document(content=content, metadata={plan_store.ASSETS_KEY: served})
 
 
-def test_a_document_holding_no_asset_is_keyed_exactly_as_before_images() -> None:
+@pytest.mark.parametrize(
+    "grants",
+    [None, [], [{"source": "producer", "to": "consumer", "accepted_opaque": []}]],
+    ids=["no-export-argument", "no-edges", "edge-without-patterns"],
+)
+def test_a_document_holding_no_asset_is_keyed_exactly_as_before_images(
+    grants: list[accepted_opaque.Edge] | None,
+) -> None:
     """The key's shape changes only where a document shows an image."""
     document = _document()
     before = json.dumps(
@@ -1883,9 +1897,80 @@ def test_a_document_holding_no_asset_is_keyed_exactly_as_before_images() -> None
         separators=(",", ":"),
     )
     assert design_approval.asset_digests(document) == {}
-    assert design_approval.approval_key(document, STATED) == (
+    assert design_approval.approval_key(document, STATED, grants=grants) == (
         hashlib.sha256(before.encode("utf-8")).hexdigest()
     )
+
+
+_GRANTS: list[accepted_opaque.Edge] = [
+    {"source": "producer", "to": "consumer", "accepted_opaque": ["*.jpg", "*.png"]},
+    {"source": "other", "to": "last", "accepted_opaque": ["*.stl"]},
+]
+
+
+def _grants_changed(patterns: list[str]) -> list[accepted_opaque.Edge]:
+    """``_GRANTS`` with the first edge's patterns replaced by ``patterns``."""
+    first, second = _GRANTS
+    return [{**first, "accepted_opaque": patterns}, second]
+
+
+def _section(grants: object) -> str:
+    """A design document showing ``grants`` the way the template renders them."""
+    literal = json.dumps(grants)
+    return f"# Design\n\n## Accepted opaque content\n\n```json\n{literal}\n```\n\n## Next\n"
+
+
+def test_a_grant_moves_the_approval_key_and_each_change_to_one_moves_it_again() -> None:
+    """Approving a plan's patterns binds the key to them, and removing them all unbinds it."""
+    document = _document()
+    keys = [
+        design_approval.approval_key(document, STATED, grants=grants)
+        for grants in (
+            None,
+            _GRANTS,
+            _grants_changed(["*.jpeg", "*.png"]),
+            _grants_changed(["*.jpg", "*.png", "*.raw"]),
+            _grants_changed(["*.jpg"]),
+            list(reversed(_GRANTS)),
+        )
+    ]
+    assert len(set(keys)) == len(keys), keys
+    removed = [{**edge, "accepted_opaque": []} for edge in _GRANTS]
+    assert design_approval.approval_key(document, STATED, grants=removed) == keys[0]
+    assert design_approval.approval_key(document, STATED, grants=_GRANTS) == keys[1]
+
+
+def test_a_document_showing_exactly_the_plans_grants_is_accepted() -> None:
+    accepted_opaque.shown(_section(_GRANTS), _GRANTS)
+    accepted_opaque.shown("# Design\n", [])
+    accepted_opaque.shown("# Design\n", [{**_GRANTS[0], "accepted_opaque": []}])
+
+
+@pytest.mark.parametrize(
+    ("content", "grants", "named"),
+    [
+        ("# Design\n", _GRANTS, "producer -> consumer, other -> last"),
+        (_section(_GRANTS[:1]), _GRANTS, "producer -> consumer, other -> last"),
+        (
+            "## Accepted opaque content\n\nnone shown\n",
+            _GRANTS,
+            "producer -> consumer, other -> last",
+        ),
+        (
+            "## Accepted opaque content\n\n```json\n{broken\n```\n",
+            _GRANTS,
+            "producer -> consumer, other -> last",
+        ),
+        (_section(_GRANTS), [], "previously declared"),
+    ],
+    ids=["hidden", "one-edge-left-out", "no-literal", "malformed-literal", "patterns-removed"],
+)
+def test_a_document_not_showing_the_plans_grants_is_refused_naming_the_edges(
+    content: str, grants: list[accepted_opaque.Edge], named: str
+) -> None:
+    with pytest.raises(OSError, match=f"export edge\\(s\\) {named} differs") as refused:
+        accepted_opaque.shown(content, grants)
+    assert "just approve-design" in str(refused.value)
 
 
 def test_an_image_is_read_the_same_from_a_local_file_and_a_served_record(

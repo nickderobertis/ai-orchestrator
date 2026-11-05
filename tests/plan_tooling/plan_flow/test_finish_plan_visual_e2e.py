@@ -30,9 +30,11 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import github_board
 import pytest
 from fake_backend import ENVIRONMENT_KEYS_ENV, PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from published_tools import ONETASKGRAPH_BIN
@@ -65,6 +67,14 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import spike_plan
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _private_inventory() -> Iterator[None]:
+    """Answer each public copy's private-address inventory without the real board."""
+    with github_board.answering_private_inventory():
+        yield
+
 
 # What the recipes these journeys run leave in the temporary directory, by design or
 # from a published tool they run, is this module's own and goes with it

@@ -13,10 +13,12 @@ import argparse
 import json
 import subprocess
 import traceback
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
+from binary_files import files
 from export_plan import PlanSpec, TaskSpec
 from pydantic import JsonValue
 
@@ -27,6 +29,11 @@ from orchestrator.root import REPO_ROOT
 UNIT = "Listing"
 #: The committer the scripted workers commit as: neutral, as any worker's identity is.
 GIT_IDENTITY = ("-c", "user.email=worker@example.invalid", "-c", "user.name=Example Worker")
+
+
+#: The file the private producer commits inside the exported directory, whose commit
+#: carries the journey's binary files with it.
+EXPORTED_README = "examples/cursor/README.md"
 
 
 def run(*args: str, timeout: float = 120) -> str:
@@ -190,14 +197,20 @@ def design(project: str, scratch: Path, graph_root: Path) -> None:
     )
 
 
-def commit(path: str, content: str, message: str) -> None:
-    """Write ``content`` at ``path`` in the turn's worktree and commit it under ``message``."""
+def commit(
+    path: str, content: str, message: str, beside: Mapping[str, bytes] | None = None
+) -> None:
+    """Commit ``content`` at ``path`` in the turn's worktree, with each file ``beside`` it."""
     written = Path(path)
     if written.exists():
         return
     written.parent.mkdir(parents=True, exist_ok=True)
     written.write_text(content)
-    run("git", "add", path)
+    staged = [written]
+    for name, data in (beside or {}).items():
+        staged.append(written.parent / name)
+        staged[-1].write_bytes(data)
+    run("git", "add", *map(str, staged))
     run("git", *GIT_IDENTITY, "commit", "-q", "-m", message)
 
 
@@ -228,7 +241,8 @@ def _dispatch(args: argparse.Namespace) -> None:
         case "design":
             design(args.argument, args.scratch, args.graph_root)
         case "commit":
-            commit(args.argument, args.content, args.message)
+            exported = files() if args.argument == EXPORTED_README else None
+            commit(args.argument, args.content, args.message, exported)
 
 
 if __name__ == "__main__":

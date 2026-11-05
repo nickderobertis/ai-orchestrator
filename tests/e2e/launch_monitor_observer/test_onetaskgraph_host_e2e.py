@@ -5788,8 +5788,13 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
     assert len(reissued) == len(issued), (issued, reissued)
     refiled = reissued[RENDERED_SECOND.title]
     assert (refiled.item_id, refiled.content_id) == (first_item, first_issue)
-    assert refiled.body.startswith(after.content), refiled.body[:400]
-    carried = refiled.body.removeprefix(after.content)
+    # GitHub copies now carry the store's explicit heading anchors. The authored
+    # content and all of its answers still travel whole, with nothing duplicated in
+    # the metadata following that content.
+    assert refiled.body.startswith('<a id="what"></a>\n## What\n'), refiled.body[:400]
+    authored = re.sub(r'^<a id="[a-z0-9-]+"></a>\n', "", refiled.body, flags=re.MULTILINE)
+    assert authored.startswith(after.content), refiled.body[:400]
+    carried = authored.removeprefix(after.content)
     answers = RENDERED_ANSWERS[RENDERED_SECOND.node]
     criteria = answers["acceptance_criteria"]
     assert isinstance(criteria, list)

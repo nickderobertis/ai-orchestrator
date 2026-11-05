@@ -33,10 +33,11 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import github_board
 import plan_root_variable
 import pytest
 import short_state
@@ -58,6 +59,14 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import spike_plan
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _private_inventory() -> Iterator[None]:
+    """Answer each public copy's private-address inventory without the real board."""
+    with github_board.answering_private_inventory(complete=True):
+        yield
+
 
 # What the recipes these journeys run leave in the temporary directory, by design or
 # from a published tool they run, is this module's own and goes with it
@@ -449,6 +458,9 @@ def flow(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Flow:
         "PATH": f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}",
         "FAKE_CODEX_ANSWERS": json.dumps([PASSING_VERDICT]),
         plan_root_variable.name(): str(authoring),
+        # What the tracked document says of it, for a turn in a worktree that lacks that
+        # document and sees the private source the inventory's stand-in declares.
+        "ONETASKGRAPH_SOURCES__AUTHORING__VISIBILITY": "private",
         "ONETASKGRAPH_SOURCES__DESTINATION__PLUGIN": "local-md",
         "ONETASKGRAPH_SOURCES__DESTINATION__CONFIG__ROOT": str(destination),
         "ONETASKGRAPH_DEFAULT_SOURCES": f"{AUTHORING},{DESTINATION}",

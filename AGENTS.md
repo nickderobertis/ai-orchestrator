@@ -826,6 +826,7 @@ them reach you; `manager` names the session role and is never a command.
    cost) its decisions are graded by. Put the board copy in front of them, answer what they ask, and record their decision with
    `just approve-design <source>:<project>`; `just orchestrate` refuses a plan whose
    document is missing or unapproved.
+   Write an `accepted_opaque` pattern onto an export edge only where the manager’s brief or a manager ruling names it on the user’s word, never propose one as a planner or worker unasked; the design document’s **Accepted opaque content** section is where the user sees and approves it.
    Its per-unit **Architecture** — each high-cost decision with its exact contract — is
    where your own reading of the seams goes. A seam is
    wherever two parties must both hold to an agreement and one can move without the

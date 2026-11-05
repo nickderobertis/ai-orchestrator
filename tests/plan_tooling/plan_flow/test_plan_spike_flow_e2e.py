@@ -41,10 +41,11 @@ import shlex
 import shutil
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, cast
 
+import github_board
 import plan_fixture_source
 import pytest
 import short_state
@@ -69,6 +70,14 @@ from test_plan_flow_e2e import (
 from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, spike_plan
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _private_inventory() -> Iterator[None]:
+    """Answer each public copy's private-address inventory without the real board."""
+    with github_board.answering_private_inventory():
+        yield
+
 
 #: Copies the tracked tree, so it sits in the whole-workspace tier.
 # What the recipes these journeys run leave in the temporary directory, by design or

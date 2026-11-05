@@ -4106,6 +4106,7 @@ def test_board_status_refuses_edges_without_the_validated_shape_before_asking_th
 )
 def test_a_dependency_added_after_board_status_is_copied_only_after_a_further_board_status(
     board: Path,
+    served_followups: None,
     drafts_root: Path,
     capsys: pytest.CaptureFixture[str],
     held: tickets.Status,

@@ -9,6 +9,7 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/follow_up_ticket_shape.py",
+      "{workspaceRoot}/orchestrator/accepted_opaque.py",
       "{workspaceRoot}/orchestrator/design_approval.py",
       "{workspaceRoot}/orchestrator/design_chain.py",
       "{workspaceRoot}/orchestrator/follow_up_comments.py",

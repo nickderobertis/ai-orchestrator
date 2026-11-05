@@ -27,6 +27,7 @@ from typing import ClassVar, Literal, NamedTuple, NewType
 
 import follow_up_variables
 import onetaskgraph_user_layer
+import pytest
 from follow_up_ticket_shape import FIX, current_section, impact_prose
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
@@ -2987,12 +2988,31 @@ def _serving_board(
     """
     _GitHubFixture.refusal = refusal
     try:
-        with _served(_GitHubFixture, BOARD, options, number) as endpoint:
+        with (
+            _served(_GitHubFixture, BOARD, options, number) as endpoint,
+            _served(
+                _HumanPublicFixture,
+                _EmptyBoard(),
+                STATUS_OPTIONS,
+                _tracked_project_number("human-public"),
+            ) as human_public,
+            _served(
+                _HumanPrivateFixture,
+                _EmptyBoard(),
+                STATUS_OPTIONS,
+                _tracked_project_number("human-private"),
+            ) as human_private,
+        ):
             BOARD.placement_delays = placement
             yield {
                 "GH_PROJECTS_TOKEN": "fixture-token",
                 "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": endpoint,
                 "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": endpoint,
+                # Document routing reads the configured human-task destinations too.
+                # Keep those reads on separate empty boards, away from GitHub and from
+                # this journey's plans/followups request counts.
+                "ONETASKGRAPH_SOURCES__HUMAN_PUBLIC__CONFIG__ENDPOINT": human_public,
+                "ONETASKGRAPH_SOURCES__HUMAN_PRIVATE__CONFIG__ENDPOINT": human_private,
                 # A copy onto `plans` or `followups` builds every source their routes name,
                 # which a Linear source refuses to do without its key; a journey whose user
                 # layer routes to the example's Linear sources says so, and a task routed
@@ -3084,6 +3104,61 @@ class _HumanPrivateFixture(_GitHubFixture):
 
     requests: ClassVar[list[_GraphQLRequest]] = []
     rest_requests: ClassVar[list[RestRequest]] = []
+
+
+class _PrivateInventoryFixture(_GitHubFixture):
+    """The `human-private` board a public copy's inventory read reaches, and nothing else's.
+
+    Its own class, so a journey serving the committed human boards beside it through
+    `_HumanPrivateFixture` keeps its own board and request logs.
+    """
+
+    requests: ClassVar[list[_GraphQLRequest]] = []
+    rest_requests: ClassVar[list[RestRequest]] = []
+
+
+#: Names the fixture's own token for `human-private`, so `GH_PROJECTS_TOKEN` stays what the
+#: journey's environment makes it for every other source, a journey on a missing one included.
+PRIVATE_INVENTORY_TOKEN = "ORCHESTRATOR_TEST_PRIVATE_INVENTORY_TOKEN"  # noqa: S105 - a variable name
+
+
+@contextmanager
+def answering_private_inventory(*, complete: bool = False) -> Iterator[Sequence[object]]:
+    """Answer a public copy's private-address inventory from an empty loopback board.
+
+    Yields the live requests that board received, for a journey holding the read to happening.
+
+    The adopted store reads every source declared private before a public copy writes, and
+    refuses when it cannot. A journey copying onto a local stand-in would otherwise read the
+    real `human-private` board under a host's token, and be refused under no token at all,
+    which is every dispatch of this host. The variables reach each store the journey starts,
+    so the inventory answers without any network and the copy's own boundary stays real.
+
+    ``complete`` declares the whole source rather than overlaying the tracked one, for a
+    journey whose turns run in a target's worktree: the store refuses a partial overlay of a
+    source nothing there declares, and a declared private source switches its boundary on.
+    """
+    with (
+        _served(
+            _PrivateInventoryFixture,
+            _EmptyBoard(),
+            STATUS_OPTIONS,
+            _tracked_project_number("human-private"),
+        ) as endpoint,
+        pytest.MonkeyPatch.context() as patched,
+    ):
+        settings = {"CONFIG__ENDPOINT": endpoint, "CONFIG__TOKEN_ENV": PRIVATE_INVENTORY_TOKEN}
+        if complete:
+            settings |= {
+                "PLUGIN": "github-projects",
+                "VISIBILITY": "private",
+                "CONFIG__OWNER": CONFIGURED_REPOSITORY.owner,
+                "CONFIG__PROJECT_NUMBER": str(_tracked_project_number("human-private")),
+            }
+        for setting, value in settings.items():
+            patched.setenv(f"ONETASKGRAPH_SOURCES__HUMAN_PRIVATE__{setting}", value)
+        patched.setenv(PRIVATE_INVENTORY_TOKEN, "fixture-token")
+        yield _PrivateInventoryFixture.requests
 
 
 @contextmanager

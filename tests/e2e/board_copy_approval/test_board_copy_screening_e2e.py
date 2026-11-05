@@ -1,33 +1,18 @@
-"""A screened board copy asks only what its plan reaches, and refuses before it writes.
+"""Public copies inventory private addresses before writing, through the real recipes.
 
-The tracked `onetaskgraph.yaml` switches the plan store's public write boundary on, so every
-`just copy-plan` onto the public `plans` board is screened through the installed `onevcs`. A
-host doing an organization's work declares that organization's trackers private in its user
-layer, and the copies of this repository's own plans — which name none of them — must neither
-ask those trackers anything nor wait on one that is down: on onetaskgraph 0.11.0 a public-only
-copy asked every source declared private which of its tasks recorded the copied ones, and an
-unreachable tracker failed the copy after its writes had landed.
-
-What a copy carries that the board may not hold is the other half: a task declared private,
-or one naming a repository whose visibility nobody can answer, is refused before any write
-reaches the board, so nothing public is created and then deleted.
-
-Only the hosted services are doubled: the GitHub board is `tests/github_board.py`'s loopback
-double, and the organization's Linear tracker a loopback port that takes every connection and
-answers none. The recipe, the installed plan store and `onevcs`, and this host's templates are
-real, and `onevcs` answers each repository's visibility from a registry the test writes
-through it (`tests/boundary_home.py`).
+Only hosted APIs and paid words are doubled. A private tracker that answers lets the
+copy land without private addresses; one that refuses stops the copy before any write.
+Private task and unclassified repository refusals remain independent journeys.
 """
 
 from __future__ import annotations
 
 import json
-import socket
 import subprocess
 import threading
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import boundary_home
@@ -47,44 +32,44 @@ from test_board_copy_design_approval_e2e import (
 )
 
 
-class _Held:
-    """A hosted service held unavailable: every connection is taken, and none is answered."""
+class _Tracker(BaseHTTPRequestHandler):
+    """An empty private tracker, or an immediate service failure, recorded on the wire."""
 
-    def __init__(self) -> None:
-        self.listener = socket.create_server(("127.0.0.1", 0))
-        self.connections: list[socket.socket] = []
-        self.stopped = threading.Event()
+    requests: list[str] = []
+    available = True
 
-    @property
-    def endpoint(self) -> str:
-        host, port = self.listener.getsockname()[:2]
-        return f"http://{host}:{port}/graphql"
+    def do_POST(self) -> None:  # noqa: N802 - stdlib callback
+        sent = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+        self.requests.append(sent)
+        query = json.loads(sent)["query"]
+        empty = {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}
+        if self.available and "mutation" not in query:
+            body = {"data": {"issues": empty, "projects": empty, "documents": empty}}
+            self.send_response(200)
+        else:
+            body = {"errors": [{"message": "private tracker unavailable"}]}
+            self.send_response(503)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(body).encode())
 
-    def serve(self) -> None:
-        self.listener.settimeout(0.2)
-        while not self.stopped.is_set():
-            try:
-                taken, _ = self.listener.accept()
-            except TimeoutError:
-                continue
-            except OSError:
-                return
-            self.connections.append(taken)
+    def log_message(self, format: str, *args: object) -> None:
+        return
 
 
 @contextmanager
-def _held_service() -> Iterator[_Held]:
-    held = _Held()
-    serving = threading.Thread(target=held.serve, daemon=True)
+def _tracker(available: bool) -> Iterator[str]:
+    _Tracker.requests = []
+    _Tracker.available = available
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Tracker)
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
     serving.start()
     try:
-        yield held
+        yield f"http://127.0.0.1:{server.server_port}/graphql"
     finally:
-        held.stopped.set()
+        server.shutdown()
         serving.join(timeout=5)
-        for taken in held.connections:
-            taken.close()
-        held.listener.close()
+        server.server_close()
 
 
 def _organization_layer(tmp_path: Path, endpoint: str) -> dict[str, str]:
@@ -145,35 +130,31 @@ def _mutations() -> list[str]:
 # because driving it writes to the live board this repository plans on, and the organization's
 # Linear tracker, because no check may reach a Linear workspace — and the paid model `reviewed`
 # scripts; the recipe, the installed plan store and onevcs, and the records they write are real.
-def test_a_public_only_copy_neither_asks_nor_waits_on_an_unrelated_private_tracker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("available", [True, False], ids=["answering", "unavailable"])
+def test_a_public_copy_checks_private_addresses_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, available: bool
 ) -> None:
-    """The copy lands whole while the organization's private tracker takes connections, unanswered.
-
-    Not one connection reaches it: the plan names no repository routed there and no item of
-    it, so screening the copy has nothing to ask it, and a request made anyway would hold the
-    copy until the store gave up.
-    """
+    """A complete private inventory admits a clean copy; a failed one writes nothing."""
     boundary_home.answering(monkeypatch)
-    environment, _, _ = _drafted_for_the_board(tmp_path, monkeypatch, approve=False)
-    with _held_service() as tracker, _serving_board() as remote:
-        layered = {**environment, **remote, **_organization_layer(tmp_path, tracker.endpoint)}
+    environment, located, _ = _drafted_for_the_board(tmp_path, monkeypatch, approve=False)
+    with _tracker(available) as endpoint, _serving_board() as remote:
+        layered = {**environment, **remote, **_organization_layer(tmp_path, endpoint)}
         copied = _recipe(layered, "copy-plan", RENDERED_QUALIFIED, "--to", "plans")
-        landed = sorted(issue.title for issue in BOARD.issues_created_and_kept())
-        contacted = len(tracker.connections)
-        # The tracker was listening and counting all along: a connection made now is taken.
-        host, port = tracker.listener.getsockname()[:2]
-        with socket.create_connection((host, port), timeout=5):
-            deadline = time.monotonic() + 5
-            while len(tracker.connections) == contacted and time.monotonic() < deadline:
-                time.sleep(0.05)
-        counted = len(tracker.connections) - contacted
-
-    assert copied.returncode == 0, copied.stdout + copied.stderr
-    assert counted == 1, "the held tracker took no connection, so it could not have seen one"
-    assert contacted == 0, f"the copy reached the private tracker {contacted} time(s)"
-    assert len(_copied(copied.stdout)) == 1 + 2 + 1, copied.stdout
-    assert RENDERED_PROJECT in landed and RENDERED_FIRST.title in landed, landed
+        landed = list(BOARD.issues_created_and_kept())
+        mutations = _mutations()
+    assert _Tracker.requests, "the private inventory was never checked"
+    if available:
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        assert len(_copied(copied.stdout)) == 1 + 2 + 1, copied.stdout
+        assert RENDERED_PROJECT in [issue.title for issue in landed]
+        assert RENDERED_FIRST.title in [issue.title for issue in landed]
+        for issue in landed:
+            assert located not in issue.body, issue.body
+            assert "hiddenco" not in issue.body, issue.body
+    else:
+        assert copied.returncode != 0, copied.stdout + copied.stderr
+        assert "private tracker unavailable" in copied.stdout + copied.stderr
+        assert mutations == [] and landed == [], (mutations, landed)
 
 
 def _declared_private(root: Path) -> None:

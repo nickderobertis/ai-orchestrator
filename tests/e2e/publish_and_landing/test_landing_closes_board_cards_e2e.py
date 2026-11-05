@@ -11,9 +11,9 @@ when it is adopted.
 Everything is real — the recipes, the engine, its linked `onevcs` and plan store, git, and
 this repository's own `onetaskgraph.yaml` — with its `plans` and `followups` sources pointed
 at the loopback board (`tests/github_board.py`) and the example user layer's Linear sources
-at a loopback answering only the screening read, as a tracker holding nothing, and only the
-paid model doubled. The identity is a
-scratch one filed under this repository's own origin, so a closing line names an issue the
+at a loopback answering screening and private-address inventory reads as an empty tracker,
+with only the paid model doubled. The identity is a scratch one filed under this repository's
+own origin, so a closing line names an issue the
 loopback holds; a change request opened for it is answered by `tests/e2e/fake_gh.py`.
 """
 
@@ -123,11 +123,11 @@ PATIENCE_SECONDS = 240
 
 
 # llmlint: ignore-block[e2e_not_mocked] Linear's API is a boundary no test may reach: this
-# records every request, answers the store's screening read with an empty tracker and refuses
-# everything else, so the journeys can say the closure write asked nothing else of the
-# organization's tracker.
+# records every request, answers the store's screening and private-address inventory reads
+# with an empty tracker and refuses everything else, so the journeys can say no closure
+# writes or unrelated reads reached the organization's tracker.
 class _LinearFixture(BaseHTTPRequestHandler):
-    """Every request a Linear source sends, recorded and refused."""
+    """Record every Linear request; answer only screening and private inventory reads."""
 
     requests: ClassVar[list[str]] = []
 
@@ -135,13 +135,13 @@ class _LinearFixture(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         request = self.rfile.read(length).decode("utf-8", "replace")
         _LinearFixture.requests.append(request)
-        if _screening_search(request):
+        if _screening_search(request) or _private_inventory(request):
             # The organization's tracker holds no copy of any board item.
             empty = {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}
-            body = json.dumps({"data": {"issues": empty}})
+            body = json.dumps({"data": {"issues": empty, "projects": empty, "documents": empty}})
             self.send_response(200)
         else:
-            body = json.dumps({"errors": [{"message": "the Linear loopback answers nothing"}]})
+            body = json.dumps({"errors": [{"message": "unexpected Linear request: " + request}]})
             self.send_response(500)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -154,6 +154,28 @@ class _LinearFixture(BaseHTTPRequestHandler):
 #: What a screened write to a public board asks each private source: the items whose copy
 #: link names the board item written, by a description search for its qualified id.
 SCREENED_ITEM = re.compile(r'"plans:[A-Za-z0-9_]+"')
+
+
+def _private_inventory(request: str) -> bool:
+    """Recognize the adopted store's scoped task, project and document inventory reads."""
+    sent = json.loads(request)
+    query = sent.get("query", "")
+    if not query.lstrip().startswith("query") or "mutation" in query:
+        return False
+    # Linear scopes projects by accessibleTeams/id, unlike issues' team/project filters.
+    # DocumentFilter carries its project scope directly rather than in an and-list.
+    filters = {
+        "issues": {"team", "project"},
+        "projects": {"accessibleTeams", "id"},
+        "documents": {"project"},
+    }
+    for connection, allowed in filters.items():
+        if connection + "(first:" not in query:
+            continue
+        held = sent.get("variables", {}).get("filter", {})
+        conditions = held.get("and", [held])
+        return all(set(condition) <= allowed for condition in conditions)
+    return False
 
 
 def _screening_search(request: str) -> bool:
@@ -323,8 +345,12 @@ def _bench(root: Path, oneharness_bin: str, *, reviewed: bool = False) -> Iterat
         # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
         environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
         yield Bench(root, identity, environment, ticket, task, untouched, _cards())
-        # The store's screening of each board write is the one read it may send there.
-        unscreened = [one for one in _LinearFixture.requests if not _screening_search(one)]
+        # Only correspondence screening and private-address inventory may reach this tracker.
+        unscreened = [
+            one
+            for one in _LinearFixture.requests
+            if not (_screening_search(one) or _private_inventory(one))
+        ]
         assert unscreened == [], f"the closure write reached the Linear loopback: {unscreened}"
 
 

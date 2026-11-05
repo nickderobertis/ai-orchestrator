@@ -127,6 +127,14 @@ variables:
     items: object
     required: false
     default: []
+  accepted_opaque:
+    description: >-
+      Copy verbatim from python -m orchestrator.plan_budgets: ordered export edges,
+      each with `source`, `to` and `accepted_opaque` (an ordered list of opaque pattern strings).
+    type: list
+    items: object
+    required: false
+    default: []
 ---
 {#- A table cell is one line holding no bare column delimiter, whatever an answer says. -#}
 {% macro cell(value) %}{{ value | replace("|", "\\|") | replace("\r\n", " ") | replace("\n", " ") | replace("\r", " ") }}{% endmacro %}
@@ -429,6 +437,19 @@ variables:
 
 {% endif %}
 {% endfor %}
+{% endif %}
+{% endblock %}
+{% block accepted_opaque_guidance %}
+{# Copy the export grants from orchestrator.plan_budgets verbatim; never invent a pattern. #}
+{% endblock %}
+{% block accepted_opaque %}
+{% if accepted_opaque %}
+## Accepted opaque content
+
+The export may carry files these patterns match although their contents cannot be checked in full; each file is still screened by its path and printable text, and a private term found in one still refuses the export.
+```json
+{{ accepted_opaque | tojson(indent=2) }}
+```
 {% endif %}
 {% endblock %}
 {% block acceptance_criteria_guidance %}
