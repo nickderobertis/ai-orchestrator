@@ -4377,11 +4377,11 @@ session's items and those from elsewhere holding its work, blocking first, each 
 entry with one line of its body and a line counting the host's other open items, while
 `--full` prints every body whole and `--all` the whole host; `list`, `show`, `answer`, `complete`, `dismiss [--reason
 TEXT]`, `raise --input FILE`, `watch` and `config` are the rest. The browser's **Action
-items** page ([`docs/dag-ui.md`](dag-ui.md)) is a separate view of the same store, with the
-same answer, complete and dismiss, so the CLI and the page show and do the same things;
-what differs is who is recorded acting — a CLI write run inside a manager session records
-that session acting on the user's behalf, a browser write records the server's acting
-session alone.
+items** page ([`docs/dag-ui.md`](dag-ui.md)) shares that store. With explicit matching filters, the CLI and the page show
+and do the same things. Its host-wide resolution and design-approval authority,
+including completion without an acting session, and its `session:<id>` / `browser`
+attribution are defined in [`docs/dag-ui.md`](dag-ui.md). A CLI write run inside a manager
+session records that session acting on the user's behalf.
 
 **Turning it on is configuration, not code.** The repository's `.onepipeline/config.yaml`
 holds this host's shared hooks, the one approval adapter, and the shared default every host of

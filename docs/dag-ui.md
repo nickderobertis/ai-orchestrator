@@ -122,11 +122,20 @@ Completing a design-review task here is an ordinary **Complete**: it approves th
 document version the task stored when it was raised, through the same authority `just
 approve-design` runs, and a document changed since is refused with `Re-read the current
 document`, the obsolete task dismissed and one raised for the current version. A write
-here records the acting session, or `browser` for an unattributed server, and records no
-`on_behalf_of`; any server can resolve any owner's item. A manager completing
-on a user's behalf does so from the CLI. When a run settles, ends or is stopped, the
-engine dismisses its still-open items that hold that run's work or plan with the reason
-"the run ended", so neither view keeps an item nothing can act on.
+here records actor `session:<id>` when the server has an acting session, or `browser`
+when it has none, with `on_behalf_of: null`. Any server session, including one owning
+no items, or no session can list every open item, read any owner's detail, and answer,
+complete or dismiss any owner's item. Resolution preserves ownership and delivers the
+result to that owner. This is the accepted approval authority: access to this host's
+server permits completing a design review through the same approval authority as
+`just approve-design`; no additional browser authentication is imposed here.
+Raising an item still requires an acting session and assigns that session ownership;
+other supervisory ownership rules below remain unchanged. The CLI report default
+remains scoped to its session; `onepipeline human-items report --all` requests the
+host-wide queue. A manager completing on a user's behalf does so from the CLI. When a run
+settles, ends or is stopped, the engine dismisses its still-open items that hold that
+run's work or plan with the reason "the run ended", so neither view keeps an item
+nothing can act on.
 
 **Those controls are the whole of what the view acts through.** A run is acted on by
 its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, a human
@@ -144,7 +153,10 @@ ordinary runs with ordinary channels, and a reply is the same post-launch route
 whatever the run is planning.
 
 **Who it acts as is one session, and this host names it.**
-`scripts/telemetry-server.sh` sources `scripts/launcher-session.sh` — the same
+`scripts/telemetry-server.sh` loads this checkout's `.env` through
+`scripts/credentials-env.sh`, preserving every name already defined in the environment,
+so design-review completion has the board credentials needed to record approval.
+It also sources `scripts/launcher-session.sh` — the same
 ladder every `onepipeline` recipe uses — and passes the result as `--session`, so
 the browser's stop is the stop of the manager who started the server. Three
 consequences to hold:

@@ -22,6 +22,18 @@
 # binary at every path the API does not own.
 set -euo pipefail
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# Supervisory writes include design approval, whose board needs host credentials.
+credentials_helper="$script_dir/credentials-env.sh"
+if [ ! -f "$credentials_helper" ] || [ ! -r "$credentials_helper" ]; then
+    echo "telemetry-server: required helper is not a readable regular file: $credentials_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/credentials-env.sh
+if ! . "$credentials_helper"; then
+    echo "telemetry-server: the helper at $credentials_helper is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+export_host_credentials telemetry-server
 # Who this server acts as, derived exactly as every `onepipeline` recipe derives it.
 launcher_session_helper="$script_dir/launcher-session.sh"
 if [ ! -f "$launcher_session_helper" ] || [ ! -r "$launcher_session_helper" ]; then

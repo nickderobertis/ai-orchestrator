@@ -3165,3 +3165,53 @@ def test_a_board_recipe_in_an_unprovisioned_checkout_is_refused_naming_session_s
         f"`just {board.recipe}` reached the store command in an unprovisioned checkout:\n"
         f"{trace.read_text(encoding='utf-8')}"
     )
+
+
+@pytest.mark.parametrize("recipe", ["dag-ui", "telemetry-server"])
+@pytest.mark.parametrize("inherited", [None, "command-token", ""])
+def test_server_receives_checkout_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recipe: str, inherited: str | None
+) -> None:
+    """The served process gets board credentials, respecting even an empty override."""
+    monkeypatch.delenv("GH_PROJECTS_TOKEN", raising=False)
+    checkout, trace = _checkout(tmp_path)
+    Path(_at(checkout, READ_API)).write_text(ENVIRONMENT_RECORDING_ENGINE)
+    (checkout / ".env").write_text("GH_PROJECTS_TOKEN=checkout-token\n")
+    environment = {} if inherited is None else {"GH_PROJECTS_TOKEN": inherited}
+
+    result = _run(checkout, trace, recipe, env=environment)
+
+    assert result.returncode == 0, result.stderr
+    (call,) = [RecordedCall(**json.loads(line)) for line in trace.read_text().splitlines()]
+    assert call.argv[0] == "serve"
+    assert call.env["GH_PROJECTS_TOKEN"] == ("checkout-token" if inherited is None else inherited)
+
+
+def test_server_refuses_malformed_checkout_credentials(tmp_path: Path) -> None:
+    """A malformed credentials file refuses launch before the API is started."""
+    checkout, trace = _checkout(tmp_path)
+    (checkout / ".env").write_text("not an assignment\n")
+
+    result = _run(checkout, trace, "dag-ui")
+
+    assert result.returncode == 2, result.stderr
+    assert "credential" in result.stderr
+    assert not trace.exists()
+
+
+@pytest.mark.parametrize("sabotage", ["missing", "unloadable"])
+def test_server_explains_unloadable_credentials_helper(tmp_path: Path, sabotage: str) -> None:
+    """A broken checkout names the credentials helper and its repair before serving."""
+    checkout, trace = _checkout(tmp_path)
+    helper = checkout / "scripts" / "credentials-env.sh"
+    if sabotage == "missing":
+        helper.unlink()
+    else:
+        helper.write_text("export_host_credentials() {\n")
+
+    result = _run(checkout, trace, "dag-ui")
+
+    assert result.returncode == 2, result.stderr
+    assert str(helper) in result.stderr
+    assert "just bootstrap" in result.stderr
+    assert not trace.exists()

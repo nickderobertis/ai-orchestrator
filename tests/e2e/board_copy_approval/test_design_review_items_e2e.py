@@ -370,16 +370,57 @@ def test_approve_design_completes_the_matching_task_and_releases_the_hold(
     assert f"blocks all of {reviewing.home}" not in report.stdout, report.stdout
 
 
-def _browser_complete(reviewing: Reviewing, item: str, tmp_path: Path) -> tuple[int, WireRecord]:
-    """POST the browser's Complete for ``item`` to `just dag-ui`, as the owning session."""
+def _checkout_with_credentials(tmp_path: Path, credentials: str) -> Path:
+    """A checkout of this tree whose gitignored `.env` holds ``credentials`` and no other's.
+
+    Every other entry links to this tree, so `just dag-ui` run from it is the tracked recipe,
+    wrapper and installs. The wrapper reads the `.env` beside its own script by the path it
+    was started at, which is this directory, and this tree's own `.env` is never written.
+    """
+    checkout = tmp_path / "checkout-with-credentials"
+    checkout.mkdir(parents=True)
+    for entry in REPO_ROOT.iterdir():
+        if entry.name != ".env":
+            (checkout / entry.name).symlink_to(entry)
+    (checkout / ".env").write_text(credentials, encoding="utf-8")
+    return checkout
+
+
+def _browser_complete(
+    reviewing: Reviewing,
+    item: str,
+    tmp_path: Path,
+    *,
+    checkout: Path = REPO_ROOT,
+    token: str | None = "fixture-token",
+) -> tuple[int, WireRecord]:
+    """POST the browser's Complete for ``item`` to `just dag-ui`, as the owning session.
+
+    Served from ``checkout`` with ``token`` as the environment's board credential, or with
+    none defined at all.
+    """
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = int(probe.getsockname()[1])
     serving = _acting(reviewing.environment, None)
     serving["CLAUDE_CODE_SESSION_ID"] = MANAGER
     serving["ONEAGENTGRAPH_STATE_DIR"] = str(tmp_path / "graph-records")
+    serving.pop("GH_PROJECTS_TOKEN", None)
+    if token is not None:
+        serving["GH_PROJECTS_TOKEN"] = token
     recipe = serve(
-        ["just", "dag-ui", "--runs-root", str(reviewing.runs), "--bind", f"127.0.0.1:{port}"],
+        [
+            "just",
+            "--justfile",
+            str(checkout / "justfile"),
+            "--working-directory",
+            str(checkout),
+            "dag-ui",
+            "--runs-root",
+            str(reviewing.runs),
+            "--bind",
+            f"127.0.0.1:{port}",
+        ],
         serving,
     )
     base = f"http://127.0.0.1:{port}"
@@ -405,6 +446,57 @@ def _browser_complete(reviewing: Reviewing, item: str, tmp_path: Path) -> tuple[
             return refused.code, json.loads(refused.read() or b"{}")
     finally:
         stop(recipe)
+
+
+def test_the_served_page_approves_with_the_credential_only_the_checkouts_env_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Started with no board token, the server takes `.env`'s, and the approval records.
+
+    The same item, refused first by a server whose `.env` holds no value for the token, is
+    what shows the credential the second server loaded is what recorded the approval.
+    """
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        assert _raised(reviewing).returncode == 0
+        item = _one_review(reviewing)
+        without = _checkout_with_credentials(tmp_path / "without", "GH_PROJECTS_TOKEN=\n")
+        refused, refusal = _browser_complete(
+            reviewing, str(item["id"]), tmp_path, checkout=without, token=None
+        )
+        refused_recorded = _recorded(reviewing.home)
+        still_open = _one_review(reviewing)
+        holding = _checkout_with_credentials(
+            tmp_path / "holding", "GH_PROJECTS_TOKEN=fixture-token\n"
+        )
+        status, receipt = _browser_complete(
+            reviewing, str(item["id"]), tmp_path, checkout=holding, token=None
+        )
+        recorded = _recorded(reviewing.home)
+        gated = _launch_gate(reviewing.environment, reviewing.home)
+
+    assert refused != 200, refusal
+    assert refused_recorded is None
+    assert still_open["id"] == item["id"], still_open
+    assert status == 200, receipt
+    assert receipt["item"]["item"]["state"] == "completed", receipt
+    assert recorded == item["approval"]["key"]
+    assert gated.returncode == 0, gated.stdout + gated.stderr
+
+
+def test_the_served_page_keeps_a_token_the_environment_defines_over_the_checkouts_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `.env` holding no value cannot blank the board token the server was started with."""
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        assert _raised(reviewing).returncode == 0
+        item = _one_review(reviewing)
+        checkout = _checkout_with_credentials(tmp_path, "GH_PROJECTS_TOKEN=\n")
+        status, receipt = _browser_complete(reviewing, str(item["id"]), tmp_path, checkout=checkout)
+        recorded = _recorded(reviewing.home)
+
+    assert status == 200, receipt
+    assert receipt["item"]["item"]["state"] == "completed", receipt
+    assert recorded == item["approval"]["key"]
 
 
 def test_the_browsers_complete_approves_the_stored_version_through_the_same_authority(

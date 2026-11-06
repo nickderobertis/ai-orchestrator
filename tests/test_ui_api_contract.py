@@ -287,11 +287,27 @@ ACTION_ITEMS_AVAILABILITY = {
     "there is no sample mode": "There is no sample mode",
     "`503 human_items_unavailable`": "`503 human_items_unavailable`",
     "`Re-read the current document`": "Re-read the current document",
-    "records no `on_behalf_of`": "always `on_behalf_of: null`",
-    "host-wide queue of human tasks and questions": "Lists and details are host-wide",
-    "`browser` for an unattributed server": "literal `browser` for an unattributed server",
-    "any server can resolve any owner's item": (
-        "Any server may answer, complete or dismiss any owner's item"
+    "`on_behalf_of: null`": "always `on_behalf_of: null`",
+    "the host-wide queue": (
+        "Lists and details are host-wide, independent of the server's acting session"
+    ),
+    "complete or dismiss any owner's item": (
+        "Any server may answer, complete or dismiss any owner's item, including design reviews"
+    ),
+    "actor `session:<id>`": "actor `session:<id>` for the server's acting session",
+    "or `browser`": "literal `browser` for an unattributed server",
+    "Resolution preserves ownership and delivers the result to that owner": (
+        "Stored ownership and event delivery to the owning session's watch never change"
+    ),
+    "Raising an item still requires an acting session": (
+        "Raising alone requires `owner.session` to equal the nonempty acting session"
+    ),
+    "other supervisory ownership rules below remain unchanged": (
+        "This authority does not change stop, unwatched, run ownership"
+    ),
+    "remains scoped to its session": "the CLI's session-scoped defaults",
+    "server permits completing a design review through the same approval authority": (
+        "under the engine's existing validation and approval authority"
     ),
 }
 
