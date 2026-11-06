@@ -334,10 +334,14 @@ def _override_default_targets() -> dict[RepoIdentity, str]:
 EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset()
 #: The producers whose override default is the artifact a consumer outside this repository
 #: waits on, stated in full for the same reason: printobserver, whose `github-release` is the
-#: program's own release, and privateterms, whose `crate` is the specification's Rust crate.
+#: program's own release, privateterms, whose `crate` is the specification's Rust crate, and
+#: onetaskgraph-ui, whose `npm` is the component package `onepipeline-ui` installs.
 PRINTOBSERVER: RepoIdentity = "github.com/nickderobertis/printobserver"
 PRIVATETERMS: RepoIdentity = "github.com/nickderobertis/privateterms"
-EXPECTED_CONSUMER_DEFAULTS: frozenset[RepoIdentity] = frozenset({PRINTOBSERVER, PRIVATETERMS})
+TASK_UI: RepoIdentity = "github.com/nickderobertis/onetaskgraph-ui"
+EXPECTED_CONSUMER_DEFAULTS: frozenset[RepoIdentity] = frozenset(
+    {PRINTOBSERVER, PRIVATETERMS, TASK_UI}
+)
 #: A producer that has released nothing yet, standing in for the next one whose override
 #: rule precedes its first adoption: the set is empty, and what it admits still has to be
 #: shown on a copy holding one.
@@ -383,6 +387,7 @@ def test_the_overrides_default_target_per_producer_is_the_rows_target() -> None:
     assert CONSUMER_DEFAULTS == EXPECTED_CONSUMER_DEFAULTS
     assert _override_default_targets()[PRINTOBSERVER] == "github-release"
     assert _override_default_targets()[PRIVATETERMS] == "crate"
+    assert _override_default_targets()[TASK_UI] == "npm"
     assert (
         override_complaints(_override_default_targets(), INSTALLED, AWAITING_FIRST_ADOPTION) == []
     )
@@ -400,8 +405,8 @@ def test_a_producer_in_the_override_with_neither_a_row_nor_an_entry_is_refused()
 
 @pytest.mark.parametrize(
     "producer,target",
-    ((PRINTOBSERVER, "github-release"), (PRIVATETERMS, "crate")),
-    ids=("printobserver", "privateterms"),
+    ((PRINTOBSERVER, "github-release"), (PRIVATETERMS, "crate"), (TASK_UI, "npm")),
+    ids=("printobserver", "privateterms", "onetaskgraph-ui"),
 )
 def test_a_consumer_defaults_rule_is_accounted_for_by_the_consumer_set_alone(
     producer: RepoIdentity, target: str

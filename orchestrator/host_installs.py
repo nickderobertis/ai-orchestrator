@@ -41,10 +41,11 @@ override would name a ``default_target`` nothing here installs.
 Not every producer the override gives a ``default_target`` is one this host installs
 from. ``CONSUMER_DEFAULTS`` names the producers whose default is instead the artifact a
 consumer *outside* this repository waits on — `printobserver`'s `github-release`, which a
-`local-direct` repository elsewhere adopts the program from, and `privateterms`' `crate`,
-which the tools that detect or rewrite private terms build against — so a `published` node of
-such a repository can wait on that release naming no ``consumes``, which `local-direct`
-refuses. Such a producer has no row, because nothing here installs it, and every
+`local-direct` repository elsewhere adopts the program from, `privateterms`' `crate`,
+which the tools that detect or rewrite private terms build against, and `onetaskgraph-ui`'s
+`npm`, the component package `onepipeline-ui` installs — so a `published` node of such a
+repository can wait on that release naming no ``consumes``, which `local-direct` refuses.
+Such a producer has no row, because nothing here installs it, and every
 producer the override gives a default is in exactly one of ``INSTALLED``,
 ``AWAITING_FIRST_ADOPTION`` and ``CONSUMER_DEFAULTS``: `tests/test_host_installs.py`
 holds that, and `tests/sibling_facts.py` holds each default to the producer's own
@@ -201,7 +202,11 @@ AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset()
 # text `onevcs` prints and against the override's rules, both plain `str` at that boundary,
 # for the reason the block above `Installed` gives.
 CONSUMER_DEFAULTS: frozenset[str] = frozenset(
-    {"github.com/nickderobertis/printobserver", "github.com/nickderobertis/privateterms"}
+    {
+        "github.com/nickderobertis/onetaskgraph-ui",
+        "github.com/nickderobertis/printobserver",
+        "github.com/nickderobertis/privateterms",
+    }
 )
 # llmlint: ignore-end[modern_domain_modeling]
 

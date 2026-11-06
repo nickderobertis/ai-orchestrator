@@ -224,6 +224,10 @@ rules:
     approvals: none
     checks: {wait_seconds: 6300}  # recorded max 4807 s (run 39466309432) + 25% margin
 
+  - match: {host: github.com, owner: nickderobertis, name: onetaskgraph-ui}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: onevcs}
     publication: change-auto
     approvals: none

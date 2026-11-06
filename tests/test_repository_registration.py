@@ -447,14 +447,15 @@ def single_owner_sibling(name: str) -> SingleOwnerSibling:
     )
 
 
-#: The shared pruner each Rust repository's declared pool maintenance runs, and the
-#: library answering a GraphQL document's node count and rate-limit points, which other
-#: repositories' query gates depend on.
+#: The shared pruner each Rust repository's declared pool maintenance runs, the library
+#: answering a GraphQL document's node count and rate-limit points, which other
+#: repositories' query gates depend on, and the components showing onetaskgraph tasks.
 SIBLINGS = (
     single_owner_sibling("cargo-prune-superseded"),
     single_owner_sibling("github-graphql-node-count"),
     single_owner_sibling("onebudgetspec-plugin-onevcs"),
     single_owner_sibling("onebudgetspec-github-action"),
+    single_owner_sibling("onetaskgraph-ui"),
 )
 sibling_cases = pytest.mark.parametrize(
     "sibling", SIBLINGS, ids=[sibling.identity.rsplit("/", 1)[1] for sibling in SIBLINGS]

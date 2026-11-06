@@ -39,7 +39,9 @@
 #         release, which lets a `published` node of a `local-direct` repository wait on
 #         it with no `consumes`, the field `local-direct` refuses. `privateterms`'
 #         `crate` is the specification's Rust crate, which the tools that detect or
-#         rewrite private terms build against.
+#         rewrite private terms build against. `onetaskgraph-ui`'s `npm` is the React
+#         component package `onepipeline-ui` installs; it releases with semantic-release
+#         and opens no release change request, so its rule names no `release_change`.
 #
 #   - A producer this host will install but has not yet adopted may carry its rule
 #     ahead of its first release, so a node adopting that release waits for the right
@@ -101,3 +103,6 @@ repositories:
     release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: crate
+  - match: {host: github.com, owner: nickderobertis, name: onetaskgraph-ui}
+    declaration: merge
+    default_target: npm

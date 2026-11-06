@@ -184,6 +184,7 @@ PRUNER: RepoIdentity = "github.com/nickderobertis/cargo-prune-superseded"
 GRAPHQL_NODE_COUNT: RepoIdentity = "github.com/nickderobertis/github-graphql-node-count"
 BUDGET_ONEVCS: RepoIdentity = "github.com/nickderobertis/onebudgetspec-plugin-onevcs"
 BUDGET_ACTION: RepoIdentity = "github.com/nickderobertis/onebudgetspec-github-action"
+TASK_UI: RepoIdentity = "github.com/nickderobertis/onetaskgraph-ui"
 
 RepoType = Literal["single-owner", "team"]
 Workflow = Literal["local", "remote"]
@@ -1778,8 +1779,8 @@ def test_the_tracked_registration_routes_onebudgetspec_and_names_the_wheel_its_r
 # journey of `just repos-apply` lives in this module, in the tier it already runs in.
 @pytest.mark.parametrize(
     "identity",
-    [PRUNER, GRAPHQL_NODE_COUNT, BUDGET_ONEVCS, BUDGET_ACTION],
-    ids=["pruner", "graphql-node-count", "budget-onevcs", "budget-action"],
+    [PRUNER, GRAPHQL_NODE_COUNT, BUDGET_ONEVCS, BUDGET_ACTION, TASK_UI],
+    ids=["pruner", "graphql-node-count", "budget-onevcs", "budget-action", "task-ui"],
 )
 def test_the_tracked_registration_routes_a_sibling_through_its_own_rule(
     tmp_path: Path, identity: RepoIdentity, monkeypatch: pytest.MonkeyPatch
@@ -1815,7 +1816,7 @@ def test_the_tracked_registration_routes_a_sibling_through_its_own_rule(
         assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
         assert reported(checked.stdout, "approvals") == "none", checked.stdout
         assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
-        if identity in (BUDGET_ONEVCS, BUDGET_ACTION):
+        if identity in (BUDGET_ONEVCS, BUDGET_ACTION, TASK_UI):
             assert reported(checked.stdout, "checks wait") == "3600 s", checked.stdout
 
 

@@ -89,6 +89,12 @@
 ~/projects/onebudgetspec-plugin-onevcs
 ~/.ai-orchestrator/repos/nickderobertis__onetaskgraph
 
+# `onetaskgraph-ui`, the React components that show onetaskgraph tasks, published as an
+# npm package. `onepipeline-ui` installs its release, so this host installs nothing from
+# it; it is registered so plans can dispatch work into it. Listed under both layouts.
+~/.ai-orchestrator/repos/nickderobertis__onetaskgraph-ui
+~/projects/onetaskgraph-ui
+
 # `printobserver`, which this host both publishes and executes in. The first entry is
 # the publication checkout, spelled like every other entry in this block: a change is
 # published from it, and it is never worked in directly — only fast-forwarded once a

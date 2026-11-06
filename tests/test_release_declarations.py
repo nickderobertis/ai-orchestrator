@@ -122,8 +122,9 @@ def test_an_installed_producer_resolves_the_default_its_row_installs() -> None:
     (
         ("github.com/nickderobertis/printobserver", "github-release"),
         ("github.com/nickderobertis/privateterms", "crate"),
+        ("github.com/nickderobertis/onetaskgraph-ui", "npm"),
     ),
-    ids=("printobserver", "privateterms"),
+    ids=("printobserver", "privateterms", "onetaskgraph-ui"),
 )
 def test_a_consumer_default_resolves_the_overrides_target_with_no_row(
     producer: str, target: str
