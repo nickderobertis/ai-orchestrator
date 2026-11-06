@@ -320,11 +320,11 @@ def test_a_design_document_copied_onto_the_board_is_approved_there_and_launchabl
 ) -> None:
     """`just copy-plan` then `just approve-design` on the board copy, and the gate accepts it.
 
-    A public source copy names the task's board issue URL; a private source copy removes
-    its private location,
-    and the adopted store records the digest of what it wrote so approval can be recorded
-    there. A private source's copy omits the origin; the drafting source's own link still
-    identifies it for approval and the launch gate.
+    Either source's copy names the task's board issue URL where the authoring copy named its
+    location, because a path a table cell writes alone is translated to its counterpart's
+    address, and the adopted store records the digest of what it wrote so approval can be
+    recorded there. A private source's copy omits the origin; the drafting source's own link
+    still identifies it for approval and the launch gate.
     """
     if not private:
         _drafted_in_a_public_source(monkeypatch)
@@ -346,7 +346,7 @@ def test_a_design_document_copied_onto_the_board_is_approved_there_and_launchabl
     assert str(document.qualified_id) == destinations[DESIGN], (document, destinations)
     if private:
         assert plan_store.ORIGIN_KEY not in document.metadata, document.metadata
-    assert (issue_url in document.content) == (not private), (
+    assert issue_url in document.content, (
         f"the board copy has to name the first task's board issue {issue_url} where the "
         f"authoring copy named its location:\n{document.content}"
     )

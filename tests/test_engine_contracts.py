@@ -4832,3 +4832,31 @@ def test_the_boundary_context_the_templates_read_is_the_engines_own() -> None:
         assert read and read <= written, f"templates/{template} reads {read - written}"
         compared = set(CLEARANCE_COMPARED.findall(text))
         assert compared <= clearances, f"templates/{template} compares {compared - clearances}"
+
+
+#: The adopted plan store's README, the authority for the authored section-link form.
+ONETASKGRAPH_DOCS = Engine("onetaskgraph", _pinned_tag("onetaskgraph"), ".")
+#: What that README states of the slug rule, in its own words and examples, which
+#: `tests/plan_tooling/plan_copy/test_section_link_drift_e2e.py` restates in `_heading_slugs`.
+SECTION_LINK_SLUG_RULE = (
+    "its text lowercased, every character that is not a letter, a digit, a space, `-` or `_` "
+    "removed, and each space replaced by `-`.",
+    "The n-th repeat of a slug in one record is suffixed `-<n>`, so the second `## Budgets` is "
+    "`budgets-1`.",
+    "`### Step 2.b: retry (once)` is `step-2b-retry-once`",
+    "`### Budget <id>` is `budget-<id>`.",
+)
+
+
+def test_the_section_link_slug_rule_the_drift_journey_restates_is_the_stores_own() -> None:
+    """The adopted store's README still states the rule the drift journey holds a link to.
+
+    A copy between two folders of Markdown carries a fragment as written, so nothing the
+    journey runs would notice the store's rule moving: this is what would.
+    """
+    readme = _plain(_source(ONETASKGRAPH_DOCS, "README.md"))
+    for stated in SECTION_LINK_SLUG_RULE:
+        assert _plain(stated) in readme, (
+            f"onetaskgraph {ONETASKGRAPH_DOCS.ref}'s README no longer says {stated!r}; re-read "
+            "its *Section links*, then bring `_heading_slugs` and `budget_anchor` to it"
+        )

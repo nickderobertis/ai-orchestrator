@@ -34,6 +34,7 @@ from typing import Any, NewType
 import boundary_home
 import plan_fixture_source
 import pytest
+from github_board import _serving_board
 from project_fixtures import (
     FIXTURE_UNIT,
     approved,
@@ -872,24 +873,16 @@ def test_a_budget_changed_after_the_review_stops_the_copy_and_copies_nothing(
     assert _records(destination) == [], "a refused copy wrote to the destination"
 
 
-# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingPlanCopyWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
-def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
-    destination: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The design document's budget table links each owner where the copy put it.
+def _designed_with_two_budgets(
+    project: str, scratch: Path
+) -> tuple[dict[str, Any], dict[plan_store.NodeId, ReportedLocation]]:
+    """Give `route` and `worker` a budget each and render the design document from the writer.
 
-    Its answers are what `python -m orchestrator.plan_budgets` prints for the plan — each
-    budget with its owning node and the location the drafting store reports for that task —
-    rendered into the document through the design-doc template. After `just copy-plan`,
-    every linked budget name in the copied document resolves, relative to that document's
-    own file, to the file the destination reports for its task, at the `#budget-<id>`
-    fragment of the budget's heading there, and none is the drafting store's location.
+    Its answers are what `python -m orchestrator.plan_budgets` prints for the plan, handed to
+    the design-doc template; the plan is left approved and reviewed. Answers those answers and
+    the location the drafting store reports for each node.
     """
-    monkeypatch.setenv("ONETASKGRAPH_SOURCES__TEST_FIXTURES__VISIBILITY", "public")
-    project = _project("copy-owned-links", "route", "worker")
     _, _, native = project.partition(":")
-    copied_id = f"{DESTINATION}:{native}"
     modern = {**OWNED_BUDGET, "schema_version": 2, "source": "direct", "check_runtime_seconds": 1}
     second = {**modern, "id": "worker-throughput", "name": "Worker throughput"}
     _owns(project, "route", [modern])
@@ -909,7 +902,7 @@ def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
     )
     assert printed.returncode == 0, printed.stderr
     answers = json.loads(printed.stdout)
-    supplied = destination.parent / "budget-answers.json"
+    supplied = scratch / "budget-answers.json"
     supplied.write_text(printed.stdout, encoding="utf-8")
     document = design_approval.design_document(project)
     resolved = subprocess.run(
@@ -939,6 +932,28 @@ def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
     drafted = _reported_locations(project)
     owners = {entry["node"]: entry["location"] for entry in answers["budgets"]}
     assert owners == drafted, (owners, drafted)
+    return answers, drafted
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingPlanCopyWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
+def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
+    destination: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The design document's budget table links each owner where the copy put it.
+
+    Its answers are what `python -m orchestrator.plan_budgets` prints for the plan — each
+    budget with its owning node and the location the drafting store reports for that task —
+    rendered into the document through the design-doc template. After `just copy-plan`,
+    every linked budget name in the copied document resolves, relative to that document's
+    own file, to the file the destination reports for its task, at the `#budget-<id>`
+    fragment of the budget's heading there, and none is the drafting store's location.
+    """
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__TEST_FIXTURES__VISIBILITY", "public")
+    project = _project("copy-owned-links", "route", "worker")
+    _, _, native = project.partition(":")
+    copied_id = f"{DESTINATION}:{native}"
+    answers, drafted = _designed_with_two_budgets(project, destination.parent)
 
     copy = _just("copy-plan", project, "--to", DESTINATION)
     assert copy.returncode == 0, copy.stdout + copy.stderr
@@ -969,6 +984,63 @@ def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
     recomputed = plan_budgets.writer_answers(copied_id)
     assert {entry["node"]: entry["location"] for entry in recomputed["budgets"]} == landed
     assert all("section_url" not in entry for entry in recomputed["budgets"])
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingPlanCopyWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
+def test_each_budget_name_link_survives_a_copy_from_a_private_source_to_a_public_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plan drafted privately keeps its budget links when `just copy-plan` makes it public.
+
+    This is the road an approver's click takes: every plan here is drafted in a source declared
+    private and copied onto one declared public. The store blanks a private address on that
+    road unless the destination verifiably holds the record it names, so a store that blanks
+    these leaves a design document whose budget table links to nothing while the copy reports
+    success. The drafting source stays as the tracked document declares it, private. The
+    `human-private` board the store inventories on this road is the loopback stand-in
+    `tests/github_board.py` serves, so no read reaches a live board.
+    """
+    root = tmp_path / "public-board"
+    root.mkdir()
+    prefix = f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}"
+    monkeypatch.setenv(f"{prefix}__VISIBILITY", "public")
+    monkeypatch.setenv(f"{prefix}__PLUGIN", "local-md")
+    monkeypatch.setenv(f"{prefix}__CONFIG__ROOT", str(root))
+    monkeypatch.setenv("ONETASKGRAPH_DEFAULT_SOURCES", f"{DRAFTED_IN},{DESTINATION}")
+    project = _project("copy-private-public-links", "route", "worker")
+    _, _, native = project.partition(":")
+    copied_id = f"{DESTINATION}:{native}"
+    _, drafted = _designed_with_two_budgets(project, tmp_path)
+
+    with _serving_board() as remote:
+        for name, value in remote.items():
+            monkeypatch.setenv(name, value)
+        copy = _just("copy-plan", project, "--to", DESTINATION)
+    assert copy.returncode == 0, copy.stdout + copy.stderr
+
+    landed = _reported_locations(copied_id)
+    (copied,) = _design_documents(copied_id)
+    content = copied["content"]
+    assert isinstance(content, str), copied
+    held = design_approval.design_document(copied_id)
+    assert held.location is not None, held
+    document_file = Path(str(held.location["path"]))
+    linked = {
+        (document_file.parent / target).resolve(): fragment
+        for target, _, fragment in (
+            line.partition(": ")[2].partition("#")
+            for line in content.splitlines()
+            if line.startswith("[") and "]: " in line
+        )
+    }
+    headed = {"route": "route-latency", "worker": "worker-throughput"}
+    for node, where in landed.items():
+        heading = f"### Budget {headed[node]}\n"
+        assert heading in Path(where).read_text(encoding="utf-8"), where
+        anchor = plan_budgets.budget_anchor(headed[node])
+        assert linked.get(Path(where).resolve()) == anchor, (node, linked, content)
+        assert drafted[node] not in content, f"{node} still links the drafting store: {content}"
 
 
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingPlanCopyWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
