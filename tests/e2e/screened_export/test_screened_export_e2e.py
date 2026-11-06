@@ -515,6 +515,9 @@ def bench(tmp_path_factory: pytest.TempPathFactory, module_tmpdir: Path) -> Iter
     # store writes lands under the journey's HOME.
     environment.setdefault("UV_CACHE_DIR", str(Path.home() / ".cache" / "uv"))
     environment["HOME"] = str(home)
+    # The host's system git config is no more this journey's than its HOME: git-lfs's package
+    # writes a required smudge filter there, which fails on the pointers the bench exports.
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
     environment["XDG_CACHE_HOME"] = str(root / "cache")
     environment["XDG_STATE_HOME"] = str(root / "state")
     environment["ONEVCS_HOME"] = str(root / "onevcs")

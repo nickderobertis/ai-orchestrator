@@ -937,6 +937,12 @@ COPY_SPEED_LANDINGS = (
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
+        "engine-check-visibility",
+        1382,
+        "c2713197",
+        "surface failing checks with their requirement and release holdups",
+    ),
+    Landing(
         "op-withdrawn-tasks",
         1101,
         "708720aa",

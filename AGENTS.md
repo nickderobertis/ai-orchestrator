@@ -1078,13 +1078,25 @@ stop`, `just shutdown`, `just watch`, `just review-comments`, `just readjust-sta
 read-only `just monitor` / `just runs` / `just status` /
 `just unwatched` / `just unpublished` / `just unfinished` views. Nothing advances a run; the engine reconciles continuously.
 `just channel-next` and `just monitor` read through the `planner` profile — the
-pipeline's decisions and settlements, not every worker's turns; `--filter detailed`
+pipeline's decisions and settlements, not every worker's turns; the engine's shipped
+`planner` profile (`src/filter.rs`) admits the `attention` significance; `--filter detailed`
 widens to the whole merged stream and `--all` bypasses profiles. Rendering a surface in
 `monitor` is not reading it; only `channel-next` consumes one. `orchestrate` stays
 attached and returns when the run settles, a blocking surface waits, or nothing is
 driving it; Ctrl-C detaches without stopping; `--detach` is for several runs supervised
 at once, and `just monitor <run-id>` re-attaches. Never background a launch by hand to
 watch it, and never rebuild run state from `events.jsonl`, `ps`, or a clone's `git log`.
+
+A `check-failed` surface names one failing check on a change the run published,
+labelled `required — blocks the merge` or `not required — does not block`, with its
+log address. A not-required failure blocks nothing: report it to the user, never
+`retry`, `cancel`, `requeue` or hold a node for it. A required failure remains the
+publication's own outcome and is read as above. A `checks-unfollowed` surface names
+checks still running when onevcs's checks timeout ended their following; their later
+result is not shown, so read it on the host. `just results` lists checks still running
+when a run ends and those no longer followed. A `release-wait` surface's "held by"
+line names the release's own change request and its failing checks, which are the
+producing repository's to fix.
 
 Require each worker to prove its change with the checks that exercise it — never `just
 gate`, which this host stopped asking a dispatch to run — and review the evidence it

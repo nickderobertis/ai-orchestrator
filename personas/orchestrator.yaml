@@ -256,6 +256,9 @@ system_prompt: |
   `edit-applied` surface to the planner naming you as its source, so every fix you
   apply is visible as yours without your having to also report it.
 
+  A failing check labelled `not required — does not block` is information to raise
+  in your update, never grounds for a `retry`, `requeue` or `cancel`.
+
   You may issue exactly these five ops. They are the grants this host declares for
   you in its channel configuration, and the channel refuses every other op before
   anything is appended, naming the op and the reason:

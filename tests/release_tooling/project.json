@@ -1,0 +1,38 @@
+{
+  "name": "release-tooling",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/release_tooling",
+  "tags": [
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-registered-checkouts",
+    "support-sibling-facts"
+  ],
+  "targets": {
+    "test-checkouts": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/release_tooling -n 4 --dist loadgroup --no-cov",
+      "cache": false,
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "releaseToolingWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  },
+  "namedInputs": {
+    "releaseToolingWorkspace": [
+      "{projectRoot}/**/*",
+      "{workspaceRoot}/AGENTS.md",
+      "{workspaceRoot}/config/onepipeline.version",
+      "{workspaceRoot}/config/onevcs.releases.yml"
+    ]
+  }
+}

@@ -1782,13 +1782,14 @@ def test_the_tracked_registration_routes_onebudgetspec_and_names_the_wheel_its_r
     ids=["pruner", "graphql-node-count", "budget-onevcs", "budget-action"],
 )
 def test_the_tracked_registration_routes_a_sibling_through_its_own_rule(
-    tmp_path: Path, identity: RepoIdentity
+    tmp_path: Path, identity: RepoIdentity, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both tracked spellings of the sibling's checkout, registered, reach its own rule.
 
     `change-auto` with no approvals by a rule rather than `default:`, read off the real
     `onevcs rules check` for the identity and for each alias a node could name.
     """
+    monkeypatch.delenv("ONEVCS_CHECKS_TIMEOUT_SECONDS", raising=False)
     host, owner, name = identity.split("/")
     entries = tracked_checkouts_of(name)
     assert len(entries) == 2, entries

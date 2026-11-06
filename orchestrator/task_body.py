@@ -17,7 +17,10 @@ one this checkout's records carry — a task's `orchestrator.budgets` record amo
 can run to as many characters as the `## Budgets` section it renders — because that is the
 map the copy sends; what the copy
 then adds or drops is small and is what the warning threshold covers, and
-:data:`UNMEASURED` states it so every refusal and warning says what its figure is.
+:data:`UNMEASURED` states it so every refusal and warning says what its figure is. One of
+those additions grows with the body: the store hands this destination a markup that writes
+an anchor line above each heading outside fenced code, so a heading's link lands on the
+issue page; the figure is that much short of the body sent.
 
 GitHub's refusal counts *characters*, so :func:`measure` counts Unicode code points —
 ``len()`` of the composed ``str`` — rather than bytes.
@@ -88,12 +91,18 @@ UNMEASURED_KEYS = (
     "onetaskgraph.depends_on",
 )
 
+#: The markup the `github-projects` source writes into the body it sends, which the figure
+#: leaves out. Its form is held to the plugin's source by `tests/test_task_body.py`.
+HEADING_ANCHORS = 'the `<a id="…"></a>` line the source writes above each heading'
+
 #: What the figure leaves out, said once for the refusal and the warning alike.
 UNMEASURED = (
     "measured as the record's content followed by the metadata slot the `github-projects` "
     "source appends — every `onepipeline.*` key, the review record and the "
     "`orchestrator.budgets` record, as compact key-sorted JSON — and leaving out what the "
-    "copy itself adds or routes elsewhere: " + ", ".join(f"`{key}`" for key in UNMEASURED_KEYS)
+    "copy itself adds or routes elsewhere: "
+    + ", ".join(f"`{key}`" for key in UNMEASURED_KEYS)
+    + f" and {HEADING_ANCHORS}"
 )
 
 # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These measurement
@@ -220,6 +229,7 @@ DOCUMENT_UNMEASURED = (
     f"a {len(SERVED_URL_BOUND)}-character attachment URL and recorded under `{ASSETS_KEY}` "
     "— and leaving out what the copy itself adds or routes elsewhere: "
     + ", ".join(f"`{key}`" for key in UNMEASURED_KEYS)
+    + f" and {HEADING_ANCHORS}"
 )
 
 

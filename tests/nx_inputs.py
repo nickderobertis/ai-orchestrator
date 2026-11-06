@@ -413,6 +413,13 @@ WHOLE_WORKSPACE = "wholeWorkspace"
 #: tracked document or Python module, so its one target is keyed on the whole workspace.
 DRIFT_GATE_PROJECTS: tuple[SubjectProject, ...] = (
     SubjectProject(
+        "release-tooling",
+        "tests/release_tooling",
+        "releaseToolingWorkspace",
+        docs_tier=False,
+        target=CHECKOUT_SCOPED,
+    ),
+    SubjectProject(
         "linear-board-checks", "tests/linear_board_checks", "linearBoardWorkspace", docs_tier=False
     ),
     SubjectProject("dispatch-bar", "tests/dispatch_bar", "dispatchBarWorkspace", docs_tier=False),
@@ -872,6 +879,7 @@ class JourneyProject(NamedTuple):
 #: `reads_docs` one — a journey that copies this checkout — in its project's `test-docs`
 #: target keyed on the whole workspace, which only `workspace-copies` declares.
 E2E_JOURNEYS: tuple[JourneyProject, ...] = (
+    JourneyProject("release-holdup", f"{E2E_ROOT}/release_holdup", "releaseHoldupWorkspace"),
     JourneyProject(
         "pooled-server-session", f"{E2E_ROOT}/pooled_server_session", "pooledServerSessionWorkspace"
     ),

@@ -53,6 +53,8 @@ PLUGIN_API_SOURCE = Path("crates") / "onetaskgraph-plugin-api" / "src" / "work.r
 PLUGIN_ASSETS_SOURCE = Path("crates") / "onetaskgraph-github-projects" / "src" / "assets.rs"
 PLUGIN_API_ASSET_SOURCE = Path("crates") / "onetaskgraph-plugin-api" / "src" / "asset.rs"
 PLUGIN_API_METADATA_SOURCE = Path("crates") / "onetaskgraph-plugin-api" / "src" / "metadata.rs"
+#: The store's own section links, which spell the anchor line a body carries above a heading.
+PLUGIN_CORE_SECTION_SOURCE = Path("crates") / "onetaskgraph-core" / "src" / "section_links.rs"
 
 
 def _record(node: str, content: str | None, **metadata: object) -> plan_store.StoreTask:
@@ -636,8 +638,11 @@ DOCUMENT_COMPOSITION = (
         "            }\n"
         "            None => incoming.content.map(str::to_owned),\n"
         "        };\n"
-        "        let body = compose_body(content.as_deref(), &slot)?;",
+        "        let marked = content.as_deref().map(|content| self.marked(content));\n"
+        "        let body = compose_body(marked.as_deref(), &slot)?;",
     ),
+    # The anchor line the measurement's statement leaves out, written above each heading.
+    (PLUGIN_CORE_SECTION_SOURCE, 'format!("<a id=\\"{slug}\\"></a>")'),
     (PLUGIN_SOURCE, "        BoardKind::Document => metadata.remove(ItemKind::METADATA_KEY),"),
     (PLUGIN_ASSETS_SOURCE, '            && url.path().starts_with("/user-attachments/assets/")'),
     (PLUGIN_API_ASSET_SOURCE, 'const REFERENCE_PREFIX: &str = "./";'),
@@ -724,7 +729,8 @@ def test_a_document_s_body_is_composed_by_the_plugin_exactly_as_a_task_s_is() ->
     Held line by line, beside the composition the task gate above holds: a document that
     reached the board some other way — its own composer, a slot of its own, content
     re-rendered on the way, its pictures served otherwise — would be measured here against
-    a body it never becomes.
+    a body it never becomes. The heading anchors the source then marks that content with
+    are what `task_body.HEADING_ANCHORS` says the figure leaves out.
     """
     read: dict[Path, PluginSource] = {}
     for source in dict.fromkeys(source for source, _ in DOCUMENT_COMPOSITION):

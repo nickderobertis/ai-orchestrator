@@ -45,6 +45,8 @@
 #     ahead of its first release, so a node adopting that release waits for the right
 #     artifact from the start. `orchestrator/host_installs.py` names each such producer
 #     in `AWAITING_FIRST_ADOPTION` until the node adopting it adds its row and pin.
+# `release_change.head` finds the producer's open release change request by its
+# release-plz head-branch prefix, so `release holdup` can name its failing checks.
 version: 1
 default:
   adoption: fast
@@ -52,38 +54,50 @@ repositories:
   - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}
     adoption: published
   - match: {host: github.com, owner: nickderobertis, name: onepipeline}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: npm
   - match: {host: github.com, owner: nickderobertis, name: onevcs}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: pypi
   - match: {host: github.com, owner: nickderobertis, name: oneagentgraph}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: pypi
   - match: {host: github.com, owner: nickderobertis, name: onejudge}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: cli
   - match: {host: github.com, owner: nickderobertis, name: oneharness}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: cli-wheel
   - match: {host: github.com, owner: nickderobertis, name: onetaskgraph}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: pypi
   - match: {host: github.com, owner: nickderobertis, name: onepipeline-ui}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: npm-cli
   - match: {host: github.com, owner: nickderobertis, name: onemessagebus}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: pypi
   - match: {host: github.com, owner: nickderobertis, name: onebudgetspec}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: pypi
   - match: {host: github.com, owner: nickderobertis, name: llmlint}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: cli
   - match: {host: github.com, owner: nickderobertis, name: printobserver}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: github-release
   - match: {host: github.com, owner: nickderobertis, name: privateterms}
+    release_change: {head: "release-plz-*"}
     declaration: merge
     default_target: crate
