@@ -11,7 +11,8 @@
 #     task holding that plan, naming its design document and the version (approval key)
 #     a person is asked to approve. Completing it runs `design-approval`, which records
 #     exactly the record `just approve-design` records for that stored version, or
-#     refuses a changed document for re-reading (`orchestrator/design_review.py`).
+#     refuses a changed document for re-reading (`orchestrator/design_review.py`). Reopening
+#     it runs the adapter's `undo`, which removes that record, or refuses a launched plan.
 #   * `follow-up-review` — a follow-up run's closeout raises it over every ticket the run
 #     created or updated; the engine's `ticket_review` aggregation derives its priority,
 #     groups the links, and retires it when there are none. It holds nothing.
@@ -47,3 +48,4 @@ human_items:
   approval_adapters:
     design-approval:
       command: ["uv", "run", "--no-sync", "orchestrator-design-review", "adapter"]
+      undo: ["uv", "run", "--no-sync", "orchestrator-design-review", "undo"]

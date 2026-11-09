@@ -94,6 +94,7 @@
       "!{workspaceRoot}/tests/e2e/llmlint_installer/test_*.py",
       "!{workspaceRoot}/tests/e2e/pooled_server_session/test_*.py",
       "!{workspaceRoot}/tests/e2e/spike_brief/test_*.py",
+      "!{workspaceRoot}/tests/e2e/design_review_undo/test_*.py",
       "!{workspaceRoot}/tests/e2e/screened_export/test_*.py",
       "!{workspaceRoot}/tests/e2e/review_drafting/test_*.py",
       "!{workspaceRoot}/tests/e2e/workspace_copies/test_*.py",
@@ -139,7 +140,7 @@
       ]
     },
     "coverage": {
-      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-check-and-review .coverage.plan-tooling-comment-version .coverage.plan-tooling-follow-ups .coverage.plan-tooling-host-layer-routing .coverage.plan-tooling-plan-copy .coverage.plan-tooling-plan-flow .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.spike-brief .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
+      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.design-review-undo .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-check-and-review .coverage.plan-tooling-comment-version .coverage.plan-tooling-follow-ups .coverage.plan-tooling-host-layer-routing .coverage.plan-tooling-plan-copy .coverage.plan-tooling-plan-flow .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.spike-brief .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
       "options": {
         "cwd": "."
       },
@@ -147,6 +148,7 @@
       "dependsOn": [
         "test",
         {"projects": ["budget-gate"], "target": "test"},
+        {"projects": ["design-review-undo"], "target": "test"},
         {"projects": ["dispatch-bar"], "target": "test"},
         {"projects": ["e2e-root"], "target": "test"},
         {"projects": ["family-scans"], "target": "test"},

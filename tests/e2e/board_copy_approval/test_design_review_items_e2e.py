@@ -29,12 +29,13 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
-from github_board import _serving_board
+import yaml
+from github_board import _GitHubFixture, _Operation, _serving_board
 from served_recipe import serve, stop
 from test_board_copy_design_approval_e2e import (
     DESIGN,
@@ -47,7 +48,7 @@ from test_board_copy_design_approval_e2e import (
 )
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval, design_review
+from orchestrator import design_approval, design_review, plan_store
 from orchestrator.root import REPO_ROOT
 
 #: The manager session these journeys act as: the owner of every item they raise.
@@ -513,11 +514,351 @@ def test_the_browsers_complete_approves_the_stored_version_through_the_same_auth
     assert status == 200, receipt
     completed = receipt["item"]["item"]
     assert completed["id"] == item["id"] and completed["state"] == "completed", completed
-    # The read API records its acting session with the authority's session prefix.
-    assert completed["resolution"]["actor"] == f"session:{MANAGER}", completed
+    # The read API records its acting session under the browser's own actor prefix.
+    assert completed["resolution"]["actor"] == f"browser:session:{MANAGER}", completed
     assert completed["resolution"]["on_behalf_of"] is None, completed
     assert recorded == item["approval"]["key"]
     assert gated.returncode == 0, gated.stdout + gated.stderr
+
+
+def _undo(reviewing: Reviewing, key: str) -> subprocess.CompletedProcess[str]:
+    """The adapter's undo as the engine runs it: the tracked command, the stored version."""
+    configured = yaml.safe_load((REPO_ROOT / ".onepipeline" / "config.yaml").read_text("utf-8"))
+    return subprocess.run(
+        configured["human_items"]["approval_adapters"]["design-approval"]["undo"],
+        input=json.dumps(
+            {"board_copy": reviewing.home, "key": key, "actor": USER, "on_behalf_of": None}
+        ),
+        cwd=REPO_ROOT,
+        env=reviewing.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+
+def _completed_review(reviewing: Reviewing) -> WireRecord:
+    """Raise the plan's review and Complete it, so its approval is recorded."""
+    assert _raised(reviewing).returncode == 0
+    item = _one_review(reviewing)
+    completed = _recipe(reviewing.environment, "human-items", "complete", str(item["id"]))
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    return item
+
+
+def _store(environment: Mapping[str, str], *arguments: str) -> None:
+    """One plan-store write, by the locked CLI, as a launch's projection makes it."""
+    done = subprocess.run(
+        ["onetaskgraph", *arguments],
+        cwd=REPO_ROOT,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_reopening_a_completed_review_takes_its_approval_back_until_it_is_approved_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reopen removes the record and returns the hold; Complete and `approve-design` restore it.
+
+    The tracked `undo` is what the installed engine runs. Repeating it changes nothing, and a
+    version the record is not at leaves the record alone.
+    """
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        item = _completed_review(reviewing)
+        key = str(item["approval"]["key"])
+        assert _recorded(reviewing.home) == key
+        reopened = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        removed = _recorded(reviewing.home)
+        back_open = _one_review(reviewing)
+        held = _recipe(reviewing.environment, "human-items", "report")
+        gated = _launch_gate(reviewing.environment, reviewing.home)
+        before_repeat = design_approval.design_document(reviewing.home).metadata
+        repeated = _undo(reviewing, key)
+        after_repeat = design_approval.design_document(reviewing.home).metadata
+
+        again = _recipe(reviewing.environment, "human-items", "complete", str(item["id"]))
+        approved_again = _recorded(reviewing.home)
+        let_through = _launch_gate(reviewing.environment, reviewing.home)
+        other_version = _undo(reviewing, "a-version-the-record-is-not-at")
+        left_alone = _recorded(reviewing.home)
+
+        reopened_again = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        by_hand = _recipe(reviewing.environment, "approve-design", reviewing.home)
+        approved_by_hand = _recorded(reviewing.home)
+        done = _one_review(reviewing, "completed")
+
+    assert reopened.returncode == 0, reopened.stdout + reopened.stderr
+    assert removed is None, "reopening has to take the approval back"
+    assert back_open["id"] == item["id"] and back_open["resolution"] is None, back_open
+    assert f"blocks all of {reviewing.home}" in held.stdout, held.stdout
+    assert gated.returncode != 0, gated.stdout + gated.stderr
+    assert "carries no approval" in gated.stderr, gated.stderr
+    assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+    assert json.loads(repeated.stdout) == {"board_copy": reviewing.home, "key": key}
+    assert after_repeat == before_repeat, "a second undo has to change nothing"
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert approved_again == key
+    assert let_through.returncode == 0, let_through.stdout + let_through.stderr
+    assert other_version.returncode == 0, other_version.stdout + other_version.stderr
+    assert left_alone == key, "an undo for another version leaves the record alone"
+    assert reopened_again.returncode == 0, reopened_again.stdout + reopened_again.stderr
+    assert by_hand.returncode == 0, by_hand.stdout + by_hand.stderr
+    assert approved_by_hand == key
+    assert done["id"] == item["id"], done
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] The criteria require the refusal proven for each
+# launch signal alone; one real launch writes them together, so these seed exactly one each,
+# in the store and runs root the engine reads, and the real launch is the journey below.
+def _driver_claimed(reviewing: Reviewing) -> None:
+    claim = json.dumps({"run": "a-run", "host": "a-host", "session": MANAGER})
+    _store(
+        reviewing.environment,
+        "project",
+        "metadata",
+        "set",
+        reviewing.home,
+        design_approval.DRIVER_CLAIM,
+        claim,
+    )
+
+
+def _task_past_todo(reviewing: Reviewing) -> None:
+    task = plan_store.read_tasks(reviewing.home)[0].qualified_id
+    _store(reviewing.environment, "task", "status", "set", task, "in-progress")
+
+
+def _run_named_it(reviewing: Reviewing) -> None:
+    run = reviewing.runs / "a-run"
+    run.mkdir()
+    (run / design_approval.LAUNCH_RECORD).write_text(
+        json.dumps({"run_id": "a-run", "project": reviewing.home}), encoding="utf-8"
+    )
+    # llmlint: ignore-end[tests_mirror_real_usage]
+
+
+@pytest.mark.parametrize(
+    "launch",
+    [_driver_claimed, _task_past_todo, _run_named_it],
+    ids=["driver-claim", "task-past-todo", "launch-record"],
+)
+def test_a_launched_plan_refuses_the_reopen_and_keeps_its_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launch: Callable[[Reviewing], None]
+) -> None:
+    """Each way a plan is known to have launched refuses, saying why, and changes nothing."""
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        item = _completed_review(reviewing)
+        launch(reviewing)
+        refused = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        recorded = _recorded(reviewing.home)
+        still = _one_review(reviewing, "completed")
+
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    assert "has already launched" in refused.stderr, refused.stderr
+    assert "would not stop it" in refused.stderr, refused.stderr
+    assert recorded == item["approval"]["key"]
+    assert still["id"] == item["id"], still
+
+
+def _every_task_at(reviewing: Reviewing, status: str) -> None:
+    for task in plan_store.read_tasks(reviewing.home):
+        _store(reviewing.environment, "task", "status", "set", task.qualified_id, status)
+
+
+def test_a_plan_whose_tasks_no_run_claimed_can_be_reopened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A status before `todo` is one no run wrote, so the approval comes back off.
+
+    `backlog` is the one a `plans` task can hold; that source maps no option for `draft`.
+    """
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        item = _completed_review(reviewing)
+        _every_task_at(reviewing, "backlog")
+        reopened = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        recorded = _recorded(reviewing.home)
+
+    assert reopened.returncode == 0, reopened.stdout + reopened.stderr
+    assert recorded is None
+
+
+def test_a_cancelled_task_refuses_the_reopen_as_launched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancelled task is past `todo`, so its plan reads as launched."""
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        item = _completed_review(reviewing)
+        _every_task_at(reviewing, "cancelled")
+        refused = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        recorded = _recorded(reviewing.home)
+
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    assert "has already launched" in refused.stderr, refused.stderr
+    assert recorded == item["approval"]["key"]
+
+
+def test_a_task_needing_attention_is_decided_by_the_other_launch_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`unknown` says nothing alone: unestablished by itself, launched beside a run naming it."""
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        item = _completed_review(reviewing)
+        _every_task_at(reviewing, "unknown")
+        alone = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        _run_named_it(reviewing)
+        corroborated = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        recorded = _recorded(reviewing.home)
+
+    assert alone.returncode != 0, alone.stdout + alone.stderr
+    assert "could not be established" in alone.stderr, alone.stderr
+    assert corroborated.returncode != 0, corroborated.stdout + corroborated.stderr
+    assert "has already launched" in corroborated.stderr, corroborated.stderr
+    assert recorded == item["approval"]["key"]
+
+
+def test_a_launch_record_that_cannot_be_read_refuses_the_reopen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run's record nothing can read leaves whether the plan launched open, so it refuses."""
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        item = _completed_review(reviewing)
+        run = reviewing.runs / "a-run"
+        # llmlint: ignore-block[tests_mirror_real_usage] No interface writes an unreadable launch
+        # record; disk damage is the state under test, and only writing it here reaches it.
+        run.mkdir()
+        (run / design_approval.LAUNCH_RECORD).write_text("{not json", encoding="utf-8")
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        refused = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        recorded = _recorded(reviewing.home)
+        still = _one_review(reviewing, "completed")
+
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    assert "could not be established" in refused.stderr, refused.stderr
+    assert design_approval.LAUNCH_RECORD in refused.stderr, refused.stderr
+    assert recorded == item["approval"]["key"]
+    assert still["id"] == item["id"], still
+
+
+def test_a_store_read_that_fails_refuses_the_reopen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The board cannot be reached: whether it launched is unknown, so the item stays completed."""
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        item = _completed_review(reviewing)
+    # Outside the served board: its endpoint now refuses every connection.
+    refused = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+    still = _one_review(reviewing, "completed")
+
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    assert "could not be established" in refused.stderr, refused.stderr
+    assert still["id"] == item["id"], still
+
+
+def test_a_really_launched_plan_refuses_the_reopen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`just orchestrate` launches the approved plan: what the engine wrote refuses the undo.
+
+    Every task is parked, so nothing dispatches, and no record here is written by the test:
+    the launch record and any claim or status are the installed engine's own.
+    """
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        item = _completed_review(reviewing)
+        for task in plan_store.read_tasks(reviewing.home):
+            _store(
+                reviewing.environment,
+                *("task", "metadata", "set", task.qualified_id, "onepipeline.parked", "true"),
+            )
+        launched = _recipe(
+            reviewing.environment,
+            *("orchestrate", reviewing.home, "--dag-graph", "off"),
+            *("--success-hook=", "--failure-hook="),
+        )
+        records = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in reviewing.runs.glob(f"*/{design_approval.LAUNCH_RECORD}")
+        ]
+        refused = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        recorded = _recorded(reviewing.home)
+        still = _one_review(reviewing, "completed")
+        for record in records:
+            stopped = _recipe(reviewing.environment, "stop", str(record["run_id"]))
+            assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+
+    assert launched.returncode in (0, 3), launched.stdout + launched.stderr
+    assert [record["project"] for record in records] == [reviewing.home], records
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    assert "has already launched" in refused.stderr, refused.stderr
+    assert "would not stop it" in refused.stderr, refused.stderr
+    assert recorded == item["approval"]["key"]
+    assert still["id"] == item["id"], still
+
+
+def test_a_document_edited_during_the_undo_keeps_its_approval_until_the_undo_is_run_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An edit landing after the undo read the document refuses it; running it again removes it."""
+    with _reviewing(tmp_path, monkeypatch) as reviewing:
+        item = _completed_review(reviewing)
+        endpoint = reviewing.environment["ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT"]
+        token = reviewing.environment["GH_PROJECTS_TOKEN"]
+
+        def on_github(document: str, variables: Mapping[str, object]) -> dict[str, Any]:
+            request = urllib.request.Request(
+                endpoint,
+                data=json.dumps({"query": document, "variables": variables}).encode(),
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=30) as answer:
+                assert answer.status == 200, answer.status
+                return dict(json.load(answer)["data"])
+
+        # The document's own issue, read over the API as any GitHub client reads one.
+        design = on_github(
+            "query($id:ID!){node(id:$id){... on Issue{id body"
+            " boards:projectItems(first:1){nodes{id}}}}}",
+            {
+                "id": plan_store.qualified(
+                    design_approval.design_document(reviewing.home).qualified_id
+                )[1]
+            },
+        )["node"]
+
+        def edited_on_the_board() -> None:
+            # A person's edit on GitHub, one `updateIssue` of the body, as its web view sends.
+            on_github(
+                "mutation($input:UpdateIssueInput!){updateIssue(input:$input){issue{id}}}",
+                {"input": {"id": design["id"], "body": design["body"] + "\n"}},
+            )
+
+        # The guarded write's own read of the document, which the undo's read of it precedes:
+        # the edit lands between the version the undo took and the write that names it.
+        # llmlint: ignore-block[tests_mirror_real_usage] A person's edit between two of the undo's
+        # own requests has no user-facing timing; the double's request hook is how a race is placed.
+        _GitHubFixture.before_operation[_Operation.DOCUMENT_IN_PROJECT] = edited_on_the_board
+        refused = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        _GitHubFixture.before_operation.pop(_Operation.DOCUMENT_IN_PROJECT, None)
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        recorded = _recorded(reviewing.home)
+        still = _one_review(reviewing, "completed")
+        retried = _recipe(reviewing.environment, "human-items", "reopen", str(item["id"]))
+        removed = _recorded(reviewing.home)
+
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    said = " ".join(refused.stderr.split())
+    assert "changed after this undo read it, so its approval stands" in said, said
+    assert design_approval.VERSION_MOVED in said, said
+    assert recorded == item["approval"]["key"]
+    assert still["id"] == item["id"], still
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert removed is None
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
@@ -543,4 +884,6 @@ def test_the_tracked_configuration_names_this_repositorys_adapter_and_both_phase
     assert hooks["follow-up-review"]["block"] == {"scope": "nothing"}, hooks
     adapter = effective["approval_adapters"]["design-approval"]["command"]
     assert adapter[-2:] == ["orchestrator-design-review", "adapter"], adapter
+    undo = effective["approval_adapters"]["design-approval"]["undo"]
+    assert undo[-2:] == ["orchestrator-design-review", "undo"], undo
     assert effective["enabled"] is True and effective["task_source"] == "human-public", effective

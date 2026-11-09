@@ -1019,7 +1019,12 @@ completing a design review records their approval; the receipt records this sess
 for them. Dismiss what nothing needs with `just
 human-items dismiss <item> [--reason TEXT]`; a run's end dismisses its own as "the run
 ended", and a resolution made while you were away reaches your next `just human-items
-watch` once. A plan states each `kind: human` node's item in `onepipeline.human_item`, its
+watch` once. `just human-items reopen <item>` puts a completed or dismissed item back and
+returns its hold, unless a person's answer or a run settled it; reopening a completed design
+review removes its approval and is refused once the plan has launched, because removing it
+would not stop the run. `just human-items note <item>`, its text given as `--text`, comments on a completed item or
+states a dismissed one's reason, and releases nothing. Each arrives on a tied run's channel
+as a non-blocking `human-item` surface, so read it as what a person did. A plan states each `kind: human` node's item in `onepipeline.human_item`, its
 priority always explicit and separate from a plan-store task's own priority, which a
 `plans` task carries none of. In the engine's words: Critical means drop everything for
 complete development disruption or critical production journeys down with only a human able

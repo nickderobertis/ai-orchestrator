@@ -2,7 +2,7 @@
 
 `orchestrator/design_approval.py` is the one authority over a design document's approval, and
 nothing here is a second one. This is the thin interface the engine's human items reach it
-through, in three places:
+through, in four places:
 
 * **Raising.** Once `just finish-plan` has copied a plan onto its board, :func:`raise_review`
   raises the configured `design-review` phase for that board copy: one task, holding the plan,
@@ -20,6 +20,9 @@ through, in three places:
 * **Approving by hand.** `just approve-design` records the approval, then completes the open
   task for the version it approved and dismisses any for an older one
   (:func:`settle_reviews`), so the plan's hold is released by either path.
+* **Undoing.** Reopening a completed task makes the engine run the same configuration's `undo`,
+  :func:`undo_main`, which takes the approval back through :func:`design_approval.withdraw`, or
+  refuses once the plan has launched, leaving the task completed.
 
 Human items off on a host is not a failure of any of these: the approval and the launch gate
 are unchanged, and there is simply no task.
@@ -31,6 +34,7 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from typing import NamedTuple
 
 from orchestrator import design_approval, human_items, plan_locations
 from orchestrator.design_approval import ApprovalKey
@@ -115,6 +119,24 @@ def settle_reviews(home: str, key: ApprovalKey) -> list[str]:
     return said
 
 
+class AdapterRequest(NamedTuple):
+    """What the engine asks the adapter and its undo about: one board copy at one version."""
+
+    board_copy: str
+    key: ApprovalKey
+
+
+def _adapter_request(stdin: str | None) -> AdapterRequest:
+    """The board copy and version the engine's `{board_copy, key, ...}` request names."""
+    request = json.loads(sys.stdin.read() if stdin is None else stdin)
+    if not isinstance(request, dict):
+        raise ValueError("the request is not an object")
+    board_copy, key = request.get("board_copy"), request.get("key")
+    if not isinstance(board_copy, str) or not isinstance(key, str) or not key.strip():
+        raise ValueError("the request names no board_copy and key")
+    return AdapterRequest(board_copy, ApprovalKey(key))
+
+
 def adapter_main(stdin: str | None = None) -> int:
     """The approval adapter: approve the version a completed task stored, or name the current one.
 
@@ -122,17 +144,9 @@ def adapter_main(stdin: str | None = None) -> int:
     key when the approval of it is recorded, the current one when the document moved on and
     nothing was. Anything it cannot do exits non-zero, which leaves the task open.
     """
-    text = sys.stdin.read() if stdin is None else stdin
     try:
-        request = json.loads(text)
-        if not isinstance(request, dict):
-            raise ValueError("the request is not an object")
-        board_copy, key = request.get("board_copy"), request.get("key")
-        if not isinstance(board_copy, str) or not isinstance(key, str) or not key.strip():
-            raise ValueError("the request names no board_copy and key")
-        answered = design_approval.approve(
-            design_approval.qualified(board_copy), expected=ApprovalKey(key)
-        )
+        board_copy, key = _adapter_request(stdin)
+        answered = design_approval.approve(design_approval.qualified(board_copy), expected=key)
     except (OSError, ValueError) as exc:
         print(f"design-review adapter: {exc}; nothing was approved", file=sys.stderr)
         return 1
@@ -145,6 +159,25 @@ def adapter_main(stdin: str | None = None) -> int:
     else:
         print(design_approval.said(answered), file=sys.stderr)
     print(json.dumps({"board_copy": board_copy, "key": answered.key}))
+    return 0
+
+
+def undo_main(stdin: str | None = None) -> int:
+    """The approval adapter's undo: take back the approval a reopened task recorded.
+
+    Reads `{board_copy, key, actor, on_behalf_of}` and answers `{board_copy, key}`, the stored
+    key, when the approval is gone or was never of that version. Exits non-zero, which leaves
+    the task completed, with the reason on standard error for the engine to show.
+    """
+    try:
+        board_copy, key = _adapter_request(stdin)
+        removed = design_approval.withdraw(design_approval.qualified(board_copy), key)
+    except (OSError, ValueError) as exc:
+        print(f"design-review undo: {exc}; the approval was not removed", file=sys.stderr)
+        return 1
+    if removed:
+        print(f"design-review undo: removed {board_copy}'s design approval", file=sys.stderr)
+    print(json.dumps({"board_copy": board_copy, "key": key}))
     return 0
 
 
@@ -209,15 +242,18 @@ def raise_main(argv: Sequence[str] | None = None) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """`orchestrator-design-review adapter|raise ...`."""
+    """`orchestrator-design-review adapter|undo|raise ...`."""
     match list(sys.argv[1:] if argv is None else argv):
         case ["adapter"]:
             return adapter_main()
+        case ["undo"]:
+            return undo_main()
         case ["raise", *rest]:
             return raise_main(rest)
         case _:
             print(
-                "usage: orchestrator-design-review adapter | raise SOURCE:PROJECT --in SOURCE",
+                "usage: orchestrator-design-review adapter | undo | "
+                "raise SOURCE:PROJECT --in SOURCE",
                 file=sys.stderr,
             )
             return 2

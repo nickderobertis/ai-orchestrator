@@ -480,12 +480,30 @@ def test_the_finish_plan_step_never_refuses_the_flow(
     assert "acts as no session" in capsys.readouterr().err
 
 
-def test_the_command_names_its_two_verbs(
+@pytest.mark.parametrize(
+    ("request_text", "refusal"),
+    [
+        ("[]", "not an object"),
+        ('{"board_copy": "not qualified", "key": "k"}', "not a qualified project id"),
+        ("not json", "Expecting value"),
+    ],
+)
+def test_the_undo_refuses_a_request_it_cannot_act_on(
+    capsys: pytest.CaptureFixture[str], request_text: str, refusal: str
+) -> None:
+    assert design_review.undo_main(request_text) == 1
+    said = capsys.readouterr()
+    assert said.out == "" and refusal in said.err and "was not removed" in said.err
+
+
+def test_the_command_names_its_verbs(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(design_review, "adapter_main", lambda: 0)
+    monkeypatch.setattr(design_review, "undo_main", lambda: 0)
     monkeypatch.setattr(sys, "argv", ["orchestrator-design-review", "adapter"])
     assert design_review.main() == 0
+    assert design_review.main(["undo"]) == 0
     assert design_review.main(["approve"]) == 2
     assert "usage:" in capsys.readouterr().err
 

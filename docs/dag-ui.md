@@ -109,7 +109,8 @@ host's resources, provider health, dispatches and runs, the acting session's rep
 from the unwatched route, and the one **host-wide shutdown**
 ([below](#shutting-the-host-down-from-the-browser)). **Action items** is another page
 of its own: the host-wide queue of human tasks and questions from
-`/api/human-items`, where an item is raised, answered, completed or dismissed. It is the
+`/api/human-items`, where an item is raised, answered, completed or dismissed, and a
+resolved one reopened or noted. It is the
 same live store `just human-items` reads and writes — one journal beneath the runs root,
 so the page and the CLI show and act on the same items; there is no sample mode. A host
 whose effective `human_items` configuration (`just human-items config`) does not enable
@@ -121,9 +122,14 @@ the scope behind that is the engine's internal record, never a filter or a colum
 Completing a design-review task here is an ordinary **Complete**: it approves the
 document version the task stored when it was raised, through the same authority `just
 approve-design` runs, and a document changed since is refused with `Re-read the current
-document`, the obsolete task dismissed and one raised for the current version. A write
-here records actor `session:<id>` when the server has an acting session, or `browser`
-when it has none, with `on_behalf_of: null`. Any server session, including one owning
+document`, the obsolete task dismissed and one raised for the current version. **Reopen**
+puts a resolved item back, and on a completed design review first runs the undo that
+removes its approval, showing that undo's refusal when the plan has already launched; each
+item says whether it can be reopened and, where it cannot, why. A note is a completed
+item's comment or a dismissed item's reason. A write here records actor
+`browser:session:<id>` when the server has an acting session, or `browser` when it has
+none, with `on_behalf_of: null`, which tells a press in the browser from a manager's
+`session:<id>` over the same journal. Any server session, including one owning
 no items, or no session can list every open item, read any owner's detail, and answer,
 complete or dismiss any owner's item. Resolution preserves ownership and delivers the
 result to that owner. This is the accepted approval authority: access to this host's
@@ -139,7 +145,7 @@ nothing can act on.
 
 **Those controls are the whole of what the view acts through.** A run is acted on by
 its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, a human
-item by its raise, answer, completion and dismissal, and the host by its one host-wide
+item by its raise, answer, completion and dismissal, its reopen and its note, and the host by its one host-wide
 shutdown; every other route the view calls reads. Every read lives in the project
 sidebar, the run's three tabs, **Run details**, **Host** and **Action items**.
 **Watching, adopting and shutting down one run or one session's runs are not the
@@ -289,7 +295,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.71.0**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.72.0**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, the run's **Channel** tab with its byte-for-byte
 reply composer and `attest`, the per-run **Stop** with the owner-naming refusal, and the

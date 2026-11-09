@@ -1,0 +1,56 @@
+{
+  "name": "design-review-undo",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/design_review_undo",
+  "tags": [
+    "scope:design-review-undo",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-boundary-home",
+    "support-conftest"
+  ],
+  "namedInputs": {
+    "designReviewUndoWorkspace": [
+      "{projectRoot}/**/*",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/config/onepipeline.version",
+      "{workspaceRoot}/config/onetaskgraph.version",
+      "{workspaceRoot}/templates/design-doc.md.j2",
+      "{workspaceRoot}/templates/templates.yaml",
+      "{workspaceRoot}/orchestrator/accepted_opaque.py",
+      "{workspaceRoot}/orchestrator/design_approval.py",
+      "{workspaceRoot}/orchestrator/design_chain.py",
+      "{workspaceRoot}/orchestrator/design_review.py",
+      "{workspaceRoot}/orchestrator/human_items.py",
+      "{workspaceRoot}/orchestrator/npm_installs.py",
+      "{workspaceRoot}/orchestrator/plan_locations.py",
+      "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/plan_units.py",
+      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/spike_plan.py"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.design-review-undo uv run pytest tests/e2e/design_review_undo -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.design-review-undo"
+      ],
+      "inputs": [
+        "designReviewUndoWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

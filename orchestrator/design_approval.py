@@ -83,6 +83,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -93,6 +94,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, NamedTuple, NewType, TypedDict, cast
+
+from onetaskgraph_sdk import MetadataSet
+from onetaskgraph_sdk._generated.query_response_of_qualified_task import StatusCategory
 
 from orchestrator import accepted_opaque, design_chain, npm_installs, plan_store, spike_plan
 from orchestrator.plan_store import NodeId, StoreDocument
@@ -118,6 +122,28 @@ RECORD_KEY = "orchestrator.design-approval"
 #: standard error does not carry apart from these words. The approval-refusal journey in
 #: `tests/e2e/board_copy_approval` holds them to the adopted store.
 VERSION_MOVED = "this write expects"
+
+#: The project-record key the engine claims a project under while a run drives it
+#: (onepipeline's `src/taskgraph.rs`, `DRIVER_KEY`). Set is launched; a value of JSON null is
+#: a claim released.
+DRIVER_CLAIM = "onepipeline.driver"
+
+#: The status categories a member task holds before any run has claimed it. Every other
+#: category is past `todo`, a cancelled one included. `unknown` is what the store says of a
+#: status it cannot place and also the `plans` board's `Needs attention`, which a run writes on
+#: a node it parked or failed, so it decides nothing alone: it refuses as unreadable only where
+#: no other evidence says the plan launched.
+NOT_YET_CLAIMED = frozenset(
+    {StatusCategory.StatusCategoryDraft, StatusCategory.StatusCategoryBacklog}
+    | {StatusCategory.StatusCategoryTodo}
+)
+UNPLACED_STATUS = StatusCategory.StatusCategoryUnknown
+
+#: The runs root this host's engine records its runs under, and the file in each run's
+#: directory naming the project it launched.
+RUNS_ROOT_ENV = "ONEPIPELINE_RUNS_DIR"
+DEFAULT_RUNS_ROOT = "runs"
+LAUNCH_RECORD = "launch.json"
 
 #: The name this host registers the design document's template under, in
 #: `templates/templates.yaml`, and the reference a rendering of it records. The document is
@@ -978,31 +1004,128 @@ def approve(project: str, expected: ApprovalKey | None = None) -> Approved:
         return Approved(document.qualified_id, located(document), held=False, key=key, moved=True)
     if recorded(document) == key:
         return Approved(document.qualified_id, located(document), held=True, key=key)
-    value = {"key": key, "approved_at": datetime.now(UTC).isoformat()}
+    written = _write_record(
+        project,
+        document,
+        {"key": key, "approved_at": datetime.now(UTC).isoformat()},
+        f"this approval read it, so nothing was recorded and the change stands. Read it again "
+        f"and re-run `{RECIPE} {project}` to approve what it says now",
+    )
+    location = plan_store.located(
+        written.location.model_dump(mode="python") if written.location else None,
+        written.id.model_dump(),
+    )
+    return Approved(document.qualified_id, location, held=False, key=key)
+
+
+def _write_record(
+    project: str, document: StoreDocument, value: object, refused: str
+) -> MetadataSet:
+    """Write ``value`` as ``document``'s record, guarded on the version it was read at.
+
+    An edit made since it was read is content the caller did not read, so the write is
+    refused, and ``refused`` finishes the sentence saying so.
+    """
     try:
-        # Guarded on the change token the listing above read the document at, so an edit
-        # made since — the content this key was not computed over — is never approved.
-        written = plan_store.sdk(
+        return plan_store.sdk(
             plan_store.client().document_metadata_set(
-                str(document.qualified_id),
-                RECORD_KEY,
-                json.dumps(value),
-                expect=document.version,
+                str(document.qualified_id), RECORD_KEY, json.dumps(value), expect=document.version
             )
         )
     except OSError as exc:
         if VERSION_MOVED not in str(exc):
             raise
         raise OSError(
-            f"{project}'s design document {document.qualified_id} changed after this "
-            f"approval read it, so nothing was recorded and the change stands. Read it again "
-            f"and re-run `{RECIPE} {project}` to approve what it says now\n{exc}"
+            f"{project}'s design document {document.qualified_id} changed after {refused}\n{exc}"
         ) from exc
-    location = plan_store.located(
-        written.location.model_dump(mode="python") if written.location else None,
-        written.id.model_dump(),
+
+
+def _launch_naming(project: str) -> str | None:
+    """The run under this host's runs root whose launch record names ``project``, or ``None``.
+
+    A directory holding no launch record is no run: the root also holds the engine's own
+    stores beside its runs. A record that cannot be read is an `OSError`, never a run that
+    did not launch this project.
+    """
+    root = Path(os.environ.get(RUNS_ROOT_ENV) or DEFAULT_RUNS_ROOT).expanduser().absolute()
+    try:
+        entries = sorted(root.iterdir())
+    except OSError as exc:
+        raise OSError(f"the runs root {root} could not be listed: {exc}") from exc
+    for entry in entries:
+        record = entry / LAUNCH_RECORD
+        try:
+            launch = json.loads(record.read_text(encoding="utf-8"))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except (OSError, ValueError) as exc:
+            raise OSError(f"the launch record {record} could not be read: {exc}") from exc
+        named = launch.get("project") if isinstance(launch, dict) else None
+        if not isinstance(named, str):
+            raise OSError(f"the launch record {record} names no project")
+        if named == project:
+            return entry.name
+    return None
+
+
+def launch_evidence(project: str) -> str | None:
+    """What says ``project`` has launched, or ``None`` when everything says it has not.
+
+    Three places can say so: the driver claim on the project's record, a member task past
+    `todo`, and a run under this host's runs root naming the project. Anything that cannot be
+    read is an `OSError` naming it, because a wrong "not launched" is what would let an
+    approval be removed from a plan that is running.
+    """
+    try:
+        record = plan_store.project_record(project)
+        metadata = record.get("metadata")
+        if isinstance(metadata, Mapping) and metadata.get(DRIVER_CLAIM) is not None:
+            return f"its project record carries a driver claim ({DRIVER_CLAIM})"
+        unplaced = None
+        for task in plan_store.plan_listing(project, record):
+            category = task.item.status.category
+            if category == UNPLACED_STATUS:
+                unplaced = unplaced or task.id.model_dump()
+            elif category not in NOT_YET_CLAIMED:
+                return f"its task {task.id.model_dump()} is at {category.value}, past todo"
+        run = _launch_naming(project)
+        if run is not None:
+            return f"run {run}'s launch record names it"
+        if unplaced is not None:
+            raise OSError(f"the store cannot place the status of task {unplaced}")
+    except (OSError, ValueError) as exc:
+        raise OSError(f"whether {project} has launched could not be established: {exc}") from exc
+    return None
+
+
+def withdraw(project: str, key: ApprovalKey) -> bool:
+    """Remove the approval of ``project``'s document at version ``key``; say whether one went.
+
+    What undoes a design review. The store's metadata verb only sets, so the record is written
+    as JSON null, which :func:`recorded` reads as no approval, guarded on the document's
+    version as :func:`approve` is. A record for another version is left alone, and a document
+    carrying none is left as it is, so repeating this changes nothing.
+
+    Refused with an `OSError` once the plan has launched, or when that cannot be established:
+    approval only gates a launch, so taking it back from a plan already running would seem to
+    work and stop nothing.
+    """
+    evidence = launch_evidence(project)
+    if evidence is not None:
+        raise OSError(
+            f"{project} has already launched ({evidence}), and removing its design approval "
+            f"would not stop it"
+        )
+    document = design_document(project)
+    if recorded(document) != key:
+        return False
+    _write_record(
+        project,
+        document,
+        None,
+        "this undo read it, so its approval stands; run the undo again to remove it",
     )
-    return Approved(document.qualified_id, location, held=False, key=key)
+    return True
 
 
 def unshown(

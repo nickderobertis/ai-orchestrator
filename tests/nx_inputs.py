@@ -884,6 +884,9 @@ E2E_JOURNEYS: tuple[JourneyProject, ...] = (
         "pooled-server-session", f"{E2E_ROOT}/pooled_server_session", "pooledServerSessionWorkspace"
     ),
     JourneyProject("spike-brief", f"{E2E_ROOT}/spike_brief", "spikeBriefWorkspace"),
+    JourneyProject(
+        "design-review-undo", f"{E2E_ROOT}/design_review_undo", "designReviewUndoWorkspace"
+    ),
     JourneyProject("screened-export", f"{E2E_ROOT}/screened_export", "screenedExportWorkspace"),
     JourneyProject("review-drafting", f"{E2E_ROOT}/review_drafting", "reviewDraftingWorkspace"),
     JourneyProject(

@@ -4464,6 +4464,28 @@ changes nothing about its items. Every resolution is delivered to the owning ses
 `just human-items watch` exactly once, so a question answered while its manager was away
 reaches it when it reconnects.
 
+**A resolution can be taken back or annotated.** `just human-items reopen <item>` returns a
+completed or dismissed item to open, its hold with it; the engine refuses an answered
+question, a `kind: human` node's item and anything the engine itself resolved, and says why
+in the item's `reopen` field, so the CLI and the page give one answer. `just human-items
+note <item>`, its text given as `--text`, comments on a completed item or states a dismissed one's reason, and
+releases nothing.
+
+**Reopening a completed design review undoes its approval.** The engine runs the
+`design-approval` adapter's `undo` (`.onepipeline/config.yaml`), which removes the record of
+that version and leaves a record of any other alone; `just orchestrate` then refuses the plan
+until `just approve-design` or a new Complete records it again. Before a launch it is one
+click. **It refuses once the plan has launched** — the project record carries a driver claim,
+a member task is past `todo`, or a run under this host's runs root names the project in its
+launch record — saying that the plan has already launched and removing the approval would not
+stop it, and the item stays completed. Anything it cannot read refuses too, naming what, because
+a wrong "not launched" is the misleading case. A cancelled member task counts as past `todo`.
+
+**A person's action reaches the managers of the runs it touches.** Each completed, dismissed,
+reopened or noted event not written by the engine is also a non-blocking planner surface of
+kind `human-item` on every live run tied to the item, naming the item, the action, the actor and
+any text. It reports what a person did and asks nothing of the run.
+
 ## The graph of record is the live graph
 
 There is no replanning step, because there is no point at which the plan stops

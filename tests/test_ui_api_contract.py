@@ -89,6 +89,8 @@ CONTROLS = {
     "POST /api/human-items/{id}/answer": "answer,",
     "POST /api/human-items/{id}/complete": "completion",
     "POST /api/human-items/{id}/dismiss": "and dismissal",
+    "POST /api/human-items/{id}/reopen": "its reopen",
+    "POST /api/human-items/{id}/note": "and its note",
 }
 #: The write routes a tab reads its state through, which act on no run and no host.
 SUBSCRIPTION_ROUTES = {
@@ -294,7 +296,9 @@ ACTION_ITEMS_AVAILABILITY = {
     "complete or dismiss any owner's item": (
         "Any server may answer, complete or dismiss any owner's item, including design reviews"
     ),
-    "actor `session:<id>`": "actor `session:<id>` for the server's acting session",
+    "actor `browser:session:<id>`": (
+        "actor `browser:session:<id>` for the server's acting session"
+    ),
     "or `browser`": "literal `browser` for an unattributed server",
     "Resolution preserves ownership and delivers the result to that owner": (
         "Stored ownership and event delivery to the owning session's watch never change"
