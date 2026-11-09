@@ -161,7 +161,7 @@ a schema version, not a field to discover.
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
 under the 0.22.0 CLI and onejudge 0.19, and read off the tags as unchanged through
-the 0.22.0/0.20.0 upgrade, the 0.26.1/0.21.0 upgrade, the 0.26.1/0.22.0 upgrade the 0.26.1/0.22.1 upgrade and the 0.26.1/0.22.2 upgrade (`config/oneharness.version` and
+the 0.22.0/0.20.0 upgrade, the 0.26.1/0.21.0 upgrade, the 0.26.1/0.22.0 upgrade, the 0.26.1/0.22.1 upgrade and the 0.26.1/0.22.2 upgrade (`config/oneharness.version` and
 `config/onejudge.version`); the pair before it is the boundary the older per-party
 accounting sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -320,8 +320,8 @@ turns onejudge 0.19.0 ran through
 `oneharness.judge.toml` and `oneharness.design-doc-judge.toml`, two on Codex and two on
 Claude Code: each record's `usage` block is the same five keys and nothing else.
 It moved again to 0.19.5 with the engine 0.75.0, to 0.20.0 with the engine 0.80.2 and to
-0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0 and to 0.22.1 with the engine 0.96.1, and both files are unchanged between `onejudge-v0.19.0` and
-`onejudge-v0.22.1` too, and the
+0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0 and to 0.22.1 with the engine 0.96.1 and to 0.22.2 with the engine 0.101.2, and both files are unchanged between `onejudge-v0.19.0` and
+`onejudge-v0.22.2` too, and the
 engine links `oneharness-core` 0.29.1 for itself, onejudge 0.22.2 and oneagentgraph 0.9.1, read off the
 SBOM its npm platform package ships. Between `oneharness-core-v0.24.2` and `oneharness-core-v0.28.2`, `domain/usage.rs`
 gains the reset-credit report above and a millisecond RFC 3339 reader

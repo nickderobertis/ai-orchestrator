@@ -402,9 +402,10 @@ class CopyOptions(TypedDict, total=False):
 #: whole plan, project record included, and a copy of named members into a project already on
 #: the destination is the engine's write-back to make, not a manager's; and `status_policy`,
 #: because every plan copy fixes it to `preserve-destination`: board statuses and open/closed
-#: state belong to runs and people, while new items take their source status.
-#: `replace`, `reject` and `sanitize_dry_run` are invocation-specific write-policy controls;
-#: plan publication uses the configured policy and the ordinary copy verdict instead.
+#: state belong to runs and people, while new items take their source status; and `replace`,
+#: `reject` and `sanitize_dry_run`, because a copy rewrites a term under what the host declares
+#: at its declaration levels rather than per invocation, and `just plans sources sanitize
+#: <source> --dry-run` is the preview of an item already carrying one.
 #: Named rather than left out of the reconciliation, so a parameter the SDK adds later still
 #: fails it by name.
 UNEXPOSED: frozenset[str] = frozenset(
@@ -412,11 +413,11 @@ UNEXPOSED: frozenset[str] = frozenset(
         "comments",
         "members_only",
         "no_link",
+        "reject",
+        "replace",
+        "sanitize_dry_run",
         "status_policy",
         "term_scope",
-        "replace",
-        "reject",
-        "sanitize_dry_run",
     }
 )
 

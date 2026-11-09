@@ -136,6 +136,17 @@ retry an export edge's end beside any other edit.
 The adoption after that moves the engine to 0.98.4, the store crates and CLI to 0.13.2 and
 the read API to 0.65.4, which links that engine: the store's Linear plugin creates a new
 Linear project again, and reads an absent project id as absent.
+The adoption after that moves the engine to 0.101.2, the read API to 0.68.0, the store crates
+and CLI to 0.14.0, onevcs to 0.60.0, onejudge to 0.22.2 and onemessagebus to 0.9.5, and the
+engine also links the `privateterms` crate, which has no CLI and so no pin: a screened write
+rewrites a declared private term, and `just plans sources sanitize` sweeps one source.
+The adoption after that moves the engine to 0.101.4, the read API to 0.69.0 and the store
+crates and CLI to 0.14.3, with every other linked crate unchanged: a copy from a private
+source to a public destination rewrites a design document's task references and per-budget
+section links to the destination's counterparts.
+The adoption after that moves the engine to 0.102.3, the read API to 0.71.0 and the store
+crates and CLI to 0.14.7, with every other linked crate unchanged: the store no longer reads
+an item before a narrow write by default.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole
@@ -878,7 +889,7 @@ the merge left in progress**, and reports it as the session's `conflict` (`paths
 the refusal at open that used to be the only answer, and nothing on this host asks for
 it. A publication over a merge nobody concluded is refused as a
 sync conflict before anything is committed or pushed, and a session's teardown aborts
-the merge and keeps every commit. onepipeline 0.98.4 dispatches the worker into that
+the merge and keeps every commit. onepipeline 0.102.3 dispatches the worker into that
 session — a node's first step, a pinned continuation, or the re-dispatch after a
 `sync-conflict` — with the conflict under `## Planner context` and one engine-written
 criterion under `### Merge resolution` at the end of `## Acceptance criteria`, so the

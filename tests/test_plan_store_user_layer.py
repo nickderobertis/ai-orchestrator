@@ -61,3 +61,30 @@ def test_a_store_the_suite_starts_reads_no_user_layer(tmp_path: Path) -> None:
 
     read = [path for path in origins.values() if Path(path).parent.name == PLAN_STORE_USER_LAYER]
     assert read == [], read
+
+
+def test_committed_remote_sources_default_to_an_empty_loopback_board() -> None:
+    shown = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "config", "show", "--json"],
+        env=os.environ.copy(),
+        cwd=Path(__file__).resolve().parent.parent,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stderr
+    settings = {entry["key"]: entry["value"] for entry in json.loads(shown.stdout)["settings"]}
+    for source in ("plans", "followups", "human-public", "human-private"):
+        assert settings[f"sources.{source}.plugin"] == "github-projects"
+        assert settings[f"sources.{source}.config.endpoint"].startswith("http://127.0.0.1:")
+
+        listed = subprocess.run(
+            [str(ONETASKGRAPH_BIN), "task", "list", "--source", source, "--json"],
+            env=os.environ.copy(),
+            cwd=Path(__file__).resolve().parent.parent,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert listed.returncode == 0, listed.stdout + listed.stderr
+        assert json.loads(listed.stdout)["items"] == [], listed.stdout

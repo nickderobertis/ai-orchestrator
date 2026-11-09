@@ -618,11 +618,21 @@ to a declared-private store while public work stays on the board.
 is screened, plans are drafted in the private `authoring` source, and **a host doing an
 organization's work declares that organization's sources `visibility: private` in its user
 layer before it adopts this change**, since an undeclared tracker refuses every task routed
-to it. **An exact public phrase that carries a private repository's term** — a machine name a
-follow-up ticket records, say — goes in the host's phrase list,
-`$ONEVCS_HOME/public-phrases.yml`: host state outside every checkout, which nothing tracked
-writes and `just repos-apply` does not install. Never list the term itself, and never edit a
-private repository's own declarations to the same end. Where a plan's home lands is the
+to it.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This task requires the manager to read the declaration levels and sweep here. The linked onevcs contract and private-terms specification are the authorities; this passage states only the rules the manager acts on. -->
+**An exact public phrase that carries a private repository's term** — a machine name a
+follow-up ticket records, say — goes in `phrases` at the declaration levels, as
+[onevcs’s contract](https://github.com/nickderobertis/onevcs/blob/main/docs/contract.md)
+specifies: repository root, ancestor directories up to home, then `$ONEVCS_HOME` fallback.
+The [private-terms specification](https://github.com/nickderobertis/privateterms/blob/main/spec/private-terms.md)
+owns precedence: nearest wins per term and none removes one. Host declarations stay outside
+this checkout; `public-phrases.yml` is deprecated. Never list the term itself in a public
+file. Preview and run a sweep with `just plans sources sanitize <source> --dry-run`, then
+without `--dry-run`.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+Where a plan's home lands is the
 store's to decide from the repositories and classification of its tasks and its project (`docs/orchestration.md`, *The public write boundary*), never yours. A plan
 naming any private repository is one private coordinating plan: its home holds every task, its
 documents and its export edge in the private source the host declares — a Linear team or a
@@ -1197,8 +1207,8 @@ exactly what it showed, with no board request before the launches, while the sna
 younger than the module's `SNAPSHOT_LAUNCHABLE_FOR`; a snapshot already launched, or launched
 past by a later overlapping one, is refused naming the fresh dry run, and never because the
 board moved since. The dispatched agent reads only the
-snapshot and posts each reply with `--expect`. Settle then makes the pass's one batched board
-read, verifies every reply, and writes the tickets the agent changed, their re-estimates and
+snapshot and posts each reply with `--expect`. Settle then makes the pass's one batched board read,
+verifies every reply, and writes the tickets the agent changed, their re-estimates and
 any withdrawal as field-scoped `--expect` writes checked from their own responses — but for
 the one named `repositories` exception: a ticket whose `repositories` changed goes as one whole
 `--expect` copy, the one field `task update` cannot set, and the store's unreported read after

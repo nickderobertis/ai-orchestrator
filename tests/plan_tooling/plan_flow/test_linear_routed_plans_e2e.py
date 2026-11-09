@@ -1686,7 +1686,7 @@ def test_a_public_task_naming_a_private_repository_is_refused_before_either_boar
 
         said = copied.stdout + copied.stderr
         assert copied.returncode != 0, said
-        assert f"{project}/library was not written to source <redacted source 1>" in said, said
+        assert f"{project}/library was not written to source {BOARD}" in said, said
         assert "a term of a private repository" in said, said
         written = [
             str(request["operation"])
@@ -1833,7 +1833,7 @@ def test_one_public_copys_boundary_processes_are_recorded(
     """Every `onevcs boundary` process one `just finish-plan` of a public plan starts.
 
     Recorded as the `boundary-invocations-per-public-copy` budget's parts, inspect apart from
-    check and each check with the items it screened, never asserted against a threshold.
+    sanitize and each sanitize with the texts it screened, never asserted against a threshold.
     """
     budget = "boundary-invocations-per-public-copy"
     with _gated(tmp_path, oneharness_bin, routed, public=[THIS_REPOSITORY, SECOND_PUBLIC]) as bench:
@@ -1865,10 +1865,12 @@ def test_one_public_copys_boundary_processes_are_recorded(
             if line
         ]
     verbs = Counter(str(entry["argv"][1]) for entry in recorded)
-    assert set(verbs) <= {"inspect", "check"}, verbs
-    screened = [_screened(str(entry["input"])) for entry in recorded if entry["argv"][1] == "check"]
+    assert set(verbs) <= {"inspect", "sanitize"}, verbs
+    screened = [
+        _screened(str(entry["input"])) for entry in recorded if entry["argv"][1] == "sanitize"
+    ]
     record(budget, "inspect processes", verbs["inspect"], unit="processes")
-    record(budget, "check processes", verbs["check"], unit="processes", items=sum(screened))
+    record(budget, "sanitize processes", verbs["sanitize"], unit="processes", items=sum(screened))
     repositories = Counter(
         str(json.loads(str(entry["input"])).get("repository"))
         for entry in recorded
@@ -1877,18 +1879,17 @@ def test_one_public_copys_boundary_processes_are_recorded(
     for repository, count in sorted(repositories.items()):
         record(budget, f"inspect of {repository}", count, unit="processes", counted=False)
     for index, items in enumerate(screened, 1):
-        record(budget, f"check {index}", 1, unit="processes", counted=False, items=items)
-    print(f"{budget}: {dict(verbs)}; inspects {dict(repositories)}; items per check {screened}")
+        record(budget, f"sanitize {index}", 1, unit="processes", counted=False, items=items)
+    print(f"{budget}: {dict(verbs)}; inspects {dict(repositories)}; texts per sanitize {screened}")
 
 
 def _screened(handed: str) -> int:
-    """How many items one `onevcs boundary check` was handed to screen.
+    """How many texts one `onevcs boundary sanitize` was handed to rewrite.
 
-    The store hands each check one item's terms — its title, metadata and repositories — as
-    one document, or several items' as a list of them.
+    The store hands one process the texts of however many items it is writing together, so a
+    process's texts, rather than the process count, say how much of the copy it screened.
     """
-    document = json.loads(handed)
-    return len(document) if isinstance(document, list) else 1
+    return len(json.loads(handed)["text"])
 
 
 # llmlint: ignore-end[e2e_not_mocked]

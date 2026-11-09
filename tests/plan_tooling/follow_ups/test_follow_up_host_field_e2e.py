@@ -9,7 +9,7 @@ that this host's configuration makes a real copy write the record's `host` onto 
 that a board without the field refuses the copy by name until the operator's `just plans
 sources fields followups --apply` creates it.
 
-The last journeys hold the host's public phrases (`$ONEVCS_HOME/public-phrases.yml`, onevcs's
+The last journeys hold the host's public phrases (`$ONEVCS_HOME/private-terms.yml`, onevcs's
 `docs/contract.md`) to the same write path: a state root of their own also registers a
 synthetic private identity whose committed manifest declares a package name, which the
 boundary refuses in public text, and a phrase file lists one exact host name carrying that
@@ -47,12 +47,12 @@ TERM_REFUSAL = "carries a term of a private repository in its text"
 PUBLIC_PHRASE = f"bench-{PRIVATE_TERM}"
 
 
-def _phrase_home(root: Path, *, phrases: tuple[str, ...]) -> Path:
+def _phrase_home(root: Path, *, phrases: tuple[str, ...], replacement: bool | None = None) -> Path:
     """A state root registering the ticket's public repository and `PRIVATE_REPOSITORY`.
 
     The private checkout commits a `pyproject.toml` naming `PRIVATE_TERM`, which is what the
     boundary derives the term from; ``phrases``, when any, are written as the host's
-    `public-phrases.yml` under the root, and none leaves the file absent.
+    `private-terms.yml` under the root, and none leaves the file absent.
     """
     public = (boundary_home.THIS_REPOSITORY, host_board._hosted(host_board.SIBLING_REPOSITORY))
     home = boundary_home.registered_home(root, public=public)
@@ -77,21 +77,28 @@ def _phrase_home(root: Path, *, phrases: tuple[str, ...]) -> Path:
         assert done.returncode == 0, f"{arguments[:3]}: {done.stdout}{done.stderr}"
     if phrases:
         listed = "".join(f'  - "{phrase}"\n' for phrase in phrases)
-        (home / "public-phrases.yml").write_text(
-            f"version: 1\nphrases:\n{listed}", encoding="utf-8"
+        (home / "private-terms.yml").write_text(
+            f"schema_version: 2\nphrases:\n{listed}", encoding="utf-8"
+        )
+    if replacement is not None:
+        action = 'with: "example-service"' if replacement else "reject: true"
+        (home / "private-terms.yml").write_text(
+            f"schema_version: 2\nphrases: [{PUBLIC_PHRASE}]\n"
+            f"replacements:\n  - term: {PRIVATE_TERM}\n    {action}\n",
+            encoding="utf-8",
         )
     return home
 
 
 def _phrase_copy(
-    tmp_path: Path, *, phrases: tuple[str, ...], evidence: str = ""
+    tmp_path: Path, *, phrases: tuple[str, ...], evidence: str = "", replacement: bool | None = None
 ) -> tuple[subprocess.CompletedProcess[str], list[host_board._Issue]]:
     """Copy a ticket verified on `PUBLIC_PHRASE` onto `followups` under a phrase state root.
 
     Answers the copy and the issues the board kept, read before the board stops serving.
     """
     environment, root = host_board._followups_environment(tmp_path)
-    home = _phrase_home(tmp_path / "boundary", phrases=phrases)
+    home = _phrase_home(tmp_path / "boundary", phrases=phrases, replacement=replacement)
     environment = boundary_home.environment(environment, home)
     ticket = host_board._follow_up_ticket(
         host_board.SIBLING_REPOSITORY, evidence=evidence, verified_on=PUBLIC_PHRASE
@@ -206,6 +213,67 @@ def test_the_bare_term_beside_the_listed_phrase_is_still_refused_with_nothing_wr
     assert refused.returncode != 0, refused.stdout + refused.stderr
     assert TERM_REFUSAL in refused.stderr, refused.stderr
     assert kept == [], "the refused copy left an issue on the board, so it wrote before it refused"
+
+
+def test_a_ticket_body_is_replaced_and_a_reject_only_declaration_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    replaced, kept = _phrase_copy(
+        tmp_path / "replace",
+        phrases=(PUBLIC_PHRASE,),
+        replacement=True,
+        evidence=f"The {PRIVATE_TERM} service answered the same way.",
+    )
+    assert replaced.returncode == 0, replaced.stdout + replaced.stderr
+    assert len(kept) == 1
+    assert "The example-service service answered the same way." in kept[0].body
+    assert f"The {PRIVATE_TERM} service" not in kept[0].body
+    refused, kept = _phrase_copy(
+        tmp_path / "reject",
+        phrases=(PUBLIC_PHRASE,),
+        replacement=False,
+        evidence=f"The {PRIVATE_TERM} service answered the same way.",
+    )
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    assert "boundary-refused" in refused.stderr, refused.stderr
+    assert kept == [], "the reject-only copy wrote an issue"
+
+
+def test_the_plans_recipe_previews_and_sweeps_a_folder_without_writing_unfixable_items(
+    tmp_path: Path,
+) -> None:
+    environment, _ = host_board._followups_environment(tmp_path)
+    home = _phrase_home(tmp_path / "boundary", phrases=(), replacement=True)
+    environment = boundary_home.environment(environment, home)
+    source = tmp_path / "sweep"
+    tasks = source / "tasks"
+    tasks.mkdir(parents=True)
+    fixable = tasks / "fixable.md"
+    fixable.write_text(
+        f"---\ntitle: Repair cursor\nstatus: todo\n---\nThe {PRIVATE_TERM} service.\n",
+        encoding="utf-8",
+    )
+    unfixable = tasks / "unfixable.md"
+    unfixable.write_text(
+        f"---\ntitle: Repair private repository\nstatus: todo\n"
+        f"repositories: [{PRIVATE_REPOSITORY}]\n---\nPrivate work.\n",
+        encoding="utf-8",
+    )
+    environment["ONETASKGRAPH_SOURCES__SWEEP__PLUGIN"] = "local-md"
+    environment["ONETASKGRAPH_SOURCES__SWEEP__CONFIG__ROOT"] = str(source)
+    environment["ONETASKGRAPH_SOURCES__SWEEP__VISIBILITY"] = "public"
+    before = {path: path.read_bytes() for path in tasks.iterdir()}
+    command = ["just", "plans", "sources", "sanitize", "sweep", "--json"]
+    preview = host_board._followups_command(environment, [*command, "--dry-run"])
+    assert preview.returncode == 1, preview.stdout + preview.stderr
+    outcomes = [item["outcome"] for item in json.loads(preview.stdout)["items"]]
+    assert sorted(outcomes) == ["unfixable", "would-rewrite"], preview.stdout
+    assert {path: path.read_bytes() for path in tasks.iterdir()} == before
+    swept = host_board._followups_command(environment, command)
+    assert swept.returncode == 1, swept.stdout + swept.stderr
+    assert "example-service" in fixable.read_text(encoding="utf-8")
+    assert PRIVATE_TERM not in fixable.read_text(encoding="utf-8")
+    assert unfixable.read_bytes() == before[unfixable]
 
 
 # llmlint: ignore-end[e2e_not_mocked, expensive_tests_stay_behind_their_own_edge]  # noqa: E501 - directive rule lists occupy one line

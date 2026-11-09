@@ -16,10 +16,14 @@ import builtins
 import functools
 import importlib.metadata
 import io
+import json
 import os
 import re
 import subprocess
+import threading
 from collections.abc import Callable, Generator, Iterator, Mapping
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -32,6 +36,7 @@ import plan_store_cache
 import plan_store_user_layer
 import pytest
 import pytest_temp_root
+import yaml
 from nx_inputs import (
     ASK_SEAM_JOURNEYS,
     BOARD_COPY_APPROVAL_ROOT,
@@ -492,9 +497,72 @@ def _isolated_plan_store_user_layer(tmp_path_factory: pytest.TempPathFactory) ->
         for entry in host.iterdir():
             if entry.name != PLAN_STORE_USER_LAYER:
                 (mirror / entry.name).symlink_to(entry)
-    with pytest.MonkeyPatch.context() as patched:
+    with pytest.MonkeyPatch.context() as patched, _empty_remote_sources() as remote:
         patched.setenv("XDG_CONFIG_HOME", str(mirror))
+        for variable, value in remote.items():
+            patched.setenv(variable, value)
         yield
+
+
+class _EmptyRemoteSource(BaseHTTPRequestHandler):
+    """A GitHub Projects endpoint holding no item, answering the reads a screened copy makes."""
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
+        request = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+        page = {"hasNextPage": False, "endCursor": None}
+        data = (
+            {"search": {"nodes": [], "pageInfo": page, "issueCount": 0}}
+            if "search(query:" in request
+            else {
+                "owner": {
+                    "projectV2": {
+                        "id": "PVT_empty",
+                        "title": "empty",
+                        "fields": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                        "items": {"nodes": [], "pageInfo": page},
+                    }
+                }
+            }
+        )
+        body = json.dumps({"data": data}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+@contextmanager
+def _empty_remote_sources() -> Iterator[dict[str, str]]:
+    """Point every committed remote source at an empty loopback board, its plugin stated.
+
+    A copy onto a public destination asks each private source what it holds of the item
+    written, whether or not a dependency names that source, so without this a journey's
+    copy reads a real board. A journey serving its own board overrides this endpoint, and
+    naming the plugin is what a launch's inherited source settings are kept by.
+    """
+    document = yaml.safe_load((REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8"))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _EmptyRemoteSource)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        environment: dict[str, str] = {}
+        for name, source in document["sources"].items():
+            if source["plugin"] == "github-projects":
+                prefix = f"ONETASKGRAPH_SOURCES__{name.upper().replace('-', '_')}__"
+                environment[f"{prefix}PLUGIN"] = "github-projects"
+                environment[f"{prefix}CONFIG__ENDPOINT"] = (
+                    f"http://127.0.0.1:{server.server_port}/graphql"
+                )
+                environment[source["config"]["token_env"]] = "fixture-token"
+        yield environment
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def _own_plan_store_cache(factory: pytest.TempPathFactory) -> Iterator[None]:
@@ -607,6 +675,17 @@ def _isolate_gate_comparison_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in tuple(os.environ):
         if key.startswith(COMPARISON_ENV_PREFIXES):
             monkeypatch.delenv(key)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_checks_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the engine's own checks wait out of the suite, whichever process runs it.
+
+    A dispatch and a publishing push may each export `ONEVCS_CHECKS_TIMEOUT_SECONDS`, and
+    `onevcs rules check` reports that value over a rule's own, so a journey reading what a
+    tracked rule resolves to would be reading its caller's setting instead.
+    """
+    monkeypatch.delenv("ONEVCS_CHECKS_TIMEOUT_SECONDS", raising=False)
 
 
 @pytest.fixture(autouse=True)

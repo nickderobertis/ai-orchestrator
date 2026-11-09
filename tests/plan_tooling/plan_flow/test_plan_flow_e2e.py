@@ -560,6 +560,12 @@ def _environment(
     if declared_at is not None:
         environment[f"ONETASKGRAPH_SOURCES__{destination.upper()}__PLUGIN"] = "local-md"
         environment[f"ONETASKGRAPH_SOURCES__{destination.upper()}__CONFIG__ROOT"] = str(declared_at)
+    else:
+        # The environment layer sits above the file, so the suite's own loopback endpoint and
+        # plugin for this source would otherwise overrule the checkout's own declaration.
+        layered = f"ONETASKGRAPH_SOURCES__{destination.upper()}__"
+        for name in [name for name in environment if name.startswith(layered)]:
+            del environment[name]
     # `authoring` is in this list because both launches of this flow read their plan out
     # of it: a run whose plan store cannot see that source reads a project with no tasks.
     environment["ONETASKGRAPH_DEFAULT_SOURCES"] = (

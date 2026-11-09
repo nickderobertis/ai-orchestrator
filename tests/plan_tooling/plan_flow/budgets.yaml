@@ -35,12 +35,14 @@ budgets:
   # copy (`test_one_public_copys_boundary_processes_are_recorded`). The approved target is 15
   # (2 inspects + 10 checks); the manager ruled the measured figure plus a fifth, 48, stands
   # until the store's release inspecting once per copy is adopted, when it returns to 15.
+  # Under the `sanitize_command` policy that copy starts 12 (8 inspects + 4 sanitizes), the store
+  # batching several items' texts into one sanitize.
   - id: boundary-invocations-per-public-copy
     description: >-
-      `onevcs boundary inspect` and `onevcs boundary check` processes one `just finish-plan`
+      `onevcs boundary inspect` and `onevcs boundary sanitize` processes one `just finish-plan`
       of a public plan starts — one project, six tasks, one design document and two spike
-      reports naming two public repositories — inspect apart from check, each check with the
-      items it screened. It protects how long a public plan's copy takes once a host switches
+      reports naming two public repositories — inspect apart from sanitize, each sanitize with
+      the texts it screened. It protects how long a public plan's copy takes once a host switches
       the store's public boundary on.
     measure: reported
     command: ["uv", "run", "--directory", "../../..", "python", "-m", "tests.budget_telemetry"]

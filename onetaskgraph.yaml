@@ -7,11 +7,14 @@
 # The plan store's public write boundary is switched on: every write to a source not declared
 # private is screened through the pinned `onevcs`, whose `boundary inspect` answers each
 # repository an item names as public or private and whose `boundary check` refuses a write
-# carrying a private repository's terms. Plans are drafted in the private `authoring` source and
+# carrying a private repository's terms. A screened write is rewritten with declared
+# replacements. Plans are drafted in the private `authoring` source and
 # copied onto the public boards. A host doing an organization's work declares that
 # organization's sources `visibility: private` in its own user layer before adopting this;
 # `docs/orchestration.md` (The public write boundary) says why.
 write_policy:
+  sanitize_command: [onevcs, boundary, sanitize, --input, "-"]
+  terms_command: [onevcs, boundary, terms, --input, "-"]
   visibility_command: [onevcs, boundary, inspect, --input, "-"]
   check_command: [onevcs, boundary, check, --destination, public, --input, "-"]
 default_sources: [authoring, examples, plans, test-fixtures]

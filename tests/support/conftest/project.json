@@ -25,6 +25,7 @@
       "{workspaceRoot}/config/oneagentgraph.version",
       "{workspaceRoot}/config/oneharness.version",
       "{workspaceRoot}/config/onejudge.version",
+      "{workspaceRoot}/onetaskgraph.yaml",
       "{workspaceRoot}/orchestrator/adoption_guard.py",
       "{workspaceRoot}/orchestrator/criteria_guard.py",
       "{workspaceRoot}/orchestrator/accepted_opaque.py",

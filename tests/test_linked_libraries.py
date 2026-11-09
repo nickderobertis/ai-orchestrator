@@ -824,7 +824,8 @@ LINKED_HARNESS_CORES = (
 #: names the CLI, a separate artifact — so it has no pin to reconcile
 #: against and is checked binary-against-SBOM only. Sorted longest-first so
 #: `oneharness-core` is tried before any prefix of it could swallow the hyphen.
-LINKED_CRATES = (*sorted(RECONCILED_PINS), UNRECONCILABLE_PIN.crate)
+#: privateterms is a linked library with no CLI and therefore no host pin.
+LINKED_CRATES = (*sorted(RECONCILED_PINS), UNRECONCILABLE_PIN.crate, "privateterms")
 LINKED_IN_BINARY = re.compile(
     rb"\b("
     + b"|".join(crate.encode() for crate in sorted(LINKED_CRATES, key=len, reverse=True))

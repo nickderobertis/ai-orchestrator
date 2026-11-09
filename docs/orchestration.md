@@ -117,37 +117,49 @@ one. An organization's own login passes, because the host registers one of its p
 repositories, so the tracker is named by the organization's word and the tracker's, as in
 "hiddenco's Linear". A private source is often named for a private repository, so a text that
 needs a private source's id, `<source>:<project>` included, belongs in a private destination.
-**A run is named on a public board by its public id**: the `public_id` `onepipeline status <run>
---json` reports, the run id itself unless that names a private repository, and otherwise `run-`
-and twelve hex digits. Every follow-up record of a run, its tickets, markers and comments, is
-keyed by that id; a run is found from it by reading `public_id` off `onepipeline status <run>
---json` for the runs `just runs` lists, and `python -m orchestrator.follow_up_tickets realias
-<run-id>` moves a run's records filed under its run id onto its public id in place.
+Older follow-up records remain keyed by the run id under which they were written. A
+comment marker rewritten by replacement no longer names that run, so the run stops owning
+that comment.
 
-**A host lists the exact public phrases that carry a private term in its own phrase file.**
-The boundary refuses a private repository's term as a whole word, so a public name with that
-term as one hyphen-separated word of it — a machine name a follow-up ticket records as its
-`host`, say — refuses every write naming it. `$ONEVCS_HOME/public-phrases.yml` lists such
-names:
+**A host declares private terms, replacements and public phrases at declaration levels.**
+A `private-terms.toml`, `private-terms.yaml` or `private-terms.yml` declares `terms` to
+reject, `[[replacements]]` entries to replace a term (`with`) or keep it reject-only
+(`reject: true`), and `phrases` exempting exact public phrases carrying a term. For example,
+over invented names:
 
-```yaml
-version: 1
-phrases:
-  - "bench-quorvel"
+```toml
+schema_version = 2
+terms = ["quorvel"]
+phrases = ["bench-quorvel"]
+
+[[replacements]]
+term = "quorvel"
+with = "example-service"
 ```
 
-It is host state beside the onevcs `rules.yml`, outside every checkout: no `onevcs` command
-writes it, nothing tracked here does, and `just repos-apply` does not install it. A phrase
-exempts the term only inside an occurrence of the whole phrase standing on its own, so the
-same term anywhere else in the text is still refused. A missing file means no phrases, while
-one that cannot be read or is refused makes the check unavailable, stopping every screened
-write rather than passing it. Never list the term itself, and never edit a private
-repository's `private-terms.toml` or manifests to the same end: either releases the term in
-every public text. onevcs's `docs/contract.md`, under *Host public phrases*, is the authority
-on the file and the matching rule. `tests/plan_tooling/follow_ups/test_follow_up_host_field_e2e.py`
-copies a follow-up ticket whose `host` is a listed phrase onto the board, and holds the same
-ticket refused with no phrase file and a ticket also naming the bare term refused, each with
-nothing written, over synthetic names.
+Levels run from a repository's committed file through each ancestor directory of its
+checkout up to the home directory, then the `$ONEVCS_HOME` fallback. The nearest level
+wins per term; no level removes a term. The plan store's own `write_policy.replacements`,
+`ONETASKGRAPH_` environment settings and `--replace`/`--reject` flags sit above these
+levels. `public-phrases.yml` is still read but deprecated; declare `phrases` in a level
+instead. Never list a private term itself as a public phrase in a public file.
+
+The [private-terms specification](https://github.com/nickderobertis/privateterms/blob/main/spec/private-terms.md)
+is the authority on the data model, precedence and matching; the
+[privateterms crate documentation](https://docs.rs/privateterms) owns file names, encodings
+and level discovery. [onevcs's contract](https://github.com/nickderobertis/onevcs/blob/main/docs/contract.md)
+explains how onevcs finds the levels. Host declarations are host state; nothing tracked here
+writes them and `just repos-apply` does not install them.
+
+Preview existing items with `just plans sources sanitize <source> --dry-run`, then run
+`just plans sources sanitize <source>` to store the fixable rewrites. The report keeps
+unfixable items visible, including items naming a private repository.
+
+A narrow write to an existing task (a status, priority, content or metadata change, an update
+or a comment) screens only the text it writes and sends the source the same requests as with no
+`sanitize_command`. A term already stored on the item stays until the sweep above cleans it;
+this host leaves the store's read-first `sanitize_stored_on_write` off, because it would read
+the task and its comments beside every such write.
 
 `tests/plan_tooling/host_layer_routing/test_screened_host_states_e2e.py`, its
 `follow_ups/` and `plan_flow/` siblings `test_screened_host_states_follow_ups_e2e.py` and
