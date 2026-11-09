@@ -116,8 +116,8 @@ def _view(
         environment.update(dict.fromkeys(("TMPDIR", "TMP", "TEMP"), str(temporary)))
     environment["ONEPIPELINE_RUNS_DIR"] = str(runs_root)
     environment["CLAUDE_CODE_SESSION_ID"] = "driver-death-e2e"
-    # `status` reads every provider's health for its host report, which would start the
-    # real provider binaries; the guard answers in their place.
+    # `status --providers` reads every provider's health for its host report, which would
+    # start the real provider binaries; the guard answers in their place.
     first = ([PAID_PROVIDER_GUARD] if guarded else []) + ([behind] if behind else [])
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = os.pathsep.join([*map(str, first), environment["PATH"]])
@@ -234,8 +234,8 @@ def test_the_status_views_provider_probe_leaves_nothing_in_the_temporary_directo
 ) -> None:
     """The host report probes every provider binary, and the guard answers for each.
 
-    `just status` and `just host` start each binary the engine's provider health probe
-    knows, `cursor-agent` among them, and a real one writes into `TMPDIR` on every call:
+    `just status --providers` starts each binary the engine's provider health probe knows,
+    `cursor-agent` among them, and a real one writes into `TMPDIR` on every call:
     that is what the pre-push gate's `gate-leftovers` budget refused a passing push for.
     Stand-ins that record their calls and write what the real ones write sit on `PATH`
     behind the guard. Unguarded, they prove the probe reaches `cursor-agent` and that the
@@ -250,7 +250,7 @@ def test_the_status_views_provider_probe_leaves_nothing_in_the_temporary_directo
     temporary = tmp_path / "views-tmp"
     temporary.mkdir()
 
-    for recipe, arguments in (("status", (undriven.run,)), ("host", ())):
+    for recipe, arguments in (("status", (undriven.run, "--providers")), ("host", ())):
         viewed = _view(
             recipe,
             *arguments,

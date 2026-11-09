@@ -251,6 +251,25 @@ def _connection(nodes: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The source is onetaskgraph's Linear crate, whose constants its own live journey re-takes against real Linear on every credentialed run; this wire reproduces that answer as it does `MEASURED_REWRITES`, and no check here may reach a Linear workspace.  # noqa: E501 - a directive is one line
+class IdConflict(ValueError):
+    """Linear's refusal of a create under an id a record already holds.
+
+    Linear answers it under HTTP 200, as ``conflict on insert of <Kind>`` with a
+    ``userPresentableMessage`` naming the id: the wording onetaskgraph's Linear source holds as
+    `id_conflict_message` and `id_conflict_presentable`, and its live journey re-takes.
+    """
+
+    def __init__(self, kind: str, native: str) -> None:
+        name = kind[0].upper() + kind[1:]
+        super().__init__(f"conflict on insert of {name}")
+        self.extensions = {
+            "userPresentableMessage": f"Entity {name} with id {native} already exists."
+        }
+
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
 NativeId = NewType("NativeId", str)
 StateId = NewType("StateId", str)
 IssueIdentifier = NewType("IssueIdentifier", str)
@@ -364,6 +383,7 @@ class LinearBoard:
         self._arrivals: list[int] = []
         self._limited_for_ms: int | None = None
         self._limited_until_ms: int | None = None
+        self._listings_miss = False
         self._lock = threading.RLock()
 
     def environment(self, source: str) -> dict[str, str]:
@@ -518,6 +538,26 @@ class LinearBoard:
         with self._lock:
             self._limited_for_ms = window_ms
             self._limited_until_ms = None
+
+    @contextmanager
+    def listings_missing(self) -> Iterator[None]:
+        """Answer every listing and search with no records while the context is open.
+
+        Linear's filtered and searched reads were observed on a real team to miss records
+        written moments before, while a read by id answers them at once (onetaskgraph's Linear
+        source states the ruling, "a copy finds what it wrote by id when no listing shows it").
+        """
+        with self._lock:
+            self._listings_miss = True
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._listings_miss = False
+
+    def _listed(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """What a listing answers of ``nodes``: none of them while listings are missing."""
+        return [] if self._listings_miss else nodes
 
     def reset_at(self) -> int | None:
         """The epoch milliseconds the rate limit lifts at, once a request has opened it."""
@@ -710,15 +750,17 @@ class LinearBoard:
                 # read, in one request. Narrowed as each connection is below.
                 return {
                     "originIssues": _page(
-                        [
-                            node
-                            for node in (self._wire(item) for item in self._issues.values())
-                            if _matches(node, variables.get("issuesFilter"))
-                        ],
+                        self._listed(
+                            [
+                                node
+                                for node in (self._wire(item) for item in self._issues.values())
+                                if _matches(node, variables.get("issuesFilter"))
+                            ]
+                        ),
                         variables.get("issuesFirst"),
                     ),
                     "originProjects": _connection(
-                        [self._wire(item) for item in self._projects.values()]
+                        self._listed([self._wire(item) for item in self._projects.values()])
                     ),
                     **resolution,
                 }
@@ -753,7 +795,11 @@ class LinearBoard:
                     return {operation: self._wire(item) if item else None}
                 case requested if requested == kind + "s":
                     nodes = [self._wire(item) for item in items.values()]
-                    return {operation: _connection(_in_project(nodes, variables.get("filter")))}
+                    return {
+                        operation: _connection(
+                            self._listed(_in_project(nodes, variables.get("filter")))
+                        )
+                    }
                 case requested if requested == kind + "Delete":
                     native = NativeId(_text(variables, "id"))
                     match kind:
@@ -780,6 +826,8 @@ class LinearBoard:
                     native = NativeId(raw_native)
                     if operation.endswith("Update") and native not in items:
                         raise ValueError(f"{operation}: unknown id {native}")
+                    if operation.endswith("Create") and native in items:
+                        raise IdConflict(kind, native)
                     if kind in ("issue", "project", "document") and self._answering:
                         self._answering.written = native
                     return {
@@ -942,6 +990,10 @@ def linear_board(*, rewrites: Sequence[Rewrite] = MEASURED_REWRITES) -> Iterator
                         payload.get("operationName"),
                         _client(int(self.client_address[1]), board.port),
                     )
+                }
+            except IdConflict as refused_id:
+                answer = {
+                    "errors": [{"message": str(refused_id), "extensions": refused_id.extensions}]
                 }
             except (ValueError, KeyError, StopIteration) as exc:
                 answer = {"errors": [{"message": str(exc)}]}

@@ -2,12 +2,12 @@
 
 Both recipes are the engine's views passed through untouched: `onepipeline status` and
 `onepipeline host` print a `free space:` line per filesystem the runs root and the
-lifecycle workspaces are on, above the `providers:` block `oneagentgraph health`
-contributes. `AGENTS.md`'s watch property 6 has a supervisor read `just status "$RUN"
+lifecycle workspaces are on. `just status --providers` ends with the `providers:` block
+`oneagentgraph health` contributes, which the view leaves out unless asked since engine
+0.103.0. `AGENTS.md`'s watch property 6 has a supervisor read `just status "$RUN"
 --no-providers`, which leaves that block out and keeps everything above it, so these
-journeys hold the recipes to printing the engine's line there, to the flag dropping that
-block and nothing else, and to printing nothing of this repository's beside the engine's
-view.
+journeys hold the recipes to printing the engine's line there, to the block being the only
+difference, and to printing nothing of this repository's beside the engine's view.
 
 The engine is the real one and so are the recipes, the wrapper script and the shell: a
 view reaches no model, and a doubled engine would prove nothing about a rendering. The run
@@ -186,7 +186,7 @@ def test_the_status_view_reports_free_space_above_the_line_a_watch_is_cut_at(
     probe: Probe,
 ) -> None:
     """The resource whose exhaustion stops everything, where a supervisor can see it."""
-    rendered = _view("status", probe.run, runs_root=probe.root)
+    rendered = _view("status", probe.run, "--providers", runs_root=probe.root)
 
     assert rendered.returncode == 0, rendered.stderr
     assert PROVIDERS in rendered.stdout, (
@@ -203,13 +203,20 @@ def test_the_status_view_without_providers_is_the_view_with_only_that_report_lef
 
     The flag is what a supervisor's watch is told to read instead of cutting the view with
     a shell filter, so it has to leave out the host's report and nothing else: the
-    free-space reading and every run-scoped line the plain view prints above that report.
+    free-space reading and every run-scoped line the view asked for the report prints
+    above it. The view names no report by default, so the bare form is held to the same.
     """
-    whole = _view("status", probe.run, runs_root=probe.root)
+    whole = _view("status", probe.run, "--providers", runs_root=probe.root)
     without = _view("status", probe.run, "--no-providers", runs_root=probe.root)
+    bare = _view("status", probe.run, runs_root=probe.root)
 
     assert whole.returncode == 0, whole.stderr
+    assert PROVIDERS in whole.stdout, whole.stdout
     assert without.returncode == 0, without.stderr
+    assert bare.returncode == 0, bare.stderr
+    assert not any(line.startswith(PROVIDERS) for line in bare.stdout.splitlines()), (
+        f"`just status {probe.run}` asked the providers unbidden: {bare.stdout!r}"
+    )
     assert not any(line.startswith(PROVIDERS) for line in without.stdout.splitlines()), (
         f"`just status {probe.run} --no-providers` still printed the host's provider "
         f"report: {without.stdout!r}"

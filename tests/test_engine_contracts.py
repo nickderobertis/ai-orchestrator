@@ -637,8 +637,8 @@ CONSTANTS = (
     Constant(
         "skipped-check verdict",
         ONEVCS,
-        "publish.rs",
-        re.compile(r'"passed"\s*\}\s*else\s*\{\s*"(passed-with-[a-z]+)"'),
+        "gate_run.rs",
+        re.compile(r'Ruling::PassedWithSkipped\s*=>\s*"(passed-with-[a-z]+)"'),
         TELEMETRY,
         "checks-settled records the watch's verdict, {value} where",
     ),
@@ -647,16 +647,16 @@ CONSTANTS = (
     Constant(
         "skipped-check verdict in AGENTS.md",
         ONEVCS,
-        "publish.rs",
-        re.compile(r'"passed"\s*\}\s*else\s*\{\s*"(passed-with-[a-z]+)"'),
+        "gate_run.rs",
+        re.compile(r'Ruling::PassedWithSkipped\s*=>\s*"(passed-with-[a-z]+)"'),
         MANAGER,
         "records checks-settled with the verdict {value}, naming that check",
     ),
     Constant(
         "skipped-check verdict in the lifecycle document",
         ONEVCS,
-        "publish.rs",
-        re.compile(r'"passed"\s*\}\s*else\s*\{\s*"(passed-with-[a-z]+)"'),
+        "gate_run.rs",
+        re.compile(r'Ruling::PassedWithSkipped\s*=>\s*"(passed-with-[a-z]+)"'),
         LIFECYCLE,
         "records checks-settled with the verdict {value}, naming it",
     ),
@@ -1572,7 +1572,9 @@ def test_the_correction_the_spike_stage_also_reads_as_kept_is_the_engines_own_wo
     respelling it would stop every such plan at its spikes, each reported as not kept.
     """
     journal = _source(ONEPIPELINE, "journal.rs")
-    spelled = re.search(r'pub const SETTLED_FROM_EVIDENCE: &str = "([a-z-]+)";', journal)
+    spelled = re.search(
+        r'pub(?:\(crate\))? const SETTLED_FROM_EVIDENCE: &str = "([a-z-]+)";', journal
+    )
     assert spelled, (
         f"onepipeline {ONEPIPELINE.ref} no longer declares SETTLED_FROM_EVIDENCE in "
         "src/journal.rs, where this gate reads the word a settle records"

@@ -10,6 +10,7 @@ import re
 import subprocess
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import onetaskgraph_user_layer
 import plan_root_variable
@@ -117,6 +118,61 @@ def test_the_wire_logs_what_each_request_read_wrote_and_rewrote() -> None:
         ("Document", None, False, [rewritten]),
         ("Documents", None, False, sorted([rewritten, kept])),
     ]
+
+
+@pytest.mark.parametrize(
+    "kind,field", [("issue", "title"), ("project", "name"), ("document", "title")]
+)
+def test_a_create_is_filed_under_the_id_it_names_and_a_held_id_is_refused(
+    kind: str, field: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real Linear's answer over the wire: HTTP 200, its own wording, the held record untouched."""
+    native = "5f2c7a10-0000-5000-8000-000000000001"
+    name = kind.title()
+
+    with linear_board() as board:
+        layer = onetaskgraph_user_layer.example()
+        source = onetaskgraph_user_layer.ORGANIZATION_PLANS
+        monkeypatch.setenv(
+            "XDG_CONFIG_HOME", str(onetaskgraph_user_layer.installed(tmp_path / "config", layer))
+        )
+        board.environment(source)  # gives the team the states its records start in
+
+        def create(value: str) -> tuple[int, dict[str, Any]]:
+            request = urllib.request.Request(
+                board.endpoint,
+                data=json.dumps(
+                    {
+                        "query": f"mutation {name}Create {{ {kind}Create {{ success }} }}",
+                        "variables": {"input": {"id": native, field: value}},
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 - loopback
+                return response.status, json.load(response)
+
+        status, filed = create("first")
+        assert status == 200
+        assert filed["data"][f"{kind}Create"][kind]["id"] == native
+
+        status, refused = create("second")
+        assert status == 200
+        # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Real Linear's answer as onetaskgraph's Linear crate holds it and its live journey re-takes it; this test proves the wire reproduces those bytes.  # noqa: E501 - a directive is one line
+        assert refused == {
+            "errors": [
+                {
+                    "message": f"conflict on insert of {name}",
+                    "extensions": {
+                        "userPresentableMessage": f"Entity {name} with id {native} already exists."
+                    },
+                }
+            ]
+        }
+        # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+        held = {"issue": board.issues, "project": board.projects, "document": board.documents}[kind]
+        (kept,) = [item for item in held() if item["id"] == native]
+        assert kept["title"] == "first"
 
 
 @pytest.mark.parametrize(

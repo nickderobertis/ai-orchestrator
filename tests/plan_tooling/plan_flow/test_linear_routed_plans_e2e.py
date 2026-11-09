@@ -916,6 +916,105 @@ def test_a_mixed_plan_keeps_every_task_in_linear_and_shows_its_public_task_on_th
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
 
 
+#: A request that creates one of the three records a plan copy writes.
+RECORD_CREATE = re.compile(r"(?:issue|project|document)create", re.IGNORECASE)
+
+
+def _record_ids(linear: LinearBoard) -> dict[str, list[str]]:
+    """The id of every issue, project and document ``linear`` holds, by kind."""
+    return {
+        kind: sorted(str(held["id"]) for held in listed)
+        for kind, listed in (
+            ("issues", linear.issues()),
+            ("projects", linear.projects()),
+            ("documents", linear.documents()),
+        )
+    }
+
+
+def _copy_links_forgotten(authoring: Path) -> int:
+    """Remove every copy link the first copy recorded, as another host's source has none.
+
+    ``authoring`` is gitignored and per checkout, so the repeat of a copy on another host
+    finds no link back to Linear, and this is the store's own on-disk record of one. Answers
+    how many items held a link.
+    """
+    linked = 0
+    # llmlint: ignore-block[tests_mirror_real_usage, contracts_have_one_source_or_a_drift_gate] No store verb forgets a copy link, and this journey's subject is a source holding none, which is what a repeat on another host reads; the assertion below fails should the store record a link under a key this does not remove.  # noqa: E501 - a directive is one line
+    for document in authoring.rglob("*.md"):
+        written = document.read_text(encoding="utf-8")
+        kept = re.sub(r'^\s*"?onetaskgraph\.cop(?:ies|y_locations)"?:.*\n', "", written, flags=re.M)
+        assert "onetaskgraph.cop" not in kept, f"a copy link this did not remove:\n{kept}"
+        if kept != written:
+            document.write_text(kept, encoding="utf-8")
+            linked += 1
+    # llmlint: ignore-end[tests_mirror_real_usage, contracts_have_one_source_or_a_drift_gate]
+    return linked
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+# The same placement and reason as the journeys above.
+# llmlint: ignore-block[e2e_not_mocked] The same three doubled boundaries as the journeys above.
+@COPIES_THE_TRACKED_TREE
+@pytest.mark.xdist_group("linear-routed")
+def test_a_budgeted_plan_copied_twice_to_linear_creates_its_records_once(
+    routed: Routed, tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A second copy whose listings show nothing finds every record the first wrote, by id.
+
+    The incident on a real team: Linear's listings missed records written moments before, the
+    repeat's source recorded no link to them, and it created the project, its tasks and its
+    documents over again. Here the source's links are gone and the stand-in's listings answer
+    nothing for the whole of the second copy, so only a read by the origin-derived id finds them.
+    """
+    from project_fixtures import owning
+
+    with _gated(tmp_path, oneharness_bin, routed) as bench:
+        name = f"test-{os.getpid()}-copied-twice"
+        project = _draft(bench, name, ALL_HIDDENCO)
+        for node in ALL_HIDDENCO:
+            owning(
+                AUTHORING,
+                name,
+                node.id,
+                [asdict(_copy_budget(node, "add"))],
+                bench.environment,
+                answers=_budgeted_answers(node),
+            )
+        answers = no_budgets([HIDDENCO])
+        answers.update(schema_version=2, checklist=[], repo_wide_effects=[])
+        budgeted(AUTHORING, name, answers, bench.environment)
+        _spike_report(bench, name, "spike-links")
+        _scripted(bench, name, ALL_HIDDENCO)
+        reviewed = _just(routed, bench, "review-plan", project)
+        assert reviewed.returncode == 0, reviewed.stdout + reviewed.stderr
+
+        first = _just(routed, bench, "copy-plan", project, "--to", LINEAR)
+        assert first.returncode == 0, first.stdout + first.stderr
+        held = _record_ids(bench.linear)
+        assert (len(held["projects"]), len(held["issues"])) == (1, len(ALL_HIDDENCO)), held
+        assert held["documents"], held
+        already_answered = len(bench.linear.requests())
+
+        assert _copy_links_forgotten(bench.authoring) > 0, "the first copy recorded no link"
+        with bench.linear.listings_missing():
+            second = _just(routed, bench, "copy-plan", project, "--to", LINEAR)
+
+        assert second.returncode == 0, second.stdout + second.stderr
+        requests = bench.linear.requests()[already_answered:]
+        assert requests, "the second copy asked Linear nothing"
+        created = [
+            request["operation"]
+            for request in requests
+            if RECORD_CREATE.fullmatch(request["operation"])
+        ]
+        assert created == [], created
+        assert _record_ids(bench.linear) == held
+        assert BOARD_FIXTURE.created == [], [issue.title for issue in BOARD_FIXTURE.created]
+    # llmlint: ignore-end[e2e_not_mocked]
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+
+
 ONE_VOTER = (
     Node(NodeId("library"), "feat: add the record client to the library"),
     Node(
