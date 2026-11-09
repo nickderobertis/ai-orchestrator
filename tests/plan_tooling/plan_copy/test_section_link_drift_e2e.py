@@ -3,14 +3,16 @@
 A design document's budget link is written here: `orchestrator/plan_budgets.py`'s
 `budget_anchor` is its fragment. The heading it names is written by `plan-task`, and what
 makes the pair a link is the slug rule the plan store's README states under *Section links*
-and its copy applies. Neither repository can see the other move, so this journey holds the
+and its copy applies. Neither repository can see the other move, so these journeys hold the
 two sides to each other through everything real: the host's own templates, the real
-`python -m orchestrator.plan_budgets`, and the installed `onetaskgraph`'s own `project copy`
-and `document copy` between two temporary local Markdown sources. It doubles nothing.
+`python -m orchestrator.plan_budgets`, and the installed `onetaskgraph`'s own copy, between
+two temporary local Markdown sources, one journey through `project copy` and `document copy`
+and one through `just copy-plan`. Neither doubles the store; the second scripts only the paid
+provider of the review `just copy-plan` requires.
 
 The slug rule is restated below from that README, because a copy between two folders of
 Markdown carries a fragment as written and reports no miss: the rule is what can disagree
-with `budget_anchor`, so this journey must not read its expected fragment from it.
+with `budget_anchor`, so a journey must not read its expected fragment from it.
 `tests/test_engine_contracts.py` holds that restatement to the adopted store's README.
 """
 
@@ -28,7 +30,7 @@ from typing import Any
 import boundary_home
 import plan_root_variable
 import pytest
-from project_fixtures import budgeted, designed, no_budgets, owning
+from project_fixtures import approved, budgeted, designed, no_budgets, owning, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
@@ -173,11 +175,10 @@ def _planned(name: str) -> tuple[str, dict[str, Any]]:
     return native, answers
 
 
-def _copied(native: str, answers: Mapping[str, Any]) -> tuple[Path, str]:
-    """Design ``native`` from ``answers`` and copy the plan: the copied document and content."""
-    source = plan_root_variable.source()
+def _designed(native: str, answers: Mapping[str, Any]) -> None:
+    """Render ``native``'s design document from the writer's ``answers``, through the template."""
     designed(
-        source,
+        plan_root_variable.source(),
         native,
         [
             {
@@ -190,8 +191,19 @@ def _copied(native: str, answers: Mapping[str, Any]) -> tuple[Path, str]:
         ],
         budget_answers=answers,
     )
+
+
+def _copied(native: str, answers: Mapping[str, Any]) -> tuple[Path, str]:
+    """Design ``native`` from ``answers`` and copy the plan: the copied document and content."""
+    source = plan_root_variable.source()
+    _designed(native, answers)
     _store("project", "copy", f"{source}:{native}", "--to", DESTINATION)
     _store("document", "copy", f"{source}:{native}-design", "--to", DESTINATION)
+    return _copied_document(native)
+
+
+def _copied_document(native: str) -> tuple[Path, str]:
+    """The file the destination reports for project ``native``'s one document, and its content."""
     listed = _store("document", "list", "--project", f"{DESTINATION}:{native}", "--json")
     (document,) = json.loads(listed)["items"]
     location = document["item"]["location"]
@@ -229,3 +241,46 @@ def test_a_copied_budget_link_lands_on_its_copied_task_s_budget_heading(
     assert HEADING in slugs, slugs
     assert fragment == slugs[HEADING], (fragment, slugs)
     assert "<a " not in content, content
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this project's other plan-copy journeys and reads what they read, the templates and the plan store, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
+def test_a_budget_link_follows_its_task_to_a_new_path_on_a_private_destination(
+    destination: Path,
+) -> None:
+    """`just copy-plan` to a private source rewrites the design document's budget link.
+
+    The link is a reference-style definition, which a store that leaves one as written on a
+    private destination carries byte for byte. Between two folders of Markdown of one layout
+    that path would happen to be right, so the destination already holds another plan under
+    this plan's name: the copy lands as `<native>-2`, its task files under that folder, and
+    only a rewritten link reaches it. Written as authored it names a file that plan never
+    had. Only the review turn's paid provider is scripted, by `reviewed`.
+    """
+    native, answers = _planned("private")
+    project = f"{plan_root_variable.source()}:{native}"
+    _designed(native, answers)
+    approved(project)
+    # llmlint: ignore[e2e_not_mocked] `reviewed` substitutes the paid provider process alone.
+    reviewed(project)
+    _store("project", "create", DESTINATION, "--id", native, "--title", "Another plan")
+
+    copy = subprocess.run(
+        ["just", "copy-plan", project, "--to", DESTINATION],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(240),
+        check=False,
+    )
+    assert copy.returncode == 0, copy.stdout + copy.stderr
+
+    landed = f"{native}-2"
+    document, content = _copied_document(landed)
+    target, fragment = _budget_link(content)
+    assert not Path(target).is_absolute(), target
+    task = _copied_task(landed)
+    assert task.is_relative_to(destination / "tasks" / landed), task
+    assert (document.parent / target).resolve() == task.resolve(), content
+    slugs = _heading_slugs(task.read_text(encoding="utf-8"))
+    assert HEADING in slugs, slugs
+    assert fragment == slugs[HEADING], (fragment, slugs)

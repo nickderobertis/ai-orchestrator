@@ -884,11 +884,18 @@ def test_the_public_view_follows_the_canonical_status(bench: Bench, journey: Jou
 
 def test_the_public_view_carries_its_task_s_budget_anchor_and_link(journey: Journey) -> None:
     """The budget the public task owns travels on its one view: the budget's heading, whose
-    slug is the anchor, and the task's in-page link to it, each as the task wrote them."""
+    slug is the anchor, and the task's link to it, in the form the plan store's README states
+    for a GitHub issue's link to its own heading: the `www.github.com` URL naming that issue."""
     assert journey.home
     (view,) = [issue for issue in BOARD.issues if issue.number > 2 and issue.sub_issues == 0]
     assert f"### Budget {CONSUMER_BUDGET}\n" in view.body, view.body
-    assert BUDGET_LINK.replace("(#", "(#user-content-") in view.body, view.body
+    own_heading = (
+        f"https://www.github.com/{PUBLIC_REPOSITORY}/issues/{view.number}"
+        f"#user-content-{budget_anchor(CONSUMER_BUDGET)}"
+    )
+    assert BUDGET_LINK.replace(f"(#{budget_anchor(CONSUMER_BUDGET)})", f"({own_heading})") in (
+        view.body
+    ), view.body
     assert f'<a id="{budget_anchor(CONSUMER_BUDGET)}"></a>' in view.body
 
 
