@@ -58,6 +58,7 @@ harnesses = [
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:alternate3",
     "claude-code:primary-backup",
     "claude-code:primary",
 ]
@@ -98,6 +99,15 @@ unset_env = [
 ]
 
 [harness.claude-code.variant.alternate2]
+model = "claude-sonnet-5"
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+[harness.claude-code.variant.alternate3]
 model = "claude-sonnet-5"
 unset_env = [
     "ANTHROPIC_API_KEY",

@@ -1677,7 +1677,7 @@ and the CLI's own, holds that refusal down the dispatch road, and holds that the
 
 **So the identities are stated once and a role file is short.** Two shared parents at
 the root carry them and nothing runs against either: `oneharness.identities.toml` holds
-the six identities, and `oneharness.dispatch.toml` extends it to add the
+the seven identities, and `oneharness.dispatch.toml` extends it to add the
 `XDG_RUNTIME_DIR` repoint the three dispatched sides need. Each `oneharness.<role>.toml`
 names one of the two and states what is a decision about that role — its chain order,
 deadline, labels, tier. Neither parent is named `oneharness.toml`, so discovery cannot
@@ -1690,7 +1690,7 @@ produces a member that will not start. **A resolved configuration is not evidenc
 a turn**, so audit a credential mask from a real turn rather than from `oneharness
 config`.
 
-**Every role names the same six identities**, differing only in order, because a role
+**Every role names the same seven identities**, differing only in order, because a role
 that omitted one would lose that quota once everything ahead of it was exhausted; the
 primary Claude identity is last everywhere with `claude-code:primary-backup` immediately
 before it, and `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` holds every config's chain to
@@ -1706,7 +1706,7 @@ honours it; `tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py`
 off the turn's own provider rather than off the configs. Each side's order is a
 decision:
 
-- **Agent side** — `oneharness.toml`: both alternate Claude subscriptions first, because
+- **Agent side** — `oneharness.toml`: the three alternate Claude subscriptions first, because
   the personas are tuned against that model tier, then codex. The linked engine
   carries each turn's tool events to the views as they happen, through oneagentgraph's
   `turn-activity`, rather than after a turn that runs for many minutes.
@@ -1762,8 +1762,9 @@ which has no graph-native field: never point two members at one config to save a
 and never set `ONEHARNESS_TIMEOUT`, which is process-wide and moves every member at
 once. `scripts/claude-alt-config-dir.sh` and `scripts/codex-alt-home.sh` are the one
 source of the identities' directories, sourced by every wrapper and hook so no two drift.
-The claude one exports all four Claude indirections — `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`
+The claude one exports all five Claude indirections — `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`
 (`$HOME/.claude-alt`), `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` (`$HOME/.claude-alt2`),
+`ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR` (`$HOME/.claude-alt3`, for `claude-code:alternate3`),
 `ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR` (`$HOME/.claude-primary-backup`) and
 `ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` (`$HOME/.claude`) — taking each from the
 environment, then from the host's `ai-orchestrator/claude-identities.env` under its XDG

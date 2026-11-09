@@ -9,7 +9,7 @@ the real `codex` refused by a loopback endpoint (`tests/lost_turn_producer.py`).
 
 Each conversation runs in a scratch directory standing where a launch stands. That is
 forced rather than chosen: the agent side discovers its `oneharness.toml` from the working
-directory, and this repository's own names six real identities, so a scratch file naming
+directory, and this repository's own names seven real identities, so a scratch file naming
 codex alone is what keeps a paid provider out of reach. The judge argv names its
 configuration launch-relative (`config/onemessagebus.yaml`), so the scratch carries that
 path too — this host's committed file, linked, or a copy a journey names.

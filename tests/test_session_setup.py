@@ -881,14 +881,19 @@ def test_persist_session_env_writes_worker_sandbox_environment_once(tmp_path: Pa
     assert f"{tmp_path}/.local/node/bin" in lines[0]
 
 
-def test_persist_session_env_creates_the_first_sessions_absent_parent(tmp_path: Path) -> None:
+@pytest.mark.parametrize("identity_directory", [".claude-alt2", ".claude-alt3"])
+def test_persist_session_env_creates_the_first_sessions_absent_parent(
+    tmp_path: Path, identity_directory: str
+) -> None:
     """The state a freshly authenticated config directory is in on its first session.
 
     Claude Code names `<config-dir>/session-env/<session-id>/sessionstart-hook-0.sh`,
     and on that first session neither directory exists yet, so the appends used to
     fail with a raw shell redirect error and the session lost its toolchain PATH.
     """
-    env_file = tmp_path / ".claude-alt2" / "session-env" / "a-session-id" / "sessionstart-hook-0.sh"
+    env_file = (
+        tmp_path / identity_directory / "session-env" / "a-session-id" / "sessionstart-hook-0.sh"
+    )
 
     proc = subprocess.run(
         [

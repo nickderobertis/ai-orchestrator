@@ -55,7 +55,7 @@ export_dispatch_environment() {
         "$function" "$caller" || return $?
         # What each resolver established, read off the resolver's own record of it: the
         # credentials helper's parser leaves the names its file defines in
-        # `env_file_names`, the identities helper declares its four indirections, and
+        # `env_file_names`, the identities helper declares its five indirections, and
         # the Codex helper and each template helper export exactly one.
         case $function in
             export_host_credentials)
@@ -163,7 +163,7 @@ declare -A DISPATCH_ENVIRONMENT_KEPT_NAMES=(
 declare -A DISPATCH_ENVIRONMENT_KEPT_PREFIXES=(
     [LC_]="every locale category, which decide how a tool decodes and sorts a repository's own content"
     [XDG_]="the platform directory roots this host points at its own caches, state and runtime directories, XDG_RUNTIME_DIR among them"
-    [ORCHESTRATOR_]="this host's own seam names: the four Claude identity indirections, the alternate Codex home, the ask shim, the follow-up drafting command and the comparison identity a gate replays"
+    [ORCHESTRATOR_]="this host's own seam names: the five Claude identity indirections, the alternate Codex home, the ask shim, the follow-up drafting command and the comparison identity a gate replays"
     [AI_ORCHESTRATOR_]="this host's own roots, which its scripts read"
     [ONEPIPELINE_]="the engine's own names, the launcher identity a nested launch inherits and the per-dispatch scratch directory among them"
     [ONEVCS_]="the lifecycle's own names: the state root, the session a dispatch publishes through, the comparison identity and the lock bound ai-orchestrator#1164 derives"

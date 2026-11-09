@@ -1,6 +1,6 @@
 """`scripts/claude-alt-config-dir.sh` resolves every Claude identity's config directory.
 
-Four identities read their `CLAUDE_CONFIG_DIR` through an indirection this helper is the
+Five identities read their `CLAUDE_CONFIG_DIR` through an indirection this helper is the
 one source of, and per indirection a non-empty value in the environment wins, then the
 host's identities file, then a `$HOME`-relative default. That file lives outside every
 checkout so a host whose `~/.claude` is some other account can say so without editing a
@@ -31,12 +31,15 @@ PARSER = REPO_ROOT / "scripts" / "credentials-env.sh"
 DEFAULTS = {
     "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": ".claude-alt",
     "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": ".claude-alt2",
+    "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR": ".claude-alt3",
     "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": ".claude-primary-backup",
     "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": ".claude",
 }
 
-#: The two indirections the primary-backup identity and the env-driven primary added.
+#: The indirections the third alternate, the primary-backup identity and the env-driven
+#: primary added.
 NEW_INDIRECTIONS = (
+    "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR",
     "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR",
     "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR",
 )
@@ -83,7 +86,7 @@ def _write_identities(config_home: Path, contents: str) -> Path:
 
 
 def test_with_nothing_set_every_identity_resolves_to_its_default(tmp_path: Path) -> None:
-    """A host exporting nothing and keeping no identities file gets the four defaults."""
+    """A host exporting nothing and keeping no identities file gets the five defaults."""
     resolved = _resolve({"HOME": str(tmp_path)})
 
     assert resolved.returncode == 0, resolved.stderr
@@ -91,6 +94,38 @@ def test_with_nothing_set_every_identity_resolves_to_its_default(tmp_path: Path)
     assert resolved.stderr == ""
     # Nothing is created: an absent directory is `auth` to claude-code, which falls through.
     assert list(tmp_path.iterdir()) == []
+
+
+def test_the_third_alternate_takes_the_environment_then_the_file_then_its_default(
+    tmp_path: Path,
+) -> None:
+    """Each source in turn decides the third alternate's directory, and none creates it."""
+    name = "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR"
+    home = tmp_path / "home"
+    home.mkdir()
+    from_environment, from_file = tmp_path / "from-environment", tmp_path / "from-file"
+
+    defaulted = _resolve({"HOME": str(home)})
+    assert defaulted.returncode == 0, defaulted.stderr
+    assert defaulted.exported[name] == str(home / ".claude-alt3")
+
+    _write_identities(home / ".config", f"{name}={from_file}\n")
+    filed = _resolve({"HOME": str(home)})
+    assert filed.returncode == 0, filed.stderr
+    assert filed.exported[name] == str(from_file)
+
+    overridden = _resolve({"HOME": str(home), name: str(from_environment)})
+    assert overridden.returncode == 0, overridden.stderr
+    assert overridden.exported[name] == str(from_environment)
+
+    # An empty environment value is no value, so the file still decides.
+    blank = _resolve({"HOME": str(home), name: ""})
+    assert blank.returncode == 0, blank.stderr
+    assert blank.exported[name] == str(from_file)
+
+    assert not (home / ".claude-alt3").exists()
+    assert not from_file.exists()
+    assert not from_environment.exists()
 
 
 @pytest.mark.parametrize("indirection", NEW_INDIRECTIONS)
@@ -373,7 +408,7 @@ def test_an_absent_identities_file_resolves_the_defaults_silently(
     """A file this process sees nothing at is absent, whether or not the parser is there.
 
     Beneath a config directory this process may not search, a file somebody wrote is as
-    invisible as none at all: both resolve the four defaults with nothing said, and so
+    invisible as none at all: both resolve the five defaults with nothing said, and so
     does a checkout whose helper has no parser beside it to ask.
     """
     scripts = tmp_path / "checkout" / "scripts"
@@ -400,7 +435,7 @@ def test_an_absent_identities_file_resolves_the_defaults_silently(
 
 
 def test_resolving_a_name_that_is_not_an_identity_indirection_is_refused(tmp_path: Path) -> None:
-    """The per-identity resolver the trust marker calls routes the four indirections only."""
+    """The per-identity resolver the trust marker calls routes the five indirections only."""
     typo = "ORCHESTRATOR_CLAUDE_PRIMARY_BAKCUP_CONFIG_DIR"
     completed = subprocess.run(
         [

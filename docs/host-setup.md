@@ -9,8 +9,8 @@ hand. Everything below was reconstructed by reading the scripts on a host that h
 just been brought up; this document exists so the next host is something to follow
 rather than an investigation to repeat.
 
-Add a subscription to an existing host? Only [The six harness
-logins](#4-the-six-harness-logins) applies.
+Add a subscription to an existing host? Only [The seven harness
+logins](#4-the-seven-harness-logins) applies.
 
 ## What is already automated
 
@@ -256,17 +256,18 @@ Bootstrap only the canonical checkout. The safety clone needs to exist and stay
 clean: every run clones it again, and the lifecycle points that per-run clone at
 `.githooks` itself before adding a worktree.
 
-## 4. The six harness logins
+## 4. The seven harness logins
 
-Every role's chain — worker, judge, orchestrator, llmlint — names the same six
+Every role's chain — worker, judge, orchestrator, llmlint — names the same seven
 identities and differs only in their order, so an identity nobody logged into is
-quota that role loses once everything ahead of it is exhausted. Log in to all six:
+quota that role loses once everything ahead of it is exhausted. Log in to all seven:
 
 | Identity | Command |
 | --- | --- |
 | `claude-code:primary` | once, in the canonical checkout: `CLAUDE_CONFIG_DIR="$HOME/.claude" claude`, then `/login` if it is not logged in — it shares the default `claude` login's credentials ([why once](#how-the-primary-identity-authenticates)) |
 | `claude-code:alternate` | `CLAUDE_CONFIG_DIR="$HOME/.claude-alt" claude`, then `/login` |
 | `claude-code:alternate2` | `CLAUDE_CONFIG_DIR="$HOME/.claude-alt2" claude`, then `/login` |
+| `claude-code:alternate3` | `CLAUDE_CONFIG_DIR="$HOME/.claude-alt3" claude`, then `/login` |
 | `claude-code:primary-backup` | `CLAUDE_CONFIG_DIR="$HOME/.claude-primary-backup" claude`, then `/login` |
 | `codex` | `codex login` |
 | `codex:alternate` | `CODEX_HOME="$HOME/.codex-alt" codex login` |
@@ -286,6 +287,7 @@ Each Claude identity reads its config directory from one variable, which
 | --- | --- | --- |
 | `claude-code:alternate` | `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` | `$HOME/.claude-alt` |
 | `claude-code:alternate2` | `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` | `$HOME/.claude-alt2` |
+| `claude-code:alternate3` | `ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR` | `$HOME/.claude-alt3` |
 | `claude-code:primary-backup` | `ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR` | `$HOME/.claude-primary-backup` |
 | `claude-code:primary` | `ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` | `$HOME/.claude` |
 
@@ -296,7 +298,7 @@ empty or not an absolute path. It sits outside every checkout, and every entry p
 reads it — the wrappers and the launch verbs — so it reaches the hooks that source no
 shell profile.
 
-- It admits those four names and nothing else, one `NAME=value` per line, in the same
+- It admits those five names and nothing else, one `NAME=value` per line, in the same
   dialect as the credentials `.env`.
 - For each name, a non-empty value in the environment wins over the file, and the file
   wins over the default.
@@ -663,14 +665,15 @@ Then probe each identity individually, with the environment a launch establishes
 cd ~/projects/ai-orchestrator
 bash -c '. scripts/dispatch-env.sh; export_dispatch_environment probe
   . scripts/node-scratch-dir.sh; ensure_node_scratch_dir probe
-  for identity in claude-code:alternate claude-code:alternate2 claude-code:primary-backup \
+  for identity in claude-code:alternate claude-code:alternate2 claude-code:alternate3 claude-code:primary-backup \
     claude-code:primary codex:primary codex:alternate; do
     oneharness run --config oneharness.toml --harness "$identity" --prompt "Reply with OK"
   done'
 ```
 
-The two helpers export the indirections the variants name in `env_from` — the four
+The two helpers export the indirections the variants name in `env_from` — the five
 Claude ones, `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`, `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR`,
+`ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR`,
 `ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR` and
 `ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR`, `ORCHESTRATOR_CODEX_ALT_HOME`, and the
 `ONEPIPELINE_NODE_SCRATCH_DIR` a turn's runtime directory is mapped from — and
@@ -683,7 +686,7 @@ A probe that reports
 ```
 
 is the **not-logged-in** state, not a broken config: finish that identity's login in
-[step 4](#4-the-six-harness-logins).
+[step 4](#4-the-seven-harness-logins).
 
 Finally, prove the checkout itself:
 
@@ -696,7 +699,7 @@ just gate
 - [ ] `git`, `just`, `uv`, `gh`, `node`/`npm` on `PATH`
 - [ ] `gh auth login`; global git `user.name` and `user.email`
 - [ ] canonical checkout **and** isolated safety clone; `just bootstrap` in the canonical one
-- [ ] all six harness identities logged in
+- [ ] all seven harness identities logged in
 - [ ] allowlister installed and its codex hook wired
 - [ ] registry rebuilt with checkout **paths**; `just repos --audit-gate-coverage` reviewed
 - [ ] `just repos-bootstrap` reports every present sibling `ran` or `unchanged`, none

@@ -1,4 +1,4 @@
-"""The sixth identity reaches every entry point, and a host that never heard of it keeps working.
+"""A new Claude identity reaches every entry point, and a host that never heard of it keeps working.
 
 Every chain now names `claude-code:primary-backup` just before `claude-code:primary`, and
 both read their `CLAUDE_CONFIG_DIR` through an indirection oneharness refuses to start
@@ -57,10 +57,12 @@ PAID_PROVIDER_GUARD = helper("no-paid-provider")
 CLAUDE_INDIRECTIONS = (
     "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR",
     "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR",
+    "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR",
     "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR",
     "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR",
 )
 NEW_INDIRECTIONS = (
+    "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR",
     "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR",
     "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR",
 )
@@ -69,6 +71,7 @@ NEW_INDIRECTIONS = (
 DEFAULT_LEAVES = {
     "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": ".claude-alt",
     "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": ".claude-alt2",
+    "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR": ".claude-alt3",
     "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": ".claude-primary-backup",
     "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": ".claude",
 }
@@ -137,6 +140,29 @@ raise SystemExit(1)
 """
 
 
+#: A provider that records its environment, then behaves as claude-code does about a login:
+#: refuses a config directory holding nothing, and answers one that holds a login.
+LOGIN_CHECKING_PROVIDER = """#!/usr/bin/env python3
+import json, os, sys
+
+if "--version" in sys.argv[1:]:
+    print("1.0.0 (login-checking)")
+    raise SystemExit(0)
+directory = os.environ["CLAUDE_CONFIG_DIR"]
+with open(os.environ["IDENTITY_RECORDINGS"], "a", encoding="utf-8") as stream:
+    record = {"binary": "claude", "environment": {"CLAUDE_CONFIG_DIR": directory}}
+    stream.write(json.dumps(record) + "\\n")
+if os.path.isdir(directory) and os.listdir(directory):
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                      "result": "recorded", "session_id": "login-checking"}))
+    raise SystemExit(0)
+print(json.dumps({"type": "result", "subtype": "success", "is_error": True,
+                  "result": "Not logged in · Please run /login", "session_id": "login-checking",
+                  "total_cost_usd": 0, "usage": {"input_tokens": 0, "output_tokens": 0}}))
+raise SystemExit(1)
+"""
+
+
 class Host(NamedTuple):
     """A host set up before the primary-backup identity existed."""
 
@@ -162,7 +188,7 @@ def _existing_host(
 ) -> Host:
     """A `HOME` holding the logged-in directories named, and an environment exporting none.
 
-    Built from nothing, so none of the four indirections, no `XDG_CONFIG_HOME`, and no
+    Built from nothing, so none of the five indirections, no `XDG_CONFIG_HOME`, and no
     `ONEHARNESS_*` override the suite's own process carries can reach the entry point.
     """
     home = tmp_path / "home"
@@ -322,6 +348,66 @@ def test_a_never_logged_in_primary_backup_falls_through_as_auth_where_nothing_fi
     assert not (host.home / ".claude-primary-backup").exists()
 
 
+# Only the paid `claude` binary is doubled, because a real one would spend a subscription;
+# the resolvers, the llmlint tier's config and the real `oneharness` CLI above it classify
+# the refusal and continue the chain.
+# llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] see the reason directly above
+@pytest.mark.parametrize("state", ["absent", "empty"])
+def test_a_never_logged_in_third_alternate_falls_through_as_auth(
+    tmp_path: Path, state: str
+) -> None:
+    """A host that never logged the third alternate in loses nothing, in either state it can be in.
+
+    The double refuses a config directory holding no login, as claude-code does, so the
+    empty directory is classified from the provider's own refusal, and the absent one by the
+    real CLI before anything spawns. Either way the chain continues to the next candidate.
+    """
+    front = tmp_path / "providers"
+    front.mkdir()
+    provider = front / "claude"
+    provider.write_text(LOGIN_CHECKING_PROVIDER, encoding="utf-8")
+    provider.chmod(0o755)
+    host = _existing_host(tmp_path, front, logged_in=(".claude",))
+    (host.home / ".claude" / "login").write_text("signed in", encoding="utf-8")
+    third = host.home / ".claude-alt3"
+    if state == "empty":
+        third.mkdir()
+
+    turn = _run(
+        [
+            "bash",
+            "-c",
+            ". scripts/codex-alt-home.sh; ensure_codex_alt_home probe; "
+            ". scripts/claude-alt-config-dir.sh; resolve_claude_alt_config_dir probe; "
+            'exec oneharness run --config "$0" "$@"',
+            str(LLMLINT_CONFIG),
+            "--harness",
+            "claude-code:alternate3,claude-code:primary",
+            "--mode",
+            "read-only",
+            "--prompt",
+            "record",
+            "--compact",
+        ],
+        host,
+    )
+
+    assert turn.returncode == 0, turn.stderr
+    fallback = json.loads(turn.stdout)["fallback"]
+    assert [(skipped["harness"], skipped["reason"]) for skipped in fallback["fell_through"]] == [
+        ("claude-code:alternate3", "auth")
+    ], fallback
+    assert fallback["ran"] == "claude-code:primary", fallback
+    handed = [entry["environment"]["CLAUDE_CONFIG_DIR"] for entry in _recorded(host)]
+    assert handed[-1] == str(host.home / ".claude"), handed
+    if state == "empty":
+        assert handed[0] == str(third), handed
+    assert third.exists() is (state == "empty"), "the turn changed whether the directory exists"
+
+
+# llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
+
+
 def _assert_login_refusal_is_authentication(rendered: str) -> None:
     """The operator verdict whose legacy failure this adoption must expose."""
     assert "fell through 'claude-code' (auth)" in rendered, rendered
@@ -465,6 +551,7 @@ def test_on_an_existing_host_every_entry_point_hands_off_with_every_indirection_
         )
     assert "Claude config" not in completed.stderr, completed.stderr
     assert not (host.home / ".claude-primary-backup").exists()
+    assert not (host.home / ".claude-alt3").exists()
 
 
 class RefusedIdentitiesFile(NamedTuple):

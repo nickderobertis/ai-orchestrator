@@ -2,7 +2,7 @@
 # Named as the worker's agent-side config, at the repo root under this exact name.
 # See docs/onejudge-integration.md.
 #
-# The six identities it routes over — their variants, models, credential masks and
+# The seven identities it routes over — their variants, models, credential masks and
 # environment indirections — are stated once in `oneharness.identities.toml`, and the
 # dispatched side's `XDG_RUNTIME_DIR` repoint in `oneharness.dispatch.toml`. What is
 # left here is what is really a decision about THIS role: its chain order and its
@@ -27,16 +27,17 @@ extends = "oneharness.dispatch.toml"
 # call site.
 history_labels = { role = "agent" }
 
-# Every role's chain names the same six identities; only the order differs. The
+# Every role's chain names the same seven identities; only the order differs. The
 # worker keeps Claude first, because the personas are tuned against that model
-# tier: an exhausted alternate subscription reaches the SECOND alternate Claude
-# plan before it degrades to Codex. Codex and its second identity follow, then the
+# tier: an exhausted alternate subscription reaches the SECOND and then the THIRD alternate
+# Claude plan before it degrades to Codex. Codex and its second identity follow, then the
 # primary-backup Claude subscription, and the primary Claude subscription is the
 # last resort everywhere.
 # llmlint: ignore[changed_behavior_has_e2e] integration tests exercise real oneharness fallback selection; paid-provider quota rejection cannot be deterministic.
 harnesses = [
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:alternate3",
     "codex:primary",
     "codex:alternate",
     "claude-code:primary-backup",

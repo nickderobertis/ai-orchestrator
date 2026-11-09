@@ -20,10 +20,11 @@ from orchestrator.root import REPO_ROOT
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-usage.sh"
 
 #: Every Claude identity's indirection, and the directory under the test's own tree each is
-#: pinned to. The probe resolves the same four a dispatch does.
+#: pinned to. The probe resolves the same five a dispatch does.
 CLAUDE_INDIRECTIONS = {
     "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": "claude-alt",
     "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": "claude-alt2",
+    "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR": "claude-alt3",
     "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": "claude-primary-backup",
     "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": "claude-primary",
 }

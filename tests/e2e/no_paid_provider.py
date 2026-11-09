@@ -2,9 +2,9 @@
 """A paid provider's binary that refuses the turn instead of spending a subscription.
 
 `ONEHARNESS_BIN_*` keys on a harness **id** and no spelling of it reaches a variant, so
-it cannot cover `claude-code:alternate`, `:alternate2`, `:primary`, or `codex:alternate`
-— the identities a journey only reaches by accident, and where a billed run and a free
-one look identical from its assertions. `PATH` is the one seam every variant of every
+it cannot cover `claude-code:alternate`, `:alternate2`, `:alternate3`, `:primary`, or
+`codex:alternate` — the identities a journey only reaches by accident, and where a billed
+run and a free one look identical from its assertions. `PATH` is the one seam every variant of every
 family does share, so `no-paid-provider/` holds one entry per provider binary, each a
 symlink here, and that directory goes first.
 

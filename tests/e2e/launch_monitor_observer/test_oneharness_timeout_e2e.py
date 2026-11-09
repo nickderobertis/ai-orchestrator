@@ -147,12 +147,14 @@ DESIGN_DOC_WRITER_CHAIN = [
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:alternate3",
     "claude-code:primary-backup",
     "claude-code:primary",
 ]
 DESIGN_DOC_REVIEWER_CHAIN = [
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:alternate3",
     "codex:primary",
     "codex:alternate",
     "claude-code:primary-backup",
@@ -170,7 +172,7 @@ SPIKE_BRIEF_CHAIN = ["codex:primary", "codex:alternate"]
 
 #: The identity order every side resolves. Two orders cover thirteen of the fourteen configs:
 #: the worker, its board-live copy and the design-doc reviewer lead with the Claude
-#: subscriptions, every other side with Codex, and all thirteen name the same six identities
+#: subscriptions, every other side with Codex, and all thirteen name the same seven identities
 #: with the primary-backup Claude subscription immediately before the primary one, which is
 #: last everywhere. The spike brief is the one Codex-only chain, as its constant says.
 INTENDED_CHAINS = {
@@ -193,6 +195,7 @@ INTENDED_CHAINS = {
 #: The indirection each Claude identity reads its `CLAUDE_CONFIG_DIR` from, as
 #: `scripts/claude-alt-config-dir.sh` exports it.
 ALTERNATE_INDIRECTION = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR"
+THIRD_ALTERNATE_INDIRECTION = "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR"
 PRIMARY_BACKUP_INDIRECTION = "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR"
 PRIMARY_INDIRECTION = "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR"
 
@@ -564,7 +567,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
     for side, config in configs.items():
         assert effective[side]["harnesses"]["value"] == INTENDED_CHAINS[side], (
             f"{config.name} resolves {effective[side]['harnesses']['value']}, not "
-            f"{INTENDED_CHAINS[side]}; every chain but the spike brief's names all six "
+            f"{INTENDED_CHAINS[side]}; every chain but the spike brief's names all seven "
             "identities, with claude-code:primary-backup immediately before claude-code:primary"
         )
         variants = _without_sources(effective[side]["harness"]["claude-code"]["variant"])
@@ -585,6 +588,15 @@ def test_every_side_resolves_its_intended_effective_deadline(
         assert backup == {**alternate, "env_from": backup["env_from"]}, (
             f"{config.name}'s primary-backup differs from its alternate in more than the "
             "directory it reads"
+        )
+        second, third = variants["alternate2"], variants["alternate3"]
+        assert third["env_from"] == {
+            **second["env_from"],
+            "CLAUDE_CONFIG_DIR": {"value": THIRD_ALTERNATE_INDIRECTION},
+        }, f"{config.name}'s alternate3 maps a different environment from its alternate2"
+        assert third == {**second, "env_from": third["env_from"]}, (
+            f"{config.name}'s alternate3 differs from its alternate2 in more than the "
+            "directory it reads, so it runs another tier or carries another credential mask"
         )
         assert primary["env_from"]["CLAUDE_CONFIG_DIR"] == {"value": PRIMARY_INDIRECTION}, (
             f"{config.name}'s primary does not read its directory from {PRIMARY_INDIRECTION}"
@@ -736,7 +748,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
             f"the {side} resolves "
             f"{effective[side]['harnesses']['value']}, not {chain}; this one role pairs "
             "Codex on the side that writes with Claude on the side that reviews — the "
-            "reverse of every other pairing here — and every chain names all six "
+            "reverse of every other pairing here — and every chain names all seven "
             "identities with the primary Claude subscription last, so a dropped one is a "
             "quota this host loses entirely"
         )

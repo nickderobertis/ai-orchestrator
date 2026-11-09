@@ -35,7 +35,7 @@ history_labels = { role = "agent" }
 # prose to a fixed template under a reviewer that pushes back, and this host prefers its
 # Claude subscriptions on the side that judges that prose. Past both Codex identities it
 # reaches the workers' alternate Claude subscriptions in the worker's own relative order,
-# with the primary Claude identity last — every role names all six, so no quota is lost
+# with the primary Claude identity last — every role names all seven, so no quota is lost
 # once everything ahead of it is exhausted.
 # llmlint: ignore[changed_behavior_has_e2e] tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
 harnesses = [
@@ -43,6 +43,7 @@ harnesses = [
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:alternate3",
     "claude-code:primary-backup",
     "claude-code:primary",
 ]
@@ -80,6 +81,14 @@ unset_env = [
 ]
 
 [harness.claude-code.variant.alternate2]
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+[harness.claude-code.variant.alternate3]
 unset_env = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",

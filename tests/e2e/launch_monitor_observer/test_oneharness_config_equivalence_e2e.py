@@ -226,7 +226,7 @@ def test_every_role_inherits_from_the_shared_parents() -> None:
     }
     assert not wrong_root, (
         f"every role's chain must end at `oneharness.identities.toml`, which is where "
-        f"the six identities are stated; these do not: {wrong_root}"
+        f"the seven identities are stated; these do not: {wrong_root}"
     )
 
     unreferenced = [

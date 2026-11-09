@@ -36,16 +36,17 @@ timeout = 600
 # of a conversation a session is. See `orchestrator/labels.py`.
 history_labels = { role = "judge", agent_role = "judge" }
 
-# Both alternate Claude subscriptions first, in the worker's own relative order — the
+# The three alternate Claude subscriptions first, in the worker's own relative order — the
 # reverse of every other supervisory chain on this host, and the whole point of this
 # role having its own pair of files. Past them it reaches both Codex identities rather
-# than stopping, because every role names all six identities and a role that omitted
+# than stopping, because every role names all seven identities and a role that omitted
 # one would lose that quota entirely once everything ahead of it was exhausted. The
 # primary Claude identity is last here as it is everywhere.
 # llmlint: ignore[changed_behavior_has_e2e] tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
 harnesses = [
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:alternate3",
     "codex:primary",
     "codex:alternate",
     "claude-code:primary-backup",
@@ -85,6 +86,14 @@ unset_env = [
 ]
 
 [harness.claude-code.variant.alternate2]
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+[harness.claude-code.variant.alternate3]
 unset_env = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",

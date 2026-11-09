@@ -46,6 +46,7 @@ RESOLVER_ENTRY = re.compile(r'^\s*"([a-z-]+\.sh):([a-z_]+)"\s*$', re.MULTILINE)
 CLAUDE_INDIRECTIONS = (
     "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR",
     "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR",
+    "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR",
     "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR",
     "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR",
 )
@@ -149,6 +150,7 @@ def test_the_document_carries_what_the_resolvers_establish(tmp_path: Path) -> No
         "GH_PROJECTS_OWNER": "nickderobertis",
         "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(home / ".claude-alt"),
         "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(home / ".claude-alt2"),
+        "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR": str(home / ".claude-alt3"),
         "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": str(home / ".claude-primary-backup"),
         "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": str(home / ".claude"),
         CODEX_INDIRECTION: str(home / ".codex-alt"),

@@ -1,7 +1,7 @@
 """A role config's `extends` chain: how to read one, and how to copy one that resolves.
 
 Each `oneharness.<role>.toml` at the repository root states its own chain, deadline and
-tier and inherits the six identities from `oneharness.identities.toml`, directly or
+tier and inherits the seven identities from `oneharness.identities.toml`, directly or
 through `oneharness.dispatch.toml`. Two consequences reach every journey that touches
 one, and both are why the walk lives here rather than in each module that needs it:
 

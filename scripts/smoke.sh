@@ -5,7 +5,7 @@
 #
 #   1. `oneagentgraph smoke`, which runs `oneharness run` in a throwaway directory and
 #      judges the history record it wrote. `ONEHARNESS_CONFIG` names `oneharness.toml`
-#      as the user-level config, which is what puts this repository's six-identity chain
+#      as the user-level config, which is what puts this repository's seven-identity chain
 #      under that turn rather than whatever the host's own config names; the history
 #      store is one nothing else writes to, because the smoke judges the record it just
 #      wrote, stamped with this tier's own labels.

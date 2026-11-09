@@ -29,6 +29,7 @@ harnesses = [
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:alternate3",
     "claude-code:primary-backup",
     "claude-code:primary",
 ]

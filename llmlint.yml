@@ -41,7 +41,7 @@ history:
   # llmlint: ignore[changed_behavior_has_e2e] A retention count is a logic-free config value read by llmlint itself, not behavior this repository implements; an e2e for it could only assert that llmlint honors its own documented setting.
   max_runs: 200
 # No `agents` block: every judge runs under the dedicated oneharness.llmlint.toml,
-# which names the same six identities every role does but keeps its own priority
+# which names the same seven identities every role does but keeps its own priority
 # order rather than inheriting the worker's alternate-Claude-first chain. llmlint
 # hands the path to oneharness as written, and both resolve it against the process's
 # working directory, so it names the file from the repository root, where every

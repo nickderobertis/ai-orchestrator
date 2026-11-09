@@ -51,6 +51,17 @@ unset_env = [
     "HELLOPATIENT_LINEAR_API_KEY",
 ]
 
+[harness.claude-code.variant.alternate3]
+env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+    "HELLOPATIENT_LINEAR_API_KEY",
+]
+
 [harness.claude-code.variant.primary-backup]
 env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
 unset_env = [

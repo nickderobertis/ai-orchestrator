@@ -18,6 +18,7 @@ history_labels = { role = "agent" }
 harnesses = [
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:alternate3",
     "codex:primary",
     "codex:alternate",
     "claude-code:primary-backup",
@@ -48,6 +49,15 @@ unset_env = [
 ]
 
 [harness.claude-code.variant.alternate2]
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "HELLOPATIENT_LINEAR_API_KEY",
+]
+
+[harness.claude-code.variant.alternate3]
 unset_env = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",

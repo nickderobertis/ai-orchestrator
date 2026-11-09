@@ -310,7 +310,7 @@ def test_every_harness_config_is_a_restating_site() -> None:
 
     The subject set is the configs that declare `history_labels`, stated here rather
     than left to the glob. `oneharness*.toml` also matches the two SHARED parents —
-    `oneharness.identities.toml` and `oneharness.dispatch.toml` — which state the six
+    `oneharness.identities.toml` and `oneharness.dispatch.toml` — which state the seven
     identities every role extends and declare no labels at all: a label names which
     SIDE of a conversation a session is, which is a fact about a role and not about an
     identity. They restate nothing because they say nothing about labels, which is the

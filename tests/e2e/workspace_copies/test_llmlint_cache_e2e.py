@@ -277,6 +277,7 @@ def copies(tmp_path: Path) -> Copies:
             for variable in (
                 "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR",
                 "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR",
+                "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR",
                 "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR",
                 "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR",
             )
@@ -560,6 +561,7 @@ IDENTITY_DIRECTORIES = {
     "ORCHESTRATOR_CODEX_ALT_HOME": Identity("codex", "CODEX_HOME", ".codex-alt"),
     "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": Identity("claude", "CLAUDE_CONFIG_DIR", ".claude-alt"),
     "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": Identity("claude", "CLAUDE_CONFIG_DIR", ".claude-alt2"),
+    "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR": Identity("claude", "CLAUDE_CONFIG_DIR", ".claude-alt3"),
     "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": Identity(
         "claude", "CLAUDE_CONFIG_DIR", ".claude-primary-backup"
     ),

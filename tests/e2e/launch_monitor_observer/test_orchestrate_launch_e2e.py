@@ -565,7 +565,7 @@ def routed_persona_run(
     tmp_path = tmp_path_factory.mktemp("routed-persona")
     environment = _environment(tmp_path, oneharness_bin)
     # Each side's real routing, copied with the parents it extends: a role config states
-    # its chain and inherits the six identities, and `extends` resolves against the
+    # its chain and inherits the seven identities, and `extends` resolves against the
     # directory of the file declaring it, so a copy on its own resolves nothing.
     worker_config = copied_with_its_parents(
         REPO_ROOT / "oneharness.toml", tmp_path, name="worker.toml"

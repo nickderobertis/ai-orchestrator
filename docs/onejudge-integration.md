@@ -54,13 +54,13 @@ One role pairs those two sides the **other way round**, and it is the only one h
 that does. `graphs/design-doc.yaml` runs the role that reads a finished plan and writes
 the design document a person reviews it as: its agent side is
 `oneharness.design-doc.toml`, which leads with both Codex identities, and its judge side
-is `oneharness.design-doc-judge.toml`, which leads with both alternate Claude
+is `oneharness.design-doc-judge.toml`, which leads with the three alternate Claude
 subscriptions. The reason is what that judge is asked to do — decide whether the
 document reads plainly to a technical product manager with no depth in the domain — so
 this host puts its Claude subscriptions on the side making that call and Codex on the
 side writing to the template. That judge side is also the one supervisory side here
 that keeps the working model tier rather than `oneharness.judge.toml`'s cheaper one,
-because this review *is* the deliverable's quality bar. Both name all six identities
+because this review *is* the deliverable's quality bar. Both name all seven identities
 with the primary Claude subscription last, and both state their own finite deadline;
 neither is shared with any other member, for the reason the pacemaker's is not.
 
@@ -72,12 +72,12 @@ concerns (persona defaults, session), never harness/model selection.
 
 ### Where the identities are stated, and what a role file carries
 
-Every role config above extends a shared parent, so the six identities are written down
+Every role config above extends a shared parent, so the seven identities are written down
 once rather than fourteen times:
 
 | File | What it holds |
 | --- | --- |
-| `oneharness.identities.toml` | The six identities: each variant's `model`, its `env_from` indirection for `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, its `unset_env` credential mask, and `[harness.claude-code]`'s `IS_SANDBOX`. Plus `run_mode` and `history`. |
+| `oneharness.identities.toml` | The seven identities: each variant's `model`, its `env_from` indirection for `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, its `unset_env` credential mask, and `[harness.claude-code]`'s `IS_SANDBOX`. Plus `run_mode` and `history`. |
 | `oneharness.dispatch.toml` | Extends the above and adds one thing: the `XDG_RUNTIME_DIR` repoint onto the node's own scratch, which `env_from`'s key-wise merge lands beside each variant's own indirection. |
 | `oneharness.<role>.toml` | What is really a decision about that role: its `harnesses` order, its `timeout`, its `history_labels`, its `stream` / `schema_file` / `schema_max_retries`, its `mode`, and its model tier where that differs. |
 
@@ -125,7 +125,7 @@ ambient `CODEX_HOME` and masks nothing except the plan store's two credentials, 
 roles its correct mask is *empty* — and empty is exactly what a child cannot say, since
 an empty list inherits. So `oneharness.identities.toml` and `oneharness.dispatch.toml`
 state no mask at that variant, and each of the eleven roles that masks either says so
-itself — the board-live worker masking the Linear key alone. It is the one place the six-identity block is not the whole
+itself — the board-live worker masking the Linear key alone. It is the one place the seven-identity block is not the whole
 story, and both parents carry a note at that variant explaining why.
 
 Every variant also keeps its own `model` line even where it matches the harness-level
@@ -448,7 +448,7 @@ directory** rather than against the working directory. `oneharness config --conf
 `source`, so a reader can see which file a value came from, and `config_files` lists the
 chain parent-first. That is what the ten `oneharness*.toml` files here are built on:
 each names `oneharness.identities.toml` as its parent, directly or through
-`oneharness.dispatch.toml`, rather than restating one six-identity block apiece.
+`oneharness.dispatch.toml`, rather than restating one seven-identity block apiece.
 `FileConfig` refuses an unknown key — so a host whose CLI predates this release refuses
 every one of those files at the first read.
 What 0.16.1 before it changed
@@ -630,10 +630,10 @@ the wheel is installed; keep `~/.local/bin` ahead of `~/.cargo/bin` regardless.
 ## Harnesses and the live path
 
 Live dispatch drives a real harness, chosen by `oneharness.toml`'s fallback chain.
-**Every role names the same six identities** — `claude-code:alternate`,
-`claude-code:alternate2`, `codex:primary`, `codex:alternate`,
+**Every role names the same seven identities** — `claude-code:alternate`,
+`claude-code:alternate2`, `claude-code:alternate3`, `codex:primary`, `codex:alternate`,
 `claude-code:primary-backup`, `claude-code:primary` — and the roles differ only in the
-order they try them. The worker order is that list as written: both alternate Claude
+order they try them. The worker order is that list as written: the three alternate Claude
 subscriptions first, because the personas are tuned against that model tier, then Codex,
 then the primary-backup Claude subscription and the primary Claude identity as the last
 resort. Every chain puts `claude-code:primary-backup` immediately before
@@ -655,6 +655,7 @@ it — so the account behind it, and its position in every chain, are what they 
 `scripts/claude-alt-config-dir.sh` is the one source of every Claude identity's config
 directory: it derives `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` as `$HOME/.claude-alt`,
 `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` as `$HOME/.claude-alt2`,
+`ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR` as `$HOME/.claude-alt3`,
 `ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR` as `$HOME/.claude-primary-backup` and
 `ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` as `$HOME/.claude`. For each, a non-empty value
 in the environment wins, then the host's identities file
@@ -738,6 +739,12 @@ unauthenticated second plan is safe and free in every committed chain exactly as
 unauthenticated `codex:alternate` is. (claude-code also creates its config
 directory itself on first run, which is why there is nothing to pre-create.)
 
+`claude-code:alternate3` is a third subscription, credentialed from `$HOME/.claude-alt3`
+through `ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR` and placed directly after the second, so its
+quota is spent before the backup and primary reserves. Everything above holds for it: log
+in with `CLAUDE_CONFIG_DIR="$HOME/.claude-alt3" claude`, and a host that never does loses
+nothing, the candidate falling through as `auth`.
+
 The **orchestrator** reverses the worker's order. It is a long-lived supervisory
 process, not a worker, so `oneharness.orchestrator.toml` selects both Codex
 identities first: it does not stand in front of the workers for the subscriptions
@@ -746,7 +753,7 @@ in the worker's own relative order, and the operator accepts that trade —
 contending for the workers' Claude quota beats stalling a supervisory process every
 workstream waits on.
 The monitor member names that config in `graphs/dag-scope.yaml`, and
-`scripts/onepipeline.sh` establishes the same four shared
+`scripts/onepipeline.sh` establishes the same five shared
 `ORCHESTRATOR_CLAUDE_*_CONFIG_DIR` indirections at driver start through
 `scripts/dispatch-env.sh` — so `just orchestrate` launches on a fresh shell with
 nothing exported by hand.
@@ -754,7 +761,7 @@ nothing exported by hand.
 The **judge** leads with Codex for the same reason and, past both Codex
 identities, now reaches the workers' alternate subscriptions before
 `claude-code:primary`. It keeps its cheaper-supervisor intent through `model`
-rather than through isolation: all four of its Claude variants name the cheaper
+rather than through isolation: all five of its Claude variants name the cheaper
 supervisor tier that config states, below the one every other role inherits
 from `oneharness.identities.toml`. The `claude-code:primary` variant is
 env-driven like the others: it reads its
@@ -765,21 +772,21 @@ account that directory holds and never as an ambient key.
 The **design-doc role reverses the reversal**, and is the one place on this host where
 the identity order is chosen for what a side is good at rather than for what it must not
 queue in front of. `oneharness.design-doc.toml` writes the document and leads with both
-Codex identities; `oneharness.design-doc-judge.toml` reviews it and leads with both
+Codex identities; `oneharness.design-doc-judge.toml` reviews it and leads with the three
 alternate Claude subscriptions, on the tier `oneharness.identities.toml` states rather
 than the judge config's cheaper supervisor one. What that reviewer decides is whether
 the prose reads plainly to a non-specialist, which is the document's whole purpose, so
 the cheaper-supervisor trade every other judged tier makes is the wrong one here. Past
-their leading pair each reaches
-the other provider's two identities and then `claude-code:primary-backup` and
-`claude-code:primary`, so both name all six and neither loses a quota once everything ahead of it is exhausted.
+their leading identities each reaches
+the other provider's identities and then `claude-code:primary-backup` and
+`claude-code:primary`, so both name all seven and neither loses a quota once everything ahead of it is exhausted.
 `tests/e2e/launch_monitor_observer/test_design_doc_graph_e2e.py` reads both orders back through the graph that
 routes them, and `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` reads them beside every other
 config's from the real CLI.
 
 **llmlint** uses `oneharness.llmlint.toml`, which `llmlint.yml` and the plan
 checklist name under `oneharness.config`, and is **no longer Codex-only**: it carries the
-same six identities in the same supervisory order. That trade is deliberate — a
+same seven identities in the same supervisory order. That trade is deliberate — a
 blocking pre-push check that can still be judged beats one isolated from the Claude
 quota that is left. It does mean this tier can contend for the workers'
 subscriptions once both Codex accounts are exhausted.
@@ -910,6 +917,7 @@ harnesses = [
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:alternate3",
     "claude-code:primary-backup",
     "claude-code:primary",
 ]
@@ -1231,6 +1239,9 @@ ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$HOME/.claude-alt" \
 ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR="$HOME/.claude-alt2" \
   oneharness run --config oneharness.toml \
   --harness claude-code:alternate2 --prompt "Reply with OK"
+ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR="$HOME/.claude-alt3" \
+  oneharness run --config oneharness.toml \
+  --harness claude-code:alternate3 --prompt "Reply with OK"
 ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR="$HOME/.claude-primary-backup" \
   oneharness run --config oneharness.llmlint.toml \
   --harness claude-code:primary-backup --prompt "Reply with OK"
@@ -1242,7 +1253,7 @@ ORCHESTRATOR_CODEX_ALT_HOME="$HOME/.codex-alt" \
   --harness codex:alternate --prompt "Reply with OK"
 ```
 
-A `codex:alternate`, `claude-code:alternate2` or `claude-code:primary-backup` probe that
+A `codex:alternate`, `claude-code:alternate2`, `claude-code:alternate3` or `claude-code:primary-backup` probe that
 reports `fell_through:
 [{"harness": "...", "reason": "auth"}]` is the unauthenticated state, not a broken
 config; run the `codex login` above, or for the second Claude plan:
@@ -1251,7 +1262,7 @@ config; run the `codex login` above, or for the second Claude plan:
 CLAUDE_CONFIG_DIR="$HOME/.claude-alt2" claude
 ```
 
-or for the primary-backup plan, `CLAUDE_CONFIG_DIR="$HOME/.claude-primary-backup" claude`,
+or for the third, `CLAUDE_CONFIG_DIR="$HOME/.claude-alt3" claude`, or for the primary-backup plan, `CLAUDE_CONFIG_DIR="$HOME/.claude-primary-backup" claude`,
 
 then `/login` in that session.
 
@@ -1326,7 +1337,7 @@ agent config, since the published verb runs `oneharness run` in a throwaway dire
 where no project config is discovered.
 
 The smoke spends a second turn beside that one, the **trust probe**: claude-code driven
-as a dispatch drives it — `oneharness run --config oneharness.toml` naming only the four
+as a dispatch drives it — `oneharness run --config oneharness.toml` naming only the five
 claude-code identities, in bypass mode, so `claude -p --permission-mode
 bypassPermissions` under one identity's config directory — in a fresh git directory
 nothing has trusted, whose `.claude/settings.json` names a `SessionStart` hook writing a

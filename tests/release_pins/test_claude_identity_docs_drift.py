@@ -60,7 +60,7 @@ def _chain_identities() -> set[str]:
 
     The subject set is the configs that declare a `harnesses` chain, stated here rather
     than left to the glob: `oneharness*.toml` also matches the two SHARED parents —
-    `oneharness.identities.toml` and `oneharness.dispatch.toml` — which state the six
+    `oneharness.identities.toml` and `oneharness.dispatch.toml` — which state the seven
     identities every role extends and deliberately name no chain, so that each role's
     order stays its own. Reading them for `harnesses` would raise rather than answer.
     """
@@ -81,7 +81,7 @@ def test_every_document_names_each_indirection_its_default_and_the_identities_fi
     document: str,
 ) -> None:
     defaults = _helper_defaults()
-    assert len(defaults) == 4, defaults
+    assert len(defaults) == 5, defaults
     prose = _flat(document)
 
     missing = [

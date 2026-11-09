@@ -1,12 +1,13 @@
 # shellcheck shell=bash
 # The ONE source of every Claude identity's config directory.
 #
-# Every config maps one of these four indirections into CLAUDE_CONFIG_DIR through
+# Every config maps one of these five indirections into CLAUDE_CONFIG_DIR through
 # `env_from` for each claude-code variant, so oneharness refuses to run when any of them
 # is unset in the parent process:
 #
 #   ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR             $HOME/.claude-alt             claude-code:alternate
 #   ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR            $HOME/.claude-alt2            claude-code:alternate2
+#   ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR            $HOME/.claude-alt3            claude-code:alternate3
 #   ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR  $HOME/.claude-primary-backup  claude-code:primary-backup
 #   ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR         $HOME/.claude                 claude-code:primary
 #
@@ -29,6 +30,7 @@ set -euo pipefail
 CLAUDE_IDENTITY_CONFIG_VARIABLES=(
     ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
     ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR
+    ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR
     ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR
     ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR
 )
@@ -49,11 +51,12 @@ case $_claude_identity_helper_dir in
 esac
 
 # The $HOME-relative default and the diagnostic label of one indirection. Refuses a
-# name that is not one of the four, so a caller cannot resolve a directory nobody routes.
+# name that is not one of the five, so a caller cannot resolve a directory nobody routes.
 _claude_identity_default() {
     case $1 in
         ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR) printf '%s\n' ".claude-alt" "alternate Claude config" ;;
         ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR) printf '%s\n' ".claude-alt2" "second alternate Claude config" ;;
+        ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR) printf '%s\n' ".claude-alt3" "third alternate Claude config" ;;
         ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR) printf '%s\n' ".claude-primary-backup" "primary-backup Claude config" ;;
         ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR) printf '%s\n' ".claude" "primary Claude config" ;;
         *) return 1 ;;
@@ -151,7 +154,7 @@ resolve_claude_identity_config_dir() {
 # Derive, validate, and export every Claude identity's config directory. $1 names the
 # calling wrapper so its diagnostics stay attributable. The name is historical: it
 # resolved the two alternates once, and every caller still calls it by this name.
-# llmlint: ignore[names_match_behavior] The name is historical and kept by contract C2 of this run so none of its callers changes; the comment above says it now resolves all four identities.
+# llmlint: ignore[names_match_behavior] The name is historical and kept by contract C2 of this run so none of its callers changes; the comment above says it now resolves all five identities.
 resolve_claude_alt_config_dir() {
     local caller=$1 variable
     _load_claude_identities_file "$caller" || return $?

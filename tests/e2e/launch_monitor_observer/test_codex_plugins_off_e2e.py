@@ -203,6 +203,7 @@ def _sandbox(tmp_path: Path) -> Sandbox:
             for variable in (
                 "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR",
                 "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR",
+                "ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR",
                 "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR",
                 "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR",
             )

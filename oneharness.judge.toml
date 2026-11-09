@@ -2,7 +2,7 @@
 # supervises the work and scores the transcript. Referenced by
 # `config/onejudge.base.yaml`'s `provider.judge_config`.
 #
-# The six identities are stated once in `oneharness.identities.toml` and the
+# The seven identities are stated once in `oneharness.identities.toml` and the
 # dispatched side's `XDG_RUNTIME_DIR` repoint in `oneharness.dispatch.toml`. What is
 # this role's own: its chain order, its labels, and the cheaper model tier its Claude
 # identities run on.
@@ -35,6 +35,7 @@ harnesses = [
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:alternate3",
     "claude-code:primary-backup",
     "claude-code:primary",
 ]
@@ -81,6 +82,17 @@ unset_env = [
 ]
 
 [harness.claude-code.variant.alternate2]
+model = "claude-sonnet-5"
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+    "HELLOPATIENT_LINEAR_API_KEY",
+]
+
+[harness.claude-code.variant.alternate3]
 model = "claude-sonnet-5"
 unset_env = [
     "ANTHROPIC_API_KEY",
