@@ -1111,7 +1111,9 @@ checks still running when onevcs's checks timeout ended their following; their l
 result is not shown, so read it on the host. `just results` lists checks still running
 when a run ends and those no longer followed. A `release-wait` surface's "held by"
 line names the release's own change request and its failing checks, which are the
-producing repository's to fix.
+producing repository's to fix. A `provisioning-failed` surface says a node's worktree
+may lack its toolchain because the `post-checkout` provisioning failed at open; it
+carries the re-run command to run in that worktree.
 
 Require each worker to prove its change with the checks that exercise it — never `just
 gate`, which this host stopped asking a dispatch to run — and review the evidence it
@@ -2095,13 +2097,17 @@ that invocation instead. Both Nx caches are origin-keyed under
 `${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/` through `scripts/nx.sh`.
 
 **Session setup — and `just bootstrap`, which runs it — provisions a worktree, and
-nothing else installs.** `scripts/nx.sh` and every recipe that runs `uv run` export
-`UV_NO_SYNC=1` and, through `scripts/require-provisioned.sh`, refuse a checkout whose
-Python environment holds no interpreter, naming `just session-setup`: under `UV_NO_SYNC`
+nothing else installs**, and the tracked `.githooks/post-checkout` runs its
+`--provision-only` on every branch checkout, so every session worktree is provisioned at
+open and a pooled slot again on reuse, for every harness. `scripts/nx.sh` and every
+recipe that runs `uv run` export `UV_NO_SYNC=1` and, through
+`scripts/require-provisioned.sh`, refuse a checkout whose Python environment holds no
+interpreter, naming `just session-setup`: under `UV_NO_SYNC`
 a missing `.venv` does not fail, uv creates an empty one and runs whatever another
-checkout puts on PATH. A Codex-side dispatch never runs the session-start hook, so in an
-unprovisioned run root or a new pool slot it meets that refusal until `onevcs` provisions
-a session when it opens one. A publication's worktree is cut the same way, so
+checkout puts on PATH. A Codex-side dispatch never runs the session-start hook, so
+`post-checkout` is what provisions its worktree. A failed provisioning never fails the
+open: its worker's task carries the failure and the re-run command, and its manager gets
+a `provisioning-failed` surface. A publication's worktree is cut the same way, so
 `.githooks/pre-push` runs setup's `--provision-only` before the gate: that checkout's
 toolchain and none of a session's host steps. No `uv run` this repository spells syncs:
 the `justfile` and each script that runs one export `UV_NO_SYNC=1`, an Nx target runs

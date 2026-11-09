@@ -68,6 +68,8 @@ from nx_inputs import (
     PLAN_STORE_DEPENDENCY_READ_SCOPED,
     PLAN_STORE_DEPENDENCY_READ_WORKSPACE,
     PLAN_TOOLING_PROJECTS,
+    POST_CHECKOUT_PROVISIONING_ROOT,
+    POST_CHECKOUT_PROVISIONING_WORKSPACE,
     PRE_PUSH_PROVISIONING_ROOT,
     PRE_PUSH_PROVISIONING_WORKSPACE,
     PROJECT_STORE_RACE_ROOT,
@@ -260,6 +262,9 @@ OWNED_PROJECTS = {
     # every directory-owned project's key before it collects any of them, so this
     # project's row is here beside its siblings' rather than in its own directory.
     PRE_PUSH_PROVISIONING_ROOT: OwnedProject(key=PRE_PUSH_PROVISIONING_WORKSPACE, docs_tier=False),
+    POST_CHECKOUT_PROVISIONING_ROOT: OwnedProject(
+        key=POST_CHECKOUT_PROVISIONING_WORKSPACE, docs_tier=False
+    ),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The read guard needs
     # every directory-owned project's key before it collects any of them, so each project's

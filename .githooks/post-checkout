@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Provision the checked-out worktree on every branch checkout: `git worktree add`, which
+# is how `onevcs` opens a session, and a pooled slot's `checkout` on reuse both pass `1`
+# as the third argument, and every harness passes through one of them, where only Claude
+# Code runs the `SessionStart` hook. A file checkout passes `0` and provisions nothing.
+# Activated by `just bootstrap` (git config core.hooksPath .githooks).
+#
+# Provisioning is session setup's own `--provision-only`: this checkout's toolchain and
+# none of a session's host steps. A failure exits with provisioning's own status, which
+# `onevcs` records while the session still opens, and the engine shows the worker and the
+# manager (AGENTS.md, "The checks").
+set -uo pipefail
+
+if [ "${3:-}" != 1 ]; then
+  exit 0
+fi
+
+# Git exports repository-local GIT_* variables to hooks, which would send every nested
+# git command and installer to the repository that ran the hook rather than this tree.
+# Git runs this hook from the checked-out worktree's root, so clear Git's documented local
+# set and let commands rediscover the repository from the working directory, as
+# `.githooks/pre-push` does.
+while IFS= read -r name; do
+  if [ -n "$name" ]; then
+    unset "$name"
+  fi
+done < <(git rev-parse --local-env-vars)
+
+root=$PWD
+rerun="cd $(printf '%q' "$root") && scripts/session-setup.sh --provision-only"
+echo "post-checkout: provisioning $root..." >&2
+# Setup's own lines go to stderr, the stream a hook's failure is read from.
+bash "$root/scripts/session-setup.sh" --provision-only >&2
+status=$?
+if [ "$status" -ne 0 ]; then
+  echo "post-checkout: provisioning failed (exit $status); the failing step's message is above, and this worktree's toolchain may be missing until it succeeds. Re-run: $rerun" >&2
+fi
+exit "$status"

@@ -184,6 +184,22 @@ def setup_repo(
 def run_setup(
     repo: Path, tmp_path: Path, *, path: str | None = None
 ) -> subprocess.CompletedProcess[str]:
+    setup = subprocess.run(
+        ["bash", str(repo / "scripts" / "session-setup.sh")],
+        text=True,
+        capture_output=True,
+        env=setup_environment(tmp_path, path=path),
+    )
+    await_host_sweep(tmp_path)
+    return setup
+
+
+def setup_environment(tmp_path: Path, *, path: str | None = None) -> dict[str, str]:
+    """The environment session setup runs under in a journey, sandboxed in `tmp_path`.
+
+    Shared by `run_setup` and by a journey that reaches session setup through something
+    else that runs it — a git hook — so both provision under the same sandbox.
+    """
     bun = shutil.which("bun")
     assert bun is not None
     bun_version = subprocess.run(
@@ -202,47 +218,40 @@ def run_setup(
     # one redirect keeps both halves inside `tmp_path`.
     scratch_root = tmp_path / "tmp"
     scratch_root.mkdir(exist_ok=True)
-    setup = subprocess.run(
-        ["bash", str(repo / "scripts" / "session-setup.sh")],
-        text=True,
-        capture_output=True,
-        env={
-            **os.environ,
-            "ASDF_BUN_VERSION": bun_version,
-            "ASDF_DATA_DIR": os.environ.get("ASDF_DATA_DIR", str(Path.home() / ".asdf")),
-            "HOME": str(tmp_path),
-            # Named beside `HOME` rather than derived from it: the suite exports
-            # `ONEVCS_HOME` to a copy of the host's root (`tests/onevcs_state_snapshot.py`),
-            # and that export would otherwise win over the derivation this sandbox
-            # relies on — the sweep session setup starts would read the copy, and the
-            # journey that plants a broken root under `$HOME` would plant it where
-            # nothing looks.
-            "ONEVCS_HOME": str(tmp_path / ".onevcs"),
-            "PATH": path or os.environ["PATH"],
-            "TMPDIR": str(scratch_root),
-            # Where uv puts its tools under that home anyway, named so that no tool
-            # directory this process inherited sends setup's `llmlint` install elsewhere.
-            "UV_TOOL_DIR": str(tmp_path / ".local" / "share" / "uv" / "tools"),
-            "UV_TOOL_BIN_DIR": str(tmp_path / ".local" / "bin"),
-            # A shared cache and a suite that corrupts what it installed cannot both
-            # be hardlinks. uv installs by linking out of its cache, so the test
-            # below that rewrites an installed `METADATA` to prove version drift is
-            # detected rewrote the cache entry — and every other environment on this
-            # host linked to the same inode — turning one deliberate corruption into
-            # a real broken toolchain. Copying is the difference between sharing
-            # downloads and sharing files; it costs a fraction of one download.
-            "UV_LINK_MODE": "copy",
-            **({"UV_CACHE_DIR": shared_cache} if shared_cache else {}),
-            # Bun's download cache, shared for the reason uv's is: `HOME` would otherwise
-            # make every journey download the engine and the read API again.
-            **({"BUN_INSTALL_CACHE_DIR": shared_bun_cache} if shared_bun_cache else {}),
-            # Named rather than inherited, so the host sweep's lock and log are this
-            # journey's own even on a host that exports its own cache home.
-            "XDG_CACHE_HOME": str(host_sweep_cache(tmp_path).parents[1]),
-        },
-    )
-    await_host_sweep(tmp_path)
-    return setup
+    return {
+        **os.environ,
+        "ASDF_BUN_VERSION": bun_version,
+        "ASDF_DATA_DIR": os.environ.get("ASDF_DATA_DIR", str(Path.home() / ".asdf")),
+        "HOME": str(tmp_path),
+        # Named beside `HOME` rather than derived from it: the suite exports
+        # `ONEVCS_HOME` to a copy of the host's root (`tests/onevcs_state_snapshot.py`),
+        # and that export would otherwise win over the derivation this sandbox
+        # relies on — the sweep session setup starts would read the copy, and the
+        # journey that plants a broken root under `$HOME` would plant it where
+        # nothing looks.
+        "ONEVCS_HOME": str(tmp_path / ".onevcs"),
+        "PATH": path or os.environ["PATH"],
+        "TMPDIR": str(scratch_root),
+        # Where uv puts its tools under that home anyway, named so that no tool
+        # directory this process inherited sends setup's `llmlint` install elsewhere.
+        "UV_TOOL_DIR": str(tmp_path / ".local" / "share" / "uv" / "tools"),
+        "UV_TOOL_BIN_DIR": str(tmp_path / ".local" / "bin"),
+        # A shared cache and a suite that corrupts what it installed cannot both
+        # be hardlinks. uv installs by linking out of its cache, so the test
+        # below that rewrites an installed `METADATA` to prove version drift is
+        # detected rewrote the cache entry — and every other environment on this
+        # host linked to the same inode — turning one deliberate corruption into
+        # a real broken toolchain. Copying is the difference between sharing
+        # downloads and sharing files; it costs a fraction of one download.
+        "UV_LINK_MODE": "copy",
+        **({"UV_CACHE_DIR": shared_cache} if shared_cache else {}),
+        # Bun's download cache, shared for the reason uv's is: `HOME` would otherwise
+        # make every journey download the engine and the read API again.
+        **({"BUN_INSTALL_CACHE_DIR": shared_bun_cache} if shared_bun_cache else {}),
+        # Named rather than inherited, so the host sweep's lock and log are this
+        # journey's own even on a host that exports its own cache home.
+        "XDG_CACHE_HOME": str(host_sweep_cache(tmp_path).parents[1]),
+    }
 
 
 def host_sweep_cache(tmp_path: Path) -> Path:

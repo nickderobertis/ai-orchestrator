@@ -4862,3 +4862,32 @@ def test_the_section_link_slug_rule_the_drift_journey_restates_is_the_stores_own
             f"onetaskgraph {ONETASKGRAPH_DOCS.ref}'s README no longer says {stated!r}; re-read "
             "its *Section links*, then bring `_heading_slugs` and `budget_anchor` to it"
         )
+
+
+def test_the_provisioning_failed_surface_the_prose_names_is_the_engines_own() -> None:
+    """A manager is told to read a `provisioning-failed` surface carrying the re-run command,
+    and a worker to find the failure in its task: both are the pinned engine's own contract
+    for a session whose `post-checkout` provisioning failed, read off its `contract.md` so a
+    renamed kind or a dropped field fails here rather than being believed."""
+    contract = _plain(_source(ONEPIPELINE_DOCS, "contract.md"))
+    for stated in (
+        "worktree-provision-failed",
+        "the task the worker receives on its first turn carries a section",
+        "the rerun command to run in the worktree",
+        "one non-blocking surface of kind provisioning-failed per failed session",
+        "rerun:",
+    ):
+        assert stated in contract, (
+            f"onepipeline {ONEPIPELINE_DOCS.ref}'s contract.md no longer states {stated!r}, "
+            "which AGENTS.md and docs/repo-lifecycle.md tell a manager to rely on"
+        )
+    lifecycle = REPO_ROOT / "docs" / "repo-lifecycle.md"
+    for document in (MANAGER, lifecycle):
+        prose = _plain(document.read_text("utf-8"))
+        assert "provisioning-failed surface" in prose, (
+            f"{document.relative_to(REPO_ROOT)} no longer names the provisioning-failed surface"
+        )
+        assert "re-run command" in prose, (
+            f"{document.relative_to(REPO_ROOT)} no longer says the surface carries the re-run "
+            "command"
+        )

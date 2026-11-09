@@ -94,6 +94,8 @@ from nx_inputs import (
     PLAN_TOOLING_PROJECTS,
     PLAN_TOOLING_ROOT,
     PLAN_TOOLING_SCOPED,
+    POST_CHECKOUT_PROVISIONING_ROOT,
+    POST_CHECKOUT_PROVISIONING_SCOPED,
     PRE_PUSH_PROVISIONING_ROOT,
     PRE_PUSH_PROVISIONING_SCOPED,
     PROJECT_STORE_RACE_ROOT,
@@ -814,6 +816,7 @@ SUITE_TIERS = (
     # catalog of test projects, where every project has its entry; the pre-push-provisioning
     # entry sits beside the others' because the catalog is the domain.
     (f"{PRE_PUSH_PROVISIONING_ROOT}/project.json", PRE_PUSH_PROVISIONING_SCOPED),
+    (f"{POST_CHECKOUT_PROVISIONING_ROOT}/project.json", POST_CHECKOUT_PROVISIONING_SCOPED),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and

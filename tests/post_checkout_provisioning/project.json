@@ -1,0 +1,37 @@
+{
+  "name": "post-checkout-provisioning",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/post_checkout_provisioning",
+  "tags": [
+    "scope:post-checkout-provisioning",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-offline-installs",
+    "support-provisioning"
+  ],
+  "namedInputs": {
+    "postCheckoutProvisioningWorkspace": [
+      "{workspaceRoot}/.githooks/**/*",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/post_checkout_provisioning/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/post_checkout_provisioning --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "postCheckoutProvisioningWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

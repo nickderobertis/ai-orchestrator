@@ -21,5 +21,7 @@ and `just bootstrap` which runs it, provision a worktree and nothing else instal
   edit pay for it.
 - **The pre-push hook's provisioning is `tests/pre_push_provisioning/`**, a project of
   its own, so an edit to the hook's scripts does not rebuild these toolchains.
+- **The `post-checkout` hook's provisioning is `tests/post_checkout_provisioning/`**, a
+  project of its own for the same reason.
 - **The PyPI journeys are `tests/session_setup_pypi/`**, a project of their own, so an
   edit only they read does not select this one.

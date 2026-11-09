@@ -76,6 +76,13 @@ SESSION_SETUP_WORKSPACE = "sessionSetupWorkspace"
 PRE_PUSH_PROVISIONING_WORKSPACE = "prePushProvisioningWorkspace"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
+# that owns tier keys, one row per test project, as the rows beside this one are.
+#: The named input `post-checkout-provisioning`'s one test target is keyed on: the tracked
+#: hooks directory the journey's scratch clone carries, beside the session setup chain its
+#: `--provision-only` runs, which reaches the key as the provisioning unit's own files.
+POST_CHECKOUT_PROVISIONING_WORKSPACE = "postCheckoutProvisioningWorkspace"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
 # that owns tier names, one row per test project, as the block over the ask-seam
 # journeys below says: `tests/conftest.py`'s read guard and
 # `tests/tree_scans/test_nx_cache_scope.py` resolve every project's key, name and
@@ -611,6 +618,19 @@ PRE_PUSH_PROVISIONING_SCOPED = "test"
 PRE_PUSH_PROVISIONING_ROOT = "tests/pre_push_provisioning"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
+# that owns tier names, one row per test project, as the rows beside this one are.
+#: The project whose test target owns the journey over the tracked `post-checkout` hook:
+#: a real worktree add and branch checkout in a scratch clone, each provisioned by session
+#: setup's `--provision-only`. A project of its own so an edit to the hooks rebuilds only
+#: its toolchains, and an edit elsewhere none of them.
+POST_CHECKOUT_PROVISIONING_PROJECT = "post-checkout-provisioning"
+#: That project's one test target: nothing here reads this repository's prose.
+POST_CHECKOUT_PROVISIONING_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+POST_CHECKOUT_PROVISIONING_ROOT = "tests/post_checkout_provisioning"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The reason above
 # `HOST_SWEEP_WORKSPACE`: this module holds one row per test project.
 #: The project whose test target owns the journeys over the host sweep session setup
@@ -1093,6 +1113,7 @@ def catalogued_roots() -> dict[str, str]:
         SCHEMA_CACHE_PROJECT: SCHEMA_CACHE_ROOT,
         SESSION_OPEN_CONFLICT_PROJECT: SESSION_OPEN_CONFLICT_ROOT,
         PRE_PUSH_PROVISIONING_PROJECT: PRE_PUSH_PROVISIONING_ROOT,
+        POST_CHECKOUT_PROVISIONING_PROJECT: POST_CHECKOUT_PROVISIONING_ROOT,
         SESSION_SETUP_PROJECT: SESSION_SETUP_ROOT,
         SESSION_SETUP_PYPI_PROJECT: SESSION_SETUP_PYPI_ROOT,
         UNFINISHED_PROJECT: UNFINISHED_ROOT,

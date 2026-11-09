@@ -131,9 +131,6 @@ RETIRED: dict[str, str] = {
         "claude-code's bypass mode, which every dispatch runs: it runs an untrusted "
         "directory's turn and SessionStart hook, which `just smoke`'s trust probe re-takes"
     ),
-    ".githooks/post-checkout": (
-        "nothing: it only marked trust, which claude-code's bypass mode does not need"
-    ),
     "scripts/oneharness-agent.sh": (
         "the engine starting each side as plain `oneharness run --config <member config>` "
         "(`bin: oneharness` in config/onejudge.base.yaml), and the graph-native "
