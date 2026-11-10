@@ -78,38 +78,95 @@ read_oneharness_pin() {
 }
 
 # The `llmlint-cli` release the rule selects under the pin, as uv's resolver answers
-# without installing anything; empty when nothing resolves.
+# without installing anything; empty when nothing resolves, with uv's report logged.
 selected_llmlint() {
-  printf '%s\n' "llmlint-cli>=$LLMLINT_MIN" "oneharness-cli==$1" \
-    | uv pip compile - --no-header --no-annotate --quiet 2>/dev/null \
-    | sed -n 's/^llmlint-cli==//p'
+  local resolved
+  if ! resolved=$(printf '%s\n' "llmlint-cli>=$LLMLINT_MIN" "oneharness-cli==$1" \
+    | uv pip compile - --no-header --no-annotate --quiet 2>&1); then
+    printf '%s\n' "$resolved" >&2
+    return 0
+  fi
+  printf '%s\n' "$resolved" | sed -n 's/^llmlint-cli==//p'
 }
 
-# Whether the installed tool already is the selected release, installed with the pin,
-# with its link in place. `uv tool install --upgrade` rewrites the receipt and removes
-# and recreates the link even when nothing changes, so for a moment no `llmlint` exists
-# — a moment that lands inside other checkouts' gate runs when many sessions start; a
-# current install is therefore never handed to it.
-install_is_current() {
-  local pin=$1 selected=$2
-  [ -n "$selected" ] || return 1
-  [ -x "$BIN_DIR/llmlint" ] || return 1
-  uv tool list --show-with 2>/dev/null \
-    | grep -qxF "llmlint-cli v$selected [with: oneharness-cli==$pin]"
+# The `llmlint-cli` release the tool environment holds, as `uv tool list` reports it:
+# empty, with status 0, when uv lists no such tool, and status 1 when uv cannot list.
+installed_llmlint() {
+  local listing
+  listing=$(uv tool list 2>/dev/null) || return 1
+  printf '%s\n' "$listing" | sed -n 's/^llmlint-cli v\([^ ]*\)$/\1/p'
+}
+
+# Whether `uv tool install --upgrade` may be handed the host's llmlint: it rewrites the
+# receipt and removes and recreates the link even when nothing changes, so for a moment
+# no `llmlint` exists — a moment that lands inside other checkouts' gate runs when many
+# sessions start. So it is handed only an install that is missing, not runnable, or a
+# release other than the selected one, and never one this run cannot tell apart from
+# the selected release: a release query that fails or answers nothing, or a tool list
+# uv cannot read, leaves a runnable llmlint as it is, and
+# `tests/test_llmlint_release_pin.py` names a host whose install has parted from the pin.
+#
+# Current is the release alone, not the receipt's `--with oneharness-cli==<pin>`: other
+# repositories' installers on this host run `uv tool install --upgrade llmlint-cli` into
+# the same tool directory with no `--with`, which drops that line while leaving the same
+# release in place, and reinstalling over it would recreate the link on the next session
+# start for nothing. The pin constrains which release resolves; the `oneharness` a
+# judged run reaches is the one on PATH, which wins over the copy beside llmlint.
+needs_install() {
+  local pin=$1 selected installed
+  if [ ! -x "$BIN_DIR/llmlint" ]; then
+    log "no runnable llmlint at $BIN_DIR/llmlint"
+    return 0
+  fi
+  if ! installed=$(installed_llmlint); then
+    log "uv could not list its tools, so the installed llmlint's release is unknown; leaving it as it is"
+    return 1
+  fi
+  if [ -z "$installed" ]; then
+    log "$BIN_DIR/llmlint is not a uv tool install of llmlint-cli"
+    return 0
+  fi
+  selected=$(selected_llmlint "$pin")
+  if [ -z "$selected" ]; then
+    log "the release query for llmlint-cli >= $LLMLINT_MIN under oneharness-cli $pin failed or answered nothing; leaving the installed llmlint-cli $installed as it is"
+    return 1
+  fi
+  if [ "$installed" = "$selected" ]; then
+    log "llmlint-cli $selected under oneharness-cli $pin is already installed; leaving it as it is"
+    return 1
+  fi
+  log "llmlint-cli $installed is installed and the pin selects $selected"
+  return 0
+}
+
+# Serialize the decision and the install across every run linking into this bin
+# directory, whichever checkout started it: a run that finds another installing waits,
+# then finds the release it installed current, rather than reinstalling over a link just
+# made. The lock is the bin directory itself, opened and locked whole, so nothing is
+# written beside the link and nothing into uv's tool directory, every entry of which uv
+# reads as a tool. A run that cannot take it goes on unserialized, as every run did
+# before the lock.
+lock_bin_dir() {
+  if ! command -v flock >/dev/null 2>&1; then
+    log "flock not found; going on unserialized"
+    return 0
+  fi
+  if ! mkdir -p "$BIN_DIR" 2>/dev/null || ! { exec 9<"$BIN_DIR"; } 2>/dev/null; then
+    log "cannot open $BIN_DIR to lock it; going on unserialized"
+    return 0
+  fi
+  flock 9 || log "flock could not lock $BIN_DIR; going on unserialized"
 }
 
 ensure_toolchain() {
-  local pin selected
+  local pin
   if ! command -v uv >/dev/null 2>&1; then
     log "uv not found; cannot install llmlint (install uv: https://docs.astral.sh/uv/)"
     return 0
   fi
   pin=$(read_oneharness_pin) || return 0
-  selected=$(selected_llmlint "$pin")
-  if install_is_current "$pin" "$selected"; then
-    log "llmlint-cli $selected under oneharness-cli $pin is already installed; leaving it as it is"
-    return 0
-  fi
+  lock_bin_dir
+  needs_install "$pin" || return 0
   log "installing the highest llmlint-cli >= $LLMLINT_MIN that runs under oneharness-cli $pin (the release config/oneharness.version pins) via uv tool"
   uv tool install --upgrade "llmlint-cli>=$LLMLINT_MIN" --with "oneharness-cli==$pin" >&2 \
     || log "no llmlint-cli >= $LLMLINT_MIN resolved under oneharness-cli $pin, or the install failed (uv's report is above); leaving the installed llmlint as it is"
@@ -117,6 +174,8 @@ ensure_toolchain() {
 
 export PATH="${BIN_DIR}:${PATH}"
 ensure_toolchain
+# Released before the closing checks, which only read what is installed.
+exec 9>&-
 if command -v llmlint >/dev/null 2>&1; then
   log "ready (llmlint: $(llmlint --version 2>/dev/null || echo unknown))"
   llmlint doctor >&2 2>&1 || log "llmlint doctor reported an issue (see above)"

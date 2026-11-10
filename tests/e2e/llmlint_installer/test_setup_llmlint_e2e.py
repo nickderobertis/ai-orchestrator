@@ -15,6 +15,12 @@ resolver, the tool directory and shim it installs — and that directory is a th
 one `uv`'s own `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` name, so the host's install is never
 touched.
 
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] These
+journeys sit behind `llmlint-installer:test`, a project of their own keyed on the
+installer, the pin and this directory. Its one inherited edge, `support-conftest`, is the
+suite's root `tests/conftest.py`, which pytest loads for every project under `tests/`, so
+no project here can run without it.
+
 """
 
 from __future__ import annotations
@@ -280,10 +286,10 @@ def test_the_installer_leaves_the_host_alone_when_no_release_admits_the_pin(
 
     assert completed.returncode == 0, completed.stderr
     assert (
-        f"no {LLMLINT_DISTRIBUTION} >= {FLOOR} resolved under {ONEHARNESS_DISTRIBUTION} {pin}"
-        in completed.stderr
-    ), completed.stderr
-    assert "leaving the installed llmlint as it is" in completed.stderr, completed.stderr
+        f"the release query for {LLMLINT_DISTRIBUTION} >= {FLOOR} under "
+        f"{ONEHARNESS_DISTRIBUTION} {pin} failed or answered nothing; leaving the installed "
+        f"{LLMLINT_DISTRIBUTION} {INCOMPATIBLE} as it is"
+    ) in completed.stderr, completed.stderr
     # What was found: uv's own resolution names the requirement nothing offered met.
     assert f"{ONEHARNESS_DISTRIBUTION}>={above}" in completed.stderr, completed.stderr
     installed = installed_llmlint(tool_home.tool_dir)
@@ -369,30 +375,42 @@ def _install_fingerprint(home: ToolHome) -> dict[Path, PathStamp]:
 
 
 @dataclass(frozen=True)
-class WatchedRun:
-    """One installer run, and how often the link was polled and found missing during it."""
+class WatchedRuns:
+    """Installer runs started at once, and how often the link was polled and found missing."""
 
-    completed: subprocess.CompletedProcess[str]
+    completed: tuple[subprocess.CompletedProcess[str], ...]
     polls: int
     misses: int
 
+    @property
+    def logs(self) -> str:
+        return "\n---\n".join(run.stderr for run in self.completed)
 
-def _run_watching_the_link(script: Path, env: dict[str, str], link: Path) -> WatchedRun:
-    """Run the installer while polling `link` for as long as the run lasts."""
-    process = subprocess.Popen(
-        ["bash", str(script)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
-    )
+
+def _watch_runs(script: Path, env: dict[str, str], link: Path, count: int = 1) -> WatchedRuns:
+    """Start `count` installer runs at once and poll `link` until every one has ended."""
+    processes = [
+        subprocess.Popen(
+            ["bash", str(script)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        for _ in range(count)
+    ]
     polls = misses = 0
-    while process.poll() is None:
+    while any(process.poll() is None for process in processes):
         polls += 1
         if not os.path.lexists(link):
             misses += 1
-    stdout, stderr = process.communicate()
-    return WatchedRun(
-        subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr),
-        polls,
-        misses,
-    )
+    completed = []
+    for process in processes:
+        stdout, stderr = process.communicate()
+        completed.append(
+            subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+        )
+    return WatchedRuns(tuple(completed), polls, misses)
 
 
 def _uv_tool_install(env: dict[str, str], *arguments: str) -> None:
@@ -432,10 +450,10 @@ def test_the_installer_replaces_a_stale_release_and_leaves_a_current_one_alone(
     assert "already installed" not in first.stderr, first.stderr
     before = _install_fingerprint(tool_home)
 
-    second = _run_watching_the_link(INSTALLER, env, link)
+    second = _watch_runs(INSTALLER, env, link)
 
-    log = second.completed.stderr
-    assert second.completed.returncode == 0, log
+    log = second.logs
+    assert second.completed[0].returncode == 0, log
     assert second.polls > 0
     assert second.misses == 0, (
         f"{link} was missing on {second.misses} of {second.polls} polls:\n{log}"
@@ -450,28 +468,20 @@ def test_the_installer_replaces_a_stale_release_and_leaves_a_current_one_alone(
 
 
 @pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
-@pytest.mark.parametrize("broken", ["link-missing", "pin-not-constrained"])
-def test_the_installer_repairs_a_selected_release_that_is_not_installed_as_the_rule_says(
-    tmp_path: Path, tool_home: ToolHome, broken: str
+def test_the_installer_reinstalls_a_selected_release_whose_link_is_gone(
+    tmp_path: Path, tool_home: ToolHome
 ) -> None:
-    """The selected release is in place but its link is gone, or it carries no pin: reinstall.
+    """The selected release is in place but its `llmlint` link is not: reinstall it.
 
-    Either is an install the rule did not produce, so leaving it alone would leave a host
-    with no `llmlint` command, or one whose `oneharness` is not the pinned release.
+    Leaving it alone would leave a host with no `llmlint` command.
     """
     pin = pinned_oneharness()
     env = tool_home.environment(_index(tmp_path / "index", _offer(pin)))
     link = tool_home.bin_dir / ENTRY_POINT
-    if broken == "link-missing":
-        _uv_tool_install(
-            env,
-            f"{LLMLINT_DISTRIBUTION}=={ADMISSIBLE}",
-            "--with",
-            f"{ONEHARNESS_DISTRIBUTION}=={pin}",
-        )
-        link.unlink()
-    else:
-        _uv_tool_install(env, f"{LLMLINT_DISTRIBUTION}=={ADMISSIBLE}")
+    _uv_tool_install(
+        env, f"{LLMLINT_DISTRIBUTION}=={ADMISSIBLE}", "--with", f"{ONEHARNESS_DISTRIBUTION}=={pin}"
+    )
+    link.unlink()
 
     completed = _run_installer(INSTALLER, env)
 
@@ -488,3 +498,282 @@ def test_the_installer_repairs_a_selected_release_that_is_not_installed_as_the_r
     assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} {ADMISSIBLE})" in completed.stderr, (
         completed.stderr
     )
+
+
+def _uv_config(directory: Path, pip_settings: str) -> Path:
+    """A `uv.toml` whose `[pip]` table reaches the release query and not the install.
+
+    `uv pip compile` is the installer's release query and `[pip]` settings apply to the
+    `uv pip` interface alone, so real `uv` answers the query as an unreachable index or an
+    answer written elsewhere would, while `uv tool install` still reaches the index.
+    """
+    path = directory / "uv.toml"
+    path.write_text(f"[pip]\n{pip_settings}\n", encoding="utf-8")
+    return path
+
+
+#: Each way the selected release can already be on a host while a run cannot read it as
+#: its own receipt: installed by another repository's installer with no `--with`, a
+#: release query that fails, one that answers nothing — and, for each, runs overlapping.
+#: The two query cases start from an install that does carry the pin, so the failed or
+#: empty query is the only thing a run could read as not current.
+LEFT_ALONE = {
+    "installed-without-the-pin": "",
+    "release-query-fails": "no-index = true",
+    "release-query-answers-nothing": 'output-file = "{directory}/compiled.txt"',
+}
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
+@pytest.mark.parametrize("runs", [1, 4], ids=["one-run", "overlapping-runs"])
+@pytest.mark.parametrize("case", sorted(LEFT_ALONE))
+def test_the_installer_never_touches_an_installed_selected_release(
+    tmp_path: Path, tool_home: ToolHome, case: str, runs: int
+) -> None:
+    """The selected release is installed: no run removes or replaces its link.
+
+    The selected release is installed either the way another repository's installer on
+    the host leaves it — `uv tool install --upgrade llmlint-cli` with no `--with`, so the
+    receipt carries no pin — or, for a release query that fails or answers nothing, with
+    the pin in the receipt as this installer writes it. The link is polled for as long as
+    any run lasts, then every path of the install is compared to what it was. A run that
+    reinstalled would have removed and recreated the link, which a gate in another
+    checkout meets as no `llmlint` command at all.
+    """
+    pin = pinned_oneharness()
+    env = tool_home.environment(_index(tmp_path / "index", _offer(pin)))
+    with_pin: tuple[str, ...] = (
+        ()
+        if case == "installed-without-the-pin"
+        else ("--with", f"{ONEHARNESS_DISTRIBUTION}=={pin}")
+    )
+    _uv_tool_install(env, f"{LLMLINT_DISTRIBUTION}=={ADMISSIBLE}", *with_pin)
+    settings = LEFT_ALONE[case]
+    if settings:
+        env["UV_CONFIG_FILE"] = str(_uv_config(tmp_path, settings.format(directory=tmp_path)))
+    link = tool_home.bin_dir / ENTRY_POINT
+    # Run once first, as a host's llmlint has been: the first run of the fake console
+    # script writes its bytecode cache into the tool environment, which is no reinstall.
+    subprocess.run([str(link), "--version"], capture_output=True, check=True, env=env)
+    before = _install_fingerprint(tool_home)
+
+    watched = _watch_runs(INSTALLER, env, link, runs)
+
+    logs = watched.logs
+    assert all(run.returncode == 0 for run in watched.completed), logs
+    assert watched.polls > 0
+    assert watched.misses == 0, (
+        f"{link} was missing on {watched.misses} of {watched.polls} polls:\n{logs}"
+    )
+    assert _install_fingerprint(tool_home) == before, logs
+    expected = (
+        f"{LLMLINT_DISTRIBUTION} {ADMISSIBLE} under {ONEHARNESS_DISTRIBUTION} {pin} is "
+        "already installed; leaving it as it is"
+        if case == "installed-without-the-pin"
+        else f"failed or answered nothing; leaving the installed {LLMLINT_DISTRIBUTION} "
+        f"{ADMISSIBLE} as it is"
+    )
+    for run in watched.completed:
+        assert expected in run.stderr, run.stderr
+        assert "installing the highest" not in run.stderr, run.stderr
+        assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} {ADMISSIBLE})" in run.stderr, run.stderr
+    if case == "release-query-fails":
+        # uv's own report says why the query failed, so a log names the cause.
+        assert "index lookups were disabled" in logs, logs
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
+def test_overlapping_runs_over_a_stale_release_install_it_once(
+    tmp_path: Path, tool_home: ToolHome
+) -> None:
+    """Runs from several session starts meet a stale install: one installs, the rest wait.
+
+    Each waits on the lock the first takes on the bin directory, then finds the release
+    that run installed current, rather than reinstalling over the link it just made.
+    """
+    pin = pinned_oneharness()
+    env = tool_home.environment(_index(tmp_path / "index", _offer(pin)))
+    _uv_tool_install(
+        env, f"{LLMLINT_DISTRIBUTION}=={FLOOR}", "--with", f"{ONEHARNESS_DISTRIBUTION}=={pin}"
+    )
+
+    watched = _watch_runs(INSTALLER, env, tool_home.bin_dir / ENTRY_POINT, 4)
+
+    logs = watched.logs
+    assert all(run.returncode == 0 for run in watched.completed), logs
+    installs = [run for run in watched.completed if "installing the highest" in run.stderr]
+    assert len(installs) == 1, logs
+    assert logs.count("is already installed; leaving it as it is") == 3, logs
+    installed = installed_llmlint(tool_home.tool_dir)
+    assert installed is not None and installed.version == str(ADMISSIBLE), logs
+    for run in watched.completed:
+        assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} {ADMISSIBLE})" in run.stderr, run.stderr
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
+def test_a_tool_list_uv_cannot_read_leaves_a_runnable_llmlint_alone(
+    tmp_path: Path, tool_home: ToolHome
+) -> None:
+    """uv cannot list its tools, so the installed release is unknown: touch nothing.
+
+    `UV_TOOL_DIR` naming a file is a tool directory uv cannot list, while the link still
+    runs the release installed before.
+    """
+    pin = pinned_oneharness()
+    env = tool_home.environment(_index(tmp_path / "index", _offer(pin)))
+    _uv_tool_install(env, f"{LLMLINT_DISTRIBUTION}=={ADMISSIBLE}")
+    link = tool_home.bin_dir / ENTRY_POINT
+    subprocess.run([str(link), "--version"], capture_output=True, check=True, env=env)
+    before = _install_fingerprint(tool_home)
+    unlistable = tmp_path / "not-a-tool-dir"
+    unlistable.write_text("", encoding="utf-8")
+    env["UV_TOOL_DIR"] = str(unlistable)
+
+    watched = _watch_runs(INSTALLER, env, link)
+
+    log = watched.logs
+    assert watched.completed[0].returncode == 0, log
+    assert watched.misses == 0, log
+    assert _install_fingerprint(tool_home) == before, log
+    assert (
+        "uv could not list its tools, so the installed llmlint's release is unknown; "
+        "leaving it as it is"
+    ) in log, log
+    assert "installing the highest" not in log, log
+    assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} {ADMISSIBLE})" in log, log
+
+
+def _path_without_flock(directory: Path, home: ToolHome) -> str:
+    """A PATH holding `uv` and every command the installer runs, and no `flock`."""
+    directory.mkdir()
+    for command in ("bash", "dirname", "mkdir", "sed", "tr"):
+        found = shutil.which(command, path="/usr/bin:/bin")
+        assert found is not None, command
+        (directory / command).symlink_to(found)
+    return f"{home.path.split(':')[0]}:{directory}"
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
+def test_a_host_without_flock_still_installs_the_selected_release(
+    tmp_path: Path, tool_home: ToolHome
+) -> None:
+    """No `flock` on PATH, as on a stock macOS: the run says so and installs unserialized."""
+    pin = pinned_oneharness()
+    env = tool_home.environment(_index(tmp_path / "index", _offer(pin)))
+    env["PATH"] = _path_without_flock(tmp_path / "no-flock", tool_home)
+    _uv_tool_install(env, f"{LLMLINT_DISTRIBUTION}=={FLOOR}")
+
+    completed = _run_installer(INSTALLER, env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "flock not found; going on unserialized" in completed.stderr, completed.stderr
+    assert (
+        f"{LLMLINT_DISTRIBUTION} {FLOOR} is installed and the pin selects {ADMISSIBLE}"
+    ) in completed.stderr, completed.stderr
+    installed = installed_llmlint(tool_home.tool_dir)
+    assert installed is not None and installed.version == str(ADMISSIBLE), completed.stderr
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
+def test_a_lock_flock_refuses_is_reported_and_the_run_still_installs(
+    tmp_path: Path, tool_home: ToolHome
+) -> None:
+    """`flock` refuses the lock, as on a filesystem without locks: say so, install anyway.
+
+    The one stand-in is `flock` itself, the util-linux command at the installer's
+    boundary, answering as `flock` does when the kernel refuses the lock: a non-zero exit.
+    No real filesystem a journey can make refuses a lock on a directory just opened.
+    """
+    pin = pinned_oneharness()
+    env = tool_home.environment(_index(tmp_path / "index", _offer(pin)))
+    refusing = tmp_path / "refusing-flock"
+    refusing.mkdir()
+    flock = refusing / "flock"
+    flock.write_text(
+        "#!/bin/sh\necho 'flock: failed to get lock: Operation not supported' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    flock.chmod(0o755)
+    env["PATH"] = f"{refusing}:{env['PATH']}"
+    _uv_tool_install(env, f"{LLMLINT_DISTRIBUTION}=={FLOOR}")
+
+    completed = _run_installer(INSTALLER, env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "flock: failed to get lock" in completed.stderr, completed.stderr
+    assert (
+        f"flock could not lock {tool_home.bin_dir}; going on unserialized"
+    ) in completed.stderr, completed.stderr
+    installed = installed_llmlint(tool_home.tool_dir)
+    assert installed is not None and installed.version == str(ADMISSIBLE), completed.stderr
+    assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} {ADMISSIBLE})" in completed.stderr, (
+        completed.stderr
+    )
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
+@pytest.mark.parametrize("bin_dir_state", ["cannot-be-created", "cannot-be-opened"])
+def test_a_bin_dir_that_cannot_be_locked_is_reported_and_the_run_goes_on(
+    tmp_path: Path, tool_home: ToolHome, bin_dir_state: str
+) -> None:
+    """The bin directory cannot be made, or cannot be opened to lock: say so, go on.
+
+    Made under a file, it can be neither locked nor linked into, so uv's own failure is
+    what the log goes on to report; opened, it needs read permission, which a directory
+    uv can still link into may lack.
+    """
+    pin = pinned_oneharness()
+    env = tool_home.environment(_index(tmp_path / "index", _offer(pin)))
+    if bin_dir_state == "cannot-be-created":
+        parent = tmp_path / "a-file"
+        parent.write_text("", encoding="utf-8")
+        bin_dir = parent / "bin"
+    else:
+        bin_dir = tool_home.bin_dir
+        bin_dir.chmod(0o300)
+    env["UV_TOOL_BIN_DIR"] = str(bin_dir)
+
+    try:
+        completed = _run_installer(INSTALLER, env)
+    finally:
+        tool_home.bin_dir.chmod(0o755)
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"cannot open {bin_dir} to lock it; going on unserialized" in completed.stderr, (
+        completed.stderr
+    )
+    assert "installing the highest" in completed.stderr, completed.stderr
+    if bin_dir_state == "cannot-be-created":
+        assert "leaving the installed llmlint as it is" in completed.stderr, completed.stderr
+    else:
+        installed = installed_llmlint(tool_home.tool_dir)
+        assert installed is not None and installed.version == str(ADMISSIBLE), completed.stderr
+        assert (bin_dir / ENTRY_POINT).exists(), completed.stderr
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
+def test_an_llmlint_uv_did_not_install_is_handed_to_uv_which_keeps_it(
+    tmp_path: Path, tool_home: ToolHome
+) -> None:
+    """A runnable `llmlint` no uv tool install owns is not current, and uv refuses it.
+
+    The installer asks uv to install, and uv will not overwrite an executable it did
+    not link, so the command already there is what the host keeps, and the log says so.
+    """
+    pin = pinned_oneharness()
+    env = tool_home.environment(_index(tmp_path / "index", _offer(pin)))
+    link = tool_home.bin_dir / ENTRY_POINT
+    foreign = "#!/bin/sh\necho 'llmlint foreign'\n"
+    link.write_text(foreign, encoding="utf-8")
+    link.chmod(0o755)
+
+    completed = _run_installer(INSTALLER, env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"{link} is not a uv tool install of {LLMLINT_DISTRIBUTION}" in completed.stderr, (
+        completed.stderr
+    )
+    assert "Executable already exists" in completed.stderr, completed.stderr
+    assert "leaving the installed llmlint as it is" in completed.stderr, completed.stderr
+    assert link.read_text(encoding="utf-8") == foreign
+    assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} foreign)" in completed.stderr, completed.stderr

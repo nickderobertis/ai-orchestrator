@@ -656,6 +656,32 @@ def test_a_shape_this_check_does_not_act_on_is_left_to_the_engine(envelope: obje
     assert refusal(envelope, ScriptedJudge()) is None
 
 
+@pytest.mark.parametrize(
+    "changes",
+    (
+        ["add it"],
+        [{"op": "note", "node": {"id": "work", "task": "x"}}],
+        [{"op": "add", "node": "work-2"}],
+        [{"op": "amend", "node": {"id": "work", "amendment": "   "}}],
+        [{"op": "amend", "node": {"id": 7, "amendment": SOUND}}],
+        [{"op": "amend", "node": {"id": "work"}}],
+    ),
+)
+def test_a_change_the_engine_document_states_in_no_shape_read_here_is_left_to_it(
+    changes: list[object],
+) -> None:
+    """An entry of the engine's `changes` this check cannot read is passed over, not guessed.
+
+    The engine writes the document, so an entry that is not an op mapping, an op outside
+    the ones carrying prose, and an amendment with no node name or no text all compose
+    nothing a judge would read; the engine refuses the blank amendment itself.
+    """
+    document = {"goal": "close the coverage gap", "changes": changes, "plan": {"tasks": []}}
+
+    assert reviewables(document) == []
+    assert refusal(document, ScriptedJudge()) is None
+
+
 def test_the_first_refused_resulting_task_is_the_one_reported() -> None:
     """The bus refuses the whole envelope, so one reason is the whole answer."""
     said = refusal(
@@ -1108,3 +1134,18 @@ def test_an_envelope_stating_no_node_asks_onevcs_nothing(
     assert structural_refusal(envelope) == []
     assert structural_refusal("not an envelope") == []
     assert not asked.exists(), asked.read_text(encoding="utf-8")
+
+
+def test_a_stated_node_with_no_plan_beside_it_is_asked_about_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A document carrying no `plan` lends a stated node no dependency to be read with.
+
+    The same consumer the plan-carrying journey above refuses is asked about on its own,
+    so its producer is unknown here and no release rule about it can fire.
+    """
+    _releasing_host(tmp_path, monkeypatch)
+    document = _envelope({"op": "add", "node": _consumer_node()})
+    del document["plan"]
+
+    assert structural_refusal(document) == []
