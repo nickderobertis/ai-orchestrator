@@ -41,7 +41,7 @@ from typing import Literal, NamedTuple
 from conftest import git
 from waits import timeout as e2e_timeout
 
-from orchestrator.project_store import hosted_origin
+from orchestrator.record_shapes import hosted_origin
 from orchestrator.root import REPO_ROOT
 
 #: The scratch identity's policy: merged locally and explicitly private because this

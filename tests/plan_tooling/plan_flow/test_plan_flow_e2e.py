@@ -77,7 +77,7 @@ from nx_workspace import (
     copy_working_tree,
     share_this_checkouts_install,
 )
-from project_fixtures import helper, no_budgets
+from project_fixtures import helper, no_budgets, store_written
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
@@ -91,7 +91,6 @@ from orchestrator import (
     spike_plan,
 )
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import render_plan_project
 from orchestrator.root import REPO_ROOT
 
 
@@ -272,7 +271,7 @@ class StandInNode(TypedDict):
     check-plan` would end the flow at that refusal rather than at anything under test.
 
     `repo` is here because the plan this journey authors deliberately spans two
-    repositories: `render_plan_project` turns a `host/owner/name` value into the task
+    repositories: the store's writer turns a `host/owner/name` value into the task
     record's own `repositories`, which is what makes the stored plan a multi-repository
     one rather than a single-repository one with two nodes.
     """
@@ -287,7 +286,7 @@ class StandInNode(TypedDict):
 class StandInPlan(TypedDict):
     """The plan document the planner stand-in writes, stated rather than left open.
 
-    `render_plan_project` takes any mapping and copies unknown keys through, so an open
+    `store_written` takes any mapping and copies unknown keys through, so an open
     dict would compile — but this is a document this journey composes in full, and the
     fields it has to get right (a `schema_version` the loader accepts, and tasks carrying
     the fields the store renders) are exactly what a name for it makes checkable.
@@ -337,14 +336,17 @@ class Planned(NamedTuple):
     environment: dict[str, str]
     #: What the flow left in the temporary directory it ran with, by name.
     left_in_tmpdir: list[str]
+    #: The engine's `template check plan-task --item` of each task the flow's tail created
+    #: in its design project, by qualified id, taken before the fixture ends the runs.
+    design_tasks_checked: dict[str, subprocess.CompletedProcess[str]]
 
 
 def _plan_records(stored: Stored) -> dict[str, str]:
     """The files a planner authoring ``stored``'s plan into the fixture root would write.
 
-    Rendered through this repository's own `render_plan_project`, so the stand-in leaves
-    the same records `just plan`'s own writer leaves and the store reads them the same way
-    — rather than a hand-written shape only this journey would ever produce.
+    Written by the pinned store through `store_written`, so the stand-in leaves the
+    records the store's own `task create` leaves — rather than a hand-written shape only
+    this journey would ever produce.
     """
     plan: StandInPlan = {
         "schema_version": 3,
@@ -390,7 +392,7 @@ def _plan_records(stored: Stored) -> dict[str, str]:
     }
     return {
         str(plan_fixture_source.root() / relative): content
-        for relative, content in render_plan_project(plan, native_id=stored.project).items()
+        for relative, content in store_written(plan, native_id=stored.project).items()
     }
 
 
@@ -636,6 +638,51 @@ def _copy_link(
     return linked
 
 
+def _design_tasks_checked(
+    environment: dict[str, str],
+) -> dict[str, subprocess.CompletedProcess[str]]:
+    """The engine's verdict on each task the flow's tail created in its design project.
+
+    The tasks are listed through the pinned store, which names them, and each is put to
+    `template check plan-task --item` through the wrapper every verb runs under. The
+    planner's own node is not among them: it is the manager's hand-written brief, launched
+    with `--require-rendered false` by design, in the planner run's project.
+    """
+    listed = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "task",
+            "list",
+            "--source",
+            AUTHORING_SOURCE,
+            "--project",
+            DESIGN_RUN,
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert listed.returncode == 0, f"the store could not list the design project:\n{listed.stderr}"
+    ids = [str(record["id"]) for record in json.loads(listed.stdout)["items"]]
+    return {
+        task: subprocess.run(
+            [str(REPO_ROOT / "scripts" / "onepipeline.sh"), "template", "check", "plan-task"]
+            + ["--item", task],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(120),
+            check=False,
+        )
+        for task in ids
+    }
+
+
 @pytest.fixture(scope="module")
 def planned(
     tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str, module_tmpdir: Path
@@ -693,6 +740,7 @@ def planned(
             f"the launch that writes the document"
         )
         assert turns.is_file(), f"the flow reached no harness turn, so {turns} is absent"
+        design_tasks_checked = _design_tasks_checked(environment)
         return Planned(
             launch=launch,
             # `cast` rather than a validating read: `onepipeline` owns the journal's
@@ -714,6 +762,7 @@ def planned(
             destination=destination,
             environment=environment,
             left_in_tmpdir=sorted(path.name for path in module_tmpdir.iterdir()),
+            design_tasks_checked=design_tasks_checked,
         )
     finally:
         for ended in (RUN, DESIGN_RUN):
@@ -754,6 +803,11 @@ def _timestamps(journal: list[JournalEvent], kind: str, node: str) -> list[datet
         for event in journal
         if event.get("kind") == kind and event.get("labels", {}).get(NODE_LABEL) == node
     ]
+
+
+def _task_record(title: str) -> str:
+    """Where a destination's store files a task: under the slug of its title."""
+    return f"tasks/{re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')}.md"
 
 
 @pytest.mark.xdist_group("plan-flow")
@@ -827,6 +881,22 @@ def test_the_tail_runs_under_a_run_of_its_own_whose_channel_the_launch_names(
 
 
 @pytest.mark.xdist_group("plan-flow")
+@pytest.mark.xdist_group("plan-flow")
+def test_the_engine_accepts_every_task_the_flow_created_as_its_template_rendering(
+    planned: Planned,
+) -> None:
+    """Each task `just plan` creates through the template is one the engine's check accepts.
+
+    The flow's rendered task is the design document's writer, which its tail creates; the
+    planner's node is the hand-written brief and is not a rendering by design.
+    """
+    assert planned.design_tasks_checked, "the flow's tail created no task to check"
+    for task, checked in planned.design_tasks_checked.items():
+        assert checked.returncode == 0 and ": ok" in checked.stdout, (
+            f"{task}: {checked.stdout}{checked.stderr}"
+        )
+
+
 def test_the_design_doc_dispatch_is_given_the_plan_the_brief_named(planned: Planned) -> None:
     """The one thing that dispatch cannot derive reaches it in its own effective prompt.
 
@@ -995,8 +1065,10 @@ def test_the_flow_leaves_the_plan_and_its_one_document_on_the_destination_it_was
     assert landed == [
         f"documents/{planned.stored.document}.md",
         f"projects/{project}.md",
-        f"tasks/{project}/decide-the-cursor.md",
-        f"tasks/{project}/read-the-cursor.md",
+        *sorted(
+            _task_record(title)
+            for title in (planned.stored.task_title, planned.stored.second_task_title)
+        ),
     ], f"the flow left {landed} on the destination"
 
 
@@ -1270,8 +1342,10 @@ def test_a_flow_that_names_no_destination_copies_into_the_board_this_repository_
     assert landed == [
         f"documents/{default_board.stored.document}.md",
         f"projects/{project}.md",
-        f"tasks/{project}/decide-the-cursor.md",
-        f"tasks/{project}/read-the-cursor.md",
+        *sorted(
+            _task_record(title)
+            for title in (default_board.stored.task_title, default_board.stored.second_task_title)
+        ),
     ], f"the flow left {landed} on the board it copies into when it is told none"
 
 

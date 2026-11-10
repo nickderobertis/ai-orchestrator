@@ -26,7 +26,7 @@ import plan_root_variable
 from project_fixtures import budgeted, designed, no_budgets
 
 from orchestrator import npm_installs
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -49,8 +49,8 @@ WRAPPER_SCRIPTS = (
     # API is handed is derived the way a real invocation derives it rather than by a
     # variable this suite happened to inherit.
     "launcher-session.sh",
-    # `just orchestrate` adds this host's defaults through the first, and names the second
-    # as both run-end hooks, refusing a checkout where it could not run.
+    # `just orchestrate` adds this host's graph defaults through the first; the launch
+    # config names the second as both run-end hooks.
     "orchestrate.sh",
     "run-ended.sh",
     # `just plan` writes its one-node plan through this one, and refuses to launch at
@@ -94,9 +94,9 @@ WRAPPER_SCRIPTS = (
     # checkout whose `templates/` carries no registration.
     "template-env.sh",
     # The one definition of which resolvers establish a dispatch's environment, which
-    # every launch runs at driver start and names — as the hook beside it, by absolute
-    # path — for the engine to re-run before each node-scope dispatch. A checkout
-    # without either is refused before it delegates.
+    # every launch runs at driver start and its launch config names — as the hook beside
+    # it — for the engine to re-run before each node-scope dispatch. A checkout without
+    # either is refused before it delegates.
     "dispatch-env.sh",
     "dispatch-env-hook.sh",
     # The bound every waiter for the merge-queue lock queues under, derived from how long
@@ -151,26 +151,19 @@ ENGINE = f"{CHECKOUT}/node_modules/{npm_installs.ENGINE.relative_to(npm_installs
 #: And the read API `scripts/telemetry-server.sh` execs, from the same install.
 READ_API = f"{CHECKOUT}/node_modules/{npm_installs.READ_API.relative_to(npm_installs.NODE_MODULES)}"
 
-#: The bus configuration `scripts/onepipeline.sh` hands every launch that names none,
-#: immediately after `start`, as the copied checkout's own absolute path.
+#: The bus configuration `scripts/onepipeline.sh` hands every flow that names none,
+#: immediately after `flow run`, as the copied checkout's own absolute path.
 BUS_CONFIG = f"--bus-config {CHECKOUT}/config/onemessagebus.yaml"
-#: The dispatch-env hook the same wrapper hands every launch that names none, after the
-#: bus configuration, as the copied checkout's own absolute path: the engine spawns it
-#: from the launch record's directory, so a relative one would name nothing there.
-DISPATCH_ENV_HOOK = f"--dispatch-env-hook {CHECKOUT}/scripts/dispatch-env-hook.sh"
-#: The pool-maintenance schedule the same wrapper hands every launch that names none,
-#: after the hook, as the copied checkout's own absolute path for the same reason.
-MAINTENANCE_CONFIG = f"--maintenance-config {CHECKOUT}/config/onepipeline.maintenance.yaml"
-#: All three, in the order the wrapper renders them, which every launch a caller named
-#: none of carries. Named on every `start` without asking the engine whether it takes
-#: them: every engine `config/onepipeline.version` admits does.
-DEFAULTS = f"{BUS_CONFIG} {DISPATCH_ENV_HOOK} {MAINTENANCE_CONFIG}"
-#: The two flags `scripts/onepipeline.sh` adds after the bus configuration, and the
-#: default it renders for each.
-WRAPPER_DEFAULTS = {
-    "--dispatch-env-hook": DISPATCH_ENV_HOOK,
-    "--maintenance-config": MAINTENANCE_CONFIG,
-}
+#: The launch config the same wrapper names on every `start` that names none, immediately
+#: after the verb, as the copied checkout's own absolute path; every launch setting it
+#: carries is the document's, so no flag for any of them is rendered.
+LAUNCH_CONFIG = f"--launch-config {CHECKOUT}/config/onepipeline.launch.yaml"
+#: What every launch a caller named no launch config for carries ahead of what was typed.
+DEFAULTS = LAUNCH_CONFIG
+#: The launch settings every launcher but `just orchestrate` names blank, because the
+#: launch config states `just orchestrate`'s run-end hooks and drafting graph and a blank
+#: flag beats the document's key.
+BLANKS = "--success-hook= --failure-hook= --pr-author-graph="
 #: How the wrapper asks the installed engine which release it is, before every `start`
 #: and `adopt`: the second half of the one line it prints on stderr naming the engine
 #: `config/onepipeline.version` requests and the one about to run (ai-orchestrator#1217).

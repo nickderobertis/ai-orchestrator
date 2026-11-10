@@ -1,7 +1,7 @@
 """The design-document graph budgets' measurement, `design_doc_dag.py`, driven through real tools.
 
-Each measurement below loads a fixture into a scratch `local-md` store with this repository's
-record renderer, reads it through the pinned plan store's real `project graph`, and draws it
+Each measurement below loads a fixture into a scratch `local-md` store through the store's own
+`task create`, reads it through the pinned plan store's real `project graph`, and draws it
 with the locked mermaid-cli and `just render-diagram`, exactly as the budgets do; only the
 fixture is smaller — four tasks in three units — so a run costs a second or two rather than
 the budgets' four large plans. The refusals are each driven by the input that causes them:

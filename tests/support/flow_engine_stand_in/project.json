@@ -12,6 +12,7 @@
       "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/config/onepipeline.launch.yaml",
       "{workspaceRoot}/scripts/launcher-session.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/templates/templates.yaml",

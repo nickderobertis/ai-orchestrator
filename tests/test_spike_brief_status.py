@@ -67,3 +67,28 @@ def test_receipt_run_ids_and_roots_follow_the_existing_planning_contract(
     assert spike_brief.runs_root() == Path(spike_flow.DEFAULT_RUNS_ROOT)
     monkeypatch.setenv(spike_flow.RUNS_ROOT_ENV, str(tmp_path))
     assert spike_brief.runs_root() == tmp_path
+
+
+def test_delivery_telemetry_is_replaced_whole_and_leaves_no_stage(tmp_path: Path) -> None:
+    """A rewrite reads back as the new telemetry, and nothing but the file is left beside it."""
+    path = tmp_path / "runs" / spike_brief.DELIVERY_HISTORY
+    first: spike_brief.Delivery = {"schema_version": 1, "eligible": "2026-01-01T00:00:00Z"}
+    second: spike_brief.Delivery = {**first, "writer_finished": "2026-01-01T00:01:00Z"}
+
+    spike_brief.write_delivery(path, first)
+    spike_brief.write_delivery(path, second)
+
+    assert spike_brief.read_delivery(path) == second
+    assert [one.name for one in path.parent.iterdir()] == [path.name]
+
+
+def test_delivery_telemetry_that_cannot_be_put_in_place_leaves_no_stage(tmp_path: Path) -> None:
+    """A destination a rename cannot replace refuses the write, and its stage is taken back."""
+    path = tmp_path / spike_brief.DELIVERY_HISTORY
+    path.mkdir()
+
+    with pytest.raises(OSError):
+        spike_brief.write_delivery(path, {"schema_version": 1, "eligible": "2026-01-01T00:00:00Z"})
+
+    assert [one.name for one in tmp_path.iterdir()] == [path.name]
+    assert path.is_dir()

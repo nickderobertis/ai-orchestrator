@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The planner channel's envelope hook, as config/onemessagebus.yaml names it.
+# The engine's envelope reviewer, as config/onepipeline.launch.yaml names it.
 #
-# `orchestrator/envelope_review.py` is the hook; this only gives it the environment
+# `orchestrator/envelope_review.py` is the reviewer; this only gives it the environment
 # its judged turn needs. That turn is one `oneharness run` under a config whose identity
 # chain names a portable indirection per alternate identity — CODEX_HOME for the second
 # Codex identity, CLAUDE_CONFIG_DIR for each alternate Claude subscription — which
@@ -11,11 +11,11 @@
 # reviewer, so an unauthenticated identity falls through the chain rather than leaving
 # every envelope unjudged.
 #
-# The bus reads this command's answer as a hook's: exit 0 printing the envelope back
+# The engine reads this command's answer as a hook's: exit 0 printing the document back
 # passes it (keep), 1 refuses with stderr as the reason, and anything else is unjudged,
-# which the bus never sends. The module prints the envelope on a pass; this wrapper
-# prints nothing of its own on stdout, which is the envelope's. The refusals below exit
-# 2 for that reason: a checkout this hook cannot read itself out of is no verdict on the
+# which the engine never applies. The module prints the document on a pass; this wrapper
+# prints nothing of its own on stdout, which is the document's. The refusals below exit 2
+# for that reason: a checkout this reviewer cannot read itself out of is no verdict on the
 # envelope.
 set -euo pipefail
 # Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
@@ -23,7 +23,7 @@ export UV_NO_SYNC=1
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || {
-    echo "envelope-review: could not resolve the checkout this validator was run from; run it by its path inside a checkout" >&2
+    echo "envelope-review: could not resolve the checkout this reviewer was run from; run it by its path inside a checkout" >&2
     exit 2
 }
 
@@ -38,7 +38,7 @@ resolve_claude_alt_config_dir "envelope-review" || exit 2
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when the checkout above a directory this script has just entered stops being enterable mid-run, since entering that directory already required traversing it; a journey producing that would have to remove the checkout it is running from.
 cd -- "${script_dir%/scripts}" || {
-    echo "envelope-review: could not enter the checkout at ${script_dir%/scripts}; run the validator by its path inside a readable checkout, then send the envelope again" >&2
+    echo "envelope-review: could not enter the checkout at ${script_dir%/scripts}; run the reviewer by its path inside a readable checkout, then send the envelope again" >&2
     exit 2
 }
 exec uv run python -m orchestrator.envelope_review "$@"

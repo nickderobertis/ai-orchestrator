@@ -2279,11 +2279,6 @@ RUN_PATHS_JOIN = (
 DEFAULT_RUNS_DIR = re.compile(r'pub const DEFAULT_RUNS_DIR: &(?:\'static )?str = "([^"]+)";')
 RUNS_DIR_ENV = re.compile(r'pub const RUNS_DIR_ENV: &(?:\'static )?str = "([^"]+)";')
 
-#: How `sys::process_start_token` encodes what it read out of `/proc/<pid>/stat`. The
-#: prefix is captured rather than written here, because this gate exists to say the
-#: draft strips the prefix the engine actually stamps.
-START_TOKEN_ENCODING = re.compile(r'const PROC_STAT_TOKEN: &str = "([^"{]*)";')
-
 #: One field of a serde-derived record, with the attributes above it — which is where a
 #: `rename` moves its wire name and a `default` says the engine can read a record that
 #: omits it. Both are what part a field this repository must write from one it may.
@@ -2407,9 +2402,9 @@ def _declared_fields(
     return tuple(fields)
 
 
-# `orchestrator/follow_up_drafts.py` resolves the node a draft names out of the engine's
-# dispatch registry, so every name it reads there is a copy of the engine's; the gates
-# below hold each one to the installed engine's own declaration.
+# `orchestrator/follow_up_drafts.py` reads a run's public id through the engine, under the
+# runs root the engine resolves; the gate below holds that resolution to the installed
+# engine's own declaration.
 
 
 def _joined_under_a_run_root(accessor: str) -> str:
@@ -2429,10 +2424,10 @@ def _joined_under_a_run_root(accessor: str) -> str:
 
 
 def test_a_draft_looks_under_the_runs_root_the_engine_writes() -> None:
-    """The store a draft resolves its node from is `onepipeline`'s, resolved its way.
+    """The store a draft asks for its run's public id is `onepipeline`'s, resolved its way.
 
-    A runs root read some other way is an answer about a different store: no dispatch is
-    found and every draft names its node `unresolved` while the pointer still renders.
+    A runs root read some other way is an answer about a different store: the run is not
+    found there and its drafts are keyed by its engine id rather than its public one.
     """
     ledger = _source(ONEPIPELINE, "ledger.rs")
     for pattern, copied, what in (
@@ -2449,53 +2444,6 @@ def test_a_draft_looks_under_the_runs_root_the_engine_writes() -> None:
             f"orchestrator/follow_up_drafts.py resolves {what} as {copied!r} while "
             f"onepipeline {ONEPIPELINE.ref} declares {declared.group(1)!r}"
         )
-
-
-def test_a_draft_reads_the_dispatch_registry_and_record_the_engine_writes() -> None:
-    """The registry is where the engine puts dispatches, and each field read is declared.
-
-    A renamed directory or field fails nothing: the entry stops naming a dispatch and
-    every draft names its node `unresolved`.
-    """
-    joined = _joined_under_a_run_root("dispatches")
-    assert joined == follow_up_drafts.DISPATCH_REGISTRY, (
-        f"orchestrator/follow_up_drafts.py looks for {follow_up_drafts.DISPATCH_REGISTRY!r} "
-        f"under a run root while onepipeline {ONEPIPELINE.ref} writes "
-        f"`RunPaths::dispatches` as {joined!r}"
-    )
-    declared = {
-        field.name for field in _declared_fields(ONEPIPELINE, "ledger.rs", "DispatchRecord")
-    }
-    for read in (
-        follow_up_drafts.DISPATCH_NODE,
-        follow_up_drafts.DISPATCH_PID,
-        follow_up_drafts.DISPATCH_STARTED,
-    ):
-        assert read in declared, (
-            f"orchestrator/follow_up_drafts.py reads {read!r} off a dispatch registry "
-            f"entry while onepipeline {ONEPIPELINE.ref}'s `DispatchRecord` declares "
-            f"{sorted(declared)}"
-        )
-
-
-def test_a_draft_strips_the_start_token_the_engine_stamps() -> None:
-    """The stamp that tells a live dispatch from a reused pid is `onepipeline`'s spelling.
-
-    A draft accepts a pid match only when the recorded start time is the live process's
-    own, so a re-spelled prefix does not fail either: every draft silently names its node
-    `unresolved`.
-    """
-    declared = START_TOKEN_ENCODING.search(_source(ONEPIPELINE, "sys.rs"))
-    assert declared is not None, (
-        f"onepipeline {ONEPIPELINE.ref} no longer encodes a process's start token from "
-        "`/proc/<pid>/stat` where this gate reads it, so orchestrator/follow_up_drafts.py's "
-        "copy of that prefix cannot be reconciled; re-read `sys.rs` and correct both"
-    )
-    assert declared.group(1) == follow_up_drafts.PROC_STAT_START, (
-        f"orchestrator/follow_up_drafts.py strips {follow_up_drafts.PROC_STAT_START!r} "
-        f"from a recorded start time while onepipeline {ONEPIPELINE.ref} stamps "
-        f"{declared.group(1)!r}"
-    )
 
 
 def _journalled_payloads(root: Path, kind: str) -> list[dict[str, object]]:
@@ -3655,9 +3603,6 @@ AMENDMENT_SHAPING = {
     ),
 }
 
-#: A `Command` variant with its fields, doc comments and attributes included, so a field a
-#: variant gained or lost is read from the declaration rather than assumed.
-OPERATION_VARIANT = re.compile(r"\n    (?P<name>[A-Z]\w*) \{(?P<body>.*?)\n    \},", re.DOTALL)
 #: A top-level struct's fields, at the indentation a struct body declares them.
 STRUCT_FIELD = re.compile(r"^\s{4}pub (?P<field>[a-z_]\w*): ", re.MULTILINE)
 
@@ -3666,23 +3611,16 @@ STRUCT_FIELD = re.compile(r"^\s{4}pub (?P<field>[a-z_]\w*): ", re.MULTILINE)
 # this into the uncached `orchestrator:test-checkouts` for the reason the checkpoint gate
 # above states: its subject is the adopted engine's own source, outside this workspace.
 def test_the_node_a_live_edit_states_is_read_with_the_fields_the_engine_declares() -> None:
-    """`orchestrator/envelope_review.py` reads a node an `add` or a `retry` states only when
-    every field it carries is one the engine's `Node` accepts, renders the node's amendment
-    from the field the engine renders one from, and passes over a node declaring that it
-    dispatches nobody by the field the engine settles that on. Each is a restatement of
-    `Node` at the pinned release: a field the engine gained would have the preflight pass
-    over a node the engine commits, and a renamed amendment or no-dispatch field would have
-    it judge text no dispatch reads, or refuse a bookmark nobody works.
+    """`orchestrator/envelope_review.py` renders a node's amendment from the field the
+    engine renders one from, and passes over a node declaring that it dispatches nobody by
+    the field the engine settles that on. Each is a restatement of `Node` at the pinned
+    release: a renamed amendment or no-dispatch field would have it judge text no dispatch
+    reads, or refuse a bookmark nobody works.
     """
     from orchestrator import envelope_review
 
     node_struct = _source(ONEPIPELINE, "plan.rs").split("pub struct Node {", 1)[1]
     node_fields = set(STRUCT_FIELD.findall(node_struct.split("\n}\n", 1)[0]))
-    assert node_fields == envelope_review.NODE_FIELDS, (
-        f"onepipeline {ONEPIPELINE.ref}'s Node fields changed, so the live structural "
-        f"preflight's command validation drifted: engine={sorted(node_fields)}, "
-        f"check={sorted(envelope_review.NODE_FIELDS)}"
-    )
     assert "assets_from" in node_fields
     for document in (MANAGER, ORCHESTRATION):
         assert "`assets_from`" in document.read_text(encoding="utf-8"), document
@@ -3691,6 +3629,34 @@ def test_the_node_a_live_edit_states_is_read_with_the_fields_the_engine_declares
             f"onepipeline {ONEPIPELINE.ref}'s `Node` no longer carries the field "
             f"`orchestrator.envelope_review.{name}` names; it declares {sorted(node_fields)}"
         )
+
+
+#: The envelope reviewer's declared contract, closing onepipeline's
+#: `docs/contract-divergences.md` entry 45: which ops the engine lists as the document's
+#: changes, and the prefix it reads a declared objection from.
+ENVELOPE_REVIEWER_CONTRACT = re.compile(
+    r'"objection_prefix": (?P<prefix>"[^"]*"),\s*'
+    r'"ops_listed_as_changes": (?P<ops>\[[^\]]*\])'
+)
+
+
+def test_the_ops_the_envelope_reviewer_reads_are_the_ones_the_engine_offers_it() -> None:
+    """`orchestrator/envelope_review.py` reads every op the engine lists among a document's
+    `changes`, and declares its objection on the prefix the engine reads one from. A release
+    that offered another op would put prose in front of a dispatch nothing here reads, and
+    one that moved the prefix would refuse an envelope naming no node.
+    """
+    from orchestrator import envelope_review
+
+    declared = ENVELOPE_REVIEWER_CONTRACT.search(
+        _source(ONEPIPELINE_DOCS, "contract-divergences.md")
+    )
+    assert declared is not None, (
+        f"onepipeline {ONEPIPELINE_DOCS.ref}'s contract-divergences.md no longer declares the "
+        "envelope reviewer's changes and objection prefix; re-read entry 45"
+    )
+    assert set(json.loads(declared["ops"])) == envelope_review.CHANGE_OPS, declared["ops"]
+    assert json.loads(declared["prefix"]) == envelope_review.OBJECTION_PREFIX, declared["prefix"]
 
 
 #: A struct's fields including a raw identifier — `pub r#match: RuleMatch` — spelled
@@ -3852,161 +3818,6 @@ def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it
         f"onepipeline {ONEPIPELINE.ref}'s `amended` no longer places the block the way "
         "`orchestrator.envelope_review.amended` restates; re-read it and correct the "
         "restatement"
-    )
-
-
-#: Which `add` and `retry` the engine refuses for their target, and how it moves a node's
-#: `deps`, `consumes` and `delivers` under the three edits that move edges — each at the
-#: declaration in `src/edits.rs` that `orchestrator.envelope_review.stated_graph` restates.
-EDGE_FOLDS = {
-    "an add of an id the graph already holds is refused": re.compile(
-        r"fn compile_add\(graph: &mut Graph, node: &Node\) -> Result<Vec<Operation>> \{\s*"
-        r"if graph\.contains\(&node\.id\) \{\s*"
-        r"return Err\(refuse\(format!\(\"add: node '\{\}' already exists\""
-    ),
-    "a retry of a node the graph does not hold is refused": re.compile(
-        r"let Some\(target\) = graph\.get\(id\)\.cloned\(\) else \{\s*"
-        r"return Err\(refuse\(format!\(\"retry: no node '\{id\}'\"\)\)\);"
-    ),
-    "a retry onto a replacement id the graph already holds is refused": re.compile(
-        r"if graph\.contains\(&replacement\.id\) \{\s*"
-        r"return Err\(refuse\(format!\(\s*\"retry: replacement id '\{\}' must be new\""
-    ),
-    "a retry's replacement stating no deps inherits the superseded node's deps and consumes": (
-        re.compile(
-            r"if replacement\.deps\.is_empty\(\) \{\s*"
-            r"replacement\.deps = target\.deps\.clone\(\);.*?"
-            r"replacement\.consumes\.clone_from\(&target\.consumes\);",
-            re.DOTALL,
-        )
-    ),
-    "a retry's replacement stating no delivers inherits the superseded node's delivers": (
-        re.compile(
-            r"if replacement\.delivers\.is_empty\(\) \{\s*"
-            r"replacement\.delivers\.clone_from\(&target\.delivers\);\s*\}",
-        )
-    ),
-    "a retry redirects each dependent onto the replacement, its consumes entry rekeyed": (
-        re.compile(
-            r"for dep in &mut node\.deps \{\s*if dep == id \{\s*"
-            r"dep\.clone_from\(&replacement\.id\);\s*\}\s*\}\s*"
-            r"carried = node\.consumes\.remove\(id\);\s*"
-            r"if let Some\(carried\) = carried\.clone\(\) \{\s*"
-            r"node\.consumes\.insert\(replacement\.id\.clone\(\), carried\);",
-            re.DOTALL,
-        )
-    ),
-    "a retry removes the superseded node": re.compile(
-        r"graph\.remove\(id\);\s*operations\.push\(Operation::NodeDropped \{\s*"
-        r"node: id\.to_string\(\),\s*dependents: Dependents::Detach,",
-        re.DOTALL,
-    ),
-    "a cascading drop removes every dependent, recursively": re.compile(
-        r"Dependents::Drop => \{\s*let mut pending = direct;\s*"
-        r"while let Some\(candidate\) = pending\.pop\(\) \{.*?"
-        r"pending\.extend\(graph\.dependents_of\(&candidate\)\);",
-        re.DOTALL,
-    ),
-    "a detaching drop removes each dependent's edge and consumes entry": re.compile(
-        r"Dependents::Detach => \{.*?node\.deps\.retain\(\|dep\| dep != id\);.*?"
-        r"node\.consumes\.remove\(id\);",
-        re.DOTALL,
-    ),
-    "a dropped node is consumed by no remaining node": re.compile(
-        r"Operation::NodeDropped \{ node, \.\. \} => \{\s*graph\.remove\(node\);.*?"
-        r"other\.consumes\.remove\(node\);",
-        re.DOTALL,
-    ),
-    "a reparent replaces deps and keeps only the consumes keyed on one of them": re.compile(
-        r"Operation::Reparent \{ node, to, \.\. \} => \{\s*"
-        r"if let Some\(node\) = graph\.get_mut\(node\) \{\s*"
-        r"node\.deps\.clone_from\(to\);\s*"
-        r"node\.consumes\.retain\(\|dep, _\| to\.iter\(\)\.any\(\|d\| d == dep\)\);",
-        re.DOTALL,
-    ),
-}
-
-
-@pytest.mark.parametrize("fold", EDGE_FOLDS, ids=lambda fold: fold)
-def test_the_graph_a_live_edit_is_checked_over_is_folded_as_the_engine_folds_it(
-    fold: str,
-) -> None:
-    """The structural rules a reply's resulting nodes are held to read `deps` and
-    `consumes`, so how a `retry`, a `drop` and a `reparent` move them is restated in
-    `orchestrator/envelope_review.py` and held here to the engine's source at the pinned
-    release. A release that moved one would have the check ask the rules about a graph the
-    engine never commits — accepting a reply that lands a refusable node, or refusing one
-    that does not.
-    """
-    assert EDGE_FOLDS[fold].search(_source(ONEPIPELINE, "edits.rs")) is not None, (
-        f"onepipeline {ONEPIPELINE.ref}'s `edits.rs` no longer declares that {fold}; re-read "
-        "`compile_add`, `compile_retry`, `compile_drop` and `apply`, and correct "
-        "`orchestrator.envelope_review.stated_graph`"
-    )
-
-
-#: The engine's live-edit command vocabulary: `Command` in `channel.rs`, serialized by
-#: `op` in lower case with unknown fields refused, which is what makes each variant's
-#: field set the whole of what an envelope may carry for that op.
-COMMAND_TAGGING = re.compile(
-    r'#\[serde\(tag = "op", rename_all = "lowercase", deny_unknown_fields\)\]\s*'
-    r"pub enum Command \{"
-)
-
-
-def _command_fields() -> dict[str, dict[str, str]]:
-    """Every `Command` variant at the pinned release, by wire op, with its fields' types."""
-    channel_rs = _source(ONEPIPELINE, "channel.rs")
-    tagged = COMMAND_TAGGING.search(channel_rs)
-    assert tagged is not None, (
-        f"onepipeline {ONEPIPELINE.ref} no longer serializes `Command` by `op` in lower "
-        "case with unknown fields refused, so every op `orchestrator.envelope_review` "
-        "names and every field it reads for one is unreconciled"
-    )
-    body = channel_rs[tagged.end() :].split("\n}\n", 1)[0]
-    return {
-        variant["name"].lower(): dict(
-            re.findall(r"^\s{8}(?:pub )?([a-z_]\w*): (.+?),?$", variant["body"], re.MULTILINE)
-        )
-        for variant in OPERATION_VARIANT.finditer(body)
-    }
-
-
-def test_the_ops_a_live_edit_reads_task_prose_from_are_the_commands_the_engine_declares() -> None:
-    """Which ops carry a node mapping, in which field, and which carry a text or a
-    criterion, is restated in `orchestrator/envelope_review.py` as data, and the
-    live-edit table in `docs/orchestration.md` is held to that restatement elsewhere. This
-    holds it to the declaration both derive from: the engine's own `Command` enum at the
-    pinned release. An op that stopped carrying its node, or moved it to another field,
-    would otherwise leave the table and the module agreeing with each other about a wire
-    the engine no longer speaks — and task prose reaching a dispatch through the field
-    nothing reads.
-    """
-    from orchestrator import envelope_review
-
-    declared = _command_fields()
-    assert set(envelope_review.WHOLE_TASK_OPS) == set(envelope_review.STATED_IN)
-    for op, field in envelope_review.STATED_IN.items():
-        assert op in declared, (
-            f"orchestrator/envelope_review.py reads a whole task off {op!r}, which onepipeline "
-            f"{ONEPIPELINE.ref} does not declare among {sorted(declared)}"
-        )
-        assert field in declared[op], (
-            f"orchestrator/envelope_review.py reads {op!r}'s task from {field!r}, while "
-            f"onepipeline {ONEPIPELINE.ref} declares it with {sorted(declared[op])}"
-        )
-    # `add` and `retry` state a full `Node`; `requeue` states partial overrides of one,
-    # which the module reads as the overrides they are.
-    assert declared["add"]["node"] == declared["retry"]["node"] == "Node", declared
-    assert declared["requeue"]["amend"].startswith("Option<Map<"), declared["requeue"]
-    # An amendment is the `text` of `amend`, a note's criteria half is its `criterion`,
-    # and both name their node by `id` — the three fields the module matches on.
-    assert "text" in declared[envelope_review.AMEND_OP], declared[envelope_review.AMEND_OP]
-    assert {"id", "criterion"} <= set(declared[envelope_review.NOTE_OP]), declared[
-        envelope_review.NOTE_OP
-    ]
-    assert all("id" in declared[op] for op in ("retry", "requeue", envelope_review.AMEND_OP)), (
-        declared
     )
 
 

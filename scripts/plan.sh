@@ -197,9 +197,6 @@ PLANNING_PROJECT_METADATA='{"orchestrator.plan-kind": {"kind": "planning", "node
 #: the store's own answer rather than this script's, and a second spelling of it here is
 #: exactly what used to send the write and the read to two different directories.
 PLAN_RECORDS="projects"
-#: Where a project's task records sit under that same root, which the cleanup below
-#: reaches when a write fails partway.
-PLAN_TASKS="tasks"
 PLAN_SOURCE="authoring"
 
 #: The persona ref the planner node carries. A path, deliberately — see the header.
@@ -690,28 +687,21 @@ checklist_rules() {
 # then the plan checklist's rules, then the placement note, under the goal ``$4``. Echoes
 # where the project record was written.
 write_planner() {
-    local run_name=$1 node_id=$2 note=$3 goal=$4 written records metadata checklist
+    local run_name=$1 node_id=$2 note=$3 goal=$4 written metadata checklist
     written="$plan_directory/$run_name.md"
-    records="$plan_root/$PLAN_TASKS/$run_name"
     metadata="${PLANNING_PROJECT_METADATA//@NODES@/[\"$node_id\"]}"
     # Checked rather than left to `set -e`: this function runs inside its callers' `$(…)`,
     # where errexit is off, so a failed resolution would otherwise write an empty checklist.
     checklist=$(checklist_rules) || return
     "$python" -c "$PLAN_PROGRAM" "$run_name" "$brief" "$PLANNER_PERSONA" "$node_id" "$PLAN_OPT_MAX_TURNS" \
         "$PLAN_DIRECT_PLACEMENT_NOTE" "$note" "$goal" "$PLANNER_GRAPH" "$checklist" "$boundary_note" \
-        | "$python" -m orchestrator.project_store "$plan_root" "$metadata" >/dev/null || {
-        # Reported rather than swallowed, and reported without ending the launch here: what
-        # the operator has to act on is the write that failed, which the diagnostic below
-        # names, and a removal that failed on top of it leaves records the next launch would
-        # read — so it earns its own line naming them, and the refusal still comes last. The
-        # one task record is named rather than matched by a pattern: this project has exactly
-        # one node and its id is what that file is called, so there is nothing to sweep.
-        rm -f "${written:?}" "${records:?}/${node_id:?}.md" ||
-            echo "plan: part of the half-written plan could not be removed; delete $written and $records by hand, or the next launch of '$run_name' reads what this one left" >&2
-        # This one is *expected* to fail whenever the directory is absent or still holds a
-        # record the removal above could not take, and both are already reported by that
-        # line, so its own failure is not a second thing to tell anybody about.
-        rmdir "$records" 2>/dev/null || :
+        | "$python" -m orchestrator.plan_records "$plan_root" "$metadata" >/dev/null || {
+        # The store creates the project's document last, so a write that failed left at most
+        # the task it had created, which the next write of '$run_name' retires before
+        # creating its own; the project document is removed in case a replacement failed
+        # after it, and a removal that fails is reported rather than swallowed.
+        rm -f "${written:?}" ||
+            echo "plan: the half-written plan's project record could not be removed; delete $written by hand, or the next launch of '$run_name' reads what this one left" >&2
         fail "the plan for '$brief' could not be written to $written by $python" \
             "restore the pinned toolchain with 'just bootstrap', then retry"
     }
@@ -753,9 +743,11 @@ launch() {
     # id a launch names, does not read the plan this run is grouped under as the one it runs.
     [ -z "$declared_project" ] || labels+=("--group=$declared_project")
     export "$PLAN_RUN_ID_ENV=$run_name"
+    # The run-end hooks and the drafting graph a planning run never took, blank unless named.
+    plan_launch_blanks ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} "$@"
     # One directive rather than two stacked ones: a directive's scope is the line under it, so the upper of a stacked pair covers the lower and never the command, and the judge reported whichever of the two it had stranded.
     # llmlint: ignore[boundary_inputs_validated, tool_output_is_signal, robust_shell] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; this is `just orchestrate`'s attached launch with a plan written first, so streaming the run as it goes is what a manager stays attached for — the lines this script owns are printed beside it; and the array expansions are the `set -u` idiom whose `+` part alone is unquoted, measured to keep `one two`, `*` and the empty string each one argument.
-    "$script_dir/onepipeline.sh" start "$project" "${labels[@]}" ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} "$@"
+    "$script_dir/onepipeline.sh" start "$project" "${labels[@]}" "${PLAN_LAUNCH_BLANKS[@]}" ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} "$@"
 }
 
 # Record, after a planner launch that settled, what that planner authored: a planning run

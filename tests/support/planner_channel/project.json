@@ -12,6 +12,7 @@
     "testSupport": [
       "{workspaceRoot}/tests/e2e/planner_channel.py",
       "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/config/onepipeline.launch.yaml",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

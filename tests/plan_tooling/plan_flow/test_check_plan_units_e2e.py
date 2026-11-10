@@ -6,7 +6,7 @@ design document is written: by `just check-plan`, naming the task and the store'
 `task metadata set` command, and by `just finish-plan`, which stops at that check before
 anything is launched. There is no fallback.
 
-Everything is real: the plan written through this repository's own record renderer into
+Everything is real: the plan written through the store's own `project create` and `task create` into
 this process's own fixture source, the unit set through the store's own `task metadata set`
 as a planner sets it, the review recorded by the real `just review-plan` with only the paid
 provider doubled, and the real recipes, the engine's `plan check` and the registered check.
@@ -34,7 +34,7 @@ from test_finish_plan_recipe_e2e import PASSES, PLAN_REFUSED, STATES_ITS_BAR, _b
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_units
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 _SEQUENCE = itertools.count()

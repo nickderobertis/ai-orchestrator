@@ -8,7 +8,9 @@
 # scripts/dispatch-env.sh, the one definition of which, and print what they
 # established as `{"version": 1, "env": {"NAME": "value", ...}}` — so an indirection
 # a routing change adds while a run is live reaches its next dispatch
-# (ai-orchestrator#1109). Stderr is the resolvers' own diagnostics, which never echo a
+# (ai-orchestrator#1109) — and pass on `ONEPIPELINE_NODE_ID`, the node the engine names
+# to this hook and to nothing it dispatches, so a follow-up drafted from inside the
+# dispatch names its node (orchestrator/follow_up_drafts.py). Stderr is the resolvers' own diagnostics, which never echo a
 # value; the engine keeps it under the run and never records a printed value.
 set -euo pipefail
 
@@ -22,7 +24,7 @@ fail() {
 # a document in answer to `--help` would look like a hook that ran.
 if [ "$#" -ne 0 ]; then
     fail "this hook takes no arguments and was given $#" \
-        "name it whole as 'onepipeline start --dispatch-env-hook $0', which scripts/onepipeline.sh does for every launch"
+        "name it whole as a launch config's dispatch_env_hook, which config/onepipeline.launch.yaml does for every launch"
 fi
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
@@ -33,6 +35,11 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) || fail "this hook 
 # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
 . "$script_dir/dispatch-env.sh"
 export_dispatch_environment dispatch-env-hook || exit $?
+# The node this dispatch is, as the engine named it here; absent only where something
+# other than the engine ran this hook, which then names no node rather than inventing one.
+if [ -n "${ONEPIPELINE_NODE_ID-}" ]; then
+    dispatch_environment_names+=(ONEPIPELINE_NODE_ID)
+fi
 
 # Sets `encoded` to $1 as a JSON string, escaped with builtins alone, byte-wise under
 # the C locale so a value in any encoding passes through as it was written, because

@@ -50,7 +50,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import npm_installs, plan_budgets
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: The organization's two trackers the example layer declares private.

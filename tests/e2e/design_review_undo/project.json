@@ -30,7 +30,8 @@
       "{workspaceRoot}/orchestrator/plan_locations.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/plan_units.py",
-      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/plan_records.py",
+      "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/orchestrator/spike_plan.py"
     ]

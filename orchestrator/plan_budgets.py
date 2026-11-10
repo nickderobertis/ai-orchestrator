@@ -54,8 +54,8 @@ from typing import Any, ClassVar, NamedTuple, NewType, NotRequired, Protocol, Ty
 import yaml
 
 from orchestrator import accepted_opaque, design_approval, npm_installs, plan_store, task_body
-from orchestrator.plan_store import QualifiedProjectId, StoreTask
-from orchestrator.project_store import DOCUMENTS_DIRECTORY, hosted_origin
+from orchestrator.plan_store import QualifiedProjectId
+from orchestrator.record_shapes import DOCUMENTS_DIRECTORY, hosted_origin
 from orchestrator.root import REPO_ROOT
 
 #: The task metadata key holding the budgets a task owns, as a JSON list of :class:`Budget`.
@@ -614,14 +614,6 @@ def tasks_of_plan(plan: object) -> list[TaskBudgets]:
     return found
 
 
-def tasks_of_records(records: Sequence[StoreTask]) -> list[TaskBudgets]:
-    """Every store record as the budget checks read it, for the path that reads the store."""
-    return [
-        TaskBudgets(record.node_id, record.content, task_record(record.metadata))
-        for record in records
-    ]
-
-
 def render_section(record: object) -> str:
     """The `## Budgets` section a task owning ``record`` renders, through the pinned store.
 
@@ -1157,19 +1149,16 @@ def exempt_kind(project: str, nodes: set[str]) -> str | None:
     return stamped.kind
 
 
-def refusals(
-    project: str, plan: object, tasks: Sequence[TaskBudgets] | None = None
-) -> list[Refusal]:
+def refusals(project: str, plan: object) -> list[Refusal]:
     """Everything `just check-plan` refuses about ``project``'s budgets, read against ``plan``.
 
-    ``tasks`` is every task with its budgets record, read from ``plan``'s own metadata maps
-    when not given — the document the engine's `plan check` hands the registered check
-    carries them, and the path reading the store hands its records instead. Every task's
+    Every task's budgets record is read from ``plan``'s own metadata maps, which the
+    document the engine's `plan check` hands the registered check carries. Every task's
     `## Budgets` section is held to its record whatever the plan; the plan-level answers are
     required when a task adds/changes a budget, except for migrated or exempt plans.
     Existing analysis is always validated for non-exempt plans.
     """
-    tasks = tasks_of_plan(plan) if tasks is None else tasks
+    tasks = tasks_of_plan(plan)
     found: list[Refusal] = []
     try:
         for task in tasks:

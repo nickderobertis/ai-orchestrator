@@ -74,7 +74,7 @@ from orchestrator import follow_up_tickets as tickets
 from orchestrator import human_items, npm_installs, plan_store
 from orchestrator.plan_budgets import Direction
 from orchestrator.plan_store import WRITABLE_PLUGIN
-from orchestrator.project_store import frontmatter
+from orchestrator.record_shapes import frontmatter
 from orchestrator.root import REPO_ROOT
 
 RUN = "listing-run"

@@ -53,6 +53,8 @@ from project_fixtures import (
     local_project,
     no_budgets,
     owning,
+    store_written,
+    written_as_planned,
 )
 from published_tools import LOCKED_INSTALLS_PATH
 from waits import timeout as e2e_timeout
@@ -66,7 +68,7 @@ from orchestrator import (
     plan_store,
 )
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import render_plan_project, write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 
@@ -463,10 +465,10 @@ def test_editing_the_persona_invalidates_the_record(tmp_path: Path) -> None:
 
     document = _document(project)
     written = document.read_text(encoding="utf-8")
-    reviewed_as = '"onepipeline.persona": "engineer"'
+    reviewed_as = "onepipeline.persona: engineer"
     assert reviewed_as in written, written
     document.write_text(
-        written.replace(reviewed_as, '"onepipeline.persona": "docs-writer"'), encoding="utf-8"
+        written.replace(reviewed_as, "onepipeline.persona: docs-writer"), encoding="utf-8"
     )
 
     refused = _just("check-plan", project)
@@ -563,14 +565,18 @@ def test_turning_a_dispatched_node_into_a_human_one_invalidates_its_record(
 
     document = _document(project, "route")
     written = document.read_text(encoding="utf-8")
-    reviewed_as = '  "onepipeline.persona": "engineer"'
+    reviewed_as = "  onepipeline.persona: engineer"
     assert reviewed_as in written, written
-    rekinded = "\n".join(
-        line
-        for line in written.replace(reviewed_as, '  "onepipeline.kind": "human"').splitlines()
-        if not line.startswith("repositories:")
-    )
-    document.write_text(f"{rekinded}\n", encoding="utf-8")
+    # A human node names no repository, so the record's `repositories` block goes whole.
+    rekinded: list[str] = []
+    in_repositories = False
+    for line in written.replace(reviewed_as, "  onepipeline.kind: human").splitlines():
+        in_repositories = line.startswith("repositories:") or (
+            in_repositories and line.startswith("- ")
+        )
+        if not in_repositories:
+            rekinded.append(line)
+    document.write_text("\n".join(rekinded) + "\n", encoding="utf-8")
 
     refused = _just("check-plan", project)
     assert refused.returncode == 1, refused.stdout + refused.stderr
@@ -612,10 +618,12 @@ def test_rewiring_a_dependency_invalidates_only_the_record_of_the_node_it_moved(
     assert _just("check-plan", project).returncode == 0
     standing = {node: _record_of(project, node) for node in ("route", "docs")}
 
+    # The edge names each prerequisite by the id the store gave its task.
+    route, docs = (_document(project, node).stem for node in ("route", "docs"))
     document = _document(project, "gate")
     written = document.read_text(encoding="utf-8")
-    assert written.count('/route"]') == 1, written
-    document.write_text(written.replace('/route"]', '/docs"]'), encoding="utf-8")
+    assert written.count(f"- id: {route}\n") == 1, written
+    document.write_text(written.replace(f"- id: {route}\n", f"- id: {docs}\n"), encoding="utf-8")
 
     refused = _just("check-plan", project)
     assert refused.returncode == 1, refused.stdout + refused.stderr
@@ -711,9 +719,9 @@ def test_editing_a_lifecycle_steps_persona_invalidates_the_record(tmp_path: Path
 
     document = _document(project)
     written = document.read_text(encoding="utf-8")
-    reviewed_as = '"persona": "docs-writer"'
+    reviewed_as = "persona: docs-writer"
     assert written.count(reviewed_as) == 1, written
-    document.write_text(written.replace(reviewed_as, '"persona": "reviewer"'), encoding="utf-8")
+    document.write_text(written.replace(reviewed_as, "persona: reviewer"), encoding="utf-8")
 
     refused = _just("check-plan", project)
     assert refused.returncode == 1, refused.stdout + refused.stderr
@@ -744,10 +752,10 @@ def test_declaring_that_a_node_expects_no_diff_invalidates_its_record(tmp_path: 
 
     document = _document(project)
     written = document.read_text(encoding="utf-8")
-    reviewed_as = '  "onepipeline.persona": "engineer"'
+    reviewed_as = "  onepipeline.persona: engineer"
     assert reviewed_as in written, written
     document.write_text(
-        written.replace(reviewed_as, f'  "{plan_review.EXPECTS_NO_DIFF}": true'),
+        written.replace(reviewed_as, f"  {plan_review.EXPECTS_NO_DIFF}: true"),
         encoding="utf-8",
     )
 
@@ -1472,7 +1480,7 @@ def _authored_records(native: str) -> dict[str, str]:
             }
         ],
     }
-    rendered = render_plan_project(plan, native_id=native)
+    rendered = store_written(plan, native_id=native)
     project, described = described_record(
         plan, native, no_budgets(["github.com/nickderobertis/some-service"])
     )
@@ -2169,18 +2177,20 @@ def test_a_live_edit_amending_a_node_is_asked_the_pedantry_question_and_refused_
 ) -> None:
     """The per-task question reaches a manager's live edit, with the live-edit exception.
 
-    Driven through the validator the bus runs on a reply, `scripts/envelope-review.sh`,
-    with a `requeue` amending a parked node's whole task on stdin and only the paid
+    Driven through the reviewer the engine runs on a reply, `scripts/envelope-review.sh`,
+    with the document a `requeue` amending a parked node's whole task leaves on stdin
+    (onepipeline's `docs/contract-divergences.md`, entry 45) and only the paid
     provider scripted: the judged turn's prompt carries the pedantry question and the
     exception, and a refusal of the pedantic clause refuses the whole envelope.
     """
     log = tmp_path / "prompts.jsonl"
     environment = _reviewing(tmp_path, REFUSES_AS_PEDANTIC)
     environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+    requeued = {"id": "route", "task": _task(PEDANTIC)}
     envelope = {
-        "version": 2,
-        "author": "planner",
-        "commands": [{"op": "requeue", "id": "route", "amend": {"task": _task(PEDANTIC)}}],
+        "goal": "route the listing",
+        "changes": [{"op": "requeue", "node": requeued}],
+        "plan": {"schema_version": 3, "tasks": [requeued]},
     }
 
     reviewed = subprocess.run(
@@ -2336,10 +2346,10 @@ def test_editing_the_goal_invalidates_the_plan_level_record_and_no_tasks(
 
     # The adopting node's `adoption` moves its own record and the plan's, and the
     # producer's record stands.
-    reviewed_as = '"onepipeline.adoption": "published"'
+    reviewed_as = "onepipeline.adoption: published"
     assert reviewed_as in task.read_text(encoding="utf-8")
     task.write_text(
-        task.read_text(encoding="utf-8").replace(reviewed_as, '"onepipeline.adoption": "fast"'),
+        task.read_text(encoding="utf-8").replace(reviewed_as, "onepipeline.adoption: fast"),
         encoding="utf-8",
     )
     refused = _just("check-plan", project)
@@ -2406,31 +2416,24 @@ CROSS_DAG_EDGE = "run:r-upstream-0001#adopt"
 def _waiting_on_another_run(name: str) -> str:
     """One dispatched node waiting on this plan's own node and on a node of another run.
 
-    The cross-DAG half is written onto the stored record because that is the only place
-    it can be written: `orchestrator/project_store.py` turns a node's `deps` into store
-    dependency edges, whose targets are records of this project, so a wait on a node
-    outside the plan reaches a record the way its author puts it there. Both halves at
-    once, because a node carrying one kind alone cannot tell the two renderings apart.
+    Both halves are stated in the plan: `orchestrator/plan_records.py` turns the node's own
+    dependency into a store edge and the wait on another run's node into the reserved
+    `onepipeline.deps` key. Both halves at once, because a node carrying one kind alone
+    cannot tell the two renderings apart.
     """
-    project = local_project(
+    return local_project(
         json.dumps(
             {
                 "schema_version": 3,
                 "goal": {"text": "Deliver the checkout route"},
-                "tasks": [{**_node("route"), "deps": ["design"]}, _node("design")],
+                "tasks": [
+                    {**_node("route"), "deps": ["design", CROSS_DAG_EDGE]},
+                    _node("design"),
+                ],
             }
         ),
         name,
     )
-    document = _document(project, "route")
-    written = document.read_text(encoding="utf-8")
-    anchor = '  "onepipeline.id": "route"'
-    assert anchor in written, written
-    document.write_text(
-        written.replace(anchor, f'{anchor}\n  "onepipeline.deps": ["{CROSS_DAG_EDGE}"]', 1),
-        encoding="utf-8",
-    )
-    return project
 
 
 def test_the_reviewer_is_handed_the_cross_dag_dependency_its_record_is_keyed_on(
@@ -2632,12 +2635,21 @@ def test_the_plan_level_reviewer_reads_omitted_detail_through_a_listed_path(
 def test_a_plan_whose_compact_prompt_exceeds_the_limit_spends_no_plan_level_turn(
     tmp_path: Path,
 ) -> None:
-    """The size guard, through the real recipe: exit 2, both numbers, no turn, no record."""
+    """The size guard, through the real recipe: exit 2, both numbers, no turn, no record.
+
+    The goal is put on the stored project record after the store wrote it, because a goal
+    past the limit is longer than one argument the store's `project create` can be handed.
+    """
     goal = "Deliver the checkout route. " * (plan_review.PLAN_PROMPT_LIMIT // 28 + 1)
     project = local_project(
-        json.dumps({"schema_version": 3, "goal": {"text": goal}, "tasks": [_node("route")]}),
+        json.dumps({"schema_version": 3, "goal": {"text": "short"}, "tasks": [_node("route")]}),
         "review-over-the-limit",
     )
+    source, native = plan_store.qualified(project)
+    record = plan_store.source_root(source) / "projects" / f"{native}.md"
+    written = record.read_text(encoding="utf-8")
+    assert "    text: short\n" in written, written
+    record.write_text(written.replace("    text: short\n", f"    text: {json.dumps(goal)}\n"))
     log = tmp_path / "prompts.jsonl"
     environment = _reviewing(tmp_path, PASSES)
     environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
@@ -2692,7 +2704,7 @@ LONG_BUDGET: dict[str, object] = {
 def _compact_view_project() -> str:
     """One agent node with a long lead owning a long-workload budget, one human node."""
     native = f"review-compact-view-{os.getpid()}"
-    write_plan_project(
+    written_as_planned(
         plan_fixture_source.root(),
         {
             "schema_version": 3,
@@ -2715,7 +2727,7 @@ def _compact_view_project() -> str:
                 },
             ],
         },
-        native_id=native,
+        native,
     )
     answers = no_budgets(["github.com/nickderobertis/some-service"])
     answers["checklist"][0] = {
@@ -2905,7 +2917,7 @@ CHECKLIST_FINDING = "a test asserts the route answers within 200 ms"
 def _relative(project: str) -> str:
     """The plan's one task document, named relative to the plan-authoring root."""
     document = _document(project)
-    return str(document.relative_to(document.parents[2]))
+    return str(document.relative_to(document.parents[1]))
 
 
 def test_a_plan_the_checklist_fails_is_refused_with_llmlints_report(tmp_path: Path) -> None:

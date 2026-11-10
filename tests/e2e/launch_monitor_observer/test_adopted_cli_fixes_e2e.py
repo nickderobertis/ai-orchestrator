@@ -42,8 +42,8 @@ or a recipe reaches it, and each journey fails on the release before the fix:
 * a `local-md` listing keeps working while another process replaces a record in place
   beside it — https://github.com/nickderobertis/onetaskgraph/issues/1837 — where the
   release before it read a stage renamed away between the folder listing and its
-  resolution as a malformed record, on the very writes `orchestrator/project_store.py`
-  makes to keep this host's own records whole.
+  resolution as a malformed record, on exactly the stage-and-rename write a peer
+  process makes to keep a record whole.
 
 Two fixes of that same plan-store adoption are not driven here, because no dispatch of
 this host can reach them: the `github-projects` source preserving an issue body's bytes
@@ -95,7 +95,6 @@ from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 from orchestrator import npm_installs
-from orchestrator.project_store import publish_record, read_records
 from orchestrator.root import REPO_ROOT
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The project edge this
@@ -908,6 +907,29 @@ def test_a_listing_scoped_to_one_run_is_not_failed_by_another_runs_records(
 PLAN = "plan"
 DELIVERER = f"{PLAN}/deliverer"
 TICKET = f"{PLAN}/ticket"
+
+
+def _publish(destination: Path, content: str) -> None:
+    """Replace ``destination`` the way a peer keeps a record whole: a hidden stage, renamed."""
+    stage = destination.with_name(f".{destination.name}.{os.getpid()}.peer-staging")
+    try:
+        stage.write_text(content, encoding="utf-8")
+        os.replace(stage, destination)
+    finally:
+        stage.unlink(missing_ok=True)
+
+
+def _read_records(root: Path) -> dict[str, str]:
+    """Every record under ``root``'s `projects/` and `tasks/`, a hidden stage never one."""
+    return {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for directory in (root / "projects", root / "tasks")
+        if directory.is_dir()
+        for path in sorted(directory.iterdir())
+        if path.is_file() and not path.name.startswith(".")
+    }
+
+
 DELIVERER_RECORD = (
     f'---\ntitle: "deliverer"\nproject: "{PLAN}"\nstatus: "todo"\ndelivers: [{TICKET}]\n---\n'
     "\nDelivers the ticket.\n"
@@ -970,13 +992,13 @@ def test_a_reader_racing_a_status_and_a_delivered_by_write_sees_whole_records(
 ) -> None:
     """Every read during the writes returns a record as it was or as it is, never part of one.
 
-    The reader is this repository's own `read_records`, the reader `tests/project_store_race`
-    races the store's peers with, run as fast as a thread can while `task status set` moves
-    the deliverer back and forth — each move a status write on the deliverer and a
-    delivered-by write on the ticket. The release before the fix opened both records
-    truncating, and a reader between that open and the write that followed it read an
-    empty file: a task file caught empty is what refused a read of some other project on
-    this host, and this is the same window on the store's own side.
+    The reader is `_read_records`, a plain listing of the root's records, run as fast as
+    a thread can while `task status set` moves the deliverer back and forth — each move a
+    status write on the deliverer and a delivered-by write on the ticket. The release
+    before the fix opened both records truncating, and a reader between that open and the
+    write that followed it read an empty file: a task file caught empty is what refused a
+    read of some other project on this host, and this is the same window on the store's
+    own side.
     """
     checkout = tmp_path / "checkout"
     records = _planned(checkout)
@@ -987,7 +1009,7 @@ def test_a_reader_racing_a_status_and_a_delivered_by_write_sees_whole_records(
 
     def read_until_stopped() -> None:
         while not stop.is_set():
-            for relative, text in read_records(records).items():
+            for relative, text in _read_records(records).items():
                 if text not in whole.get(relative, frozenset()):
                     seen_apart.append((relative, text))
 
@@ -1019,7 +1041,7 @@ def test_a_reader_racing_a_status_and_a_delivered_by_write_sees_whole_records(
 
 
 #: How many listings are taken while the record is being replaced. On the release before
-#: the fix the walk resolved the stage `publish_record` renames away, and read the
+#: the fix the walk resolved the stage `_publish` renames away, and read the
 #: vanish as a malformed record within the first few listings.
 LISTINGS = 40
 REVISED_TICKET = TICKET_RECORD.replace("The ticket.", "The ticket, revised.")
@@ -1030,8 +1052,8 @@ def test_a_listing_keeps_working_while_a_record_is_replaced_in_place_beside_it(
 ) -> None:
     """Every listing taken during the replacements answers, with every record and no error.
 
-    The writer is `publish_record`, the way this repository keeps its own records whole:
-    a stage beside the destination, renamed into place. The stage is a dotfile the store
+    The writer is `_publish`, the way a peer keeps a record whole: a stage beside the
+    destination, renamed into place. The stage is a dotfile the store
     never lists as a record, but the release before the fix resolved it anyway, and one
     renamed away between the folder listing and that resolution failed the whole listing
     as a malformed record that no longer existed. Here a file gone by the time the walk
@@ -1047,7 +1069,7 @@ def test_a_listing_keeps_working_while_a_record_is_replaced_in_place_beside_it(
         for n in itertools.count():
             if stop.is_set():
                 return
-            publish_record(ticket, (TICKET_RECORD, REVISED_TICKET)[n % 2])
+            _publish(ticket, (TICKET_RECORD, REVISED_TICKET)[n % 2])
 
     writer = threading.Thread(target=replace_until_stopped)
     writer.start()

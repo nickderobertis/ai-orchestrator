@@ -31,7 +31,8 @@ import boundary_home
 import pytest
 from waits import timeout as e2e_timeout
 
-from orchestrator.project_store import PlanDocument, PlanNode, write_plan_project
+from orchestrator.plan_records import write_plan_project
+from orchestrator.record_shapes import PlanDocument, PlanNode
 from orchestrator.root import REPO_ROOT
 
 
@@ -90,8 +91,8 @@ def test_every_copied_task_belongs_to_the_project_it_was_copied_into(
     """Each copied task's id, `project` and file are the destination project's.
 
     Beside itself is the incident: the copy lands as `demo-2` in the folder it came from,
-    and a task id kept from the source would put it in `tasks/demo/`. Into another folder
-    the project keeps its id, and the task must still be filed under it there.
+    and a task id kept from the source would file the copy under the source's project. Into
+    another folder the project keeps its id, and each task must still be filed under it.
     """
     roots = {AUTHORING: tmp_path / "authoring", ELSEWHERE: tmp_path / "elsewhere"}
     for root in roots.values():
@@ -110,11 +111,16 @@ def test_every_copied_task_belongs_to_the_project_it_was_copied_into(
     project = landed.removeprefix(f"{destination}:")
     if destination == AUTHORING:
         assert project != PROJECT, f"a copy beside its source took the source's id: {copied}"
-    tasks = [outcome["destination"] for outcome in outcomes[1:]]
-    assert sorted(tasks) == [f"{landed}/first", f"{landed}/second"], copied
+    # The store names each copied task in the destination's own id space, which is flat:
+    # the task belongs to its project by the record's `project`, not by a folder.
+    copies = {outcome["source"]: outcome["destination"] for outcome in outcomes[1:]}
+    assert sorted(copies) == [f"{AUTHORING}:first", f"{AUTHORING}:second"], copied
+    assert all(task.startswith(f"{destination}:") for task in copies.values()), copied
+    if destination == AUTHORING:
+        assert not set(copies) & set(copies.values()), f"a copy kept its source's id: {copied}"
 
-    folder = (roots[destination] / "tasks" / project).resolve()
-    for task in tasks:
+    folder = (roots[destination] / "tasks").resolve()
+    for task in copies.values():
         answered = _plans(environment, "task", "show", task)
         [held] = cast(list[dict[str, dict[str, object]]], answered["items"])
         shown = held["item"]
@@ -123,16 +129,18 @@ def test_every_copied_task_belongs_to_the_project_it_was_copied_into(
         assert Path(location).resolve().parent == folder, (
             f"{task} is stored at {location}, not under {folder}"
         )
-    edges = _plans(environment, "task", "deps", f"{landed}/second")
+    edges = _plans(environment, "task", "deps", copies[f"{AUTHORING}:second"])
     targets = [
         cast(dict[str, dict[str, str]], edge)["to"]["id"]
         for edge in cast(list[object], edges["items"])
     ]
-    assert targets == [f"{landed}/first"], edges
-    assert sorted(path.name for path in (roots[AUTHORING] / "tasks" / PROJECT).iterdir()) == [
-        "first.md",
-        "second.md",
-    ]
+    assert targets == [copies[f"{AUTHORING}:first"]], edges
+    for source in (f"{AUTHORING}:first", f"{AUTHORING}:second"):
+        [held] = cast(
+            list[dict[str, dict[str, object]]],
+            _plans(environment, "task", "show", source)["items"],
+        )
+        assert held["item"]["project"] == PROJECT, f"the copy moved its source {source}"
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

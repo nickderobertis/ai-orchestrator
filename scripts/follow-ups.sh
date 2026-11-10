@@ -159,31 +159,27 @@ SUFFIX="-follow-ups"
 #: What one count the inventory answers with is: a non-negative whole number.
 COUNT='^[0-9]+$'
 
-#: Writes the project with no task yet and prints the id the store wrote it under, after
-#: retiring every task the project already held: the store files a created task by its
-#: title rather than under the project, so a re-dispatch would otherwise launch the
-#: previous pass's node beside the one created next. The writer sweeps the layout it wrote
-#: itself; the store's own records are named by the ids it answers, one per file.
+#: Creates the project with no task yet through the store and prints the id the store
+#: wrote it under. Written again under the same id, the store's writer retires every task
+#: the project already held first (`orchestrator/plan_records.py`), so a re-dispatch never
+#: launches the previous pass's node beside the one created next.
 PROJECT_PROGRAM='
 import json, pathlib, sys
 
-from orchestrator import plan_store
-from orchestrator.project_store import TASKS_DIRECTORY, write_plan_project
+from orchestrator.plan_records import write_plan_project
 
-(root, native, name, run, source, metadata, mode) = sys.argv[1:8]
+(root, native, name, run, metadata, mode) = sys.argv[1:7]
 goal = (
     f"Answer the quoted comments on follow-up tickets for run {run}"
     if mode == "feedback"
     else f"Verify the follow-up drafts run {run} left, and put the verified tickets on the board"
 )
 plan = {"schema_version": 3, "goal": {"text": goal}, "name": name, "tasks": []}
-root = pathlib.Path(root)
-project = write_plan_project(root, plan, native_id=native, project_metadata=json.loads(metadata))
-for held in plan_store.read_tasks(f"{source}:{project}"):
-    record = (root / TASKS_DIRECTORY / held.qualified_id.split(":", 1)[1]).with_suffix(".md")
-    if record.resolve().is_relative_to((root / TASKS_DIRECTORY).resolve()):
-        record.unlink(missing_ok=True)
-print(project)
+print(
+    write_plan_project(
+        pathlib.Path(root), plan, native_id=native, project_metadata=json.loads(metadata)
+    )
+)
 '
 
 usage="just follow-ups <run-id> [--feedback FILE] [--unanswered] [--comments] [--detach] [--to SOURCE]"
@@ -597,11 +593,11 @@ fi
 # The store slugs the id it is handed, lower-casing it, so the project is launched by the
 # id it answers with: a run id carrying a capital is otherwise one the store never holds.
 written=$("$python" -c "$PROJECT_PROGRAM" "$plan_root" "$project_native" "$follow_up_run" "$run" \
-    "$PLAN_SOURCE" "$FOLLOW_UPS_METADATA" "$mode") ||
+    "$FOLLOW_UPS_METADATA" "$mode") ||
     fail "the follow-ups project for run '$run' could not be written under $plan_root" \
         "restore the pinned toolchain with 'just bootstrap', then retry"
 
-# The answer is `write_plan_project`'s own return, whose shape `project_store._slug` is the
+# The answer is `write_plan_project`'s own return, whose shape `plan_records._slug` is the
 # one definition of, so an empty answer is the one thing left for this launch to refuse.
 # llmlint: ignore[boundary_inputs_validated] The value is this repository's own writer's return, taken in the process that wrote it; restating its slug shape here is the second source `contracts_have_one_source_or_a_drift_gate` forbids.
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when the pinned toolchain's writer returns without naming the project it wrote; no journey can produce that without doubling the writer, which the suite never does.
@@ -641,10 +637,11 @@ task=$(cd "$checkout" &&
 
 if [ "$detached" -eq 1 ]; then
     launched=0
+    plan_launch_blanks "${closeout_hooks[@]}"
     # The engine's own launch record goes to standard error, so standard output is the two
     # lines below and nothing else.
     # llmlint: ignore[tool_output_is_signal, robust_shell] The engine's launch record is kept for an operator reading standard error, and standard output carries only the two lines the success hook relays; `${grouping[@]+"${grouping[@]}"}` is the `set -u` idiom for a possibly-empty array, whose `+` part alone is unquoted, measured to keep every element one argument.
-    "$script_dir/onepipeline.sh" start "$project" --dag-graph off --detach --label kind=follow-ups ${grouping[@]+"${grouping[@]}"} "${closeout_hooks[@]}" >&2 || launched=$?
+    "$script_dir/onepipeline.sh" start "$project" --dag-graph off --detach --label kind=follow-ups ${grouping[@]+"${grouping[@]}"} "${closeout_hooks[@]}" "${PLAN_LAUNCH_BLANKS[@]}" >&2 || launched=$?
     [ ! -f "$runs_root/$follow_up_run/launch.json" ] || hook_handed_off=1
     if [ "$launched" -ne 0 ]; then
         echo "follow-ups: the detached launch of run $follow_up_run over run $run failed; the diagnostic above names why" >&2
@@ -664,10 +661,12 @@ else
     echo "follow-ups: launching run $follow_up_run to verify run $run's drafts onto '$board'; watch it with: just watch $follow_up_run" >&2
 fi
 status=0
-# The attached launch names no run-end hook: it runs the same closeout itself once the run
-# returns, below, so the checks run once and their answer is this recipe's exit status.
+# The attached launch names no run-end hook — every one blank, beating the launch config's —
+# because it runs the same closeout itself once the run returns, below, so the checks run
+# once and their answer is this recipe's exit status.
+plan_launch_blanks
 # llmlint: ignore[tool_output_is_signal, robust_shell] This is an attached launch, so streaming the run as it goes is what the operator stays attached for; `${grouping[@]+"${grouping[@]}"}` is the `set -u` idiom for a possibly-empty array, whose `+` part alone is unquoted, measured to keep every element one argument.
-"$script_dir/onepipeline.sh" start "$project" --dag-graph off --label kind=follow-ups ${grouping[@]+"${grouping[@]}"} || status=$?
+"$script_dir/onepipeline.sh" start "$project" --dag-graph off --label kind=follow-ups ${grouping[@]+"${grouping[@]}"} "${PLAN_LAUNCH_BLANKS[@]}" || status=$?
 
 # With no judge, this is what holds the output to its shape. Initial mode runs the closeout
 # a detached launch's run-end hook runs, which names each refusal and keeps itself and its

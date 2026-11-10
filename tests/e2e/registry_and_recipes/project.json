@@ -74,6 +74,7 @@
       "{workspaceRoot}/scripts/new-persona.sh",
       "{workspaceRoot}/scripts/node-scratch-dir.sh",
       "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/config/onepipeline.launch.yaml",
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",

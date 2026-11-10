@@ -59,7 +59,7 @@ from orchestrator import (
     design_approval,
     plan_budgets,
     plan_store,
-    project_store,
+    record_shapes,
     spike_branches,
     spike_plan,
 )
@@ -142,7 +142,7 @@ def _repository(task: plan_store.StoreTask) -> str:
     named = task.repositories[0] if task.repositories else task.metadata.get("onepipeline.repo")
     if not isinstance(named, str):
         return ""
-    return project_store.hosted_origin(named) or named
+    return record_shapes.hosted_origin(named) or named
 
 
 def stacking_chains(project: QualifiedProjectId) -> dict[NodeId, tuple[NodeId, ...]]:

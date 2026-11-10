@@ -48,7 +48,7 @@ from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
 from orchestrator.plan_store import WRITABLE_PLUGIN
-from orchestrator.project_store import TASKS_DIRECTORY, frontmatter
+from orchestrator.record_shapes import TASKS_DIRECTORY, frontmatter
 
 RUN = "listing-run"
 OTHER_RUN = "earlier-run"

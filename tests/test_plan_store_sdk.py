@@ -28,7 +28,8 @@ from orchestrator import (
     plan_copy,
     plan_store,
 )
-from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
+from orchestrator.plan_records import write_plan_project
+from orchestrator.record_shapes import PlanDocument, PlanNode, frontmatter
 from orchestrator.root import REPO_ROOT
 
 #: A plan-store CLI of another release, the suite's own decoy: it reports a version no
@@ -67,7 +68,7 @@ def _registered(
 
 
 #: The ticket a fixture task delivers, held by a local source the test configures.
-DELIVERED = "sdktickets:board/ticket"
+DELIVERED = "sdktickets:ticket"
 
 
 def test_sdk_helpers_read_and_copy_a_real_local_plan(
@@ -75,6 +76,16 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
 ) -> None:
     source, destination = tmp_path / "source", tmp_path / "destination"
     destination.mkdir()
+    # The repository a task names and the ticket it delivers are classified at the write,
+    # so both are in place before the store is asked to write the plan naming them.
+    _registered(monkeypatch, tmp_path, public=["github.com/acme/service"])
+    tickets = tmp_path / "tickets"
+    write_plan_project(
+        tickets, {"name": "board", "tasks": [PlanNode(id="ticket", title="Ticket", task="Fix.")]}
+    )
+    _source(monkeypatch, "sdktickets", tickets)
+    _source(monkeypatch, "sdksource", source)
+    _source(monkeypatch, "sdkdestination", destination)
     plan: PlanDocument = {
         "name": "demo",
         "tasks": [
@@ -117,16 +128,6 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
         ),
         encoding="utf-8",
     )
-    _registered(monkeypatch, tmp_path, public=["github.com/acme/service"])
-    # The ticket a task delivers is one a configured source holds, because the store's
-    # boundary refuses to write a reference whose item it cannot classify.
-    tickets = tmp_path / "tickets"
-    write_plan_project(
-        tickets, {"name": "board", "tasks": [PlanNode(id="ticket", title="Ticket", task="Fix.")]}
-    )
-    _source(monkeypatch, "sdktickets", tickets)
-    _source(monkeypatch, "sdksource", source)
-    _source(monkeypatch, "sdkdestination", destination)
     _source(monkeypatch, "sdkdraft", drafts)
     plan_store.sdk(plan_store.client().document_copy(["sdkdraft:design"], to="sdksource"))
 
@@ -136,7 +137,7 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
     assert read["tasks"][1]["deps"] == ["first"]
     assert read["tasks"][1]["repo"] == "github.com/acme/service"
     assert read["tasks"][1]["delivers"] == [DELIVERED]
-    assert plan_store.task_record("sdksource:demo/first")["title"] == "First"
+    assert plan_store.task_record("sdksource:first")["title"] == "First"
     assert plan_store.read_projects("sdksource")[0].title == "demo"
     # No task there carries a comment, so the narrowed query keeps none of them.
     commented = plan_store.client().task_list(
@@ -145,7 +146,7 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
     )
     assert plan_store.sdk(commented).items == []
     assert plan_store.local_projects("sdksource") == ["sdksource:demo"]
-    assert plan_store.task_document("sdksource", "demo/first").is_file()
+    assert plan_store.task_document("sdksource", "first").is_file()
     assert plan_store.read_documents("sdksource:demo")[0].labels == ["design"]
     assert plan_store.authored_deps(records[1]) == ["first"]
 
@@ -154,6 +155,10 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
         "resolved_digest",
         lambda *_arguments: design_approval.ChainDigest("sha256:test-template"),
     )
+    # The provenance above is built here rather than rendered, so the pinned engine's
+    # template check is answered as accepting it; that check is driven for real in
+    # `tests/plan_tooling/plan_flow/test_approve_design_recipe_e2e.py`.
+    monkeypatch.setattr(design_approval, "checked", lambda *_arguments: None)
     assert design_review.approve_main(["sdksource:demo"]) == 0
     assert design_approval.approve("sdksource:demo").held
     assert design_review.approve_main(["sdksource:demo"]) == 0
@@ -197,7 +202,7 @@ def test_a_read_runs_the_locked_install_with_a_decoy_first_on_the_path(
         f"exists for — a decoy ahead of {ONETASKGRAPH_BIN} — was never set up"
     )
 
-    assert plan_store.task_record("sdksource:demo/task")["title"] == "Task"
+    assert plan_store.task_record("sdksource:task")["title"] == "Task"
     assert plan_store.read_tasks("sdksource:demo")[0].node_id == "task"
 
     assert not served.exists() or served.read_text(encoding="utf-8") == "", (
@@ -237,7 +242,7 @@ def test_a_missing_locked_install_is_refused_by_name_with_the_bootstrap_remedy(
         plan_store.client()
     assert str(expected) in str(refused.value)
     with pytest.raises(OSError, match="just bootstrap"):
-        plan_store.task_record("sdksource:demo/task")
+        plan_store.task_record("sdksource:task")
 
     # A file that is there but cannot be run — a half-finished provisioning — is the
     # same refusal, never handed to the SDK to fail on.
@@ -283,14 +288,14 @@ def test_the_sdk_binary_variable_is_refused_by_name(
         root, {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]}
     )
     _source(monkeypatch, "sdksource", root)
-    assert plan_store.task_record("sdksource:demo/task")["title"] == "Task"
+    assert plan_store.task_record("sdksource:task")["title"] == "Task"
 
     monkeypatch.setenv(plan_store.SDK_BINARY_VARIABLE, str(ONETASKGRAPH_BIN))
     with pytest.raises(OSError, match="ONETASKGRAPH_SDK_BINARY") as refused:
         plan_store.client()
     assert str(ONETASKGRAPH_BIN) in str(refused.value)
     with pytest.raises(OSError, match="ONETASKGRAPH_SDK_BINARY"):
-        plan_store.task_record("sdksource:demo/task")
+        plan_store.task_record("sdksource:task")
 
 
 def test_sdk_helpers_report_real_local_source_refusals(
@@ -305,8 +310,10 @@ def test_sdk_helpers_report_real_local_source_refusals(
     with pytest.raises(OSError, match="no project"):
         plan_store.project_record("sdksource:missing")
     with pytest.raises(OSError, match="no task"):
-        plan_store.task_record("sdksource:demo/missing")
-    with pytest.raises(OSError, match="not <project>/<task>"):
+        plan_store.task_record("sdksource:missing")
+    with pytest.raises(OSError, match="not <task> or <project>/<task>"):
+        plan_store.task_document("sdksource", "a/b/c")
+    with pytest.raises(OSError, match="has no record"):
         plan_store.task_document("sdksource", "missing")
     with pytest.raises(OSError, match="has no record"):
         plan_store.task_document("sdksource", "demo/missing")
@@ -358,9 +365,9 @@ def test_plan_semantic_refusals_are_applied_after_sdk_validation(
         missing_id,
         {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]},
     )
-    task = missing_id / "tasks" / "demo" / "task.md"
+    task = missing_id / "tasks" / "task.md"
     task.write_text(
-        task.read_text(encoding="utf-8").replace('  "onepipeline.id": "task"\n', ""),
+        task.read_text(encoding="utf-8").replace("  onepipeline.id: task\n", ""),
         encoding="utf-8",
     )
     _source(monkeypatch, "missingid", missing_id)
@@ -382,10 +389,10 @@ def test_plan_semantic_refusals_are_applied_after_sdk_validation(
             ],
         },
     )
-    task = repositories / "tasks" / "demo" / "task.md"
+    task = repositories / "tasks" / "task.md"
     task.write_text(
         task.read_text(encoding="utf-8").replace(
-            '["github.com/acme/one"]', '["github.com/acme/one", "github.com/acme/two"]'
+            "- github.com/acme/one\n", "- github.com/acme/one\n- github.com/acme/two\n"
         ),
         encoding="utf-8",
     )
@@ -398,27 +405,23 @@ def test_plan_semantic_refusals_are_applied_after_sdk_validation(
         unknown,
         {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]},
     )
-    task = unknown / "tasks" / "demo" / "task.md"
+    task = unknown / "tasks" / "task.md"
     task.write_text(
         task.read_text(encoding="utf-8").replace(
-            'status: "todo"\n', 'status: "todo"\ndepends_on: ["demo/missing"]\n'
+            "status: todo\n", 'status: todo\ndepends_on: ["missing"]\n'
         ),
         encoding="utf-8",
     )
     _source(monkeypatch, "unknown", unknown)
     # The store's own graph refuses a prerequisite its source does not hold at all.
-    with pytest.raises(OSError, match="no task with the id unknown:demo/missing"):
+    with pytest.raises(OSError, match="no task with the id unknown:missing"):
         plan_store.read_tasks("unknown:demo")
     # One it holds outside the plan is drawn, and refused here as no task of the plan.
     write_plan_project(
         unknown,
         {"name": "other", "tasks": [PlanNode(id="missing", title="Missing", task="Body")]},
     )
-    task.write_text(
-        task.read_text(encoding="utf-8").replace("demo/missing", "other/missing"),
-        encoding="utf-8",
-    )
-    with pytest.raises(OSError, match="unknown dependency targets for unknown:demo/task"):
+    with pytest.raises(OSError, match="unknown dependency targets for unknown:task"):
         plan_store.read_tasks("unknown:demo")
 
     duplicate = tmp_path / "duplicate"
@@ -432,10 +435,10 @@ def test_plan_semantic_refusals_are_applied_after_sdk_validation(
             ],
         },
     )
-    second = duplicate / "tasks" / "demo" / "second.md"
+    second = duplicate / "tasks" / "second.md"
     second.write_text(
         second.read_text(encoding="utf-8").replace(
-            '"onepipeline.id": "second"', '"onepipeline.id": "first"'
+            "onepipeline.id: second", "onepipeline.id: first"
         ),
         encoding="utf-8",
     )
@@ -443,7 +446,7 @@ def test_plan_semantic_refusals_are_applied_after_sdk_validation(
     with pytest.raises(OSError, match="duplicate task or node identities"):
         plan_store.read_tasks("duplicate:demo")
 
-    with pytest.raises(OSError, match="not <project>/<task>"):
+    with pytest.raises(OSError, match="not <task> or <project>/<task>"):
         plan_store.task_document("duplicate", "../first")
 
 
@@ -763,7 +766,7 @@ def test_typed_listings_are_still_held_to_the_requested_source(
     projects = plan_store.sdk(real_client.project_list(source=["sdksource"]))
     tasks = plan_store.sdk(real_client.task_list(source=["sdksource"], project="demo"))
     shown_project = plan_store.sdk(real_client.project_show("sdksource:demo"))
-    shown_task = plan_store.sdk(real_client.task_show("sdksource:demo/task"))
+    shown_task = plan_store.sdk(real_client.task_show("sdksource:task"))
     held_documents = plan_store.sdk(real_client.document_list(source=["sdksource"], project="demo"))
 
     bad_project = projects.items[0].model_copy(
@@ -826,7 +829,7 @@ def test_typed_listings_are_still_held_to_the_requested_source(
         plan_store, "sdk", lambda _answer: shown_task.model_copy(update={"items": []})
     )
     with pytest.raises(OSError, match="returned 0 records"):
-        plan_store.task_record("sdksource:demo/task")
+        plan_store.task_record("sdksource:task")
 
     foreign = held_documents.items[0].model_copy(
         update={"id": held_documents.items[0].id.__class__("elsewhere:design")}
@@ -963,8 +966,19 @@ def _copied_home(name: str, tasks: list[PlanNode], tmp_path: Path) -> str:
     sources and no public boundary. These reader journeys exercise existing routed records;
     `test_a_public_home_sends_a_plan_holding_a_private_task_to_the_private_source`
     separately drives the screened copy and an explicitly private project's refusal.
+
+    The store stamps a task naming a private repository `classification: private` when it
+    writes it under this checkout's boundary, which makes the whole draft private; these
+    journeys read records drafted without that boundary, so the stamp is taken back off
+    the draft before it is copied.
     """
-    write_plan_project(tmp_path / "draft", {"name": name, "tasks": tasks})
+    draft = tmp_path / "draft"
+    write_plan_project(draft, {"name": name, "tasks": tasks})
+    for record in (draft / "tasks").glob("*.md"):
+        record.write_text(
+            record.read_text(encoding="utf-8").replace("classification: private\n", ""),
+            encoding="utf-8",
+        )
     unbounded = tmp_path / "unbounded"
     unbounded.mkdir(exist_ok=True)
     (unbounded / "onetaskgraph.yaml").write_text(
@@ -1091,6 +1105,7 @@ def test_a_public_home_sends_a_plan_holding_a_private_task_to_the_private_source
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__DRAFT__VISIBILITY", "private")
 
     def drafted(name: str, repositories: list[str]) -> str:
+        """Draft the plan ``name``, its tasks each naming one of ``repositories``."""
         write_plan_project(
             tmp_path / "draft",
             {
@@ -1103,22 +1118,24 @@ def test_a_public_home_sends_a_plan_holding_a_private_task_to_the_private_source
         )
         return f"draft:{name}"
 
-    report = plan_store.sdk(
-        plan_store.client().project_copy(
-            drafted("routed", [ROUTED_REPOSITORY, ROUTED_REPOSITORY]), to="home"
-        )
-    )
+    def task_ids(project: str) -> list[str]:
+        """The qualified ids the store gave ``project``'s tasks, in node order."""
+        return [
+            str(task.qualified_id)
+            for task in sorted(plan_store.read_tasks(project), key=lambda task: task.node_id)
+        ]
+
+    routed = drafted("routed", [ROUTED_REPOSITORY, ROUTED_REPOSITORY])
+    routed_tasks = task_ids(routed)
+    report = plan_store.sdk(plan_store.client().project_copy(routed, to="home"))
     assert {
         str(item.root.source.root): str(item.root.destination.root).partition(":")[0]
         for item in report.items
         if item.root.destination
-    } == {
-        "draft:routed": "member",
-        "draft:routed/task-0": "member",
-        "draft:routed/task-1": "member",
-    }
+    } == {routed: "member"} | dict.fromkeys(routed_tasks, "member")
 
     mixed = drafted("mixed", [HOME_REPOSITORY, ROUTED_REPOSITORY])
+    mixed_tasks = task_ids(mixed)
     report = plan_store.sdk(plan_store.client().project_copy(mixed, to="home"))
     destinations = {
         str(item.root.source.root): str(item.root.destination.root).partition(":")[0]
@@ -1127,11 +1144,7 @@ def test_a_public_home_sends_a_plan_holding_a_private_task_to_the_private_source
     }
     # Every task of a plan holding a private one stays canonical beside its private home; the
     # public task is seen at the public home only as the store's neutral view of it.
-    assert destinations == {
-        "draft:mixed": "member",
-        "draft:mixed/task-0": "member",
-        "draft:mixed/task-1": "member",
-    }, destinations
+    assert destinations == {mixed: "member"} | dict.fromkeys(mixed_tasks, "member"), destinations
     public_records = {
         path: path.read_text(encoding="utf-8") for path in (tmp_path / "home").rglob("*.md")
     }
@@ -1179,10 +1192,12 @@ def test_a_public_home_sends_a_plan_holding_a_private_task_to_the_private_source
         for path in (tmp_path / source).rglob("*.md")
     }
 
-    report = plan_store.sdk(plan_store.client().task_copy(["draft:routed/task-0"], to="home"))
-    assert [str(item.root.destination.root) for item in report.items if item.root.destination] == [
-        "member:routed/task-0"
-    ]
+    report = plan_store.sdk(plan_store.client().task_copy([routed_tasks[0]], to="home"))
+    assert [
+        str(item.root.destination.root).partition(":")[0]
+        for item in report.items
+        if item.root.destination
+    ] == ["member"]
 
 
 def test_a_home_naming_its_members_in_any_other_shape_is_refused_by_name(
@@ -1194,7 +1209,11 @@ def test_a_home_naming_its_members_in_any_other_shape_is_refused_by_name(
     record = tmp_path / "projects" / "odd.md"
     text = record.read_text(encoding="utf-8")
     record.write_text(
-        text.replace("metadata:\n", 'metadata:\n  onetaskgraph.members: ["not qualified"]\n', 1),
+        text.replace(
+            "status: todo\n",
+            'status: todo\nmetadata:\n  onetaskgraph.members: ["not qualified"]\n',
+            1,
+        ),
         encoding="utf-8",
     )
 

@@ -20,14 +20,12 @@ where the draft came from is read off this process instead — the run, the disp
 scratch and session, the working directory and its git state, and the node — because a
 pointer an agent had to remember is a pointer that is missing exactly when it matters.
 
-**The node is resolved by process ancestry**, because the engine exports no node id to a
-dispatch. It records every dispatch it starts under `<runs root>/<run>/dispatches/*.json` —
-the node, the process, and the kernel's start time for that process — so the draft's own
-process walks up its parents until one is a recorded dispatch. A pid match is accepted only
-when the recorded start time is the live process's own: a host that has been up for weeks
-has reused every pid a stale entry names, and naming the wrong node is worse than naming
-none. When nothing matches, the draft says `unresolved` and is still written.
-`tests/test_engine_contracts.py` holds every registry name read here to the engine's own.
+**The node is the one the engine names.** The engine hands its dispatch-env hook the node
+it is about to dispatch as `ONEPIPELINE_NODE_ID`, and `scripts/dispatch-env-hook.sh` puts
+that name into the dispatch's own environment, so every process of the dispatch inherits
+it and a draft reads it there (:data:`NODE_ID_ENV`). A process the engine did not
+dispatch — a manager's shell, or a dispatch launched without the hook — carries none, and
+a node draft from it says `unresolved` and is still written.
 
 **The transcript pointer is a command a reader runs**, taken against onepipeline 0.29.0:
 
@@ -77,7 +75,7 @@ from typing import Literal, NoReturn, TypeGuard, get_args
 
 from orchestrator import npm_installs
 from orchestrator.plan_store import RECORD_COMPONENT
-from orchestrator.project_store import frontmatter, hosted_origin
+from orchestrator.record_shapes import frontmatter, hosted_origin
 from orchestrator.run_reading import RunId, Unreadable, public_id
 
 #: The plan-store source a draft is stored in, as `onetaskgraph.yaml` names it.
@@ -122,26 +120,20 @@ KINDS: tuple[Kind, ...] = get_args(Kind)
 #: The kinds that are a dag-scope member, and so name one.
 MEMBER_KINDS = ("monitor", "pacemaker")
 
-#: What a node draft names when no recorded dispatch is an ancestor of the drafting process.
+#: What a node draft names when its process carries no node id from the engine.
 UNRESOLVED = "unresolved"
 
 #: What the stamp reads out of the environment the engine gives a dispatch.
 RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
 NODE_SCRATCH_ENV = "ONEPIPELINE_NODE_SCRATCH_DIR"
 SESSION_ENV = "ONEVCS_SESSION"
+#: The node the engine names to its dispatch-env hook, which that hook passes on to the
+#: dispatch it prepares; `tests/test_dispatch_env_hook.py` holds the two to one name.
+NODE_ID_ENV = "ONEPIPELINE_NODE_ID"
 
 #: How `onepipeline` is told where its runs live, and where they are when nothing says.
 RUNS_ROOT_ENV = "ONEPIPELINE_RUNS_DIR"
 DEFAULT_RUNS_ROOT = "runs"
-
-#: The dispatch registry: where under a run it is, the three fields of an entry this reads,
-#: and how an entry spells the kernel start time it recorded. Each, and the two runs-root
-#: names above, is held to the installed engine by `tests/test_engine_contracts.py`.
-DISPATCH_REGISTRY = "dispatches"
-DISPATCH_NODE = "node"
-DISPATCH_PID = "pid"
-DISPATCH_STARTED = "started"
-PROC_STAT_START = "linux-proc-stat:"
 
 #: The engine binary a transcript pointer names.
 ENGINE = "onepipeline"
@@ -381,7 +373,7 @@ def checked_title(title: str) -> str:
 
 
 def checked_repository(repository: str) -> str:
-    """``repository`` as the normalized origin `orchestrator/project_store.py` decides."""
+    """``repository`` as the normalized origin `orchestrator/record_shapes.py` decides."""
     origin = hosted_origin(repository.strip())
     if origin is None:
         raise Refused(
@@ -470,7 +462,7 @@ def checked_author(kind: str, node: str | None, member: str | None) -> Author:
     # llmlint: ignore[boundary_inputs_validated] A node id's grammar is the engine's, and it
     # accepts `/` in lifecycle ids, so a character set spelled here would refuse real ids.
     # Every caller has already refused an empty or control-bearing value (`_optional_text`,
-    # `registered_dispatches`), and `transcript_for` quotes the id with `shlex.join`.
+    # `dispatched_node`), and `transcript_for` quotes the id with `shlex.join`.
     if (kind == "node") != isinstance(node, str) or node == "":
         raise Refused(f"a {kind} draft names {node!r} as its node; {SHAPE}")
     return Author(kind=kind, node=node, member=member)
@@ -739,100 +731,24 @@ def _validated(
     return draft
 
 
-@dataclass(frozen=True)
-class RegisteredDispatch:
-    """One entry of a run's dispatch registry that can be checked against a live process."""
+def dispatched_node() -> str:
+    """The node the engine dispatched this process as, or :data:`UNRESOLVED`.
 
-    node: str
-    #: The kernel start time the entry recorded, without its spelling's prefix.
-    started: str
-
-
-def registered_dispatches(runs_root: Path, run: str) -> dict[int, RegisteredDispatch]:
-    """Every dispatch ``run`` records with a start time this can check, by process.
-
-    An entry recording no start time, or one in a spelling this does not read, is left
-    out rather than trusted: a pid alone names whichever process the kernel handed it to
-    last.
+    Read from :data:`NODE_ID_ENV`, which the engine names to the dispatch-env hook and
+    the hook passes on. A value carrying a control character is not one the engine wrote,
+    and naming the wrong node is worse than naming none.
     """
-    by_process: dict[int, RegisteredDispatch] = {}
-    for entry in sorted((runs_root / run / DISPATCH_REGISTRY).glob("*.json")):
-        try:
-            recorded = json.loads(entry.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(recorded, dict):
-            continue
-        pid = recorded.get(DISPATCH_PID)
-        node = recorded.get(DISPATCH_NODE)
-        started = recorded.get(DISPATCH_STARTED)
-        # llmlint: ignore[boundary_inputs_validated] The engine wrote this node id and owns
-        # its grammar, which admits `/`; this refuses what could forge a stored line or move
-        # a reader's cursor, and `transcript_for` quotes the id with `shlex.join`.
-        if (
-            type(pid) is int
-            and isinstance(node, str)
-            and node
-            and not CONTROL.search(node)
-            and isinstance(started, str)
-            and started.startswith(PROC_STAT_START)
-            and started.removeprefix(PROC_STAT_START).isdigit()
-        ):
-            by_process[pid] = RegisteredDispatch(node, started.removeprefix(PROC_STAT_START))
-    return by_process
-
-
-def process_started(pid: int) -> str | None:
-    """The kernel's own start time for a process, or `None` when it is gone.
-
-    Everything after the last `)`, because the field before it is the process name and is
-    the one field that can itself carry a bracket or a space.
-    """
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    _, closed, after = stat.rpartition(")")
-    fields = after.split() if closed else []
-    return fields[19] if len(fields) > 19 else None  # pragma: no branch - the kernel writes 52
-
-
-def process_parent(pid: int) -> int | None:
-    """The parent of a process, or `None` when it is gone."""
-    try:
-        status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    for line in status.splitlines():
-        if line.startswith("PPid:"):
-            stated = line.split(":", 1)[1].strip()
-            return int(stated) if stated.isdigit() else None
-    return None  # pragma: no cover - every /proc/<pid>/status carries PPid
-
-
-def lineage(pid: int) -> list[int]:
-    """``pid`` and every process it descends from, nearest first, stopping short of init."""
-    walked = [pid]
-    at = process_parent(pid)
-    while at is not None and at > 1 and at not in walked:
-        walked.append(at)
-        at = process_parent(at)
-    return walked
-
-
-def resolve_node(run: str, *, runs_root: Path | None, pid: int) -> str:
-    """The node whose recorded dispatch ``pid`` descends from, or :data:`UNRESOLVED`.
-
-    A runs root of `None` is one this process could not name, and so holds no registry.
-    """
-    if runs_root is None:
+    # llmlint: ignore[boundary_inputs_validated] The engine wrote this node id and owns its
+    # grammar, which admits `/`; this refuses what could forge a stored line or move a
+    # reader's cursor, and `transcript_for` quotes the id with `shlex.join`.
+    named = os.environ.get(NODE_ID_ENV, "")
+    # llmlint: ignore[changed_behavior_has_e2e] A control character is a forgery guard no
+    # launch can reach: the engine refuses such a node id in a plan, so the only way to
+    # produce one is to set the variable by hand, which `tests/test_follow_up_drafts.py`
+    # does; the blank and named paths are driven through the real command and a real launch.
+    if not named or CONTROL.search(named):
         return UNRESOLVED
-    registered = registered_dispatches(runs_root, run)
-    for at in lineage(pid):
-        found = registered.get(at)
-        if found is not None and process_started(at) == found.started:
-            return found.node
-    return UNRESOLVED
+    return named
 
 
 def runs_root() -> Path | None:
@@ -997,8 +913,8 @@ rest from where it runs:
   run                 the public id `onepipeline status` names the run by — --run, or
                       {RUN_ID_ENV}, as given where the runs root holds no record of it
   author.kind         --as (default: node)
-  author.node         for --as node, the dispatch this process descends from, read off the
-                      run's dispatch registry under {RUNS_ROOT_ENV}; `{UNRESOLVED}` when none
+  author.node         for --as node, {NODE_ID_ENV}, the node the engine dispatched this
+                      process as; `{UNRESOLVED}` when none
   author.member       --member, for --as monitor and --as pacemaker
   dispatch.scratch    {NODE_SCRATCH_ENV}
   dispatch.session    {SESSION_ENV}
@@ -1086,7 +1002,7 @@ def prepare(arguments: argparse.Namespace, root_env: str) -> tuple[Draft, Path]:
             "directory that exists"
         ) from None
     root = ensure_draft_root(root_env)
-    node = resolve_node(run, runs_root=runs_root(), pid=os.getpid()) if kind == "node" else None
+    node = dispatched_node() if kind == "node" else None
     key = follow_up_key(run)
     draft = Draft(
         title=title,

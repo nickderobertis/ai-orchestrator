@@ -662,7 +662,7 @@ in the environment wins, then the host's identities file
 (`$XDG_CONFIG_HOME/ai-orchestrator/claude-identities.env`, or the same path under
 `$HOME/.config`), then that default. Every entry point that reaches oneharness sources it — the llmlint and
 usage wrappers, the launch verbs, the plan reviewer, the drafter
-the envelope validator and the smoke — because
+the envelope reviewer and the smoke — because
 oneharness refuses to start whenever a named variant's `env_from` source is unset in the
 parent. Each variant maps its portable path to `CLAUDE_CONFIG_DIR`
 only inside its own child and masks ambient Anthropic API/OAuth credentials so they

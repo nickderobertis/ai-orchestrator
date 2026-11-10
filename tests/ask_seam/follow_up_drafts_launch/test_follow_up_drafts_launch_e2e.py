@@ -13,8 +13,8 @@ Then the dispatched node *uses* it. `tests/e2e/fake_backend.py` stands in for th
 alone, and its worker turn runs `$ORCHESTRATOR_FOLLOW_UP_DRAFT` in the session worktree the
 engine cut, with the environment that turn inherited — which is the only way to prove what a
 draft written inside a dispatch is stamped with: the run, the dispatch's scratch, session,
-working directory and git state, and the node, resolved from the run's own dispatch registry
-by walking up from the drafting process to the dispatch the engine recorded.
+working directory and git state, and the node, which the engine names to this host's
+dispatch-env hook as `ONEPIPELINE_NODE_ID` and that hook passes on to the dispatch.
 
 The root is stated to the launch rather than left to resolve to this checkout's
 `.follow-ups/`, for the reason `tests/plan_tooling/plan_flow/test_plan_root_env.py`'s
@@ -73,6 +73,7 @@ INHERITED = (
     "ONEPIPELINE_RUN_ID",
     "ONEPIPELINE_CHANNEL_ASKER",
     "ONEPIPELINE_NODE_SCRATCH_DIR",
+    "ONEPIPELINE_NODE_ID",
     "ONEVCS_SESSION",
     "ORCHESTRATOR_ASK_MANAGER",
     "CLAUDE_CODE_SESSION_ID",
@@ -148,6 +149,7 @@ def _environment(
             drafts.RUN_ID_ENV,
             drafts.NODE_SCRATCH_ENV,
             drafts.SESSION_ENV,
+            drafts.NODE_ID_ENV,
         ]
     )
     # The stand-in for the paid model runs the real drafting command in its own worktree,
@@ -336,10 +338,10 @@ def test_the_draft_is_stamped_with_the_run_the_dispatch_and_the_node_it_came_fro
     session = _given(launched.worker, drafts.SESSION_ENV, WORKER)
 
     assert draft.run == launched.run == _given(launched.worker, drafts.RUN_ID_ENV, WORKER)
-    registry = sorted(path.name for path in (launched.runs / launched.run / "dispatches").iterdir())
+    given = _given(launched.worker, drafts.NODE_ID_ENV, WORKER)
+    assert given == NODE, f"the dispatch-env hook handed the worker node {given!r}, not {NODE!r}"
     assert draft.author == drafts.Author("node", NODE, None), (
-        f"the draft names {draft.author}, where the dispatch it was written in is node {NODE}; "
-        f"the run's dispatch registry held {registry}"
+        f"the draft names {draft.author}, where the dispatch it was written in is node {NODE}"
     )
     assert draft.dispatch.scratch == _given(launched.worker, drafts.NODE_SCRATCH_ENV, WORKER)
     assert draft.dispatch.session == session and re.fullmatch(r"s-[0-9a-f]{12}", session)

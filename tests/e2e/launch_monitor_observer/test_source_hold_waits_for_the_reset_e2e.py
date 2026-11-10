@@ -35,7 +35,6 @@ from pathlib import Path
 from typing import Any
 
 import onetaskgraph_user_layer
-import plan_fixture_source
 import pytest
 from linear_board import linear_board
 from project_fixtures import project_from_plan
@@ -43,6 +42,7 @@ from test_adopted_engine_reads_an_adopted_run_e2e import _just, _until
 from test_orchestrate_launch_e2e import CandidatePlan, _node
 from test_orchestrate_launch_e2e import _environment as _launched_environment
 
+from orchestrator import plan_store
 from orchestrator.run_reading import RunId
 
 # What the recipes this journey runs leave in the temporary directory is this module's own
@@ -92,16 +92,14 @@ def _layer(endpoint: str) -> dict[str, Any]:
 
 def _edge_into_the_tracker(project: str) -> None:
     """Record, beside `edged`'s own dependency, its opaque edge to the tracker's item."""
-    native = project.split(":", 1)[1]
-    task = plan_fixture_source.root() / "tasks" / native / "edged.md"
+    (edged,) = [task for task in plan_store.read_tasks(project) if task.node_id == "edged"]
+    assert edged.location is not None, edged
+    task = Path(edged.location)
     written = task.read_text(encoding="utf-8")
-    own = f'depends_on: ["{native}/prerequisite"]'
+    own = "depends_on:\n"
     assert own in written, written
     opaque = json.dumps({"designator": DESIGNATOR, "id": ITEM, "kind": "blocks", "item": "task"})
-    task.write_text(
-        written.replace(own, f'depends_on: ["{native}/prerequisite", {opaque}]'),
-        encoding="utf-8",
-    )
+    task.write_text(written.replace(own, f"{own}- {opaque}\n", 1), encoding="utf-8")
 
 
 def _now_ms() -> int:

@@ -94,21 +94,15 @@ from __future__ import annotations
 
 import hashlib
 import re
-import sys
 from collections.abc import Iterator, Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from orchestrator import (
-    adoption_guard,
     npm_installs,
-    plan_budgets,
     plan_review,
     plan_store,
-    publication_guard,
-    structural_guard,
-    task_body,
 )
 from orchestrator.root import REPO_ROOT
 
@@ -1108,7 +1102,7 @@ def criteria_block(task: str) -> str:
     contract C6b — before `plan check` hands a consumer check any plan at all, so a
     refusal here would only restate the engine's.
     """
-    # llmlint: ignore-block[boundary_inputs_validated] The criteria-section rule is the engine's (onepipeline's contract C6b), and this host moved it there on purpose: every engine `config/onepipeline.version` admits refuses both shapes at plan load and at `start`, and the one path that reads a task without that loader — `check_directly`, for an engine with no `plan check` — says in its accepted line that a launch may still refuse the plan's structure.  # noqa: E501
+    # llmlint: ignore-block[boundary_inputs_validated] The criteria-section rule is the engine's (onepipeline's contract C6b), and this host moved it there on purpose: every engine `config/onepipeline.version` admits refuses both shapes at plan load and at `start`, and `just check-plan` reads every plan through that loader before this module's checks run.  # noqa: E501
     opens = list(OPENS_CRITERIA.finditer(task))
     if not opens:
         return ""
@@ -1467,44 +1461,15 @@ def _nodes(node: Mapping[str, Any], node_id: str) -> Iterator[Node]:
             )
 
 
-def check_plan(plan: object) -> int:
-    """Check every dispatched node of ``plan``; return how many were checked.
-
-    The criteria first and this host's publication policy after, which is the order the
-    two cost a plan's author: a criterion its own judge would fail on is a wrong bar
-    whatever repository it lands in, and where it lands and whether the release it waits
-    on could ever arrive there are the structural rules
-    :data:`orchestrator.structural_guard.GUARDS` lists, which the live-edit check reads too.
-    Whether the `plans` board would take each task's issue body is
-    :mod:`orchestrator.task_body`'s, and :func:`check_directly` asks it of the store's
-    records rather than of ``plan``: the plan :func:`orchestrator.plan_store.read_plan`
-    assembles carries no metadata map, and the map is part of the body.
-    """
-    checked = 0
-    for node in dispatched_nodes(plan):
-        # llmlint: ignore[boundary_inputs_validated] How a task's own notes are headed is the `plan-task` template's to render, and a launch under `require_rendered` holds a task to being that rendering, so a variant heading is one the engine refuses as a hand edit; a launch that opts out (the planning launch, or a suite exporting the variable) accepts hand-written notes on purpose, and this reads them as written rather than guessing at a variant.  # noqa: E501
-        check(node.task, node.id, resolve_bar(node.persona))
-        checked += 1
-    structural_guard.check_plan(plan)
-    return checked
-
-
 #: The executable this repository's checks are registered as, which
 #: :mod:`orchestrator.plan_check` hands the engine's own plan check. Passed relative to
 #: the working directory that command gives the verb, which is this checkout's root.
 PLAN_CHECK_SCRIPT = Path("scripts") / "plan-check.sh"
 
-#: How the two paths name themselves in what they print. An operator reading an accepted
-#: plan has to know which loader read it, because only one of them is the launch's own
-#: and the other leaves a structural refusal for the launch to make.
+#: How an accepted plan names the loader that read it, which is the launch's own.
 THROUGH_ENGINE = (
     f"read through `{ENGINE} plan check`, with this repository's checks registered as "
     f"{PLAN_CHECK_SCRIPT.as_posix()}"
-)
-DIRECTLY = (
-    f"read with this repository's checks alone: the `{ENGINE}` this command resolved "
-    f"carries no `plan check`, so the engine's own loader did not read this plan and a "
-    f"launch may still refuse its structure"
 )
 
 
@@ -1518,7 +1483,7 @@ class Counted(NamedTuple):
 
 
 def accepted(counted: Counted, path: str, *, review_exempt: bool = False) -> str:
-    """What an accepted plan reports, in one wording both paths print.
+    """What an accepted plan reports.
 
     The count is what stops a plan whose nodes were all skipped for the wrong reason
     reading like a clean one — so where it is unknown the line says so, and why, rather
@@ -1539,24 +1504,16 @@ def accepted(counted: Counted, path: str, *, review_exempt: bool = False) -> str
     return f"check-plan: {read}, {reviewed} ({path})"
 
 
-def plan_record_refusal(
-    project: str, plan: object, owned: Mapping[str, object] | None = None
-) -> str | None:
+def plan_record_refusal(project: str, plan: object) -> str | None:
     """Why ``plan`` carries no plan-level review record on ``project``, or ``None``.
 
-    The one reading of that record for both of `just check-plan`'s paths — the check the
-    engine's `plan check` spawns and :func:`check_directly` — so that what they read and
-    what they say cannot drift apart: the path with no engine verb once read no
-    plan-level record at all and accepted a plan the other path refused. The record lives
-    on the **project** record, which the loaded plan does not carry, so it is read from
-    the store by the qualified id rather than from ``plan``. A record the store cannot
-    answer is a refusal naming what the store said and never an accept, because the plan
-    it is being asked about is one that same store just loaded. What is not answered here
-    is a review bar this checkout cannot fingerprint: that :class:`OSError` is the
-    caller's, because each path already reports that condition in its own shape.
-
-    ``owned`` is each node's budgets record, for :func:`check_directly`'s plan, which the
-    store reads without the metadata the spawned check's document carries for each node.
+    The reading of that record for the check the engine's `plan check` spawns. The record
+    lives on the **project** record, which the loaded plan does not carry, so it is read
+    from the store by the qualified id rather than from ``plan``. A record the store
+    cannot answer is a refusal naming what the store said and never an accept, because
+    the plan it is being asked about is one that same store just loaded. What is not
+    answered here is a review bar this checkout cannot fingerprint: that
+    :class:`OSError` is the caller's, which reports that condition in its own shape.
     """
     try:
         record = plan_store.project_record(project)
@@ -1566,7 +1523,7 @@ def plan_record_refusal(
             f"{exc}; nothing says a reviewer read this plan whole, so review it with "
             f"`just review-plan {project}` once the store answers"
         )
-    if not plan_review.plan_unreviewed(record, plan, owned=owned):
+    if not plan_review.plan_unreviewed(record, plan):
         return None
     return (
         f"the project record carries no plan-level review record for the plan's "
@@ -1575,101 +1532,3 @@ def plan_record_refusal(
         f"with `just review-plan {project}`, which spends one turn on the plan whole "
         f"once every task carries a record"
     )
-
-
-def check_directly(project: str, *, review_exempt: bool = False) -> int:
-    """Check ``project`` with this repository's checks alone, against an engine with no
-    `plan check`.
-
-    ``review_exempt`` lifts the per-task and the plan-level review refusals and nothing
-    else, for a project :func:`orchestrator.plan_check.review_exempt` answers for: that is
-    where the exemption and its reason are stated, and the caller asks it.
-
-    The path this command took before the engine had a verb to register a check with,
-    kept rather than deleted because it is the answer for a host whose engine predates
-    that verb — and because it is the same checks over the same plan, so the two paths
-    agree by construction rather than by being kept in step: the per-task records and
-    the plan-level record are both read here, the second through the
-    :func:`plan_record_refusal` the spawned check reads it through. What it cannot do is
-    make the loader's own refusals: those are the engine's, and a plan checked this way
-    is still refused by the launch for a structural error this never looks at.
-    """
-    try:
-        plan, records = plan_store.read_project(project)
-    except (OSError, ValueError) as exc:
-        print(
-            f"check-plan: cannot read project {project}: {exc}; pass the qualified "
-            "project id you are about to hand `just orchestrate`",
-            file=sys.stderr,
-        )
-        return 2
-    try:
-        checked = check_plan(plan)
-        task_body.check_records(records)
-    except (
-        CriteriaError,
-        publication_guard.PublicationError,
-        adoption_guard.AdoptionError,
-        task_body.BodyError,
-    ) as exc:
-        print(f"check-plan: {exc}", file=sys.stderr)
-        return 1
-    # tests/test_criteria_guard.py covers this, and no recipe journey can: the recipe
-    # runs in this checkout, which by construction holds the review configuration
-    # whose absence this reports.
-    # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
-    except OSError as exc:
-        print(
-            f"check-plan: cannot read this checkout's own review configuration: {exc}; run "
-            f"`just bootstrap` from the repository root and retry",
-            file=sys.stderr,
-        )
-        return 2
-    budgets = plan_budgets.refusals(project, plan, plan_budgets.tasks_of_records(records))
-    for refused in budgets:
-        where = f"{refused.node}: " if refused.node is not None else ""
-        print(f"check-plan: {where}{refused.field}: {refused.reason}", file=sys.stderr)
-    try:
-        unreviewed = [] if review_exempt else plan_review.unreviewed(records)
-        whole = (
-            None
-            if review_exempt
-            else plan_record_refusal(project, plan, plan_review.owned_by_node(records))
-        )
-    # tests/test_criteria_guard.py covers this: the review bar is composed from this
-    # checkout's own tracked files, so a recipe journey run from here cannot remove one.
-    # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
-    except OSError as exc:
-        print(
-            f"check-plan: cannot fingerprint the review bar this plan would be reviewed "
-            f"against: {exc}; run `just bootstrap` from the repository root and retry",
-            file=sys.stderr,
-        )
-        return 2
-    if unreviewed:
-        named = ", ".join(task.node_id for task in unreviewed)
-        # The qualification is unconditional rather than a branch on this plan's own
-        # store, which would be a second answer to `plan_review.unwritable`'s question
-        # and a diagnostic no journey could reach without writing to the live board. A
-        # record is an entry of a task's own Markdown document, so a plan held anywhere
-        # else cannot carry one — and saying so here is what stops an operator reading
-        # `review-plan` as a step that will clear a board plan. Running it says which
-        # store it is, immediately and without spending a turn.
-        print(
-            f"check-plan: {len(unreviewed)} task(s) carry no review record for their current "
-            f"authored content: {named}. Nothing has reviewed those criteria, which is how "
-            f"a plan written under time pressure reaches a dispatch. Review them with "
-            f"`just review-plan {project}`, which records a pass only for a plan held "
-            f"in a local Markdown store.",
-            file=sys.stderr,
-        )
-    if whole is not None:
-        print(f"check-plan: {whole}", file=sys.stderr)
-    if budgets or unreviewed or whole is not None:
-        return 1
-    # Over the records rather than the plan, the way `orchestrator/plan_check.py` warns
-    # after the verb accepts: the two paths then measure one body from one map.
-    for warned in task_body.warnings(records):
-        print(warned, file=sys.stderr)
-    print(accepted(Counted(checked), DIRECTLY, review_exempt=review_exempt))
-    return 0

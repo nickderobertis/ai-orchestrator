@@ -1,18 +1,16 @@
 """A lifecycle node this host's publication policy would refuse is refused before dispatch.
 
-Two shapes reach a dispatch, run for as long as the work takes, and are refused only
-once the branch is finished: a node whose `title` the destination repository's own
-`commit-msg` hook rejects, and a node consuming a release target on an identity whose
-workflow opens no change request. One node of this host lost finished, judge-passed work
-to a `refactor:` subject and its dependent was skipped for it; another ran an hour and
-thirty-six minutes before the second was reported.
+A node consuming a release target on an identity whose workflow opens no change request
+reaches a dispatch, runs for as long as the work takes, and is refused only once the
+branch is finished; one ran an hour and thirty-six minutes before that was reported. A
+node's `title` is not asked here: the engine's own loader puts it to the destination's
+`commit-msg` hook, which `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py`
+drives through the real `just check-plan`.
 
-The git checkout and its hook here are real — the hook is written, made executable, and
-**run**, which is the whole of how this refusal and a repository's own rule stay one
-statement. What is doubled is `onevcs`, at the boundary this repository doubles every
-published CLI a recipe delegates to: it is what says which identity a `repo` names and
-which policy that identity resolves, and asking the real one would make this tier's
-memoized verdict depend on another repository's registration.
+The git checkout here is real. What is doubled is `onevcs`, at the boundary this
+repository doubles every published CLI a recipe delegates to: it is what says which
+identity a `repo` names and which policy that identity resolves, and asking the real one
+would make this tier's memoized verdict depend on another repository's registration.
 `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` drives the real one,
 through the real `just check-plan`, against a registered scratch identity.
 """
@@ -38,51 +36,24 @@ from scratch_identity import registered, rules_for
 from orchestrator import publication_guard
 from orchestrator.publication_guard import (
     Destination,
-    PublicationError,
     RepoIdentity,
     Workflow,
-    check_plan,
-    commit_msg_hook,
     destination,
-    hook_refusal,
     publishing_nodes,
     refusals,
 )
 from orchestrator.root import REPO_ROOT
-
-#: A `commit-msg` hook of the shape this host's own is: it reads the subject and nothing
-#: else, because `onevcs` runs one against a subject it is about to publish where no
-#: index, diff or branch exists. It refuses a type its repository cuts no release from.
-HOOK = """#!/usr/bin/env bash
-set -euo pipefail
-subject=$(head -n 1 "$1")
-case "$subject" in
-    feat:*|fix:*|perf:*) exit 0 ;;
-esac
-echo "commit-msg: this repository does not release from '${subject%%:*}:'" >&2
-exit 1
-"""
 
 #: A workflow that opens a change request, so a node consuming a release target on it is
 #: waiting on a publication that identity really makes.
 OPENS_A_CHANGE_REQUEST = Workflow.CHANGE_AUTO
 
 
-def _checkout(root: Path, *, hook: str | None = HOOK) -> Path:
-    """A real git checkout, with a real `commit-msg` hook where one is asked for."""
+def _checkout(root: Path) -> Path:
+    """A real git checkout, the publication checkout a stand-in `onevcs` names."""
     checkout = root / "publication"
     checkout.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", "-b", "main", str(checkout)], check=True)
-    if hook is None:
-        return checkout
-    hooks = checkout / ".githooks"
-    hooks.mkdir()
-    written = hooks / "commit-msg"
-    written.write_text(hook, encoding="utf-8")
-    written.chmod(written.stat().st_mode | stat.S_IXUSR)
-    subprocess.run(
-        ["git", "-C", str(checkout), "config", "core.hooksPath", ".githooks"], check=True
-    )
     return checkout
 
 
@@ -150,166 +121,6 @@ def _plan(**node: Any) -> dict[str, Any]:
     what such a model would refuse to express.
     """
     return {"tasks": [{"id": "work", "title": "feat: do it", "repo": "service", **node}]}
-
-
-def test_a_title_the_destinations_own_hook_refuses_is_refused_before_dispatch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The subject a node's title becomes, ruled on by the repository that will land it.
-
-    `onevcs` passes the title to the squash commit and to `gh pr create` and never
-    re-derives it, so a hook that refuses it refuses the publication — after the whole
-    dispatch has been paid for.
-    """
-    _onevcs(
-        tmp_path,
-        monkeypatch,
-        answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
-    )
-
-    found = refusals(_plan(title="refactor: rename the reader"))
-
-    assert [(one.node, one.field) for one in found] == [("work", "title")]
-    assert "'refactor: rename the reader'" in found[0].reason, found[0].reason
-    assert "does not release from 'refactor:'" in found[0].reason, found[0].reason
-    assert "local/service" in found[0].reason, found[0].reason
-
-
-def test_a_title_that_hook_accepts_is_not_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The half that makes the refusal worth having: a sound plan still launches."""
-    _onevcs(
-        tmp_path,
-        monkeypatch,
-        answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
-    )
-
-    assert refusals(_plan(title="fix: correct the reader")) == []
-
-
-def test_a_destination_that_declares_no_hook_is_not_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Nothing here is knowable, so nothing is refused.
-
-    A plan is checked against repositories this checkout may never have seen, and
-    refusing one for what this host cannot read would refuse plans that launch today.
-    """
-    _onevcs(
-        tmp_path,
-        monkeypatch,
-        answers={"service": (_checkout(tmp_path, hook=None), Workflow.LOCAL_DIRECT)},
-    )
-
-    assert refusals(_plan(title="refactor: rename the reader")) == []
-
-
-def test_a_hook_that_is_not_executable_is_read_as_no_hook(tmp_path: Path) -> None:
-    """git runs an executable hook and skips anything else, and so does this."""
-    checkout = _checkout(tmp_path)
-    hook = checkout / ".githooks" / "commit-msg"
-    hook.chmod(hook.stat().st_mode & ~stat.S_IXUSR & ~stat.S_IXGRP & ~stat.S_IXOTH)
-
-    assert commit_msg_hook(checkout) is None
-
-
-def test_the_hook_is_found_where_git_itself_would_find_it(tmp_path: Path) -> None:
-    """`core.hooksPath` decides, and git is what is asked rather than the setting read.
-
-    A publication's disposable clone is given the lender's hooks path when it is cut, so
-    the hook resolved here is the hook that will run. A checkout that sets none falls
-    back to git's own default, which is a real state for a repository whose hooks are
-    installed rather than tracked.
-    """
-    declared = _checkout(tmp_path)
-    assert commit_msg_hook(declared) == declared / ".githooks" / "commit-msg"
-
-    default = _checkout(tmp_path / "other", hook=None)
-    installed = default / ".git" / "hooks" / "commit-msg"
-    installed.write_text(HOOK, encoding="utf-8")
-    installed.chmod(installed.stat().st_mode | stat.S_IXUSR)
-    assert commit_msg_hook(default) == installed
-
-
-def test_a_directory_that_is_no_git_checkout_answers_no_hook(tmp_path: Path) -> None:
-    """A publication checkout this host cannot ask git about says nothing about a title."""
-    outside = tmp_path / "not-a-checkout"
-    outside.mkdir()
-
-    assert commit_msg_hook(outside) is None
-    assert commit_msg_hook(tmp_path / "absent") is None
-
-
-def test_a_host_that_cannot_run_git_says_nothing_about_a_title(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """git is what resolves the hook, so a host without it resolves none.
-
-    The same answer an unreadable checkout gets, and for the same reason: this refusal
-    is written to miss rather than to refuse a node it cannot read.
-    """
-    checkout = _checkout(tmp_path)
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    monkeypatch.setenv("PATH", str(empty))
-
-    assert commit_msg_hook(checkout) is None
-
-
-def test_a_hook_that_refuses_without_saying_why_is_still_reported(tmp_path: Path) -> None:
-    """A refusal has to name something an operator can act on, even a silent one.
-
-    A hook that exits non-zero refuses the publication commit whatever its reason, so
-    reporting it before the dispatch is the accurate answer — but a reason of empty
-    string would read as a refusal about nothing.
-    """
-    checkout = _checkout(tmp_path, hook="#!/usr/bin/env bash\nexit 3\n")
-
-    reported = hook_refusal(checkout / ".githooks" / "commit-msg", checkout, "feat: fine")
-
-    assert reported == "it exited 3 without saying why"
-
-
-def test_a_hooks_own_report_reaches_the_refusal_bounded_and_printable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Another repository's program writes into a message this host prints to a terminal.
-
-    A report carrying escape sequences could move the cursor, colour unrelated output, or
-    overwrite the refusal it is quoted inside; one carrying no newline at all could be
-    arbitrarily long and bury the node and the field the refusal is about. So it is
-    collapsed, every control character is replaced, and the length is bounded with the
-    truncation said rather than silent.
-    """
-    shouting = "\x1b[2J\x1b[H" + "x" * (publication_guard.REPORT_LIMIT + 50)
-    _onevcs(
-        tmp_path,
-        monkeypatch,
-        answers={
-            "service": (
-                _checkout(
-                    tmp_path,
-                    hook=f'#!/usr/bin/env bash\nprintf %s "{shouting}" >&2\nexit 1\n',
-                ),
-                Workflow.LOCAL_DIRECT,
-            )
-        },
-    )
-
-    (refused,) = refusals(_plan(title="refactor: rename it"))
-
-    assert "\x1b" not in refused.reason, refused.reason
-    assert publication_guard.CONTROL_STAND_IN in refused.reason, refused.reason
-    assert f"[{publication_guard.REPORT_LIMIT} of " in refused.reason, refused.reason
-    assert "x" * (publication_guard.REPORT_LIMIT + 1) not in refused.reason, refused.reason
-
-
-def test_a_hook_that_cannot_be_run_at_all_refuses_nothing(tmp_path: Path) -> None:
-    """Nothing was learned, so nothing is refused."""
-    checkout = _checkout(tmp_path, hook=None)
-
-    assert hook_refusal(checkout / ".githooks" / "commit-msg", checkout, "feat: fine") is None
 
 
 def test_a_node_consuming_a_release_its_identity_never_publishes_is_refused(
@@ -410,8 +221,7 @@ def test_a_workflow_outside_the_published_vocabulary_decides_nothing(
     """A word this module does not know is unknown rather than either half of the answer.
 
     The four names are `onevcs`'s published `merge_policy` vocabulary; a release that
-    added a fifth would have this refuse nothing about it rather than guess, and the
-    title half still answers because it reads the destination's hook rather than a name.
+    added a fifth would have this refuse nothing about it rather than guess.
     """
     _onevcs(tmp_path, monkeypatch, answers={"service": (_checkout(tmp_path), "something-new")})
 
@@ -419,7 +229,6 @@ def test_a_workflow_outside_the_published_vocabulary_decides_nothing(
         RepoIdentity("local/service"), tmp_path / "publication", workflow=None, origin=None
     )
     assert refusals(_plan(consumes={"library": "pypi"})) == []
-    assert [one.field for one in refusals(_plan(title="chore: tidy"))] == ["title"]
 
 
 def test_a_repository_this_host_cannot_resolve_is_passed_over(
@@ -429,7 +238,7 @@ def test_a_repository_this_host_cannot_resolve_is_passed_over(
     _onevcs(tmp_path, monkeypatch, answers={})
 
     assert destination("service") is None
-    assert refusals(_plan(title="refactor: rename it", consumes={"library": "pypi"})) == []
+    assert refusals(_plan(consumes={"library": "pypi"})) == []
 
 
 def test_a_host_with_no_onevcs_at_all_refuses_nothing(
@@ -575,55 +384,25 @@ def test_a_plan_shape_this_does_not_decide_is_left_to_the_loader(plan: object) -
     assert refusals(plan) == []
 
 
-def test_the_raising_face_reports_the_same_answer_one_refusal_at_a_time(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Both paths read one answer, so the two cannot disagree about a plan.
-
-    `check_plan` is what the direct path reports one refusal at a time through;
-    `orchestrator/plan_check.py` reports them all through the verb. What differs is how
-    much of that one answer each is able to print, which is why the refusal it raises is
-    asserted to be the same object the other path would render — and why the correction
-    that empties the answer empties both.
-    """
-    _onevcs(
-        tmp_path,
-        monkeypatch,
-        answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
-    )
-    refused = _plan(title="refactor: rename it", consumes={"library": "pypi"})
-
-    with pytest.raises(PublicationError) as raised:
-        check_plan(refused)
-
-    assert str(raised.value) == f"work: {refusals(refused)[0].reason}"
-
-    corrected = _plan(title="fix: rename it")
-
-    assert refusals(corrected) == [], "the corrected plan is still refused for something"
-    try:
-        check_plan(corrected)
-    except PublicationError as error:
-        pytest.fail(f"the raising face refused a plan its own reader took: {error}")
-
-
 def test_a_node_wrong_in_two_ways_is_told_about_both(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Two independent fields with two independent corrections, reported together.
 
-    A node told only about its title would be retitled, re-checked, and refused again for
-    what it consumes — a second launch attempt for what one report could have said.
+    A node told only about its repository key would be corrected, re-checked, and refused
+    again for what it consumes — a second launch attempt for what one report could have
+    said.
     """
     _onevcs(
         tmp_path,
         monkeypatch,
         answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
+        origins={"service": HOSTED},
     )
 
-    found = refusals(_plan(title="refactor: rename it", consumes={"library": "pypi"}))
+    found = refusals(_plan(consumes={"library": "pypi"}, metadata=ON_THE_RESERVED_KEY))
 
-    assert sorted(one.field for one in found) == ["consumes", "title"], found
+    assert sorted(one.field for one in found) == ["consumes", "repo"], found
     assert {one.node for one in found} == {"work"}, found
 
 
@@ -697,16 +476,16 @@ def test_a_path_origin_on_the_reserved_key_is_the_case_the_key_exists_for(
 def test_an_answer_naming_no_origin_decides_nothing_about_the_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Read leniently: the two refusals that need only the checkout are still made."""
+    """Read leniently: the refusal that needs only the policy is still made."""
     _onevcs(
         tmp_path,
         monkeypatch,
         answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
     )
 
-    found = refusals(_plan(title="refactor: rename it", metadata=ON_THE_RESERVED_KEY))
+    found = refusals(_plan(consumes={"library": "pypi"}, metadata=ON_THE_RESERVED_KEY))
 
-    assert [one.field for one in found] == ["title"], found
+    assert [one.field for one in found] == ["consumes"], found
 
 
 def test_a_verb_that_does_not_return_is_bounded_rather_than_waited_on(
@@ -740,20 +519,6 @@ def test_an_onevcs_that_cannot_be_started_says_nothing(
     assert destination("service") is None
 
 
-def test_a_hook_that_does_not_return_is_bounded_the_same_way(tmp_path: Path) -> None:
-    """The destination's own hook is another program, and is given the same bound.
-
-    The hook execs its sleep, so it is one process; a hook that forks before it waits is
-    the journey `test_a_hook_whose_children_do_not_return_leaves_none_of_them_running`
-    drives.
-    """
-    checkout = _checkout(tmp_path, hook="#!/usr/bin/env bash\nexec sleep 30\n")
-
-    with pytest.MonkeyPatch.context() as bounded:
-        bounded.setattr(publication_guard, "TIMEOUT_SECONDS", 1)
-        assert hook_refusal(checkout / ".githooks" / "commit-msg", checkout, "feat: fine") is None
-
-
 #: What a test of a forking stand-in is handed: a factory for trees it ends at teardown.
 MakeTree = Callable[[Path], ProcessTree]
 
@@ -771,26 +536,6 @@ def _assert_tree_ended(tree: ProcessTree) -> None:
     assert left == {}, f"left running after the guard returned: {left}"
 
 
-def test_a_hook_whose_children_do_not_return_leaves_none_of_them_running(
-    tmp_path: Path, process_tree: MakeTree
-) -> None:
-    """A timed-out hook is ended with everything it started, however deep.
-
-    `subprocess.run`'s own bound kills the hook alone, so a child it forked — and that
-    child's own — outlived the guard as orphans and failed this repository's gate under
-    its zero-process cleanup budget.
-    """
-    checkout = _checkout(tmp_path, hook=None)
-    tree = process_tree(tmp_path / "tree")
-    hook = tree.install(checkout / ".githooks" / "commit-msg")
-
-    with pytest.MonkeyPatch.context() as bounded:
-        bounded.setattr(publication_guard, "TIMEOUT_SECONDS", 1)
-        assert hook_refusal(hook, checkout, "feat: fine") is None
-
-    _assert_tree_ended(tree)
-
-
 def test_a_destination_lookup_whose_children_do_not_return_leaves_none_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_tree: MakeTree
 ) -> None:
@@ -804,45 +549,31 @@ def test_a_destination_lookup_whose_children_do_not_return_leaves_none_running(
     _assert_tree_ended(tree)
 
 
-def test_a_hook_directory_lookup_whose_children_do_not_return_leaves_none_running(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_tree: MakeTree
-) -> None:
-    """The git that resolves the hook directory is the third subprocess, ended the same way."""
-    checkout = _checkout(tmp_path)
-    tree = process_tree(tmp_path / "tree")
-    _on_path(monkeypatch, tree, tmp_path, "git")
-    monkeypatch.setattr(publication_guard, "TIMEOUT_SECONDS", 1)
-
-    assert commit_msg_hook(checkout) is None
-
-    _assert_tree_ended(tree)
-
-
 def test_a_descendant_that_detaches_is_outside_the_bound_but_does_not_hold_the_guard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_tree: MakeTree
 ) -> None:
     """A process that leaves the group for a session of its own is the guarantee's edge.
 
     The module's docstring says so: ending a process group cannot reach it. What the guard
-    still owes is to return — the detached process holds the hook's output open, so the
+    still owes is to return — the detached process holds the lookup's output open, so the
     drain after the kill is bounded rather than waited to the end of its sleep.
     """
-    checkout = _checkout(tmp_path, hook=None)
     tree = process_tree(tmp_path / "tree")
-    hook = checkout / ".githooks" / "commit-msg"
-    hook.parent.mkdir(parents=True)
-    hook.write_text(
+    lookup = tmp_path / "bin" / "onevcs"
+    lookup.parent.mkdir(parents=True)
+    lookup.write_text(
         "#!/usr/bin/env bash\n"
         f'setsid "{tree.install(tmp_path / "detached")}" < /dev/null &\n'
         f'until [ -s "{tree.root}/grandchild.pid" ]; do sleep 0.05; done\n'
         "exec sleep 300\n",
         encoding="utf-8",
     )
-    hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
+    lookup.chmod(lookup.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{lookup.parent}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setattr(publication_guard, "TIMEOUT_SECONDS", 1)
     monkeypatch.setattr(publication_guard, "DRAIN_SECONDS", 1)
 
-    assert hook_refusal(hook, checkout, "feat: fine") is None
+    assert destination("service") is None
     assert set(tree.recorded()) == {"leader", "child", "grandchild"}
 
 

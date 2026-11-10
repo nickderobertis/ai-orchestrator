@@ -18,8 +18,8 @@
 #
 # The root's environment name is read out of scripts/follow-up-env.sh, its one
 # composition, and handed to the module rather than spelled there. The process is
-# replaced rather than forked, so the draft's own process descends directly from the
-# caller's — the ancestry the module resolves a node from.
+# replaced rather than forked, so the draft inherits the caller's environment whole —
+# `ONEPIPELINE_NODE_ID` among it, which names the node.
 set -euo pipefail
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.

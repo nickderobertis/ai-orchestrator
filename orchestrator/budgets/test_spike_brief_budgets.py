@@ -241,7 +241,7 @@ def test_real_budget_cli_selects_saved_completed_flows(
     import subprocess
 
     from orchestrator import spike_brief
-    from orchestrator.project_store import write_plan_project
+    from orchestrator.plan_records import write_plan_project
     from orchestrator.root import REPO_ROOT
 
     authoring = tmp_path / "authoring"
@@ -400,7 +400,7 @@ def test_real_budget_cli_refuses_incomplete_selection(
     import subprocess
 
     from orchestrator import spike_brief
-    from orchestrator.project_store import write_plan_project
+    from orchestrator.plan_records import write_plan_project
     from orchestrator.root import REPO_ROOT
 
     runs = tmp_path / "runs"

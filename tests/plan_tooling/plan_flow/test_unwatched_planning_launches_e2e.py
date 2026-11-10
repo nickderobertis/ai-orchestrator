@@ -55,7 +55,7 @@ from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: This journey is its own Nx project's, `plan-tooling-plan-flow`; see
@@ -358,11 +358,10 @@ def test_each_planning_launch_records_the_session_that_made_it(
     )
 
 
-#: What makes a recorded bus configuration this checkout's: the layout, this host's
-#: envelope hook, and its measured reply window, each held to the file itself by
-#: `tests/test_onemessagebus_config.py`.
+#: What makes a recorded bus configuration this checkout's: the layout, no envelope
+#: validator — the engine's envelope reviewer judges every reply — and its measured reply
+#: window, each held to the file itself by `tests/test_onemessagebus_config.py`.
 BUS_PROFILE = "planner-channel"
-BUS_HOOK_COMMAND = ["scripts/envelope-review.sh"]
 BUS_REPLY_WINDOW_SECONDS = 3000
 
 
@@ -372,11 +371,12 @@ def test_each_planning_launch_records_this_checkouts_bus_configuration(
 ) -> None:
     """Both of the flow's launches keep their channel under this host's bus configuration.
 
-    `scripts/onepipeline.sh` adds `--bus-config config/onemessagebus.yaml` to every
-    `onepipeline start`, and the engine records what it parsed in the run's launch record
-    as `bus_config`. The design-document run is launched by the flow's tail and by no
-    other journey's launch, so this is where that shape's record is read; an engine given
-    no configuration records none, and one given another file records other values.
+    `config/onepipeline.launch.yaml`, which `scripts/onepipeline.sh` names on every
+    `onepipeline start`, names `config/onemessagebus.yaml`, and the engine records what it
+    parsed in the run's launch record as `bus_config`. The design-document run is launched
+    by the flow's tail and by no other journey's launch, so this is where that shape's
+    record is read; an engine given no configuration records none, and one given another
+    file records other values.
     """
     record = observed.runs / launched / "launch.json"
     assert record.is_file(), (
@@ -388,19 +388,63 @@ def test_each_planning_launch_records_this_checkouts_bus_configuration(
         f"defaults rather than this host's. The flow reported:\n{observed.reported}"
     )
     assert bus.get("profile") == BUS_PROFILE, bus
-    hooks = bus.get("hooks")
-    assert isinstance(hooks, list) and [
-        hook.get("command") for hook in hooks if isinstance(hook, dict)
-    ] == [BUS_HOOK_COMMAND], (
-        f"run {launched}'s channel does not judge replies by this host's envelope hook: {hooks}"
-    )
-    assert not bus.get("validators"), (
-        f"run {launched} recorded deprecated validators: {bus.get('validators')}"
-    )
+    assert not bus.get("validators"), bus.get("validators")
+    assert not bus.get("hooks"), bus.get("hooks")
     codecs = bus.get("codecs")
     monitor = codecs.get("monitor") if isinstance(codecs, dict) else None
     assert isinstance(monitor, dict), f"run {launched} recorded no monitor binding: {bus}"
     assert monitor.get("reply_window_seconds") == BUS_REPLY_WINDOW_SECONDS, (
         f"run {launched} serves under a reply window of "
         f"{monitor.get('reply_window_seconds')!r}, not this host's {BUS_REPLY_WINDOW_SECONDS}"
+    )
+
+
+#: Every launch setting `scripts/onepipeline.sh` handed a planning launch as a flag, or
+#: through the variable the flag beats, before `config/onepipeline.launch.yaml` carried
+#: it — exactly as it rendered each — and what a planning launch named none of: no run-end
+#: hook and no drafting graph. Held here as those values rather than read back from the new
+#: document, so the document cannot drift from what a planning launch used to be.
+PLANNING_LAUNCH_BEFORE = {
+    "template_root": REPO_ROOT / "templates",
+    "dispatch_env_hook": REPO_ROOT / "scripts" / "dispatch-env-hook.sh",
+}
+
+
+@pytest.mark.parametrize("launched", [RUN, DESIGN_RUN], ids=["planner", "design-document"])
+def test_each_planning_launch_records_the_launch_settings_it_had_before_the_launch_config(
+    launched: str, observed: Observed
+) -> None:
+    """Both of the flow's launches record what the wrapper's flags used to set, and no more.
+
+    Each names the launch config through `scripts/onepipeline.sh` and blanks the run-end
+    hooks and the drafting graph it states for `just orchestrate`, so neither run fires a
+    hook or drafts a change request — as before — while both keep this checkout's template
+    root, dispatch-env hook, bus configuration and maintenance schedule, and gain the
+    envelope reviewer and its bar. Both launches are this suite's, which exports
+    `ONEPIPELINE_REQUIRE_RENDERED=false` for its hand-written plans, and the planner's
+    launch names `--require-rendered false` itself, so neither is held to its rendering, as
+    neither was. A command the engine spawns is recorded as the document spells it and run
+    in the recorded launch directory, so it is compared as the file it runs.
+    """
+    record = observed.runs / launched / "launch.json"
+    assert record.is_file(), (
+        f"the flow left no launch record at {record}. It reported:\n{observed.reported}"
+    )
+    recorded = json.loads(record.read_text(encoding="utf-8"))
+    directory = Path(recorded["dir"])
+
+    assert recorded.get("require_rendered", False) is False, recorded
+    assert Path(recorded["template_root"]).resolve() == PLANNING_LAUNCH_BEFORE["template_root"]
+    assert (directory / recorded["dispatch_env_hook"]).resolve() == PLANNING_LAUNCH_BEFORE[
+        "dispatch_env_hook"
+    ]
+    assert isinstance(recorded.get("bus_config"), dict), recorded
+    assert isinstance(recorded.get("maintenance_config"), dict), recorded
+    for key in ("success_hook", "failure_hook", "pr_author_graph"):
+        assert not recorded.get(key), f"run {launched} gained a {key} it never had: {recorded}"
+    assert (directory / recorded["envelope_reviewer"]).resolve() == (
+        REPO_ROOT / "scripts" / "envelope-review.sh"
+    )
+    assert (directory / recorded["envelope_reviewer_bar"]).resolve() == (
+        REPO_ROOT / "scripts" / "envelope-review-bar.sh"
     )

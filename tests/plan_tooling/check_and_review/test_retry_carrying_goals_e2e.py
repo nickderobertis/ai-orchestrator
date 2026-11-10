@@ -1,14 +1,14 @@
 """A live edit restating a plan task that carries `## Goals` is not read as an amendment.
 
-`config/onemessagebus.yaml` declares `scripts/envelope-review.sh` as the validator on the
-`replies` queue, and it reads every section of a whole task a `retry` states that no other
+`config/onepipeline.launch.yaml` names `scripts/envelope-review.sh` as the engine's envelope
+reviewer, and it reads every section of a whole task a `retry` states that no other
 reader examines as a manager's amendment, asking the bar's questions of it. `## Goals` is a
 section of this host's `plan-task` template, whose outcomes the plan review already held the
 criteria to, so a replacement task carrying it is not refused for it — while a section a
 manager added above the operational notes of the same rendering still is.
 
 The task is a real rendering: the pinned engine's `template resolve plan-task` piped into the
-pinned store's `template render`. The validator runs as the bus runs it, through its script,
+pinned store's `template render`. The reviewer runs as the engine runs it, through its script,
 both ways: the refusal is the deterministic tier's, before any turn, and the pass reaches the
 judged turn, where only the paid provider's process is substituted, at the seam the
 review-plan journeys beside this one stand it in at.
@@ -89,16 +89,23 @@ def _rendered(tmp_path: Path) -> str:
 
 
 def _retry(task: str) -> str:
-    """One reply envelope carrying a `retry` that states ``task`` whole."""
+    """The document the engine hands its reviewer for a `retry` that states ``task`` whole:
+    the replacement as a change, in the plan it lands in (onepipeline's
+    `docs/contract-divergences.md`, entry 45)."""
     node = {"id": "work-2", "persona": "engineer", "task": task}
-    command = {"op": "retry", "id": "work", "node": node}
-    return json.dumps({"version": 2, "author": "planner", "commands": [command]})
+    return json.dumps(
+        {
+            "goal": "close the coverage gap",
+            "changes": [{"op": "retry", "node": node}],
+            "plan": {"schema_version": 3, "tasks": [node]},
+        }
+    )
 
 
 def _validate(
     envelope: str, environment: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    """``envelope`` through the validator command `config/onemessagebus.yaml` declares."""
+    """``envelope`` through the reviewer command `config/onepipeline.launch.yaml` names."""
     return subprocess.run(
         [str(REPO_ROOT / "scripts" / "envelope-review.sh")],
         cwd=REPO_ROOT,

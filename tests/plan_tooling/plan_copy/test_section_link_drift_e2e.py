@@ -34,7 +34,7 @@ from project_fixtures import approved, budgeted, designed, no_budgets, owning, r
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: The source a plan is copied into, standing in for wherever a plan's copy lands.
@@ -252,7 +252,7 @@ def test_a_budget_link_follows_its_task_to_a_new_path_on_a_private_destination(
     The link is a reference-style definition, which a store that leaves one as written on a
     private destination carries byte for byte. Between two folders of Markdown of one layout
     that path would happen to be right, so the destination already holds another plan under
-    this plan's name: the copy lands as `<native>-2`, its task files under that folder, and
+    this plan's name: the copy lands as `<native>-2`, its task filed in the destination, and
     only a rewritten link reaches it. Written as authored it names a file that plan never
     had. Only the review turn's paid provider is scripted, by `reviewed`.
     """
@@ -279,7 +279,7 @@ def test_a_budget_link_follows_its_task_to_a_new_path_on_a_private_destination(
     target, fragment = _budget_link(content)
     assert not Path(target).is_absolute(), target
     task = _copied_task(landed)
-    assert task.is_relative_to(destination / "tasks" / landed), task
+    assert task.is_relative_to(destination / "tasks"), task
     assert (document.parent / target).resolve() == task.resolve(), content
     slugs = _heading_slugs(task.read_text(encoding="utf-8"))
     assert HEADING in slugs, slugs

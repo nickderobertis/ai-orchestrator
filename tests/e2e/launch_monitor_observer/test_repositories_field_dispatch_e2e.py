@@ -47,7 +47,7 @@ checkout of the identity by alias order, which is the fact
 # The finding these answer is about which Nx project owns this file. It sits beside
 # `tests/e2e/launch_monitor_observer/test_worker_start_directory_e2e.py`, the journey it is
 # the shape of, in the code-keyed tier every launch of the installed engine in this
-# repository is in; what it depends on — the record renderer, the recipes, the graphs, the
+# repository is in; what it depends on — the store's writer, the recipes, the graphs, the
 # scratch identity — is the whole of that key, so no narrower edge exists to put it behind,
 # and a project of its own for one launch would split a suite whose fixtures and stand-ins
 # it shares. The shell it drives is the launch recipe itself, which no narrower host-tool
@@ -204,7 +204,7 @@ class Launched(NamedTuple):
 def _plan(root: Path) -> Path:
     """One plan, two lifecycle nodes: the same work, the repository named two ways.
 
-    `project_from_plan` writes each node through this repository's own record renderer,
+    `project_from_plan` writes each node through the store's own `project create` and `task create`,
     which puts a `host/owner/name` `repo` into the record's `repositories` and anything
     else onto `onepipeline.repo` — so the two nodes reach the store in exactly the two
     shapes the contract keeps, and the engine's loader reads both back to one `repo`.

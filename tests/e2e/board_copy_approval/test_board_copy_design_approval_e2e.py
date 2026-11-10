@@ -495,9 +495,10 @@ def test_an_approval_whose_document_was_edited_after_its_listing_is_refused_reco
 ) -> None:
     """A design document edited on the board after the approval listed it is not approved.
 
-    The person's edit lands as the approval reads its project's record, after it listed the
-    plan's documents and computed its key over what they said. The adopted store refuses the
-    metadata write expecting the listed version, so `just approve-design` exits non-zero
+    The person's edit lands as the approval goes to write its record, after it listed the plan's
+    documents, had the pinned engine check the listed one and computed its key over what they
+    said — so the engine's check passed the version the person then moved. The adopted store
+    refuses the metadata write expecting the listed version, so `just approve-design` exits non-zero
     naming the plan and the re-run, nothing is recorded, the edit stands, and the launch gate
     still refuses the plan.
     """
@@ -534,9 +535,14 @@ def test_an_approval_whose_document_was_edited_after_its_listing_is_refused_reco
             with urllib.request.urlopen(request, timeout=30) as answer:  # noqa: S310
                 assert answer.status == 200, answer.status
 
-        _GitHubFixture.before_operation[_Operation.ISSUE] = edited_on_the_board
+        def after_the_engines_check() -> None:
+            # The first read of the document by id is the pinned engine's template check; the
+            # person's edit lands before the next, the store's read of the version it writes.
+            _GitHubFixture.before_operation[_Operation.DOCUMENT_IN_PROJECT] = edited_on_the_board
+
+        _GitHubFixture.before_operation[_Operation.DOCUMENT_IN_PROJECT] = after_the_engines_check
         refused = _recipe(on_the_board, "approve-design", board_project)
-        _GitHubFixture.before_operation.pop(_Operation.ISSUE, None)
+        _GitHubFixture.before_operation.pop(_Operation.DOCUMENT_IN_PROJECT, None)
         _on_the_board(monkeypatch, remote)
         after = design_approval.design_document(board_project)
         gated = _launch_gate(on_the_board, board_project)

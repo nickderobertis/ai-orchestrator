@@ -309,7 +309,7 @@ def visual(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Vis
             report,
             images,
             report_assets,
-            _design_task(bench, RUN),
+            _design_task(bench, RUN).task,
             copied,
             _store(
                 bench,
@@ -578,7 +578,7 @@ def test_finish_quotes_selected_revision_and_refuses_invalid_selections(
             environment=bench.environment,
         )
         assert finished.returncode == OK, finished.stdout + finished.stderr
-        task = _design_task(bench, revision_run)
+        task = _design_task(bench, revision_run).task
         assert json.dumps(revised, ensure_ascii=False, indent=2) in task["content"]
         assert f"`{selected}`" in task["content"]
         design = _store(bench, "document", "show", design_id)
@@ -685,7 +685,7 @@ def test_plans_in_one_source_each_quote_their_own_visual_report_and_an_old_id_on
                 environment=bench.environment,
             )
             assert finished.returncode == OK, finished.stdout + finished.stderr
-            return _design_task(bench, run)["content"]
+            return _design_task(bench, run).task["content"]
         finally:
             _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
 

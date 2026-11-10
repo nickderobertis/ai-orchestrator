@@ -145,12 +145,22 @@ def _stored_task(project: str, node_id: str) -> StoredTask:
 
 
 def _remove_project(project: str) -> None:
+    """Remove ``project``'s record and every task the store files under it, by its path."""
+    listed = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "task", "list", "--source", "authoring"]
+        + ["--project", project, "--json"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    if listed.returncode == 0:
+        for record in json.loads(listed.stdout)["items"]:
+            path = (record["item"].get("location") or {}).get("path")
+            if path:
+                Path(path).unlink(missing_ok=True)
     _project_record(project).unlink(missing_ok=True)
-    tasks = _plan_directory() / "tasks" / project
-    if tasks.is_dir():
-        for task in tasks.iterdir():
-            task.unlink(missing_ok=True)
-        tasks.rmdir()
 
 
 #: The two checkouts this repository's own identity registers, under which every journey
@@ -1032,6 +1042,25 @@ def test_an_observer_that_names_no_graph_refuses_the_launch(
         _remove_project(malformed.run)
 
 
+def _stored_ids(project: str, environment: dict[str, str]) -> dict[str, str]:
+    """The native id the store gave each node of the `authoring` project ``project``."""
+    listed = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "task", "list", "--source", "authoring"]
+        + ["--project", project, "--json"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert listed.returncode == 0, f"the store could not list {project}:\n{listed.stderr}"
+    return {
+        str(held["item"]["metadata"]["onepipeline.id"]): str(held["item"]["id"])
+        for held in json.loads(listed.stdout)["items"]
+    }
+
+
 def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: Path) -> None:
     """The example this repository ships is the recipe's own output, not a hand-written copy.
 
@@ -1069,12 +1098,13 @@ def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: P
                 / "plan.json"
             ).read_text(encoding="utf-8")
         )
+        stored = _stored_ids(str(shipped["name"]), environment)
         for node in generated_plan["tasks"]:
             named = node.get(AGENT_GRAPH_FIELD)
             if named is not None:
                 node[AGENT_GRAPH_FIELD] = str(Path(named).relative_to(REPO_ROOT))
             assert node.pop(TASK_RECORD_FIELD) == {
-                "id": f"{shipped['name']}/{node['id']}",
+                "id": stored[node["id"]],
                 "title": node["title"],
             }, f"node {node['id']} does not record the stored task it was read from"
         assert generated_plan == shipped, (

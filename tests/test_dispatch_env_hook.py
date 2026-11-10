@@ -30,6 +30,7 @@ from typing import NamedTuple
 
 import pytest
 
+from orchestrator import follow_up_drafts
 from orchestrator.root import REPO_ROOT
 
 HOOK = REPO_ROOT / "scripts" / "dispatch-env-hook.sh"
@@ -172,6 +173,21 @@ def test_without_a_credentials_file_the_document_carries_the_indirections_alone(
     assert tuple(env) == (*CLAUDE_INDIRECTIONS, CODEX_INDIRECTION, TEMPLATE_ROOT, INTERACTIVE)
 
 
+def test_the_node_the_engine_names_is_passed_on_to_the_dispatch(tmp_path: Path) -> None:
+    """`ONEPIPELINE_NODE_ID` reaches the dispatch by the name a drafted follow-up reads.
+
+    The engine names the node to this hook and to nothing it dispatches, so the hook is the
+    one place it can be passed on; a hook something else ran names no node at all.
+    """
+    checkout = _checkout(tmp_path / "checkout")
+    home = str(tmp_path / "home")
+
+    env = _env(_run(checkout, {"HOME": home, "ONEPIPELINE_NODE_ID": "lane/one"}))
+
+    assert env[follow_up_drafts.NODE_ID_ENV] == "lane/one"
+    assert follow_up_drafts.NODE_ID_ENV not in _env(_run(checkout, {"HOME": home}))
+
+
 def test_the_template_root_is_the_hooks_own_checkout_whatever_the_environment_held(
     tmp_path: Path,
 ) -> None:
@@ -297,7 +313,7 @@ def test_an_argument_is_refused_before_anything_is_resolved(tmp_path: Path) -> N
     assert ran.returncode == 2
     assert ran.stdout == ""
     assert "takes no arguments" in ran.stderr
-    assert "--dispatch-env-hook" in ran.stderr
+    assert "dispatch_env_hook" in ran.stderr
     assert not (home / ".codex-alt").exists(), "a refused run still ran a resolver"
 
 
@@ -357,8 +373,8 @@ def test_both_sourcing_scripts_run_the_resolvers_through_the_one_definition(scri
 
 
 def test_the_hook_is_executable_and_named_by_the_wrapper() -> None:
-    """The wrapper names it by absolute path, so it has to be runnable as a command."""
+    """The launch config every `start` names declares it, so it has to be runnable as a command."""
     assert os.access(HOOK, os.X_OK), f"{HOOK.name} is not executable"
-    assert '--dispatch-env-hook "$script_dir/dispatch-env-hook.sh"' in LAUNCH_WRAPPER.read_text(
-        "utf-8"
-    )
+    launch_config = REPO_ROOT / "config" / "onepipeline.launch.yaml"
+    assert "\ndispatch_env_hook: scripts/dispatch-env-hook.sh\n" in launch_config.read_text("utf-8")
+    assert "--launch-config" in LAUNCH_WRAPPER.read_text("utf-8")

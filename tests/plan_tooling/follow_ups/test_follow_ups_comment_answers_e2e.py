@@ -87,7 +87,7 @@ from waits import timeout as e2e_timeout
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 from orchestrator.plan_store import QualifiedTaskId
-from orchestrator.project_store import frontmatter
+from orchestrator.record_shapes import frontmatter
 from orchestrator.root import REPO_ROOT
 
 #: The group is this module's own, for fixture sharing: `answered` is module-scoped and drive the

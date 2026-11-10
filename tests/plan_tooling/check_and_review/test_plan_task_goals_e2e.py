@@ -38,7 +38,7 @@ from project_fixtures import register_stand_in
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_budgets, plan_check, plan_store
-from orchestrator.project_store import hosted_origin
+from orchestrator.record_shapes import hosted_origin
 from orchestrator.root import REPO_ROOT
 
 

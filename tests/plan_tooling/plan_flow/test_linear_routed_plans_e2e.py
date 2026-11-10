@@ -90,8 +90,8 @@ from waits import timeout as e2e_timeout
 from orchestrator import design_approval, plan_budgets, plan_check, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.plan_budgets import BudgetId, ModernBudget, Source
+from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import QualifiedProjectId
-from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 # What the recipes these journeys run leave in the temporary directory, by design or
@@ -476,7 +476,7 @@ def _rendered(bench: Bench, name: str, node: Node) -> None:
         check=True,
     )
     rendered = subprocess.run(
-        [str(ONETASKGRAPH_BIN), "task", "render", f"{AUTHORING}:{name}/{node.id}"]
+        [str(ONETASKGRAPH_BIN), "task", "render", _stored_task(bench, name, node.id)]
         + ["--template-loader", "-", "--answers", str(answers), "--no-interactive"],
         cwd=REPO_ROOT,
         env=bench.environment,
@@ -486,6 +486,26 @@ def _rendered(bench: Bench, name: str, node: Node) -> None:
         check=False,
     )
     assert rendered.returncode == 0, rendered.stdout + rendered.stderr
+
+
+def _stored_task(bench: Bench, project: str, node: str) -> str:
+    """The qualified id the store gave the authoring project ``project``'s node ``node``."""
+    listed = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "task", "list", "--source", AUTHORING, "--project", project]
+        + ["--json"],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    (found,) = [
+        str(held["id"])
+        for held in json.loads(listed.stdout)["items"]
+        if held["item"]["metadata"].get("onepipeline.id") == node
+    ]
+    return found
 
 
 def _draft(
@@ -502,16 +522,25 @@ def _draft(
     ``rendered`` plan's agent tasks are regenerated from this host's `plan-task` template,
     as a planner's are, so a launch under the rendered-only check accepts them.
     """
-    write_plan_project(
-        bench.authoring,
-        {
-            "schema_version": 3,
-            "goal": {"text": "Ship Hidden Co's change and the library it consumes"},
-            "name": name,
-            "tasks": [_node_record(node) for node in nodes],
-        },
-        native_id=name,
-    )
+    # Written under the bench's environment, whose registry declares each repository's
+    # visibility, so the store classifies every task as a planner on this host would.
+    saved = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(bench.environment)
+    try:
+        write_plan_project(
+            bench.authoring,
+            {
+                "schema_version": 3,
+                "goal": {"text": "Ship Hidden Co's change and the library it consumes"},
+                "name": name,
+                "tasks": [_node_record(node) for node in nodes],
+            },
+            native_id=name,
+        )
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
     for node in nodes if rendered else ():
         if not node.human:
             _rendered(bench, name, node)
@@ -1056,7 +1085,9 @@ def test_a_plan_whose_only_repository_naming_task_routes_lands_whole_in_linear(
         }
         assert landed[project].startswith(f"{LINEAR}:"), landed
         tasks = {source: to for source, to in landed.items() if source != project}
-        assert sorted(tasks) == sorted(f"{project}/{node.id}" for node in ONE_VOTER), landed
+        assert sorted(tasks) == sorted(_stored_task(bench, name, node.id) for node in ONE_VOTER), (
+            landed
+        )
         assert all(to.startswith(f"{LINEAR}:") for to in tasks.values()), landed
         assert len(bench.linear.issues()) == len(ONE_VOTER), bench.linear.issues()
         assert BOARD_FIXTURE.created == [], [issue.title for issue in BOARD_FIXTURE.created]
@@ -1288,11 +1319,14 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
 #: The incident's shape: three tasks naming the organization's repository, each a worker's,
 #: and one `kind: human` node naming none, which a person attests while the work runs. The
 #: ledger posts what the intake records, which is the edge the design document's graph shows.
+#: The store files a task under the slug of its title and copies a plan's tasks in that
+#: order, so the dependent's title sorts after its prerequisite's: the copy then writes each
+#: dependency edge onto an item already created, and rewrites each item exactly once.
 ROAD = (
     Node(NodeId("intake"), "feat: record the intake form", repository=HIDDENCO, commits=True),
     Node(
         NodeId("ledger"),
-        "feat: post the intake to the ledger",
+        "feat: then post the intake to the ledger",
         (NodeId("intake"),),
         repository=HIDDENCO,
         commits=True,
@@ -1785,7 +1819,8 @@ def test_a_public_task_naming_a_private_repository_is_refused_before_either_boar
 
         said = copied.stdout + copied.stderr
         assert copied.returncode != 0, said
-        assert f"{project}/library was not written to source {BOARD}" in said, said
+        library = _stored_task(bench, name, "library")
+        assert f"{library} was not written to source {BOARD}" in said, said
         assert "a term of a private repository" in said, said
         written = [
             str(request["operation"])

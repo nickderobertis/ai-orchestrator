@@ -18,8 +18,8 @@
 #     is unset, and the launched graph runs the orchestrator and every worker
 #     under those configs. They are established twice by one definition:
 #     `scripts/dispatch-env.sh` runs the resolvers here, at driver start, and
-#     `scripts/dispatch-env-hook.sh` — which every `start` names as the engine's
-#     dispatch-env hook — runs the same ones immediately before each node-scope
+#     `scripts/dispatch-env-hook.sh` — which the launch config every `start` names
+#     declares as the engine's dispatch-env hook — runs the same ones immediately before each node-scope
 #     dispatch, so an indirection a routing change adds while a run is live reaches
 #     its next dispatch rather than failing it (ai-orchestrator#1109).
 #   * A launch also carries ONEVCS_LOCK_TIMEOUT_SECONDS, derived by
@@ -42,12 +42,11 @@
 #     environment, so this is the last place a name can be taken out of one, and a
 #     read-only view keeps the environment it was given.
 #
-# A launch also names the pool-maintenance schedule, `config/onepipeline.maintenance.yaml`,
-# as `--maintenance-config`, so an idle driver maintains every registered identity's
-# warm worktree slots on this host's cadence; the file's header says what the engine
-# does with it. Both flags are named on every `start` without asking the engine first:
-# every engine `config/onepipeline.version` admits carries them, and
-# `tests/test_engine_contracts.py` holds the pin.
+# A launch also names this host's launch config, `config/onepipeline.launch.yaml`, which
+# states every launch-level setting the engine reads from one — the bus configuration, the
+# dispatch-env hook, the pool-maintenance schedule, the template root, the rendered-only
+# check, the run-end hooks, the drafting graph and the envelope reviewer — so no flag for
+# any of them is injected here; the document's header says what each is for.
 #
 # A launch also has to carry ORCHESTRATOR_ASK_MANAGER, the path of
 # `scripts/ask-manager.sh`, which a dispatched agent asks its manager through — the
@@ -218,48 +217,33 @@ if [ "$launching" = true ]; then
     echo "onepipeline: engine requested ${requested_engine} (config/onepipeline.version), about to run ${reported_engine} ($engine)" >&2
 fi
 
-# Every launch names the dispatch-env hook, `scripts/dispatch-env-hook.sh` by absolute
-# path, so each node-scope dispatch is handed an environment resolved at that moment —
-# and the pool-maintenance schedule, `config/onepipeline.maintenance.yaml` by absolute
-# path, so an idle driver sweeps every registered identity's warm worktree slots on
-# this host's cadence. `start` alone, as `--bus-config` is, because `adopt` replays the
-# launch record; a caller who names one keeps it, a blank value included, and each is
-# kept per flag. Prepended before the bus configuration so the rendered line reads
-# `start --bus-config … --dispatch-env-hook … --maintenance-config …`.
+# Every launch names this host's launch config, `config/onepipeline.launch.yaml`, and no
+# flag that document carries: the bus configuration, the dispatch-env hook, the
+# pool-maintenance schedule, the template root, the rendered-only check, the run-end hooks,
+# the drafting graph and the envelope reviewer are the document's to state, and the engine
+# reads them once at the launch and retains them in the launch record. A caller who names a
+# setting's own flag keeps theirs — the engine lets a flag beat the document's key, a blank
+# one included — and one who names a launch config of their own keeps that instead. `start`
+# alone, because `adopt` replays the launch record.
+#
+# A `start` runs from this checkout's root, because that is the launch directory the
+# engine resolves the document's relative paths against and spawns its hooks in; a caller's
+# own references are already spelled from there (`graphs/dag-scope.yaml`, a project id).
 if [ "${1:-}" = start ]; then
-    named_dispatch_env_hook=false
-    named_maintenance_config=false
+    named_launch_config=false
     for argument in "${@:2}"; do
         case "$argument" in
-            --dispatch-env-hook | --dispatch-env-hook=*) named_dispatch_env_hook=true ;;
-            --maintenance-config | --maintenance-config=*) named_maintenance_config=true ;;
+            --launch-config | --launch-config=*) named_launch_config=true ;;
         esac
     done
-    # The schedule first, so the hook prepended after it lands ahead of it.
-    if [ "$named_maintenance_config" = false ]; then
-        set -- start --maintenance-config "${script_dir%/scripts}/config/onepipeline.maintenance.yaml" "${@:2}"
+    if [ "$named_launch_config" = false ]; then
+        set -- start --launch-config "${script_dir%/scripts}/config/onepipeline.launch.yaml" "${@:2}"
     fi
-    if [ "$named_dispatch_env_hook" = false ]; then
-        set -- start --dispatch-env-hook "$script_dir/dispatch-env-hook.sh" "${@:2}"
-    fi
-fi
-
-# And every launch keeps its channel under this host's bus configuration, so the engine applies
-# the same validators, author grants and codec constants that `just channel-reply`, the ask
-# shim and the observer's judge side read. Named here because `start` is the one verb every
-# launch shape reaches — `just orchestrate`, `just plan` and the design-document launch —
-# and `adopt` takes none because an adopted run keeps the configuration its launch record
-# retained. A caller who names one keeps theirs.
-if [ "${1:-}" = start ]; then
-    named_bus_config=false
-    for argument in "${@:2}"; do
-        case "$argument" in
-            --bus-config | --bus-config=*) named_bus_config=true ;;
-        esac
-    done
-    if [ "$named_bus_config" = false ]; then
-        set -- start --bus-config "${script_dir%/scripts}/config/onemessagebus.yaml" "${@:2}"
-    fi
+    # llmlint: ignore[changed_behavior_has_e2e] Reachable only when the checkout this script was just resolved inside stops being enterable mid-run; a journey producing that would have to remove the checkout it is running from.
+    cd -- "${script_dir%/scripts}" || {
+        echo "onepipeline: could not enter the checkout at ${script_dir%/scripts}, which is the launch directory its launch config is resolved against; run the launch from a readable checkout, then retry" >&2
+        exit 2
+    }
 fi
 
 # A flow keeps a planner channel of its own, which `ask` raises a launcher's questions on
@@ -280,9 +264,10 @@ if [ "${1:-} ${2:-}" = "flow run" ]; then
     fi
 fi
 
-# `start` and `plan check` default to `--require-rendered true` (`adopt` replays its
-# launch record). A caller who names the flag, or exports ONEPIPELINE_REQUIRE_RENDERED,
-# keeps their answer.
+# `plan check` defaults to `--require-rendered true`, which a `start` reads from its launch
+# config instead; `plan check` reads no launch config. A caller who names the flag, or
+# exports ONEPIPELINE_REQUIRE_RENDERED, keeps their answer — on a `start` as well, where
+# the engine lets either beat the document.
 plan_loading_words=0
 case "${1:-} ${2:-}" in
     "start "*) plan_loading_words=1 ;;
@@ -297,15 +282,15 @@ if [ "$plan_loading_words" -gt 0 ]; then
             ;;
     esac
 fi
-if [ "$plan_loading_words" -gt 0 ] && [ -z "${ONEPIPELINE_REQUIRE_RENDERED:-}" ]; then
+if [ "$plan_loading_words" -eq 2 ] && [ -z "${ONEPIPELINE_REQUIRE_RENDERED:-}" ]; then
     named_require_rendered=false
-    for argument in "${@:plan_loading_words+1}"; do
+    for argument in "${@:3}"; do
         case "$argument" in
             --require-rendered | --require-rendered=*) named_require_rendered=true ;;
         esac
     done
     if [ "$named_require_rendered" = false ]; then
-        set -- "${@:1:plan_loading_words}" --require-rendered true "${@:plan_loading_words+1}"
+        set -- plan check --require-rendered true "${@:3}"
     fi
 fi
 

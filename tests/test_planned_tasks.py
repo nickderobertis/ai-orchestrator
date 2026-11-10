@@ -34,7 +34,7 @@ from project_fixtures import designed
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import planned_tasks
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 _SEQUENCE = itertools.count()

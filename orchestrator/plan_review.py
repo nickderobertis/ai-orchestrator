@@ -107,8 +107,8 @@ from typing import NamedTuple, NewType, TypedDict
 
 from orchestrator import design_approval, host_installs, plan_budgets, plan_store
 from orchestrator.plan_store import QualifiedTaskId, StoreTask
-from orchestrator.project_store import ENGINE_PREFIX, hosted_origin
 from orchestrator.publication_guard import RESERVED_REPO_KEY
+from orchestrator.record_shapes import ENGINE_PREFIX, hosted_origin
 from orchestrator.root import REPO_ROOT
 
 #: A digest of the review bar in force. Distinct from :data:`ReviewKey`, which is a
@@ -436,7 +436,7 @@ class Reviewed(NamedTuple):
 ORIGIN_COMMAND = ("git", "remote", "get-url", "origin")
 
 #: The scp-like spelling of a clone URL, `[user@]host:owner/name`, which
-#: :func:`orchestrator.project_store.hosted_origin` deliberately answers `None` for
+#: :func:`orchestrator.record_shapes.hosted_origin` deliberately answers `None` for
 #: because a task record never holds one. A configured remote may be spelled that way,
 #: so it is rewritten to the `host/owner/name` shape that function reads before it is
 #: asked; an `ssh://` scheme is dropped for the same reason `https://` is.

@@ -19,7 +19,9 @@
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/orchestrator/plan_units.py",
-      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/plan_records.py",
+      "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/tests/project_store_race/**/*",
       "{workspaceRoot}/tests/fixtures/planner-channel.json"

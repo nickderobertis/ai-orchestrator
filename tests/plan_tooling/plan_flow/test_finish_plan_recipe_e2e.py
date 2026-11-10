@@ -71,7 +71,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, design_chain, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 
@@ -287,7 +287,7 @@ def _draft(
     already would leave the store holding two and no reader able to say which a person
     approved.
 
-    Written through this repository's own record renderer, so the store reads these
+    Written through the store's own `project create` and `task create`, so the store reads these
     records the way it reads a planner's own rather than a hand-written shape only this
     journey would produce. ``repositories`` gives the plan one task per origin, each naming
     that one repository; with none, its one task names no repository.
@@ -600,10 +600,19 @@ class Finished(NamedTuple):
     #: The design-document node's task as the store reports it — its `repositories` and
     #: its metadata — read before the fixture takes the project back.
     design_task: StoredTask
+    #: The engine's `template check plan-task --item` of that task, taken as the run settled.
+    design_task_checked: subprocess.CompletedProcess[str]
 
 
-def _design_task(bench: Bench, run: RunId) -> StoredTask:
-    """The one task of the design-document project the tail wrote, as the store reports it.
+class DesignTask(NamedTuple):
+    """The design-document project's one task: its qualified id, and the record reported."""
+
+    id: str
+    task: StoredTask
+
+
+def _design_task(bench: Bench, run: RunId) -> DesignTask:
+    """The one task of the design-document project the tail wrote, by id and as reported.
 
     Through the plan-store CLI rather than off the file, because the settlement write-back
     rewrites a record in the store's own spelling once the run has settled; what the
@@ -629,11 +638,25 @@ def _design_task(bench: Bench, run: RunId) -> StoredTask:
         check=False,
     )
     assert listed.returncode == 0, f"the store could not list the design project:\n{listed.stderr}"
-    (task,) = [record["item"] for record in json.loads(listed.stdout)["items"]]
+    (record,) = json.loads(listed.stdout)["items"]
     # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the three
     # fields `StoredTask` names are subscripted by every reader, so a record without one fails
     # loudly there.
-    return cast(StoredTask, task)
+    return DesignTask(str(record["id"]), cast(StoredTask, record["item"]))
+
+
+def _template_checked(bench: Bench, task: str) -> subprocess.CompletedProcess[str]:
+    """The engine's own check of ``task`` against being its `plan-task` rendering."""
+    return subprocess.run(
+        [str(REPO_ROOT / "scripts" / "onepipeline.sh"), "template", "check", "plan-task"]
+        + ["--item", task],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
 
 
 #: The flow this module's one successful run is named by, and the run its tail launches.
@@ -666,12 +689,14 @@ def finished(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> F
             environment=bench.environment,
         )
         assert finish.returncode == OK, f"the tail failed:\n{finish.stdout}\n{finish.stderr}"
+        design = _design_task(bench, RUN)
         return Finished(
             finish=finish,
             drafted=drafted,
             bench=bench,
             run=RUN,
-            design_task=_design_task(bench, RUN),
+            design_task=design.task,
+            design_task_checked=_template_checked(bench, design.id),
         )
     finally:
         _stop(bench, f"{RUN}{DESIGN_RUN_SUFFIX}")
@@ -724,6 +749,13 @@ def test_the_tail_reviews_the_plan_before_it_launches_the_dispatch_that_document
     )
 
 
+def _task_record(title: str) -> re.Pattern[str]:
+    """Where a destination's store files a task: under the slug of its title, with the
+    numeric suffix the store adds when another task of the destination already took it."""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return re.compile(rf"tasks/{re.escape(slug)}(?:-\d+)?\.md")
+
+
 @pytest.mark.xdist_group("finish-plan")
 def test_the_tail_leaves_the_plan_and_its_one_document_on_the_destination(
     finished: Finished,
@@ -736,11 +768,11 @@ def test_the_tail_leaves_the_plan_and_its_one_document_on_the_destination(
     output usable at all.
     """
     project = finished.drafted.project
-    assert _records(finished.bench.destination) == [
-        f"documents/{finished.drafted.document}.md",
-        f"projects/{project}.md",
-        f"tasks/{project}/decide-the-cursor.md",
-    ], f"the tail left {_records(finished.bench.destination)} on the destination"
+    left = _records(finished.bench.destination)
+    assert left[:2] == [f"documents/{finished.drafted.document}.md", f"projects/{project}.md"]
+    assert len(left) == 3 and _task_record("feat: page the node listing").fullmatch(left[2]), (
+        f"the tail left {left} on the destination"
+    )
 
 
 @pytest.mark.xdist_group("finish-plan")
@@ -852,6 +884,16 @@ WRITER_OBLIGATIONS = (
 
 
 @pytest.mark.xdist_group("finish-plan")
+def test_the_engine_accepts_the_task_the_tail_created_as_its_template_rendering(
+    finished: Finished,
+) -> None:
+    """The record the store created is one `template check plan-task --item` accepts."""
+    checked = finished.design_task_checked
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert ": ok" in checked.stdout, checked.stdout
+
+
+@pytest.mark.xdist_group("finish-plan")
 def test_the_design_document_nodes_task_is_a_plan_task_rendering_owing_each_obligation(
     finished: Finished,
 ) -> None:
@@ -955,7 +997,7 @@ def test_the_writers_task_names_the_resolve_command_the_rule_gives_for_the_plan(
             environment=bench.environment,
         )
         assert finish.returncode == OK, f"the tail failed:\n{finish.stdout}\n{finish.stderr}"
-        content = _design_task(bench, run)["content"]
+        content = _design_task(bench, run).task["content"]
     finally:
         _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
 

@@ -18,10 +18,10 @@
   `just orchestrate --adopt`, and also how a journey that parks its only running node
   loses the driver it meant to watch. `launched(..., independent_nodes=)` holds a second
   root beside the one under test.
-- **A `retry` or `add` stating a novel task spends a judged reviewer turn** before the bus
-  appends it, on the stand-in codex the bench already puts at the `oneharness` seam, which
-  answers no verdict unless `FAKE_CODEX_ANSWERS` scripts one. A sibling's envelope may
-  pass on the `.cache/envelope-passes` a previous run left; a new envelope never does.
+- **A `retry` or `add` stating a novel task spends a judged reviewer turn** before the
+  engine applies it, on the stand-in codex the bench already puts at the `oneharness` seam,
+  which answers no verdict unless `FAKE_CODEX_ANSWERS` scripts one. The engine records a
+  pass under the run's own `validator-passes/`, so no earlier run's pass ever stands in.
 <!-- llmlint: ignore-block[determinism_vs_judgment] ai-orchestrator#1217 rejected a recipe that installs and restores an engine, because it mutates the environment every run on this host shares; the steps stay an operator's, and the launch prints the pair they are judged by. -->
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] ai-orchestrator#1217's accepted fix keeps these as operator steps documented here, written in terms of the line the launch prints; naming that line and the four steps is the whole of the instruction, and a pointer elsewhere would be a second place to keep them. -->
 - **A pre-landing proof against another engine is read off the pair the launch prints.**

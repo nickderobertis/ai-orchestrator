@@ -23,6 +23,7 @@
       "{workspaceRoot}/scripts/smoke.sh",
       "{workspaceRoot}/scripts/smoke-probe.py",
       "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/config/onepipeline.launch.yaml",
       "{workspaceRoot}/scripts/launcher-session.sh",
       "{workspaceRoot}/scripts/launch-flow.sh",
       "{workspaceRoot}/scripts/orchestrate.sh",
@@ -53,7 +54,9 @@
       "{workspaceRoot}/scripts/host-sweep.sh",
       "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/plan_units.py",
-      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/plan_records.py",
+      "{workspaceRoot}/orchestrator/record_shapes.py",
+      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

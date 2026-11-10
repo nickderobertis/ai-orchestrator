@@ -23,6 +23,7 @@ import jsonschema
 import plan_root_variable
 import plan_store_cache
 import pytest
+import yaml
 from fake_backend import PROMPT_LOG_ENV, TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED
 from github_board import (
     AUTHORING_ROOT_ENV,
@@ -109,7 +110,8 @@ from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 
 from orchestrator import follow_up_comments, follow_up_tickets, plan_check, plan_store, task_body
-from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
+from orchestrator.plan_records import write_plan_project
+from orchestrator.record_shapes import PlanDocument, PlanNode, frontmatter
 from orchestrator.root import REPO_ROOT
 
 
@@ -992,6 +994,48 @@ EXAMPLES_SOURCE = "examples"
 EXAMPLES_ROOT_ENV = f"ONETASKGRAPH_SOURCES__{EXAMPLES_SOURCE.upper()}__CONFIG__ROOT"
 
 
+def _front_matter(record: Path) -> dict[str, object]:
+    """The fields ``record``'s front matter holds, as the store wrote them."""
+    fields = yaml.safe_load(
+        record.read_text(encoding="utf-8").removeprefix("---\n").partition("\n---")[0]
+    )
+    assert isinstance(fields, dict), record
+    return fields
+
+
+def _node_record(root: Path, node: str) -> Path:
+    """The record under ``root`` the store filed for the plan node ``node``.
+
+    Found by the node id the record carries, because the store names a task file by the
+    slug of its title rather than by its node.
+    """
+    (found,) = [record for record in (root / "tasks").rglob("*.md") if _node_of(record) == node]
+    return found
+
+
+def _node_of(record: Path) -> object:
+    """The node id ``record``'s metadata carries, or `None` where it carries none."""
+    metadata = _front_matter(record).get("metadata")
+    return metadata.get("onepipeline.id") if isinstance(metadata, dict) else None
+
+
+def _node_task(source: str, root: Path, node: str) -> str:
+    """The qualified id the store gave the plan node ``node`` filed under ``root``."""
+    native = _node_record(root, node).relative_to(root / "tasks").with_suffix("")
+    return f"{source}:{native.as_posix()}"
+
+
+def _node_ids(environment: dict[str, str], project: str) -> dict[str, str]:
+    """Each task of the qualified ``project`` by its qualified id, mapped to its node id."""
+    source, _, native = project.partition(":")
+    listed = _plans_json(environment, "task", "list", "--source", source, "--project", native)
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    return {
+        str(held["id"]): str(held["item"]["metadata"]["onepipeline.id"])
+        for held in json.loads(listed.stdout)["items"]
+    }
+
+
 def _write_members_project(root: Path, revision: str) -> None:
     plan = PlanDocument(
         name=MEMBERS_PROJECT,
@@ -1044,8 +1088,8 @@ def test_a_member_copy_writes_the_named_member_and_leaves_the_rest_untouched(
     _write_members_project(authoring, "first revision")
     whole = _plans_json(environment, "project", "copy", project, "--to", EXAMPLES_SOURCE)
     assert whole.returncode == 0, whole.stdout + whole.stderr
-    unnamed_record = next((examples / "tasks").rglob(f"{UNNAMED_MEMBER}.md"))
-    named_record = next((examples / "tasks").rglob(f"{NAMED_MEMBER}.md"))
+    unnamed_record = _node_record(examples, UNNAMED_MEMBER)
+    named_record = _node_record(examples, NAMED_MEMBER)
     unnamed_before = unnamed_record.read_bytes()
 
     # Update through the store so the private source keeps the copy links it owns.
@@ -1054,26 +1098,29 @@ def test_a_member_copy_writes_the_named_member_and_leaves_the_rest_untouched(
         body = tmp_path / f"{changed}-body.md"
         body.write_text(f"## What\nThe {changed} member, second revision.\n", encoding="utf-8")
         updated = _plans_json(
-            environment, "task", "update", f"{project}/{changed}", "--body-file", str(body)
+            environment,
+            *("task", "update", _node_task(AUTHORING_SOURCE, authoring, changed)),
+            *("--body-file", str(body)),
         )
         assert updated.returncode == 0, updated.stdout + updated.stderr
     member = _plans_json(
         environment,
         *("project", "copy", project, "--to", EXAMPLES_SOURCE),
-        *("--member", f"{project}/{NAMED_MEMBER}"),
+        *("--member", _node_task(AUTHORING_SOURCE, authoring, NAMED_MEMBER)),
     )
 
     assert member.returncode == 0, member.stdout + member.stderr
     report = _conforming(member.stdout, "CopyReport")
     items = report["items"]
     assert isinstance(items, list)
-    assert [item["source"] for item in items] == [project, f"{project}/{NAMED_MEMBER}"], (
-        f"a member copy reports the project and the member it names, and nothing else: {items}"
-    )
+    assert [item["source"] for item in items] == [
+        project,
+        _node_task(AUTHORING_SOURCE, authoring, NAMED_MEMBER),
+    ], f"a member copy reports the project and the member it names, and nothing else: {items}"
     assert "second revision" in named_record.read_text(encoding="utf-8"), (
         "the named member's change did not reach its destination record"
     )
-    unnamed_source = next((authoring / "tasks").rglob(f"{UNNAMED_MEMBER}.md"))
+    unnamed_source = _node_record(authoring, UNNAMED_MEMBER)
     assert "second revision" in unnamed_source.read_text(encoding="utf-8"), (
         "the unnamed member has no pending change to leave behind"
     )
@@ -1168,8 +1215,8 @@ def test_a_task_comment_is_added_listed_edited_and_deleted_on_a_local_task(
             ],
         ),
     )
-    task = f"{AUTHORING_SOURCE}:{COMMENTS_PROJECT}/{COMMENTED_TASK}"
-    record = next((root / "tasks").rglob(f"{COMMENTED_TASK}.md"))
+    task = _node_task(AUTHORING_SOURCE, root, COMMENTED_TASK)
+    record = _node_record(root, COMMENTED_TASK)
 
     def body_file(name: str, body: str) -> str:
         path = tmp_path / f"{name}.md"
@@ -1505,11 +1552,13 @@ def _write_projected_project(root: Path) -> dict[str, _ProjectedStatus]:
         ],
     )
     write_plan_project(root, plan)
-    for task in (root / "tasks" / LOCAL_PROJECT).glob("*.md"):
+    for task in (root / "tasks").rglob("*.md"):
+        fields = _front_matter(task)
+        if fields.get("project") != LOCAL_PROJECT:
+            continue
+        word = json.dumps(titled[str(fields["title"])].value)
         text = task.read_text(encoding="utf-8")
-        title = next(t for t in titled if f"title: {json.dumps(t)}\n" in text)
-        word = json.dumps(titled[title].value)
-        task.write_text(text.replace('status: "todo"\n', f"status: {word}\n", 1), encoding="utf-8")
+        task.write_text(text.replace("status: todo\n", f"status: {word}\n", 1), encoding="utf-8")
     return titled
 
 
@@ -1552,7 +1601,11 @@ def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_b
     environment = _plan_environment(tmp_path)
     for name in [name for name in environment if name.startswith(STATUS_MAPPING_ENV_PREFIX)]:
         del environment[name]
-    word_of_task = {status.value.replace(" ", "-"): status for status in _ProjectedStatus}
+    word_of_node = {status.value.replace(" ", "-"): status for status in _ProjectedStatus}
+    word_of_task = {
+        task: word_of_node[node]
+        for task, node in _node_ids(_plan_environment(tmp_path), LOCAL_QUALIFIED).items()
+    }
     reached: dict[tuple[str, str], set[_ProjectedStatus]] = {}
     # llmlint: ignore[e2e_not_mocked] The live `plans` board is the one boundary this
     # journey must not reach: a write to it lands on the board holding this repository's
@@ -1566,7 +1619,7 @@ def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_b
         assert "is disabled for source plans" not in copied.stderr, copied.stderr
         assert copied.returncode == 0, copied.stdout + copied.stderr
         for entry in json.loads(copied.stdout)["items"]:
-            word = word_of_task.get(str(entry["source"]).rpartition("/")[2])
+            word = word_of_task.get(str(entry["source"]))
             if word is None:
                 continue
             status = _read_item(environment, str(entry["destination"])).get("status")
@@ -1606,7 +1659,7 @@ def test_a_queued_task_onto_a_plans_board_without_a_queued_option_is_refused_by_
         root, PlanDocument(name=LOCAL_PROJECT, tasks=[PlanNode(id="waiting", title="waiting")])
     )
     environment = _plan_environment(tmp_path)
-    waiting = f"{LOCAL_QUALIFIED}/waiting"
+    waiting = _node_task(AUTHORING_SOURCE, root, "waiting")
     queued = _plans_json(environment, "task", "status", "set", waiting, "queued")
     assert queued.returncode == 0, queued.stdout + queued.stderr
     assert _category(_read_item(environment, waiting)) == "queued"
@@ -5204,6 +5257,7 @@ def _prepare_claiming_launch(
     project = next(
         str(entry["destination"]) for entry in copied if entry["source"] == DELIVERING_QUALIFIED
     )
+    nodes = _node_ids(environment, DELIVERING_QUALIFIED)
     # The document opens with the plan's graph, whose reference the board rewrites to where it
     # serves the image, so the approval is recorded on the board copy a person reads.
     _approved_on_the_board(environment, project)
@@ -5211,7 +5265,7 @@ def _prepare_claiming_launch(
         environment=environment,
         project=project,
         task_items={
-            str(entry["source"]).rpartition("/")[2]: str(entry["destination"])
+            nodes[str(entry["source"])]: str(entry["destination"])
             for entry in copied
             if entry["source"] != DELIVERING_QUALIFIED
         },

@@ -37,7 +37,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import plan_store, task_body
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 

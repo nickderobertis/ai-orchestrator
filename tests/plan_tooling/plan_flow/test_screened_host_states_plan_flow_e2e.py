@@ -42,6 +42,7 @@ from test_plan_flow_e2e import (
     Stored,
     _environment,
     _just,
+    _task_record,
 )
 
 from orchestrator.root import REPO_ROOT
@@ -139,8 +140,7 @@ def test_a_plan_is_drafted_reviewed_documented_and_copied(
     assert landed == [
         f"documents/{stored.document}.md",
         f"projects/{unique}.md",
-        f"tasks/{unique}/decide-the-cursor.md",
-        f"tasks/{unique}/read-the-cursor.md",
+        *sorted(_task_record(title) for title in (stored.task_title, stored.second_task_title)),
     ], f"the flow left {landed} on the destination"
 
 

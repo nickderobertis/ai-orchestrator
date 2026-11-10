@@ -23,12 +23,11 @@ count, and it moves as records are added: asked of this host's `.plans/tasks` wh
 was written, the writer refused 45 of 451 records before this change and 0 of the same
 451 after.
 
-**Neither shape is written here, which is why each journey makes the store write it.** This
-repository's own renderer emits a JSON flow sequence and a document nobody labelled, so a
-fixture written through it would be in neither shape and would prove nothing. Each journey
-puts the record through the store's own copy verb instead — `project copy` for the task and
-`document copy` for the document — which is the path the real records reached these shapes
-by, and re-renders them the store's way.
+**Each journey makes the store write the shape, through the verb real records reached it
+by.** A plan is created through the store's own `task create`, and a document is rendered
+nobody labelled, so each journey puts the record through the store's own copy verb as
+well — `project copy` for the task and `document copy` for the document — which is the path
+the real records reached these shapes by, and re-renders them the store's way.
 
 Everything below the recipe is real: the real recipes, the real scripts, the real
 `orchestrator` package, the real installed `onetaskgraph`, and — for the review — the real
@@ -55,7 +54,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 
@@ -188,10 +187,9 @@ class Store:
     def plan(self, native: str) -> str:
         """Author :data:`STEPPED_PLAN` and copy it into :data:`STORED`; answer its id there.
 
-        The copy is the point rather than plumbing: this repository's renderer writes
-        `"onepipeline.steps": [ … ]` as a JSON flow sequence, which the writer under test
-        has always been able to edit around, and the store's own renderer writes it as a
-        block sequence at the parent key's indent, which is the shape it could not.
+        The copy is the path the real records reached this shape by: the store's own
+        renderer writes `onepipeline.steps` as a block sequence at the parent key's indent,
+        which is the shape the writer under test could not edit around.
         """
         write_plan_project(self.drafts, {"name": native, **STEPPED_PLAN}, native_id=native)
         # And its plan-level budget answers, which every plan states as its description,
@@ -381,13 +379,15 @@ def test_a_review_is_recorded_on_a_record_whose_metadata_holds_a_block_sequence(
     # the sequence's items stand at their own key's indent, level with the entries around
     # them, which is what no rule keyed on indentation alone could place.
     _, _, native = project.partition(":")
-    record = plan_store.task_document(STORED, f"{native}/landing")
+    (landing,) = [task for task in plan_store.read_tasks(project) if task.node_id == "landing"]
+    _, _, landing_id = landing.qualified_id.partition(":")
+    record = plan_store.task_document(STORED, landing_id)
     body = record.read_text(encoding="utf-8")
     assert "\n  onepipeline.steps:\n  - id: build\n" in body, body
     plan_record = plan_store.source_root(STORED) / "projects" / f"{native}.md"
     untouched = {path: path.read_bytes() for path in (record, plan_record)}
 
-    before = store.metadata("task", f"{STORED}:{native}/landing")
+    before = store.metadata("task", landing.qualified_id)
     assert [step["id"] for step in before["onepipeline.steps"]] == ["build", "prove"]
     assert plan_review.RECORD_KEY not in before
 
@@ -400,7 +400,7 @@ def test_a_review_is_recorded_on_a_record_whose_metadata_holds_a_block_sequence(
     for path, held in untouched.items():
         assert _without_the_review_entry(path.read_bytes()) == held, path
 
-    after = store.metadata("task", f"{STORED}:{native}/landing")
+    after = store.metadata("task", landing.qualified_id)
     # The sequence entry survives whole — both items, in order, with the block-scalar
     # prose each of them states. An edit that dropped a step would leave a record that
     # still parsed and still carried a pass.

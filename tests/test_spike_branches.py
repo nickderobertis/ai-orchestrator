@@ -29,8 +29,8 @@ import pytest
 from conftest import git
 
 from orchestrator import plan_store, spike_branches
+from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import QualifiedProjectId
-from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 ONEVCS = REPO_ROOT / ".venv" / "bin" / "onevcs"
@@ -70,13 +70,26 @@ def _run_root(tmp_path: Path, project: object, tasks: object) -> Path:
 
 
 def _drafted(native: str, copies: dict[str, str] | None) -> None:
-    """An `authoring` project as the plan store keeps it, recording the copies it made."""
+    """An `authoring` project as the plan store keeps it, recording the copies it made.
+
+    Created through the store; the copies a board copy would have recorded are the store's
+    own reserved key, which no caller may write, so they are put on the record afterwards
+    in the shape the store keeps them.
+    """
+    root = Path(os.environ[plan_root_variable.name()])
     write_plan_project(
-        Path(os.environ[plan_root_variable.name()]),
+        root,
         {"schema_version": 3, "goal": {"text": "Page it"}, "name": native, "tasks": []},
         native_id=native,
-        project_metadata=None if copies is None else {plan_store.COPIES_KEY: copies},
     )
+    if copies is not None:
+        record = root / "projects" / f"{native}.md"
+        record.write_text(
+            record.read_text(encoding="utf-8").replace(
+                "metadata:\n", f"metadata:\n  {plan_store.COPIES_KEY}: {json.dumps(copies)}\n", 1
+            ),
+            encoding="utf-8",
+        )
 
 
 def test_a_plan_launched_from_authoring_is_named_by_its_own_native_id() -> None:

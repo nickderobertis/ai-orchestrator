@@ -272,7 +272,7 @@ def _finish(
             DESTINATION,
             environment=bench.environment,
         )
-        task = _design_task(bench, run)["content"]
+        task = _design_task(bench, run).task["content"]
     finally:
         _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
     return bench, drafted, finished, task

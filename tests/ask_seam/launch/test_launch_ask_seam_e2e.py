@@ -64,14 +64,14 @@ from fake_backend import (
 )
 from flow_engine_stand_in import give_flow_engine
 from planner_channel import PersistentManager, just, ruling
-from project_fixtures import helper, project_from_plan
+from project_fixtures import helper, project_from_plan, store_written
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import GIT_IDENTITY, PLANNING_FLOW_ORIGIN, Identity, seeded
 from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_store
-from orchestrator.project_store import PROJECTS_DIRECTORY, TASKS_DIRECTORY, render_plan_project
+from orchestrator.record_shapes import PROJECTS_DIRECTORY
 from orchestrator.root import REPO_ROOT
 
 #: The engine's human item store, which it keeps beside the runs under a runs root once
@@ -253,13 +253,13 @@ ANSWER = "An opaque token; the node id would leak the ordering."
 
 #: What every launch's recorded bus configuration must say, read as the values that make
 #: it *this checkout's* `config/onemessagebus.yaml` rather than any configuration at all —
-#: the layout, the envelope hook this host adds, and the reply window this host
-#: measured. `tests/test_onemessagebus_config.py` holds each to the file and to the release
-#: that loads it; these are restated rather than parsed because nothing in this suite's
-#: environment reads YAML, and the three together are what a launch that dropped
-#: `--bus-config` or pointed it elsewhere would lose.
+#: the layout and the reply window this host measured, with no envelope hook or
+#: validator, since the engine's envelope reviewer judges every reply.
+#: `tests/test_onemessagebus_config.py` holds each to the file and to the release that
+#: loads it; these are restated rather than parsed because nothing in this suite's
+#: environment reads YAML, and together they are what a launch that dropped the bus
+#: configuration or pointed it elsewhere would lose.
 BUS_PROFILE = "planner-channel"
-BUS_HOOK_COMMAND = ["scripts/envelope-review.sh"]
 BUS_REPLY_WINDOW_SECONDS = 3000
 
 #: How long a journey waits for a launch to reach a dispatched turn. Load-scaled like
@@ -421,7 +421,7 @@ AUTHORED_TASK = (
 
 def _authored_records(root: Path, native: str) -> dict[str, str]:
     """The records a dispatched planner writes into ``root``, as absolute paths."""
-    rendered = render_plan_project(
+    rendered = store_written(
         {
             "schema_version": 3,
             "name": native,
@@ -1059,16 +1059,30 @@ def _attest(
     raise AssertionError(f"run {run}'s '{reference}' never became attestable:\n{refusal}")
 
 
-def _authored_by_the_launch(root: Path, run: RunId) -> tuple[Path, Path]:
-    """The two records `just plan` writes for ``run`` under ``root``, and nothing else.
+def _authored_by_the_launch(root: Path, run: RunId) -> tuple[Path, list[Path]]:
+    """The records `just plan` writes for ``run`` under ``root``, and nothing else.
 
-    The project record and the task directory, as `scripts/plan.sh` lays them out — by
-    the run's own name, which is the one thing that makes a launch's records tellable
-    apart from every other record in that root. Named by path rather than matched by a
-    pattern, for the reason that script's own cleanup names its one task record: a sweep
-    of the directory would take records the launch never wrote.
+    The project record by the run's own name, and every task the store files under that
+    project, at the path the store reports for it — the store names a task by its title,
+    so a launch's tasks are told apart from every other record in that root by the project
+    the store says they belong to, never by a pattern over file names, which would take
+    records the launch never wrote.
     """
-    return root / PROJECTS_DIRECTORY / f"{run}.md", root / TASKS_DIRECTORY / run
+    listed = subprocess.run(  # noqa: S603 - the pinned store, reading this checkout's root
+        [str(ONETASKGRAPH_BIN), "task", "list", "--source", AUTHORING, "--project", run, "--json"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert listed.returncode == 0, listed.stderr
+    owned = [
+        Path(held["item"]["location"]["path"])
+        for held in json.loads(listed.stdout)["items"]
+        if (held["item"].get("location") or {}).get("path")
+    ]
+    return root / PROJECTS_DIRECTORY / f"{run}.md", owned
 
 
 def _forgotten(root: Path, run: RunId) -> None:
@@ -1078,12 +1092,13 @@ def _forgotten(root: Path, run: RunId) -> None:
     a launch writes where a real planner writes is the property they exist to prove — so
     what they leave behind sits in a developer's own `.plans`, beside plans somebody
     authored, and under stable names a later run of the suite then finds already taken.
-    Each launch takes back exactly its own two records; a project or task directory under
-    that root it did not write is somebody's, and is not touched.
+    Each launch takes back exactly its own records; a project or task under that root it
+    did not write is somebody's, and is not touched.
     """
     project, tasks = _authored_by_the_launch(root, run)
     project.unlink(missing_ok=True)
-    shutil.rmtree(tasks, ignore_errors=True)
+    for task in tasks:
+        task.unlink(missing_ok=True)
 
 
 def _carrying_the_plan_store_configuration(identity: Identity) -> None:
@@ -1693,7 +1708,7 @@ def test_a_plan_launch_writes_its_own_project_under_the_root_its_caller_chose(
 SOMEBODY_ELSES_PROJECT = "launch-seam-somebody-elses-plan"
 
 
-def _somebody_elses_plan(root: Path) -> tuple[Path, Path]:
+def _somebody_elses_plan(root: Path) -> tuple[Path, list[Path]]:
     """Write a stranger's project into ``root`` the way a real author does, and name it.
 
     Through the store's own writer as a subprocess, because that is the one path
@@ -1705,7 +1720,7 @@ def _somebody_elses_plan(root: Path) -> tuple[Path, Path]:
         [
             str(REPO_ROOT / ".venv" / "bin" / "python3"),
             "-m",
-            "orchestrator.project_store",
+            "orchestrator.plan_records",
             str(root),
         ],
         input=json.dumps(
@@ -1749,26 +1764,29 @@ def test_a_plan_launch_takes_back_its_own_records_and_leaves_everyone_elses(
     _requires_just()
     run = RunId("launch-seam-plan-taken-back")
     root = plan_store.source_root(AUTHORING)
-    project, tasks = _authored_by_the_launch(root, run)
+    project, _ = _authored_by_the_launch(root, run)
     theirs_project, theirs_tasks = _somebody_elses_plan(root)
     try:
         with _planned(tmp_path, oneharness_bin, run):
-            assert project.is_file() and tasks.is_dir(), (
+            assert project.is_file() and _authored_by_the_launch(root, run)[1], (
                 f"the launch of {run} wrote no records into this checkout's own authoring "
                 f"root {root}, so nothing below measures a teardown"
             )
 
-        assert not project.exists() and not tasks.exists(), (
+        left = _authored_by_the_launch(root, run)[1]
+        assert not project.exists() and not left, (
             f"the launch of {run} left its records in {root}: "
-            f"{[str(path) for path in (project, tasks) if path.exists()]}"
+            f"{[str(path) for path in (project, *left) if path.exists()]}"
         )
-        assert theirs_project.is_file() and theirs_tasks.is_dir(), (
+        assert theirs_project.is_file() and theirs_tasks, "the stranger's plan wrote no task"
+        assert all(path.is_file() for path in theirs_tasks), (
             f"the launch of {run} took back records it never wrote from {root}: "
-            f"{[str(path) for path in (theirs_project, theirs_tasks) if not path.exists()]}"
+            f"{[str(path) for path in (theirs_project, *theirs_tasks) if not path.exists()]}"
         )
     finally:
         theirs_project.unlink(missing_ok=True)
-        shutil.rmtree(theirs_tasks, ignore_errors=True)
+        for task in theirs_tasks:
+            task.unlink(missing_ok=True)
 
 
 def test_a_dispatch_over_a_chosen_root_resolves_its_store_to_that_root(
@@ -1944,17 +1962,18 @@ def test_every_launch_records_this_checkouts_bus_configuration_for_its_run(
 ) -> None:
     """The engine a launch starts applies this host's messaging policy to the run's channel.
 
-    `scripts/onepipeline.sh` adds `--bus-config config/onemessagebus.yaml` to every
-    `onepipeline start`, which is the verb every launch shape reaches, and the engine
+    `config/onepipeline.launch.yaml`, which `scripts/onepipeline.sh` names on every
+    `onepipeline start` — the verb every launch shape reaches — names
+    `config/onemessagebus.yaml`, and the engine
     records the configuration it parsed in the run's `launch.json` under `bus_config`. So
     the record is read rather than the argv: it says what the engine actually took, which
-    is what decides the hooks its replies are judged by and the reply window its
-    observer's judge side is served under.
+    is what decides the authors its replies are held to and the reply window its observer's
+    judge side is served under.
 
-    Asserted as the values that make it this checkout's configuration — the layout, this
-    host's envelope hook, and its measured reply window — because an engine given no
+    Asserted as the values that make it this checkout's configuration — the layout, no
+    envelope validator, and its measured reply window — because an engine given no
     configuration records none, and one given another file records other values. The
-    adopted shape is read after its adoption, which passes no `--bus-config` of its own, so
+    adopted shape is read after its adoption, which names no configuration of its own, so
     it is also the run keeping the configuration its launch retained.
     """
     # `cast` because `getfixturevalue` answers `Any` for a fixture named at run time, and
@@ -1974,15 +1993,10 @@ def test_every_launch_records_this_checkouts_bus_configuration_for_its_run(
         f"bus's defaults rather than this host's: {sorted(recorded)}"
     )
     assert bus.get("profile") == BUS_PROFILE, bus
-    hooks = bus.get("hooks")
-    assert isinstance(hooks, list) and [
-        hook.get("command") for hook in hooks if isinstance(hook, dict)
-    ] == [BUS_HOOK_COMMAND], (
-        f"run {dispatch.run}'s channel does not judge replies by this host's envelope hook: {hooks}"
-    )
-    assert not bus.get("validators"), (
-        f"run {dispatch.run} recorded deprecated validators: {bus.get('validators')}"
-    )
+    # No bus validator: the engine's envelope reviewer, which the same launch config names,
+    # judges every reply carrying edits.
+    assert not bus.get("validators"), bus.get("validators")
+    assert not bus.get("hooks"), bus.get("hooks")
     codecs = bus.get("codecs")
     monitor = codecs.get("monitor") if isinstance(codecs, dict) else None
     assert isinstance(monitor, dict), f"run {dispatch.run} recorded no monitor binding: {bus}"

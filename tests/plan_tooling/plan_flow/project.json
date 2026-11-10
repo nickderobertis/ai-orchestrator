@@ -74,6 +74,7 @@
       "{workspaceRoot}/scripts/launch-flow.sh",
       "{workspaceRoot}/scripts/lock-timeout.sh",
       "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/config/onepipeline.launch.yaml",
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-check.sh",

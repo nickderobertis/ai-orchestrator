@@ -36,6 +36,7 @@
       "{workspaceRoot}/llmlint.yml",
       "{workspaceRoot}/.claude/settings.json",
       "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/config/onepipeline.launch.yaml",
       "{workspaceRoot}/docs/orchestration.md",
       "{workspaceRoot}/docs/repo-lifecycle.md",
       "{workspaceRoot}/docs/telemetry.md",

@@ -49,8 +49,9 @@ from orchestrator.design_approval import (
     STAMP_KIND,
     STAMP_NODES,
 )
+from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import StoreDocument
-from orchestrator.project_store import frontmatter, write_plan_project
+from orchestrator.record_shapes import frontmatter
 from orchestrator.root import REPO_ROOT
 
 #: This suite is its own Nx project, `plan-tooling-plan-flow`; see
@@ -82,6 +83,12 @@ DESIGN_REFERENCE = "onepipeline:design-doc"
 
 #: The regenerate every refusal of a document that is not the rendering in force names.
 REGENERATE = "onepipeline template resolve design-doc --json | onetaskgraph document render"
+
+#: What the pinned engine's `template check design-doc --item` says of a stored document that
+#: is no longer the rendering its provenance records — edited by hand, or rendered before
+#: the template's chain moved. The refusal is the engine's, carried into the host's.
+ENGINE_EDITED = "body differs from its rendering"
+ENGINE_MOVED = "template changed since rendering"
 
 #: The guard covering every paid identity `ONEHARNESS_BIN_*` cannot reach. Nothing here
 #: should dispatch at all, which is exactly why it is worth proving rather than assuming:
@@ -745,15 +752,21 @@ def test_a_plan_is_launched_only_while_its_design_document_is_the_one_approved(
 
     # Editing the body by hand afterwards leaves a document that is not the rendering its
     # provenance records: both the recipe and the launch refuse it, naming the regenerate.
+    # The refusal is the pinned engine's template check, carried in its own words, and the
+    # refused approval records nothing: the record is byte for byte the edited one.
     store.edit(record, "One node that changes nothing.", "Something else.")
     edited = _launch(project, runs)
     assert edited.returncode == 1, edited.stdout + edited.stderr
     assert "was edited after it was rendered" in edited.stderr, edited.stderr
+    assert ENGINE_EDITED in edited.stderr, edited.stderr
     assert REGENERATE in edited.stderr, edited.stderr
+    hand_edited = record.read_bytes()
     unapprovable = _just("approve-design", project, runs=runs)
     assert unapprovable.returncode == 1, unapprovable.stdout + unapprovable.stderr
     assert "was edited after it was rendered" in unapprovable.stderr, unapprovable.stderr
+    assert ENGINE_EDITED in unapprovable.stderr, unapprovable.stderr
     assert REGENERATE in unapprovable.stderr, unapprovable.stderr
+    assert record.read_bytes() == hand_edited, "a refused approval rewrote the record"
 
     # Changing an answer and regenerating is content nobody has approved, which is the
     # whole reason the record is keyed on the rendering rather than on the plan.
@@ -884,6 +897,11 @@ def test_a_document_that_is_not_the_rendering_in_force_is_refused_by_the_recipe_
     assert recorded.returncode == 1, recorded.stdout + recorded.stderr
     assert said in recorded.stderr, recorded.stderr
     assert REGENERATE in recorded.stderr, recorded.stderr
+    # Refused by the pinned engine's template check, and nothing was recorded.
+    if shape == "a template changed after rendering":
+        assert ENGINE_MOVED in recorded.stderr, recorded.stderr
+    (refused_document,) = store.listed()
+    assert RECORD_KEY not in refused_document["item"]["metadata"], refused_document
 
     launched = _launch(project, runs)
     assert launched.returncode == 1, launched.stdout + launched.stderr
@@ -1230,7 +1248,7 @@ def test_a_planning_project_whose_tasks_cannot_be_read_is_refused_rather_than_ex
     native = "approve-design-planning-unreadable-tasks"
     # llmlint: ignore[tests_mirror_real_usage] see the paragraph above this line
     project = store.plan(native, planning=True)
-    tasks = store.root / "tasks" / native
+    tasks = store.root / "tasks"
     assert tasks.is_dir(), f"the plan wrote no task directory to make unreadable:\n{store.root}"
 
     tasks.chmod(0o000)

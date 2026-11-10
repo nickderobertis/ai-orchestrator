@@ -61,7 +61,6 @@ from project_fixtures import (
     resolving,
     reviewed,
 )
-from project_fixtures import older_engine as _older_engine
 from published_tools import node_interpreter
 from scratch_identity import GIT_IDENTITY, registered, rules_for_hosted, seeded
 from waits import timeout as e2e_timeout
@@ -74,7 +73,7 @@ from orchestrator.criteria_guard import (
     Authorization,
     OutOfDispatch,
 )
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 
@@ -225,16 +224,26 @@ def _check_plan(plan: Path) -> subprocess.CompletedProcess[str]:
     return _check_project(project)
 
 
-def test_project_store_reports_malformed_stdin_at_its_command_boundary(tmp_path: Path) -> None:
-    refused = subprocess.run(
-        [sys.executable, "-m", "orchestrator.project_store", str(tmp_path / "store")],
+def _plan_records(root: Path, payload: str) -> subprocess.CompletedProcess[str]:
+    """The store's writer at its command boundary, as the planning recipes pipe into it."""
+    return subprocess.run(
+        [sys.executable, "-m", "orchestrator.plan_records", str(root)],
         cwd=REPO_ROOT,
-        input="{bad",
+        input=payload,
         text=True,
         capture_output=True,
-        timeout=e2e_timeout(30),
+        timeout=e2e_timeout(60),
         check=False,
     )
+
+
+def _fixture_store(root: Path) -> dict[str, str]:
+    """This process's environment with the `test-fixtures` source rooted at ``root``."""
+    return os.environ | {"ONETASKGRAPH_SOURCES__TEST_FIXTURES__CONFIG__ROOT": str(root)}
+
+
+def test_plan_records_reports_malformed_stdin_at_its_command_boundary(tmp_path: Path) -> None:
+    refused = _plan_records(tmp_path / "store", "{bad")
 
     assert refused.returncode == 2, refused.stdout + refused.stderr
     assert "input is not valid JSON" in refused.stderr
@@ -246,11 +255,7 @@ def test_project_store_reports_malformed_stdin_at_its_command_boundary(tmp_path:
     (
         ('{"tasks":[]}', "store", "requires string"),
         ('{"name":"p","tasks":[{}]}', "store", "requires a string `id`"),
-        (
-            '{"name":"p","tasks":[{"id":"same id"},{"id":"same-id"}]}',
-            "store",
-            "slug-colliding",
-        ),
+        ('{"name":"p","tasks":[{"id":"same"},{"id":"same"}]}', "store", "duplicate"),
         ('{"name":"p","tasks":[{"id":"a","task":7}]}', "store", "title and task"),
         ('{"name":"p","tasks":[{"id":"a","deps":[7]}]}', "store", "dependencies"),
         ('{"name":"p","tasks":[{"id":"a","repo":7}]}', "store", "repository"),
@@ -264,141 +269,28 @@ def test_project_store_reports_malformed_stdin_at_its_command_boundary(tmp_path:
             "store",
             "neither a task of this plan nor a cross-DAG reference",
         ),
-        ('{"name":"p","tasks":[]}', "blocked", "cannot write"),
+        ('{"name":"p","tasks":[{"id":"a"}]}', "blocked", "could not create"),
     ),
 )
-def test_project_store_reports_semantic_and_write_failures(
+def test_plan_records_reports_semantic_and_store_failures(
     tmp_path: Path, payload: str, destination: str, message: str
 ) -> None:
     target = tmp_path / destination
     if destination == "blocked":
         target.write_text("not a directory", encoding="utf-8")
-    refused = subprocess.run(
-        [sys.executable, "-m", "orchestrator.project_store", str(target)],
-        cwd=REPO_ROOT,
-        input=payload,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(30),
-        check=False,
-    )
+    refused = _plan_records(target, payload)
 
     assert refused.returncode == 2, refused.stdout + refused.stderr
     assert message in refused.stderr
     assert "Traceback" not in refused.stderr
 
 
-def test_project_store_recovers_after_a_replacement_is_partially_written(tmp_path: Path) -> None:
-    """Retrying the command completes a store whose second task blocked its first write.
-
-    A root is read while it is being written, so what a half-written store leaves behind
-    is the operator-visible property here: the project document is published last, and a
-    write that failed before reaching it leaves no project at all rather than one whose
-    tasks a source would then fail to open. The blocker is the *second* task, because a
-    run that wrote nothing would exercise no recovery.
-    """
+def test_plan_records_gives_dependency_edges_the_ids_the_store_chose(tmp_path: Path) -> None:
+    """A node's in-plan dependency names the task the store created for it, by its own id."""
     root = tmp_path / "store"
-    blocked = root / "tasks" / "replacement" / "second.md"
-    blocked.mkdir(parents=True)
-    command = [sys.executable, "-m", "orchestrator.project_store", str(root)]
-    payload = json.dumps({"name": "Replacement", "tasks": [{"id": "first"}, {"id": "second"}]})
-
-    partial = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        input=payload,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(30),
-        check=False,
-    )
-
-    assert partial.returncode == 2, partial.stdout + partial.stderr
-    assert (root / "tasks/replacement/first.md").is_file(), (
-        "the failure happened before replacement began, so this does not exercise recovery"
-    )
-    assert not (root / "projects/replacement.md").exists(), (
-        "a store that never finished its tasks must not publish the project a reader "
-        "would then open those tasks from"
-    )
-    assert "cannot write generated plan" in partial.stderr
-
-    blocked.rmdir()
-    recovered = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        input=payload,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(30),
-        check=False,
-    )
-
-    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
-    assert (root / "tasks/replacement/second.md").is_file()
-    assert (root / "projects/replacement.md").is_file()
-
-
-def test_a_replacement_that_fails_leaves_the_published_project_where_it_was(
-    tmp_path: Path,
-) -> None:
-    """Replacing an already published project, driven at the command boundary.
-
-    The project document is written last, so a *replacement* is the case where one is
-    already published while its tasks are being rewritten: a failure part-way leaves the
-    reader the project it had, not a half-published new one, and the retry is what
-    completes the replacement. The first write is the real command too, because a store
-    assembled by hand would not be the store this recovers.
-    """
-    root = tmp_path / "store"
-    command = [sys.executable, "-m", "orchestrator.project_store", str(root)]
-
-    def store(payload: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            input=json.dumps(payload),
-            text=True,
-            capture_output=True,
-            timeout=e2e_timeout(30),
-            check=False,
-        )
-
-    published = store({"name": "Replacement", "tasks": [{"id": "first", "task": "Original."}]})
-    assert published.returncode == 0, published.stdout + published.stderr
-    document = (root / "projects/replacement.md").read_text(encoding="utf-8")
-
-    blocked = root / "tasks" / "replacement" / "second.md"
-    blocked.mkdir()
-    failed = store(
-        {
-            "name": "Replacement",
-            "tasks": [{"id": "first", "task": "Replaced."}, {"id": "second"}],
-        }
-    )
-
-    assert failed.returncode == 2, failed.stdout + failed.stderr
-    assert "Replaced." in (root / "tasks/replacement/first.md").read_text(encoding="utf-8")
-    assert (root / "projects/replacement.md").read_text(encoding="utf-8") == document
-
-    blocked.rmdir()
-    recovered = store(
-        {
-            "name": "Replacement",
-            "tasks": [{"id": "first", "task": "Replaced."}, {"id": "second"}],
-        }
-    )
-
-    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
-    assert (root / "tasks/replacement/second.md").is_file()
-
-
-def test_project_store_slugs_dependency_targets_for_the_real_store(tmp_path: Path) -> None:
-    root = tmp_path / "store"
-    written = subprocess.run(
-        [sys.executable, "-m", "orchestrator.project_store", str(root)],
-        cwd=REPO_ROOT,
-        input=json.dumps(
+    written = _plan_records(
+        root,
+        json.dumps(
             {
                 "name": "Slug dependency",
                 "tasks": [
@@ -407,23 +299,12 @@ def test_project_store_slugs_dependency_targets_for_the_real_store(tmp_path: Pat
                 ],
             }
         ),
-        text=True,
-        capture_output=True,
-        check=False,
     )
     assert written.returncode == 0, written.stderr
-    environment = os.environ | {"ONETASKGRAPH_SOURCES__TEST_FIXTURES__CONFIG__ROOT": str(root)}
     read = subprocess.run(
-        [
-            "just",
-            "plans",
-            "task",
-            "deps",
-            "test-fixtures:slug-dependency/child-node",
-            "--json",
-        ],
+        ["just", "plans", "task", "deps", "test-fixtures:child-node", "--json"],
         cwd=REPO_ROOT,
-        env=environment,
+        env=_fixture_store(root),
         text=True,
         capture_output=True,
         check=False,
@@ -431,38 +312,21 @@ def test_project_store_slugs_dependency_targets_for_the_real_store(tmp_path: Pat
 
     assert read.returncode == 0, read.stderr
     edges = json.loads(read.stdout)["items"]
-    assert edges[0]["to"]["id"] == "test-fixtures:slug-dependency/parent-node"
+    assert edges[0]["to"]["id"] == "test-fixtures:parent-node"
 
 
-def test_project_store_replacement_removes_tasks_absent_from_the_new_plan(
+def test_plan_records_replacement_removes_tasks_absent_from_the_new_plan(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "store"
-    command = [sys.executable, "-m", "orchestrator.project_store", str(root)]
-    first = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        input=json.dumps(
-            {
-                "name": "Replacement",
-                "tasks": [{"id": "kept"}, {"id": "removed"}],
-            }
-        ),
-        text=True,
-        capture_output=True,
-        check=False,
+    first = _plan_records(
+        root, json.dumps({"name": "Replacement", "tasks": [{"id": "kept"}, {"id": "removed"}]})
     )
     assert first.returncode == 0, first.stderr
-    replacement = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        input=json.dumps({"name": "Replacement", "tasks": [{"id": "kept"}]}),
-        text=True,
-        capture_output=True,
-        check=False,
+    replacement = _plan_records(
+        root, json.dumps({"name": "Replacement", "tasks": [{"id": "kept"}]})
     )
     assert replacement.returncode == 0, replacement.stderr
-    environment = os.environ | {"ONETASKGRAPH_SOURCES__TEST_FIXTURES__CONFIG__ROOT": str(root)}
     read = subprocess.run(
         [
             "just",
@@ -476,16 +340,14 @@ def test_project_store_replacement_removes_tasks_absent_from_the_new_plan(
             "--json",
         ],
         cwd=REPO_ROOT,
-        env=environment,
+        env=_fixture_store(root),
         text=True,
         capture_output=True,
         check=False,
     )
 
     assert read.returncode == 0, read.stderr
-    assert [record["id"] for record in json.loads(read.stdout)["items"]] == [
-        "test-fixtures:replacement/kept"
-    ]
+    assert [record["id"] for record in json.loads(read.stdout)["items"]] == ["test-fixtures:kept"]
 
 
 @pytest.mark.parametrize(
@@ -1516,8 +1378,7 @@ def test_a_malformed_step_is_refused_against_the_plan_input_the_recipe_reads(
 
 
 #: The engine's own loader is what decides a plan's structure now, and the accepted
-#: line says so. An operator reading "accepted" has to know which loader read the plan,
-#: because the direct path leaves every structural refusal for the launch to make.
+#: line says so, naming the check this repository registers with it.
 THROUGH_THE_ENGINE = "read through `onepipeline plan check`"
 
 
@@ -1525,7 +1386,7 @@ def _task_document(project: str) -> Path:
     """The stored record of this plan's one dispatched node, for an edit no plan states.
 
     Two of the three structural errors below cannot be written as plan JSON at all —
-    `orchestrator/project_store.py` renders a node's repository into exactly one of the
+    `orchestrator/plan_records.py` writes a node's repository into exactly one of the
     two places, and partitions `deps` so that a task of this plan only ever becomes a
     store dependency edge and never the cross-DAG key — so the shape that actually
     reached a launch is reached the way it arose, by editing the record.
@@ -1540,7 +1401,7 @@ def _with_metadata(project: str, entry: str) -> str:
     """``project`` with one more `onepipeline.` metadata entry on its dispatched node."""
     document = _task_document(project)
     written = document.read_text(encoding="utf-8")
-    anchor = '  "onepipeline.id": "route"'
+    anchor = "  onepipeline.id: route"
     assert anchor in written, written
     document.write_text(written.replace(anchor, f"{anchor}\n{entry}", 1), encoding="utf-8")
     return project
@@ -1599,23 +1460,23 @@ CROSS_DAG_REFERENCE = "run:r-upstream-0001#adopt"
 
 #: The reference above as the stored record spells it — the line the renderer writes, and
 #: the one an edit no plan states is made against.
-CROSS_DAG_EDGE = f'  "onepipeline.deps": ["{CROSS_DAG_REFERENCE}"]'
+CROSS_DAG_EDGE = f"  onepipeline.deps:\n  - {CROSS_DAG_REFERENCE}"
 
 #: The same node, waiting on a different run's node. A record granted over the edge above
 #: says nothing about this one.
-MOVED_CROSS_DAG_EDGE = '  "onepipeline.deps": ["run:r-upstream-0002#adopt"]'
+MOVED_CROSS_DAG_EDGE = "  onepipeline.deps:\n  - run:r-upstream-0002#adopt"
 
 
 def _with_deps(root: Path, criteria: str, deps: list[str]) -> Path:
     """The plan above with its dispatched node stating ``deps``.
 
-    Stated in the plan and rendered through this repository's own renderer rather than
+    Stated in the plan and created through the store's `task create` rather than
     edited onto the record, because that is the path a plan reaches the store by, and
     the one that refused a cross-DAG reference outright until
     https://github.com/nickderobertis/ai-orchestrator/issues/1139. The node carrying a
     task of this plan beside the reference is the case worth driving twice over: the
     half a store *can* express beside the half only `onepipeline.deps` can, which the
-    engine's loader resolves into one `deps` list and this repository's own rendering of
+    engine's loader resolves into one `deps` list and this repository's own reading of
     the store composes separately. A node carrying only one kind cannot tell those two
     renderings apart.
     """
@@ -1636,10 +1497,13 @@ def _rewritten(project: str, old: str, new: str) -> str:
 
 
 def _own_edge_line(project: str) -> str:
-    """The stored `depends_on` line `route` carries, as the record spells it."""
-    written = _task_document(project).read_text(encoding="utf-8")
-    (line,) = [one for one in written.splitlines() if one.startswith("depends_on:")]
-    return line
+    """The stored `depends_on` block `route` carries, as the record spells it."""
+    lines = _task_document(project).read_text(encoding="utf-8").splitlines()
+    start = next(index for index, one in enumerate(lines) if one.startswith("depends_on:"))
+    end = start + 1
+    while end < len(lines) and lines[end].startswith(("- ", "  ")):
+        end += 1
+    return "\n".join(lines[start:end])
 
 
 def _recheck(project: str) -> subprocess.CompletedProcess[str]:
@@ -1854,37 +1718,26 @@ def test_the_recipe_says_the_engines_own_loader_read_the_plan(tmp_path: Path) ->
         pytest.param(RESTS_ON_A_RELEASE, 1, id="refused"),
     ),
 )
-def test_both_paths_reach_the_same_verdict_on_one_plan(
+def test_the_engine_reads_every_plan_and_names_the_check_that_refused(
     tmp_path: Path, criteria: str, code: int
 ) -> None:
-    """The recipe works against an engine with no `plan check`, and agrees with itself.
+    """Every plan is read through the engine's own `plan check`; there is no other path.
 
-    The two paths refuse different amounts — only the engine's own loader makes the
-    structural refusals — but over a plan whose structure is sound they are the same
-    checks over the same nodes, so they must reach the same verdict. What differs is
-    the sentence naming which one read it, because an operator on the narrower path is
-    owed the knowledge that a launch may still refuse this plan's structure.
+    An accepted plan says which loader read it and how many nodes it held; a refused one
+    names the registered check that made the refusal, because an engine refusal and one
+    of this repository's checks are corrected in different places.
     """
     project = project_from_plan(_plan(tmp_path, criteria))
-    direct = os.environ | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))}
 
     through = _check_project(project)
-    directly = _check_project(project, environment=direct)
 
     assert through.returncode == code, through.stdout + through.stderr
-    assert directly.returncode == code, directly.stdout + directly.stderr
     if code == 0:
         assert THROUGH_THE_ENGINE in through.stdout, through.stdout
-        assert "carries no `plan check`" in directly.stdout, directly.stdout
         assert "1 dispatched node(s)" in through.stdout, through.stdout
-        assert "1 dispatched node(s)" in directly.stdout, directly.stdout
     else:
         assert "the dispatch cannot do" in through.stderr, through.stderr
-        assert "the dispatch cannot do" in directly.stderr, directly.stderr
-        # Through the verb the refusal names the check that made it; directly there is
-        # only one loader, so there is no source to name.
         assert "check-plan: scripts/plan-check.sh: route: task: " in through.stderr, through.stderr
-        assert "check-plan: route: " in directly.stderr, directly.stderr
 
 
 @pytest.mark.parametrize(
@@ -1894,15 +1747,13 @@ def test_both_paths_reach_the_same_verdict_on_one_plan(
         pytest.param("repeated", "criteria section repeated", id="repeated"),
     ),
 )
-def test_a_criteria_section_missing_or_repeated_is_the_engines_to_refuse_on_either_path(
+def test_a_criteria_section_missing_or_repeated_is_the_engines_to_refuse(
     tmp_path: Path, shape: str, rule: str
 ) -> None:
-    """The engine refuses both shapes; the narrower path leaves them to it and says so.
+    """The engine refuses both shapes, by the rule's own name.
 
-    This repository's checks no longer restate the engine's criteria-section rule, so an
-    engine with no `plan check` accepts such a plan on what this host checks and names the
-    narrower path, whose own sentence warns that a launch may still refuse the plan's
-    structure — which the installed engine then does, by the rule's own name.
+    This repository's checks no longer restate the engine's criteria-section rule, so the
+    refusal is the installed engine's loader's.
     """
     plan = _plan(tmp_path, STATES_ITS_BAR)
     document = json.loads(plan.read_text(encoding="utf-8"))
@@ -1914,19 +1765,11 @@ def test_a_criteria_section_missing_or_repeated_is_the_engines_to_refuse_on_eith
         node["task"] += "\n## Acceptance criteria\n\n- The thing is done.\n"
     plan.write_text(json.dumps(document), encoding="utf-8")
     project = project_from_plan(plan)
-    # llmlint: ignore-block[e2e_not_mocked] The narrower path is reached only against an
-    # engine carrying no `plan check`, for the reason `_older_engine` states; the refusal
-    # this journey holds is the installed engine's own, read on the other path.
-    direct = os.environ | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))}
-    # llmlint: ignore-end[e2e_not_mocked]
 
     through = _check_project(project)
-    directly = _check_project(project, environment=direct)
 
     assert through.returncode == 1, through.stdout + through.stderr
     assert f"node 'route': {rule}" in through.stderr, through.stderr
-    assert directly.returncode == 0, directly.stdout + directly.stderr
-    assert "carries no `plan check`" in directly.stdout, directly.stdout
 
 
 def _loaded_plan(project: str, root: Path) -> str:
@@ -2053,8 +1896,6 @@ def _unreadable_engine(root: Path) -> Path:
     binary.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
-        "if sys.argv[1:] == ['plan', 'check', '--help']:\n"
-        "    raise SystemExit(0)\n"
         "print('not a json answer')\n"
         "print('onepipeline: something went wrong', file=sys.stderr)\n",
         encoding="utf-8",
@@ -2127,11 +1968,11 @@ def test_the_registered_check_reports_a_plan_it_cannot_read_as_unrunnable(tmp_pa
 def test_an_engine_named_but_not_runnable_is_refused_rather_than_read_as_a_refusal(
     tmp_path: Path,
 ) -> None:
-    """A value naming nothing runnable must not read as an engine that lacks the verb.
+    """A value naming nothing runnable is refused by name, and nothing is judged.
 
-    The two exits are the same from outside a spawn, and reading one as the other takes
-    the narrower direct path over a plan the operator meant to have checked whole — so
-    the recipe says which it was and judges nothing.
+    Spawned as it stands it would fail as a bare process error naming no variable, which
+    is a refusal of the plan in nobody's words — so the recipe says which variable named
+    what, and judges nothing.
     """
     project = project_from_plan(_plan(tmp_path, STATES_ITS_BAR))
 
@@ -2201,10 +2042,10 @@ def test_a_plan_the_engine_accepts_and_this_reader_cannot_says_so_rather_than_re
     project = reviewed(project_from_plan(_plan(tmp_path, STATES_ITS_BAR)))
     document = _task_document(project)
     written = document.read_text(encoding="utf-8")
-    named = '["github.com/nickderobertis/some-service"]'
+    named = "- github.com/nickderobertis/some-service\n"
     assert named in written, written
     document.write_text(
-        written.replace(named, '["github.com/nickderobertis/some-service", "github.com/x/y"]'),
+        written.replace(named, f"{named}- github.com/x/y\n"),
         encoding="utf-8",
     )
 
@@ -2277,7 +2118,7 @@ def _padded(root: Path, size: int) -> Path:
     return _plan(root, STATES_ITS_BAR, appended=heading + repeated)
 
 
-#: How both paths report the figure, the direct one carrying the field beside the node.
+#: How the recipe reports the figure, the field beside the node.
 MEASURED = re.compile(
     r"route: (?:task: )?its composed issue body measures (?P<size>[\d,]+) characters"
 )
@@ -2292,7 +2133,7 @@ def _reported_size(stderr: str) -> int:
 def test_a_task_whose_issue_body_the_board_would_refuse_is_refused_before_the_copy(
     tmp_path: Path,
 ) -> None:
-    """The size refusal, on both paths, naming the task, its size, the limit and the gap.
+    """The size refusal, naming the task, its size, the limit and the gap.
 
     The plan is otherwise sound, reviewed through the real recipe, and refused for the one
     thing the `plans` board would refuse it for at the last step of the flow: an issue
@@ -2301,31 +2142,24 @@ def test_a_task_whose_issue_body_the_board_would_refuse_is_refused_before_the_co
     `just copy-plan` would send.
     """
     project = project_from_plan(_padded(tmp_path, task_body.BODY_LIMIT + 2_000))
-    # llmlint: ignore-block[e2e_not_mocked] The direct path is reached only against an
-    # engine carrying no `plan check`, for the reason `_older_engine` states.
-    direct = os.environ | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))}
-    # llmlint: ignore-end[e2e_not_mocked]
 
-    through = _check_project(project)
-    directly = _check_project(project, environment=direct)
+    refused = _check_project(project)
 
     _, records = plan_store.read_project(project)
     (measured,) = [body for body in task_body.record_bodies(records) if body.node == "route"]
     assert measured.size > task_body.BODY_LIMIT, measured
-    for refused in (through, directly):
-        assert refused.returncode == 1, refused.stdout + refused.stderr
-        assert refused.stdout == "", refused.stdout
-        assert _reported_size(refused.stderr) == measured.size, refused.stderr
-        assert f"{task_body.BODY_LIMIT:,}-character limit" in refused.stderr, refused.stderr
-        assert task_body.UNMEASURED in refused.stderr, refused.stderr
-    assert "check-plan: scripts/plan-check.sh: route: task: " in through.stderr, through.stderr
-    assert "check-plan: route: task: " in directly.stderr, directly.stderr
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert refused.stdout == "", refused.stdout
+    assert _reported_size(refused.stderr) == measured.size, refused.stderr
+    assert f"{task_body.BODY_LIMIT:,}-character limit" in refused.stderr, refused.stderr
+    assert task_body.UNMEASURED in refused.stderr, refused.stderr
+    assert "check-plan: scripts/plan-check.sh: route: task: " in refused.stderr, refused.stderr
 
 
 def test_a_task_between_the_thresholds_is_accepted_with_a_warning_on_stderr(
     tmp_path: Path,
 ) -> None:
-    """From the warning threshold a task is warned about and still accepted, on both paths.
+    """From the warning threshold a task is warned about and still accepted.
 
     The warning is the wrapper's rather than the registered check's, because the verb
     swallows an accepting check's stderr: so it is asserted at the recipe, beside the
@@ -2333,27 +2167,18 @@ def test_a_task_between_the_thresholds_is_accepted_with_a_warning_on_stderr(
     fraction of.
     """
     project = project_from_plan(_padded(tmp_path, task_body.WARN_FROM + 2_000))
-    # llmlint: ignore-block[e2e_not_mocked] The direct path is reached only against an
-    # engine carrying no `plan check`, for the reason `_older_engine` states.
-    direct = os.environ | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))}
-    # llmlint: ignore-end[e2e_not_mocked]
 
-    through = _check_project(project)
-    directly = _check_project(project, environment=direct)
+    accepted = _check_project(project)
 
     _, records = plan_store.read_project(project)
     (measured,) = [body for body in task_body.record_bodies(records) if body.node == "route"]
     assert task_body.WARN_FROM <= measured.size <= task_body.BODY_LIMIT, measured
-    for accepted in (through, directly):
-        assert accepted.returncode == 0, accepted.stdout + accepted.stderr
-        assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
-        assert "check-plan: warning: route: " in accepted.stderr, accepted.stderr
-        assert _reported_size(accepted.stderr) == measured.size, accepted.stderr
-        assert f"of the {task_body.BODY_LIMIT:,}-character limit" in accepted.stderr, (
-            accepted.stderr
-        )
-    assert THROUGH_THE_ENGINE in through.stdout, through.stdout
-    assert "carries no `plan check`" in directly.stdout, directly.stdout
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+    assert "check-plan: warning: route: " in accepted.stderr, accepted.stderr
+    assert _reported_size(accepted.stderr) == measured.size, accepted.stderr
+    assert f"of the {task_body.BODY_LIMIT:,}-character limit" in accepted.stderr, accepted.stderr
+    assert THROUGH_THE_ENGINE in accepted.stdout, accepted.stdout
 
 
 def test_a_task_below_the_warning_threshold_draws_no_warning(tmp_path: Path) -> None:
@@ -2695,7 +2520,7 @@ def test_the_same_node_rewritten_with_the_origin_in_repositories_is_accepted(
 ) -> None:
     """The correction the refusal above asks for, driven to acceptance.
 
-    The record renderer puts a `host/owner/name` `repo` into the record's `repositories`
+    The store's writer puts a `host/owner/name` `repo` into the record's `repositories`
     and writes no `onepipeline.repo`, and the engine's own loader reads the node's `repo`
     back out of that list — which is asserted from the plan document the verb hands this
     repository's check, so what is read is what the loader loaded rather than what the
@@ -2758,43 +2583,6 @@ def test_a_value_this_host_cannot_resolve_earns_no_refusal_about_the_key(
 
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
-
-
-def test_both_paths_refuse_a_node_this_host_would_not_publish(tmp_path: Path) -> None:
-    """The publication refusals reach an engine with no `plan check` too, and agree.
-
-    The two paths refuse different amounts — only the engine's own loader makes the
-    structural refusals — but these are this repository's own, so they are the same
-    answer over the same plan whichever loader read it. What differs is how much of that
-    answer each can print: the verb renders every refusal, and the direct path raises the
-    first, which is why the assertion below is about the one they share rather than about
-    the count.
-    """
-    (checkout,) = registered(tmp_path / "registry", ["service"])
-    _hooked(checkout)
-    plan = _publishing_plan(
-        tmp_path, {"id": "landing", "title": "refactor: rename it", "repo": "service"}
-    )
-    project = project_from_plan(plan)
-    registry = _in_registry(tmp_path / "registry" / "onevcs")
-
-    through = _check_project(project, environment=registry)
-    # llmlint: ignore-block[e2e_not_mocked] The direct path is reached only against an
-    # engine carrying no `plan check`, which is a release older than that verb and so not
-    # an artifact this repository can install; `_older_engine` is the absence of that one
-    # verb and nothing else, for the reason stated where it is built. Everything else here
-    # is real — the recipe, the registered identity, and the destination's own hook.
-    directly = _check_project(
-        project,
-        environment=registry | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))},
-    )
-    # llmlint: ignore-end[e2e_not_mocked]
-
-    assert through.returncode == 1, through.stdout + through.stderr
-    assert directly.returncode == 1, directly.stdout + directly.stderr
-    for refused in (through, directly):
-        assert "does not release from 'refactor:'" in refused.stderr, refused.stderr
-        assert "landing" in refused.stderr, refused.stderr
 
 
 def test_a_node_consuming_a_release_its_identity_really_publishes_is_not_refused(
@@ -3103,13 +2891,11 @@ def test_a_plan_whose_repositories_the_registry_does_not_know_earns_no_adoption_
     assert "2 dispatched node(s)" in accepted.stdout, accepted.stdout
 
 
-def test_the_two_paths_report_the_same_adoption_refusal(tmp_path: Path) -> None:
-    """The direct path raises the first refusal the rules make; the verb collects them all.
+def test_every_adoption_refusal_of_a_plan_is_reported_together(tmp_path: Path) -> None:
+    """The verb collects every refusal the rules make, one per node, in one report.
 
-    Two violations in one plan, one per node, so the two amounts differ: the through-engine
-    path prints both, and the direct path prints exactly one — which has to be one of the
-    two, naming the same node, field and rule. On a plan carrying one violation the two
-    outputs name the same three things.
+    Two violations in one plan, one per node, so a report naming only the first would be
+    visibly short; on a plan carrying one violation the report names that one.
     """
     root = tmp_path / "registry"
     registered(
@@ -3124,29 +2910,19 @@ def test_the_two_paths_report_the_same_adoption_refusal(tmp_path: Path) -> None:
     (tmp_path / "one").mkdir()
     one = project_from_plan(_publishing_plan(tmp_path / "one", PRODUCER, held))
     registry = _in_registry(root / "onevcs")
-    # llmlint: ignore-block[e2e_not_mocked] The direct path is reached only against an
-    # engine carrying no `plan check`, for the reason `_older_engine` states.
-    direct = registry | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))}
-    # llmlint: ignore-end[e2e_not_mocked]
 
     through = _check_project(two, environment=registry)
-    directly = _check_project(two, environment=direct)
     through_one = _check_project(one, environment=registry)
-    directly_one = _check_project(one, environment=direct)
 
     assert through.returncode == 1, through.stdout + through.stderr
-    assert directly.returncode == 1, directly.stdout + directly.stderr
     collected = [
         line.removeprefix("check-plan: scripts/plan-check.sh: ")
         for line in through.stderr.splitlines()
         if line.startswith("check-plan: scripts/plan-check.sh: ")
     ]
     assert {line.split(": ")[0] for line in collected} == {"held", "drafted"}, collected
-    (raised,) = [line for line in directly.stderr.splitlines() if line.startswith("check-plan: ")]
-    assert raised.removeprefix("check-plan: ") in collected, (raised, collected)
-    for reported in (through_one, directly_one):
-        assert reported.returncode == 1, reported.stdout + reported.stderr
-        assert "held: adoption: this node adopts `published`" in reported.stderr, reported.stderr
+    assert through_one.returncode == 1, through_one.stdout + through_one.stderr
+    assert "held: adoption: this node adopts `published`" in through_one.stderr, through_one.stderr
 
 
 #: The tracked override, which the journeys below install over producers registered under
@@ -3732,7 +3508,21 @@ def test_a_plan_homed_on_a_source_the_defaults_leave_out_is_read_whole(
             ],
         },
         native_id=f"{native}-member",
-        project_metadata={"onetaskgraph.member_of": home},
+    )
+    # Which home a member belongs to is the store's own reserved key, written by the copy
+    # that splits a plan and by no caller, so it is put on the member's record in the shape
+    # that copy leaves it.
+    # llmlint: ignore-block[tests_mirror_real_usage] A split copy places its home and member
+    # by the source's repository routes and visibility, which cannot put the home on a source
+    # outside the defaults while keeping its member on `test-fixtures`; this journey's subject
+    # is the engine reading such a home, so the two keys that copy writes are written in its
+    # shape, as the deleted record writer wrote them before.
+    member_record = plan_fixture_source.root() / "projects" / f"{native}-member.md"
+    member_record.write_text(
+        member_record.read_text(encoding="utf-8").replace(
+            "metadata:\n", f"metadata:\n  onetaskgraph.member_of: {home}\n", 1
+        ),
+        encoding="utf-8",
     )
     plan = {
         "schema_version": 3,
@@ -3750,9 +3540,15 @@ def test_a_plan_homed_on_a_source_the_defaults_leave_out_is_read_whole(
             {"id": "approve", "kind": "human", "unit": FIXTURE_UNIT, "task": "Approve it."},
         ],
     }
-    write_plan_project(
-        home_root, plan, native_id=native, project_metadata={plan_store.MEMBERS_KEY: [member]}
+    write_plan_project(home_root, plan, native_id=native)
+    home_record = home_root / "projects" / f"{native}.md"
+    home_record.write_text(
+        home_record.read_text(encoding="utf-8").replace(
+            "metadata:\n", f"metadata:\n  {plan_store.MEMBERS_KEY}: [{json.dumps(member)}]\n", 1
+        ),
+        encoding="utf-8",
     )
+    # llmlint: ignore-end[tests_mirror_real_usage]
     budgeted(OFF_DEFAULTS, native, no_budgets([repository]), resolving(home))
     # Each task is reviewed in the project that holds it, as a split plan's are before the
     # copy that splits it: `just review-plan` records a review against its own project only.

@@ -363,22 +363,6 @@ def warnings(records: Iterable[StoreTask]) -> list[str]:
     return [warned for body in record_bodies(records) if (warned := warning(body)) is not None]
 
 
-def check_records(records: Iterable[StoreTask]) -> None:
-    """Raise :class:`BodyError` for the first record of ``records`` this board would refuse.
-
-    The raising face of :func:`refusals`, for the path that reports one refusal at a
-    time; `orchestrator/plan_check.py` reports them all through the verb. Over the
-    store's records rather than a plan because that path's plan carries no metadata map
-    — :func:`orchestrator.plan_store.read_plan` lifts the `onepipeline.*` keys out of it
-    and drops the rest — and the map is part of the body. The message names the field
-    beside the node, so the two paths report the same three things.
-    """
-    for body in record_bodies(records):
-        refused = refusal(body)
-        if refused is not None:
-            raise BodyError(f"{refused.node}: {refused.field}: {refused.reason}")
-
-
 def document_bodies(
     documents: Iterable[StoreDocument], uploads: Callable[[str], AssetUpload] = bound_upload
 ) -> Iterator[DocumentBody]:

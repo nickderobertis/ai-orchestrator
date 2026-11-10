@@ -57,7 +57,6 @@ from typing import Any, NamedTuple
 
 from orchestrator import host_installs
 from orchestrator.plan_store import NodeId
-from orchestrator.project_store import hosted_origin
 from orchestrator.publication_guard import (
     HUMAN,
     ONEVCS,
@@ -67,6 +66,7 @@ from orchestrator.publication_guard import (
     Workflow,
     destination,
 )
+from orchestrator.record_shapes import hosted_origin
 from orchestrator.root import REPO_ROOT
 
 #: The tier that reads what this one deliberately does not: a task's prose. Named in
@@ -171,10 +171,6 @@ class Node(NamedTuple):
         """The target this node names for ``dependency``, or ``None`` where it names none."""
         named = self.consumes.get(dependency)
         return named if isinstance(named, str) and named else None
-
-
-class AdoptionError(ValueError):
-    """A plan node whose release adoption could never complete on this host."""
 
 
 def nodes(plan: object) -> Iterator[Node]:
@@ -642,14 +638,3 @@ def refusals(plan: object) -> list[Refusal]:
         found.extend(_uninstalled_artifact_refusals(node, by_id, host))
         found.extend(_default_taken_refusals(node, by_id, host, adoption))
     return found
-
-
-def check_plan(plan: object) -> None:
-    """Raise :class:`AdoptionError` for the first thing this host would refuse.
-
-    The raising face of :func:`refusals`, for the path that reports one refusal at a
-    time; `orchestrator/plan_check.py` reports them all through the verb. The message
-    names the field beside the node, so the two paths report the same three things.
-    """
-    for refused in refusals(plan):
-        raise AdoptionError(f"{refused.node}: {refused.field}: {refused.reason}")

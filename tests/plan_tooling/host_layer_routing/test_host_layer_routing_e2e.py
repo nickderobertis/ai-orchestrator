@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import subprocess
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -65,8 +66,9 @@ from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 from orchestrator import follow_up_tickets as tickets
+from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import WRITABLE_PLUGIN
-from orchestrator.project_store import PlanNode, write_plan_project
+from orchestrator.record_shapes import PlanNode
 from orchestrator.root import REPO_ROOT
 
 #: A public repository every neutral fixture names: this repository's own identity.
@@ -197,8 +199,55 @@ def _held(folder: Path) -> list[str]:
     return sorted(str(path.relative_to(folder)) for path in folder.rglob("*.md"))
 
 
+def _held_plans(folder: Path) -> list[str]:
+    """Every record a folder source holds, a plan's task named `tasks/<project>/<node id>`.
+
+    Named from the task's own front matter rather than by its file, because the store files
+    a task under an id of its own choosing, while what a copy has to land is the plan's node
+    in the plan's project.
+    """
+    named = []
+    for path in folder.rglob("*.md"):
+        relative = str(path.relative_to(folder))
+        if relative.startswith("tasks/"):
+            front = path.read_text(encoding="utf-8").removeprefix("---\n").partition("\n---")[0]
+            fields = yaml.safe_load(front)
+            relative = f"tasks/{fields['project']}/{fields['metadata']['onepipeline.id']}.md"
+        named.append(relative)
+    return sorted(named)
+
+
+def _task(layer: Layer, plan: str, index: int) -> str:
+    """The qualified id the store gave ``plan``'s node `task-<index>`."""
+    source, _, native = plan.partition(":")
+    listed = _store(layer, "task", "list", "--source", source, "--project", native, "--json")
+    assert listed.returncode == 0, listed.stderr
+    (found,) = [
+        str(held["id"])
+        for held in json.loads(listed.stdout)["items"]
+        if held["item"]["metadata"].get("onepipeline.id") == f"task-{index}"
+    ]
+    return found
+
+
 def _plan(layer: Layer, name: str, repositories: list[str]) -> str:
-    """Author one plan in `authoring` whose tasks name ``repositories``, answering its id."""
+    """Author one plan in `authoring` whose tasks name ``repositories``, answering its id.
+
+    Written under the layer's own environment, whose registry declares each repository's
+    visibility, so the store classifies each task as a planner on this host would.
+    """
+    saved = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(layer.environment)
+    try:
+        _written(layer, name, repositories)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    return f"authoring:{name}"
+
+
+def _written(layer: Layer, name: str, repositories: list[str]) -> None:
     write_plan_project(
         layer.authoring,
         {
@@ -209,7 +258,6 @@ def _plan(layer: Layer, name: str, repositories: list[str]) -> str:
             ],
         },
     )
-    return f"authoring:{name}"
 
 
 # llmlint: ignore-block[e2e_not_mocked] The public GitHub Projects wire is loopback
@@ -325,21 +373,16 @@ def test_an_organization_s_ticket_reaches_its_own_tracker_by_the_layer_s_route(
     layer.environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__CREATION_OWNERS"] = (
         f"{PERSONAL.split('/')[1]},{TRACKED_OWNER}"
     )
-    _plan(layer, "tickets", [ORGANIZATION])
-    _plan(layer, "personal-tickets", [PERSONAL])
+    organization = _task(layer, _plan(layer, "tickets", [ORGANIZATION]), 0)
+    personal = _task(layer, _plan(layer, "personal-tickets", [PERSONAL]), 0)
     folder = layer.folders[onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS]
 
-    routed = _run(
-        layer, ["just", "plans", "task", "copy", "authoring:tickets/task-0", "--to", "followups"]
-    )
+    routed = _run(layer, ["just", "plans", "task", "copy", organization, "--to", "followups"])
     assert routed.returncode == 0, routed.stdout + routed.stderr
-    assert f"{onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS}:tickets/task-0" in routed.stdout
-    assert "tasks/tickets/task-0.md" in _held(folder)
+    assert f"{onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS}:" in routed.stdout
+    assert "tasks/tickets/task-0.md" in _held_plans(folder)
 
-    refused = _run(
-        layer,
-        ["just", "plans", "task", "copy", "authoring:personal-tickets/task-0", "--to", "followups"],
-    )
+    refused = _run(layer, ["just", "plans", "task", "copy", personal, "--to", "followups"])
     assert refused.returncode != 0, refused.stdout
     assert NOT_PRIVATE in refused.stderr, refused.stderr
     assert BOARD.created == [], [issue.title for issue in BOARD.created]
@@ -411,7 +454,7 @@ def test_a_plan_touching_an_organizations_work_homes_in_its_tracker_and_keeps_it
     home = f"{onetaskgraph_user_layer.ORGANIZATION_PLANS}:{name}"
     assert home in copied.stdout, copied.stdout
     private = [f"tasks/{name}/task-{index}.md" for index in range(len(repositories))]
-    assert _held(folder) == sorted([f"projects/{name}.md", *private]), _held(folder)
+    assert _held_plans(folder) == sorted([f"projects/{name}.md", *private]), _held_plans(folder)
     assert [issue.title for issue in BOARD.created] == on_the_board
     held = _board_text()
     for private_term in (home, *private, *(path[len("tasks/") : -3] for path in private)):
@@ -443,7 +486,7 @@ def test_an_organization_s_plan_is_copied_straight_to_its_own_tracker(layer: Lay
     )
 
     assert copied.returncode == 0, copied.stdout + copied.stderr
-    assert _held(layer.folders[onetaskgraph_user_layer.ORGANIZATION_PLANS]) == [
+    assert _held_plans(layer.folders[onetaskgraph_user_layer.ORGANIZATION_PLANS]) == [
         "projects/organization.md",
         "tasks/organization/task-0.md",
         "tasks/organization/task-1.md",
@@ -480,14 +523,15 @@ def test_owner_private_work_routes_and_locates_at_its_private_home(
     plan = _plan(layer, "owner-work", repositories)
     private_index = repositories.index(OWNER_PRIVATE)
     located = _run(
-        layer, ["just", "plans", "task", "locate", f"{plan}/task-{private_index}", "--to", "plans"]
+        layer,
+        ["just", "plans", "task", "locate", _task(layer, plan, private_index), "--to", "plans"],
     )
     assert located.returncode == 0, located.stdout + located.stderr
     assert "private-plans" in located.stdout, located.stdout
     copied = _run(layer, ["just", "plans", "project", "copy", plan, "--to", "plans"])
     assert copied.returncode == 0, copied.stdout + copied.stderr
     assert "private-plans:owner-work" in copied.stdout, copied.stdout
-    assert _held(layer.folders[onetaskgraph_user_layer.PRIVATE_PLANS]) == sorted(
+    assert _held_plans(layer.folders[onetaskgraph_user_layer.PRIVATE_PLANS]) == sorted(
         [
             "projects/owner-work.md",
             *(f"tasks/owner-work/task-{index}.md" for index in range(len(repositories))),
@@ -553,13 +597,14 @@ def test_overlapping_routes_follow_kind_precedence_and_written_order(
     config.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     plan = _plan(layer, "overlapping", [repository])
 
-    located = _run(layer, ["just", "plans", "task", "locate", f"{plan}/task-0", "--to", "plans"])
+    task = _task(layer, plan, 0)
+    located = _run(layer, ["just", "plans", "task", "locate", task, "--to", "plans"])
     assert located.returncode == 0, located.stdout + located.stderr
     assert PRIVATE_STAND_IN in located.stdout, located.stdout
-    copied = _run(layer, ["just", "plans", "task", "copy", f"{plan}/task-0", "--to", "plans"])
+    copied = _run(layer, ["just", "plans", "task", "copy", task, "--to", "plans"])
     assert copied.returncode == 0, copied.stdout + copied.stderr
-    assert f"{PRIVATE_STAND_IN}:overlapping/task-0" in copied.stdout, copied.stdout
-    assert _held(layer.folders[PRIVATE_STAND_IN]) == ["tasks/overlapping/task-0.md"]
+    assert f"{PRIVATE_STAND_IN}:" in copied.stdout, copied.stdout
+    assert _held_plans(layer.folders[PRIVATE_STAND_IN]) == ["tasks/overlapping/task-0.md"]
     assert _held(layer.folders[onetaskgraph_user_layer.PRIVATE_PLANS]) == []
     assert BOARD.created == []
 

@@ -186,39 +186,33 @@ upgrade:
 # monitor` defaults to: the read-time profiles are options of the reading verbs, and
 # a launch takes none. Reattach with `just monitor <run-id>` for the narrower one.
 #
-# The three graph flags this adds are the whole difference between this recipe and a
-# bare `onepipeline start`. All three ship defaulted to nothing, because the published
-# crate ships the flags and not the documents — the documents name this operator's
-# own oneharness configs and personas — so naming them is what makes an operator on
-# this host get them and a bare `onepipeline start` elsewhere not:
+# The two graph flags and the label this adds are the whole difference between this
+# recipe and the other launches `scripts/onepipeline.sh` runs. The rest of a launch's
+# settings — the run-end hooks, the drafting graph, the bus configuration, the dispatch-env
+# hook and the envelope reviewer among them — are config/onepipeline.launch.yaml's, which
+# every `start` names; the other launchers blank the hooks and the drafting graph, so this
+# recipe is the one whose runs keep them. Both graph flags ship defaulted to nothing,
+# because the published crate ships the flags and not the documents:
 #
 #   * `--dag-graph graphs/dag-scope.yaml` — no agent is required to run a plan at
 #     all, and this is the opt-in: the active monitor that watches the run and the
 #     pacemaker that reports it.
-#   * `--pr-author-graph graphs/pr-author.yaml` — a launch naming none opens its
-#     change requests with the body its plan states, or with none, which is how
-#     every pull request this harness opened came to carry `Published by onevcs.`
-#     as its Why.
 #   * `--review-reply-graph graphs/review-reply.yaml` — a launch naming none answers
 #     no reviewer: a rework's owed replies stay owed and surfaced, and a `decline` is
 #     refused, so `just review-comments` would find comments nothing could reply to.
-#   * `--success-hook` and `--failure-hook`, both naming `scripts/run-ended.sh` by
-#     an absolute path in this checkout — a launch naming none fires nothing when it
-#     ends. A run whose every node ended `done` launches its follow-up run detached
-#     through `just follow-ups`, and prints that run and its watch command; a run that
-#     ended any other way launches nothing and says how to verify its drafts by hand.
 #   * `--label kind=main` — the run kind the browser groups a plan's runs by. No
 #     `--group`: the engine groups a launch from a board copy through the copy's
 #     origin, and a launch from its own project by that project.
 #
 # An operator who names any of them themselves keeps it, per flag and including
-# `--dag-graph off` or a blank hook (and per label key for `kind`): the flags refuse to
+# `--dag-graph off` (and per label key for `kind`), and so does one naming a setting the
+# launch config carries, a blank hook included: the flags refuse to
 # be given twice, and the caller's intent is the specific one.
 #
 # `just orchestrate --adopt <run-id>` is `onepipeline adopt`: the published surface
 # splits adoption into its own verb, and this recipe keeps the one spelling the
 # planner doctrine names. `--adopt` has to lead, because everything after it is the
-# adopt verb's own. It takes none of the six flags — adoption attaches a fresh driver
+# adopt verb's own. It takes none of these flags — adoption attaches a fresh driver
 # to an intact ledger, which already records the graphs, hooks and labels its launch chose.
 # `scripts/orchestrate.sh` is the mechanism.
 #
@@ -311,10 +305,9 @@ finish-plan *args:
 # refusal `onepipeline start` would make, so a pre-dispatch refusal is a launch refusal
 # by construction. This repository's own checks run beside it as a registered `--check`
 # script, `scripts/plan-check.sh`: the review bar each node resolves to, this host's
-# operational appendix, and whether anything has reviewed the criteria. Against an engine
-# carrying no such verb the same checks run directly, and the accepted line names which
-# path read the plan, because the narrower one leaves the structural refusal for the
-# launch to make. AGENTS.md carries what re-implementing the loader cost.
+# operational appendix, and whether anything has reviewed the criteria. Every engine
+# `config/onepipeline.version` admits carries that verb, so there is no other path.
+# AGENTS.md carries what re-implementing the loader cost.
 #
 # Two things about the *result* are this seam's. Exit 1 is a refusal, each naming its
 # source — `engine` or the registered check — the node, the field, and the reason; exit 2

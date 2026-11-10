@@ -23,6 +23,7 @@ the budget writer are the installed ones.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -38,7 +39,7 @@ from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_budgets
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: A synthetic organization's repository, registered private.
@@ -78,7 +79,22 @@ def _task(what: str) -> str:
 
 
 def _drafted(bench: Bench, name: str, repository: str, what: str) -> str:
-    """Write a one-task plan into `authoring` as `just plan` stores one, and record its budgets."""
+    """Write a one-task plan into `authoring` as `just plan` stores one, and record its budgets.
+
+    Written under the bench's own environment, whose registry declares each repository's
+    visibility, so the store classifies the task as a planner on this bench would.
+    """
+    saved = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(bench.environment)
+    try:
+        return _written(bench, name, repository, what)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
+def _written(bench: Bench, name: str, repository: str, what: str) -> str:
     write_plan_project(
         bench.authoring,
         {

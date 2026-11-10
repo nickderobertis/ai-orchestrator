@@ -1,27 +1,20 @@
 """Refuse a lifecycle node this host's own publication policy would refuse afterwards.
 
-Two shapes reach a dispatch, run for as long as the work takes, and are refused only
-once the branch is finished:
+A node carrying a non-empty ``consumes`` on an identity whose workflow opens no change
+request reaches a dispatch, runs for as long as the work takes, and is refused only once
+the branch is finished: consuming a release target is a wait on a publication that
+identity never makes, so the node is unpublishable by construction whatever its adoption
+mode says. One node here ran an hour and thirty-six minutes before that was reported. It
+is knowable before anything is dispatched, from what this host already holds, and this is
+where it is asked: the engine's loader accepts it since onepipeline 0.94.0, and holds such
+a node's landing until the release instead.
 
-* a node whose ``title`` the destination repository's own ``commit-msg`` hook rejects.
-  That title becomes the publication subject — ``onevcs`` passes it to the squash commit
-  and to ``gh pr create``, and it is never re-derived — so a hook that refuses it refuses
-  the publication. One node of this host lost finished, judge-passed work to a
-  ``refactor:`` subject and its dependent was skipped for it;
-* a node carrying a non-empty ``consumes`` on an identity whose workflow opens no change
-  request. Consuming a release target is a wait on a publication that identity never
-  makes, so the node is unpublishable by construction whatever its adoption mode says.
-  Another node here ran an hour and thirty-six minutes before that was reported.
+A node's ``title`` is not asked here. It becomes the publication subject, and the
+engine's own loader puts it to the destination repository's ``commit-msg`` hook before
+anything is dispatched — at ``onepipeline plan check`` and at ``start`` alike — so a copy
+of that check here would be a second reading of one repository's rule.
 
-Both are knowable before anything is dispatched, from what this host already holds, and
-this is where they are asked. The engine refuses the title at its own loader too; what
-keeps the two agreeing is that **both read the destination repository's own hook**
-rather than a copy of that repository's release-type policy — this module runs it, so
-there is nothing here to keep in step with the rule. The ``consumes`` shape is this
-module's alone since onepipeline 0.94.0, whose loader accepts it and holds such a node's
-landing until the release instead.
-
-A third shape is refused for what it does to the *record* rather than to the branch: a
+A second shape is refused for what it does to the *record* rather than to the branch: a
 node naming a GitHub-hosted repository on the reserved ``onepipeline.repo`` key. The
 engine's contract puts a node's repository in the task record's own top-level
 ``repositories`` list as one normalized origin, and keeps that key for an identity such a
@@ -33,25 +26,25 @@ the two an identity is comes from `onevcs resolve`'s ``origin`` — a normalized
 a path — and is asked of the same registry the dispatch will resolve it through.
 
 **What is refused is narrower than what is checked, deliberately.** A node whose
-destination this host cannot resolve, one whose repository declares no ``commit-msg``
-hook, and one whose workflow is a word this module does not know are each passed over
-rather than refused: a plan is checked against repositories this checkout may never have
-seen, and refusing one for what this host cannot see would refuse plans that launch
-correctly today. Written to miss rather than to refuse a sound node, which is the trade
-:mod:`orchestrator.criteria_guard` states and the reason it states.
+destination this host cannot resolve, and one whose workflow is a word this module does
+not know, are each passed over rather than refused: a plan is checked against
+repositories this checkout may never have seen, and refusing one for what this host
+cannot see would refuse plans that launch correctly today. Written to miss rather than
+to refuse a sound node, which is the trade :mod:`orchestrator.criteria_guard` states and
+the reason it states.
 
 Nothing here decides a plan's *structure*: the engine's own loader has already ruled on
 that, and every field is read leniently for the same reason.
 
-**A subprocess this module gives up on is ended with everything it started.** Each of the
-three it runs — the destination's hook and the two lookups, ``onevcs`` and git — is started
-as the leader of a process group of its own, and on timeout the whole group is killed, the
-leader waited for and its pipes drained, so no descendant remaining in that group is left
-running once the guard returns, however deep it was started. That is the boundary: a
-descendant that deliberately detaches into a session of its own — ``setsid``, a daemon —
-has left the group and is not reached, because holding it would take host-specific
-machinery, and no hook or stand-in this module runs detaches today. The drain is bounded
-too, so such a process holding the pipes open delays the answer rather than withholding it.
+**A subprocess this module gives up on is ended with everything it started.** Each
+``onevcs`` lookup it runs is started as the leader of a process group of its own, and on
+timeout the whole group is killed, the leader waited for and its pipes drained, so no
+descendant remaining in that group is left running once the guard returns, however deep
+it was started. That is the boundary: a descendant that deliberately detaches into a
+session of its own — ``setsid``, a daemon — has left the group and is not reached,
+because holding it would take host-specific machinery, and no verb or stand-in this
+module runs detaches today. The drain is bounded too, so such a process holding the
+pipes open delays the answer rather than withholding it.
 """
 
 from __future__ import annotations
@@ -63,14 +56,13 @@ import re
 import shutil
 import signal
 import subprocess
-import tempfile
 from collections.abc import Iterator, Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, NamedTuple, NewType
 
 from orchestrator.plan_store import NodeId
-from orchestrator.project_store import hosted_origin
+from orchestrator.record_shapes import hosted_origin
 
 #: The version-control CLI that owns the registry, the rules file, and every answer this
 #: module asks of them. Resolved on the path rather than named absolutely, exactly as
@@ -133,9 +125,9 @@ class Workflow(StrEnum):
 #: derivation from the origin and is explicitly not the routing.
 _PUBLICATION = re.compile(r"^publication:\s*(?P<workflow>\S+)", re.MULTILINE)
 
-#: How long either verb, or a destination's own hook, is given to answer. A bound rather
-#: than a wait: this runs in front of a launch an operator is holding, and a repository
-#: whose hook does not return is one this module has nothing to say about.
+#: How long either verb is given to answer. A bound rather than a wait: this runs in
+#: front of a launch an operator is holding, and a lookup that does not return is one this
+#: module has nothing to say about.
 TIMEOUT_SECONDS = 30
 
 #: How long a timed-out subprocess's pipes are read for once its group is killed. Killing
@@ -152,7 +144,7 @@ class _Ran(NamedTuple):
     stderr: str
 
 
-def _bounded(arguments: list[str], *, cwd: Path | None = None) -> _Ran | None:
+def _bounded(arguments: list[str]) -> _Ran | None:
     """Run ``arguments`` within :data:`TIMEOUT_SECONDS`, or ``None`` when it did not return.
 
     The one way this module runs another program. It is started as the leader of a process
@@ -162,7 +154,6 @@ def _bounded(arguments: list[str], *, cwd: Path | None = None) -> _Ran | None:
     """
     with subprocess.Popen(
         arguments,
-        cwd=cwd,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -189,10 +180,6 @@ class Refusal(NamedTuple):
     reason: str
 
 
-class PublicationError(ValueError):
-    """A plan node this host's publication policy would refuse after the dispatch."""
-
-
 class Resolved(NamedTuple):
     """One repository as `onevcs resolve` answers for it.
 
@@ -205,7 +192,7 @@ class Resolved(NamedTuple):
 
     #: The repository identity, which is what a refusal names.
     identity: RepoIdentity
-    #: The publication checkout, which is where the destination's own hook is read from.
+    #: The publication checkout a landing fast-forwards.
     checkout: Path
     #: The origin the identity was registered from: a normalized `host/owner/name` for a
     #: hosted repository, an absolute path for a local one. ``None`` when the answer
@@ -218,7 +205,7 @@ class Destination(NamedTuple):
 
     #: The repository identity, which is what a refusal names.
     identity: RepoIdentity
-    #: The publication checkout, which is where the destination's own hook is read from.
+    #: The publication checkout a landing fast-forwards.
     checkout: Path
     #: The publication policy the rules file resolves for that identity, or ``None``
     #: when it answered something outside the published vocabulary.
@@ -231,7 +218,6 @@ class Node(NamedTuple):
     """One node of a plan that publishes, read at the plan's boundary."""
 
     id: NodeId
-    title: str
     repo: str
     #: Whether it names any release target to consume. The targets themselves are only
     #: rendered into the refusal, so the mapping is kept as it was written.
@@ -267,10 +253,10 @@ def publishing_nodes(plan: object) -> Iterator[Node]:
             # which would match every node and publish nothing. The only `kind` a plan
             # states is `human`, whose node carries no execution field at all; every
             # other shape falling through below is a node naming no repository or no
-            # title, and so no publication subject to rule on.
+            # title, and so no publication to rule on.
             case {"kind": kind} if kind == HUMAN:
                 continue
-            case {"id": str(node_id), "title": str(title), "repo": str(repo)} if (
+            case {"id": str(node_id), "title": str() as title, "repo": str(repo)} if (
                 node_id and title and repo
             ):
                 consumes = task.get("consumes")
@@ -280,7 +266,6 @@ def publishing_nodes(plan: object) -> Iterator[Node]:
                 )
                 yield Node(
                     NodeId(node_id),
-                    title,
                     repo,
                     consumes if isinstance(consumes, Mapping) else {},
                     reserved if isinstance(reserved, str) and reserved else None,
@@ -367,107 +352,6 @@ def destination(repo: str) -> Destination | None:
     )
 
 
-def commit_msg_hook(checkout: Path) -> Path | None:
-    """The ``commit-msg`` hook ``checkout`` declares, or ``None`` when it declares none.
-
-    Asked of git rather than composed from ``core.hooksPath``: ``git rev-parse
-    --git-path hooks`` is what honours that setting, an unset one, and a worktree whose
-    ``.git`` is a file — and it is the same resolution git itself performs when it runs
-    the hook, which is the point. A publication's disposable clone is given the lender's
-    hooks path when it is cut, so the hook read here is the hook that will run.
-
-    ``None`` for a repository that declares no hook, one whose hook is not an executable
-    regular file, and one this host cannot ask git about at all. All three are the same
-    thing to a plan's author: nothing about this title is knowable here.
-    """
-    try:
-        asked = _bounded(["git", "-C", str(checkout), "rev-parse", "--git-path", "hooks"])
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if asked is None or asked.returncode != 0 or not asked.stdout.strip():
-        return None
-    hook = Path(os.path.join(checkout, asked.stdout.strip(), "commit-msg"))
-    return hook if hook.is_file() and os.access(hook, os.X_OK) else None
-
-
-def hook_refusal(hook: Path, checkout: Path, subject: str) -> str | None:
-    """What ``hook`` reported about ``subject``, or ``None`` when it accepted it.
-
-    The hook is **run** rather than read, which is what keeps this refusal and the
-    repository's own rule from being two statements of one policy: the rule stays where
-    its repository states it, and a repository that changes it changes what this refuses
-    with nothing here to follow.
-
-    A hook that cannot be run at all answers ``None`` — nothing was learned, so nothing
-    is refused. A hook that runs and exits non-zero is a refusal whatever its reason,
-    including one somebody has broken: a broken hook refuses the publication commit too,
-    so reporting it before the dispatch is the accurate answer rather than a false one.
-    """
-    handle, path = tempfile.mkstemp(prefix="publication-subject-")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as message:
-            message.write(f"{subject}\n")
-        try:
-            ran = _bounded([str(hook), path], cwd=checkout)
-        except (OSError, subprocess.SubprocessError):
-            return None
-    finally:
-        os.unlink(path)
-    if ran is None or ran.returncode == 0:
-        return None
-    reported = (ran.stderr or ran.stdout).strip()
-    return reported or f"it exited {ran.returncode} without saying why"
-
-
-#: How much of another program's report a refusal carries. Bounded because the report is
-#: a foreign repository's hook talking, and an unbounded one buries the node and the
-#: field this refusal is about under however much that hook decided to say.
-REPORT_LIMIT = 400
-
-#: What a control character is replaced with. Replaced rather than dropped, so a report
-#: that was nothing but control characters still reads as text that was there.
-CONTROL_STAND_IN = "?"
-
-
-def _condensed(reported: str) -> str:
-    """A hook's own report as the one line a refusal can carry it on.
-
-    Sanitized as well as collapsed, because this is another repository's program writing
-    into a message this host prints to a terminal: a report carrying escape sequences
-    could move the cursor, colour unrelated output, or overwrite the refusal above it,
-    and one carrying no newline at all could be arbitrarily long. Whitespace is collapsed
-    first so a newline is a space rather than a `?`, then every remaining control
-    character is replaced, and the result is bounded with the truncation said rather than
-    silent.
-    """
-    collapsed = " ".join(reported.split())
-    printable = "".join(one if one.isprintable() else CONTROL_STAND_IN for one in collapsed)
-    if len(printable) <= REPORT_LIMIT:
-        return printable
-    return f"{printable[:REPORT_LIMIT]}… [{REPORT_LIMIT} of {len(printable)} characters]"
-
-
-def _title_refusal(node: Node, where: Destination) -> Refusal | None:
-    """What the destination's own hook says about this node's publication subject."""
-    hook = commit_msg_hook(where.checkout)
-    if hook is None:
-        return None
-    reported = hook_refusal(hook, where.checkout, node.title)
-    if reported is None:
-        return None
-    return Refusal(
-        node=node.id,
-        field="title",
-        reason=(
-            f"this node's title becomes the subject {where.identity} is published under, "
-            f"and that repository's own commit-msg hook refuses it: {node.title!r} — "
-            f"{_condensed(reported)}. The subject is derived once, before any of the work "
-            f"exists, and is never re-derived — so the whole dispatch is paid for and the "
-            f"branch is refused at publication. Retitle the node."
-        ),
-    )
-
-
 def _stated_policy(value: object) -> Workflow | None:
     """The policy a node states for itself, or ``None`` where it states none this reads.
 
@@ -551,10 +435,10 @@ def _reserved_key_refusal(node: Node, where: Destination) -> Refusal | None:
 def refusals(plan: object) -> list[Refusal]:
     """Everything this host's publication policy would refuse about ``plan``.
 
-    Everything, rather than the first thing about each node: the three are independent
-    fields with independent corrections, and a node told only about its title would be
-    retitled, re-checked, and refused again for what it consumes. A plan's author reads
-    one report and makes one pass.
+    Everything, rather than the first thing about each node: the two are independent
+    fields with independent corrections, and a node told only about its repository key
+    would be corrected, re-checked, and refused again for what it consumes. A plan's
+    author reads one report and makes one pass.
 
     The destination is resolved once per repository a plan names rather than once per
     node: a plan states the same repository on most of its nodes, and asking ``onevcs``
@@ -573,20 +457,7 @@ def refusals(plan: object) -> list[Refusal]:
             for refused in (
                 _reserved_key_refusal(node, where),
                 _consumes_refusal(node, where),
-                _title_refusal(node, where),
             )
             if refused is not None
         )
     return found
-
-
-def check_plan(plan: object) -> None:
-    """Raise :class:`PublicationError` for the first thing this host would refuse.
-
-    The raising face of :func:`refusals`, for the path that reports one refusal at a
-    time; `orchestrator/plan_check.py` reports them all through the verb instead. Both
-    read the same answer, so the two paths cannot disagree about a plan — what differs
-    is how much of that one answer each is able to print.
-    """
-    for refused in refusals(plan):
-        raise PublicationError(f"{refused.node}: {refused.reason}")

@@ -241,7 +241,8 @@ def test_the_binding_asks_on_the_channel_the_reply_recipe_answers_on() -> None:
 
     The recipe is the engine's `onepipeline reply`, through the wrapper every launch goes
     through, and that verb binds a ruling in the run's own channel directory under the bus
-    configuration the run's launch recorded — the file that wrapper names on every `start`.
+    configuration the run's launch recorded — the file the launch config that wrapper names on
+    every `start` declares.
     So the binding has to be spawned over that file, in that directory; a run whose binding
     asked anywhere else would read every manager's score as a wait that elapsed.
     """
@@ -255,13 +256,15 @@ def test_the_binding_asks_on_the_channel_the_reply_recipe_answers_on() -> None:
         "the justfile's `channel-reply` is no longer the engine's `onepipeline reply` through "
         f"`scripts/onepipeline.sh`:\n{body.group(1)}"
     )
+    assert "--launch-config" in LAUNCH_WRAPPER.read_text(encoding="utf-8"), (
+        f"{LAUNCH_WRAPPER.relative_to(REPO_ROOT)} no longer names a launch config on `start`"
+    )
     recorded = re.search(
-        r'set -- start --bus-config "\$\{script_dir%/scripts\}/(\S+)"',
-        LAUNCH_WRAPPER.read_text(encoding="utf-8"),
+        r"^bus_config: (\S+)$",
+        (REPO_ROOT / "config" / "onepipeline.launch.yaml").read_text(encoding="utf-8"),
+        re.MULTILINE,
     )
-    assert recorded is not None, (
-        f"{LAUNCH_WRAPPER.relative_to(REPO_ROOT)} no longer names a `--bus-config` on `start`"
-    )
+    assert recorded is not None, "config/onepipeline.launch.yaml no longer names a `bus_config`"
     assert recorded.group(1) == BUS_CONFIG, (
         f"every launch records {recorded.group(1)!r}, not {BUS_CONFIG}"
     )

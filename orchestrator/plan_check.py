@@ -53,7 +53,7 @@ from orchestrator import (
     task_body,
 )
 from orchestrator.criteria_guard import CriteriaError
-from orchestrator.project_store import qualified_id
+from orchestrator.record_shapes import qualified_id
 from orchestrator.root import REPO_ROOT
 
 #: What the verb sets in this process's environment, and the only thing a check may
@@ -91,12 +91,10 @@ def review_exempt(project: str) -> bool:
 #: cannot then spawn a check that fails to import it.
 PYTHON_ENV = "ORCHESTRATOR_PYTHON"
 
-#: The environment name a journey establishes an engine under, and the only reason it
-#: exists: :func:`main`'s direct path is reachable only against an engine carrying no
-#: `plan check`, and this repository installs one that has it. It selects nothing else —
-#: the roles a persona name resolves to are still read out of the installed binary, and
-#: both paths run these same checks over the same plan — so it cannot make a plan pass
-#: that the other path refuses.
+#: The environment name a journey establishes an engine under, so an answer the installed
+#: engine never gives — one no reader could act on — can be driven through the recipe. It
+#: selects the engine `plan check` runs and nothing else: the roles a persona name
+#: resolves to are still read out of the installed binary.
 ENGINE_ENV = "ORCHESTRATOR_PLAN_CHECK_ENGINE"
 
 #: The engine's own lever beneath `--require-rendered`; a caller who exported it has
@@ -207,9 +205,7 @@ def _plan_review_refusal(document: object, project: str | None) -> Refusal | Non
     the record it cannot read is the one that says a reviewer read the plan whole, and
     a check that accepted for want of its own environment would be the escape hatch
     this gate has none of. With an id, the reading and the refusal's text are
-    :func:`orchestrator.criteria_guard.plan_record_refusal`'s, which
-    :func:`orchestrator.criteria_guard.check_directly` reads through too, so the two
-    paths cannot drift in what they read or in what they say about it.
+    :func:`orchestrator.criteria_guard.plan_record_refusal`'s.
     """
     if project is None:
         return Refusal(
@@ -359,10 +355,8 @@ def _runnable(named: str) -> bool:
     A bare name is left to the search path — that is what `shutil.which` answers — and a
     value carrying a separator is a path, which has to be an executable **regular file**:
     a directory carries the execute bit for traversal and would pass a permission check
-    while being unspawnable. Validated before the probe rather than caught after it,
-    because a spawn failure from an unrunnable value reads as an engine that refused the
-    verb, and this command would then quietly take the narrower path over a plan the
-    operator meant to have checked whole.
+    while being unspawnable. Validated before the spawn rather than caught after it, so
+    the refusal names the variable that named it rather than a bare process error.
     """
     if os.sep in named:
         return Path(named).is_file() and os.access(named, os.X_OK)
@@ -380,23 +374,6 @@ ENGINE_WRAPPER = REPO_ROOT / "scripts" / "onepipeline.sh"
 def plan_check_engine() -> str:
     """The engine a plan check runs through: the one a journey names, else the wrapper."""
     return os.environ.get(ENGINE_ENV) or str(ENGINE_WRAPPER)
-
-
-def carries_plan_check(engine: str) -> bool:
-    """Whether ``engine`` has a `plan check` verb to register a check with.
-
-    Asked of the binary rather than of `config/onepipeline.version`, for the reason
-    AGENTS.md gives about every version claim on this host: a pin describes what a
-    release *would* link, and what answers a command is what was installed.
-    """
-    probe = subprocess.run(
-        [engine, "plan", "check", "--help"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    return probe.returncode == 0
 
 
 # llmlint: ignore[suppressions_justified] The verb's answer is another program's open
@@ -580,13 +557,11 @@ def check_through_engine(project: str, engine: str) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     """Check a qualified plan project before it is launched, from `just check-plan`.
 
-    The engine's own plan loader decides a plan's structure wherever it can be asked to
-    — every refusal `onepipeline start` would make, so that a pre-dispatch refusal is a
-    launch refusal by construction rather than by a second implementation of its rules —
-    and this repository's checks run beside it as a registered check. Against an engine
-    with no such verb the same checks run directly, and which path was taken is reported
-    either way: the two refuse different amounts, so a plan accepted by the narrower one
-    is not the same claim.
+    The engine's own plan loader decides a plan's structure — every refusal `onepipeline
+    start` would make, so that a pre-dispatch refusal is a launch refusal by construction
+    rather than by a second implementation of its rules — and this repository's checks
+    run beside it as a registered check. Every engine `config/onepipeline.version` admits
+    carries that verb, so there is no other path.
     """
     parser = argparse.ArgumentParser(
         description=(
@@ -614,11 +589,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    engine = plan_check_engine()
-    # llmlint: ignore[boundary_inputs_validated, changed_behavior_has_e2e] A probe that fails for any reason takes the direct path, as an engine that could not be found always has, and that path says on its accepted line that the engine's loader did not read the plan and a launch may still refuse it — so the narrower answer is never read as the whole one. The direct path after a failed probe is driven through the real recipe by `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py`'s narrower-path journeys; a failing probe of this checkout's own wrapper is a checkout whose pinned engine is not installed, which no journey can produce without breaking the `.venv` every concurrent test shares.  # noqa: E501
-    if carries_plan_check(engine):
-        return check_through_engine(args.project, engine)
-    return criteria_guard.check_directly(args.project, review_exempt=review_exempt(args.project))
+    return check_through_engine(args.project, plan_check_engine())
 
 
 def answer_on_stdin() -> int:

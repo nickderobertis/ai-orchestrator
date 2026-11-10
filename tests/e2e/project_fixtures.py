@@ -9,11 +9,13 @@ retention. `tests/plan_fixture_source.py` says why no test process shares one.
 
 from __future__ import annotations
 
+import atexit
 import functools
 import itertools
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -27,7 +29,8 @@ import plan_fixture_source
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import design_chain, plan_budgets
-from orchestrator.project_store import hosted_origin, write_plan_project
+from orchestrator.plan_records import write_plan_project
+from orchestrator.record_shapes import hosted_origin
 from orchestrator.root import REPO_ROOT
 
 _PROJECT_SEQUENCE = itertools.count()
@@ -79,6 +82,39 @@ _HISTORY_DIR = tempfile.TemporaryDirectory(prefix="ai-orchestrator-fixture-histo
 _HISTORY = Path(_HISTORY_DIR.name)
 
 
+#: The scratch `onevcs` state roots registering a fixture's repositories public, one per set
+#: of repositories and kept for the process, because each costs a real registration.
+_PUBLIC_HOMES: dict[frozenset[str], Path] = {}
+
+
+# llmlint: ignore[suppressions_justified] A plan fixture is the engine's open plan shape.
+def written_as_planned(root: Path, plan: Mapping[str, Any], native_id: str | None) -> None:
+    """Write ``plan`` under ``root`` through the store, its repositories registered public.
+
+    The store's boundary classifies each task by what the registry answers for the
+    repositories it names, and this process's registry answers none of a fixture's — which
+    it would read as private — where the planner a fixture stands in for writes under a
+    registry that knows them public. So the write runs against a scratch state root that
+    registers them, and every task is classified as that planner's write would be.
+    """
+    repositories = frozenset(
+        repository for repository in plan_repositories(plan) if hosted_origin(repository)
+    )
+    home = _PUBLIC_HOMES.get(repositories)
+    if home is None:
+        scratch = Path(tempfile.mkdtemp(prefix="fixture-registry-"))
+        atexit.register(shutil.rmtree, scratch, ignore_errors=True)
+        home = boundary_home.registered_home(scratch, public=sorted(repositories))
+        _PUBLIC_HOMES[repositories] = home
+    saved = dict(os.environ)
+    os.environ.update(boundary_home.environment(None, home, transports=False))
+    try:
+        write_plan_project(root, plan, native_id=native_id)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
 def local_project(content: str, name: str, *, approve: bool = True) -> str:
     """Write one unique authoring project, with its design document approved, and answer its id.
 
@@ -111,7 +147,7 @@ def local_project(content: str, name: str, *, approve: bool = True) -> str:
     for task in plan.get("tasks", []):
         if isinstance(task, dict):
             task.setdefault("unit", FIXTURE_UNIT)
-    write_plan_project(plan_fixture_source.root(), plan, native_id=native)
+    written_as_planned(plan_fixture_source.root(), plan, native)
     project = f"test-fixtures:{native}"
     budgeted(
         plan_fixture_source.SOURCE, native, no_budgets(plan_repositories(plan)), resolving(project)
@@ -250,13 +286,35 @@ def budgeted(
 
 
 # llmlint: ignore[suppressions_justified] A plan fixture is the engine's open plan shape.
+def store_written(plan: Mapping[str, Any], *, native_id: str | None = None) -> dict[str, str]:
+    """The records the pinned store writes for ``plan``, by root-relative path.
+
+    For a stand-in planner that writes its plan's records as files: they are created by
+    `orchestrator/plan_records.py` through the store's own `project create` and `task
+    create` in a scratch root, and read back as the store wrote them, so the stand-in leaves
+    exactly what a planner's own store commands leave rather than a shape only it produces.
+    The repositories the plan names are registered public in a scratch `onevcs` state root
+    for the write, as the planner the stand-in plays has them, so the store's boundary
+    classifies each task as that planner's write would.
+    """
+    with tempfile.TemporaryDirectory(prefix="store-written-") as scratch:
+        root = Path(scratch) / "records"
+        written_as_planned(root, plan, native_id)
+        return {
+            path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
+        }
+
+
+# llmlint: ignore[suppressions_justified] A plan fixture is the engine's open plan shape.
 def described_record(
     plan: Mapping[str, Any], native: str, answers: Mapping[str, object]
 ) -> tuple[Path, str]:
     """``native``'s project record, describing ``answers``, as a local Markdown store keeps it.
 
     For a stand-in planner that writes its plan's records as files: the record is the
-    pinned store's own, written by this repository's record renderer and then `budgeted`
+    pinned store's own, created through `orchestrator/plan_records.py` and then `budgeted`
     into a scratch local source of its own and read back, so the stand-in leaves exactly what
     a planner's `project create` leaves. Answers its path under a source's root, and its
     content.
@@ -702,32 +760,3 @@ def read_project_plan(project: str) -> dict[str, Any]:
         tasks.append(node)
     plan["tasks"] = tasks
     return plan
-
-
-def older_engine(root: Path) -> Path:
-    """An engine of the shape this recipe's direct path exists for.
-
-    A real binary refusing `plan check` the way a release before that verb does, rather
-    than a flag on the recipe: the path is chosen by asking the engine what it carries,
-    so the only honest way to drive the other answer is to give it an engine that
-    answers differently. Kept outside `PATH` deliberately — the roles a node's persona
-    resolves to are still read out of the installed binary, so shadowing that would
-    change what is being compared.
-    """
-    directory = root / "older-engine"
-    directory.mkdir(parents=True, exist_ok=True)
-    binary = directory / "onepipeline"
-    # llmlint: ignore[e2e_not_mocked] An engine carrying no `plan check` is not an
-    # artifact this repository can install — it is a release older than the verb — so
-    # the substitute is the absence of that one verb and nothing else. Everything the
-    # journey then drives is real: the recipe, the wrapper, this repository's own
-    # checks, the review bar lifted out of the *installed* engine, and the store.
-    binary.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "print(\"error: unrecognized subcommand 'check'\", file=sys.stderr)\n"
-        "raise SystemExit(2)\n",
-        encoding="utf-8",
-    )
-    binary.chmod(0o755)
-    return binary

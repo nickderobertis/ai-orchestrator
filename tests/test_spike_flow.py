@@ -27,8 +27,8 @@ import pytest
 from conftest import git
 
 from orchestrator import design_approval, plan_store, spike_flow
+from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import NodeId, QualifiedProjectId
-from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 from orchestrator.spike_flow import RunId
 from orchestrator.spike_plan import Branch
@@ -637,11 +637,9 @@ def test_each_spike_stacked_on_another_is_answered_with_the_spikes_above_it_near
 def test_spikes_on_no_one_stacking_chain_are_refused_rather_than_guessed_at(
     tasks: list[dict[str, object]], said: str
 ) -> None:
-    """A fan-in no chain holds is refused here, and a cycle by the store's read of the edges."""
-    project = _stacked(*tasks)
-
+    """A fan-in no chain holds is refused here, and a cycle by the store, which records none."""
     with pytest.raises((ValueError, OSError), match=said):
-        spike_flow.stacking_chains(project)
+        spike_flow.stacking_chains(_stacked(*tasks))
 
 
 def test_a_spikes_project_the_store_does_not_hold_stacks_nothing() -> None:

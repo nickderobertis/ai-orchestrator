@@ -874,7 +874,9 @@ def _homed(bench: Bench, name: str) -> Homed:
         str(entry["source"]): str(entry["destination"])
         for entry in json.loads(copied.stdout)["items"]
     }
-    project = landed[local]
+    project = landed.pop(local)
+    # The plan's one task, by whatever id the store gave it: the copy's only other entry.
+    (copied_task,) = landed.values()
     document = _just(
         bench, "plans", "document", "copy", f"{local}-design", "--to", "plans", "--json"
     )
@@ -882,11 +884,7 @@ def _homed(bench: Bench, name: str) -> Homed:
     approved = _just(bench, "approve-design", project, seconds=300)
     assert approved.returncode == 0, approved.stdout + approved.stderr
     (home,) = [issue for issue in BOARD.issues_created_and_kept() if _is(issue, project)]
-    (task,) = [
-        issue
-        for issue in BOARD.issues_created_and_kept()
-        if _is(issue, landed[f"{local}/{NODE_ID}"])
-    ]
+    (task,) = [issue for issue in BOARD.issues_created_and_kept() if _is(issue, copied_task)]
     assert task.parent_id == home.content_id, (home, task)
     moved = _just(bench, "plans", "project", "status", "set", project, "in-progress")
     assert moved.returncode == 0, moved.stdout + moved.stderr

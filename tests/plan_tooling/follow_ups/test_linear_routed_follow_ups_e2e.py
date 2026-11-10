@@ -97,8 +97,8 @@ from waits import timeout as e2e_timeout
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_check
+from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import WRITABLE_PLUGIN
-from orchestrator.project_store import write_plan_project
 
 #: Building a copy of this checkout reads everything git tracks, which routes this module to
 #: the tier that reads this repository's prose; and its one fixture runs on one worker.

@@ -560,20 +560,14 @@ def test_an_unrunnable_check_renders_what_it_carries(entry: object, rendered: st
         pytest.param("nothing-this-host-has", False, id="bare-name-nothing-has"),
         pytest.param("/nowhere/onepipeline", False, id="path-to-nothing"),
         # A directory carries the execute bit for traversal, so a permission check
-        # alone calls one runnable and the spawn then fails as though the engine had
-        # refused the verb.
+        # alone calls one runnable and the spawn then fails as a bare process error.
         pytest.param("/tmp", False, id="path-to-a-directory"),
     ),
 )
 def test_an_engine_named_in_the_environment_is_checked_before_it_is_spawned(
     named: str, runnable: bool
 ) -> None:
-    """A value this cannot spawn must not read as an engine that refused the verb.
-
-    Caught before the probe rather than after it: a spawn failure and a refusal are the
-    same exit from outside, and reading one as the other takes the narrower path over a
-    plan the operator meant to have checked whole.
-    """
+    """A value this cannot spawn is refused naming the variable, before any spawn."""
     assert plan_check._runnable(named) is runnable
 
 
@@ -628,21 +622,6 @@ def test_the_engine_is_taken_from_the_environment_before_the_launch_wrapper(
 
 def _completed(code: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess([], code, stdout, stderr)
-
-
-def test_an_engine_is_asked_whether_it_carries_the_verb(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Asked of the binary rather than of a pin, which describes a release not a host."""
-    asked: list[list[str]] = []
-
-    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        asked.append(command)
-        return _completed(0 if command[0] == "/new" else 2)
-
-    monkeypatch.setattr(plan_check.subprocess, "run", run)
-
-    assert plan_check.carries_plan_check("/new") is True
-    assert plan_check.carries_plan_check("/old") is False
-    assert asked[0][1:] == ["plan", "check", "--help"]
 
 
 ACCEPTED = {"project": "s:p", "accepted": True, "refusals": [], "unrunnable": []}
@@ -859,42 +838,19 @@ def test_a_verb_answering_nothing_at_all_names_the_command_it_ran(
     assert "it reported nothing" in capsys.readouterr().err
 
 
-def test_the_command_takes_the_engines_verb_where_there_is_one(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(plan_check, "plan_check_engine", lambda: "/new/onepipeline")
-    monkeypatch.setattr(plan_check, "carries_plan_check", lambda _: True)
-    monkeypatch.setattr(plan_check, "check_through_engine", lambda project, engine: 0)
-    monkeypatch.setattr(
-        criteria_guard,
-        "check_directly",
-        lambda *_, **__: pytest.fail("the direct path was taken"),
-    )
-
-    assert plan_check.main(["s:p"]) == 0
-    capsys.readouterr()
-
-
-def test_the_command_falls_back_to_this_repositorys_checks_alone(
+def test_the_command_reads_every_plan_through_the_engines_verb(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(plan_check, "plan_check_engine", lambda: "/old/onepipeline")
-    monkeypatch.setattr(plan_check, "carries_plan_check", lambda _: False)
+    asked: list[tuple[str, str]] = []
+    monkeypatch.setattr(plan_check, "plan_check_engine", lambda: "/new/onepipeline")
     monkeypatch.setattr(
         plan_check,
         "check_through_engine",
-        lambda *_: pytest.fail("the engine path was taken"),
-    )
-    asked: list[tuple[str, bool]] = []
-    monkeypatch.setattr(
-        criteria_guard,
-        "check_directly",
-        lambda project, *, review_exempt: asked.append((project, review_exempt)) or 5,
+        lambda project, engine: asked.append((project, engine)) or 5,
     )
 
     assert plan_check.main(["s:p"]) == 5
-    assert plan_check.main(["examples:p"]) == 5
-    assert asked == [("s:p", False), ("examples:p", True)]
+    assert asked == [("s:p", "/new/onepipeline")]
 
 
 def test_a_require_rendered_answer_that_is_neither_true_nor_false_is_refused_before_the_engine(
@@ -903,7 +859,7 @@ def test_a_require_rendered_answer_that_is_neither_true_nor_false_is_refused_bef
     """An exported value suppresses the default flag, so one that says nothing is refused."""
     monkeypatch.setenv(plan_check.REQUIRE_RENDERED_ENV, "yes")
     monkeypatch.setattr(
-        plan_check, "carries_plan_check", lambda _: pytest.fail("the engine was asked")
+        plan_check, "check_through_engine", lambda *_: pytest.fail("the engine was asked")
     )
 
     assert plan_check.main(["s:p"]) == 2

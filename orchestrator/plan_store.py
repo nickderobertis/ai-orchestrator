@@ -28,7 +28,7 @@ from onetaskgraph_sdk import (
 from onetaskgraph_sdk._generated.locate_report import Located
 from onetaskgraph_sdk._generated.query_response_of_qualified_task import QualifiedTask
 
-from orchestrator.project_store import (
+from orchestrator.record_shapes import (
     CROSS_DAG_DEPS,
     PROJECTS_DIRECTORY,
     TASKS_DIRECTORY,
@@ -669,15 +669,15 @@ def local_projects(source: str) -> list[str]:
 
 
 def task_document(source: str, native_task_id: str) -> Path:
-    """Return the existing local task path for read-only journey assertions."""
-    project, separator, task = native_task_id.partition("/")
-    if (
-        not separator
-        or not RECORD_COMPONENT.fullmatch(project)
-        or not RECORD_COMPONENT.fullmatch(task)
-    ):
-        raise OSError(f"task id {native_task_id!r} is not <project>/<task>")
-    document = source_root(source) / TASKS_DIRECTORY / project / f"{task}.md"
+    """Return the existing local task path for read-only journey assertions.
+
+    A task the store created is named `<task>`, filed at `tasks/<task>.md`; one filed
+    under a project directory is named `<project>/<task>`.
+    """
+    parts = native_task_id.split("/")
+    if len(parts) not in (1, 2) or not all(RECORD_COMPONENT.fullmatch(part) for part in parts):
+        raise OSError(f"task id {native_task_id!r} is not <task> or <project>/<task>")
+    document = source_root(source) / TASKS_DIRECTORY / Path(*parts[:-1]) / f"{parts[-1]}.md"
     if not document.is_file():
         raise OSError(f"task {source}:{native_task_id} has no record at {document}")
     return document

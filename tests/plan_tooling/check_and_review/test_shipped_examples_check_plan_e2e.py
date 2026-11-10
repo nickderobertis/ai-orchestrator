@@ -33,11 +33,11 @@ from pathlib import Path
 import boundary_home
 import plan_fixture_source
 import pytest
-from project_fixtures import older_engine, register_stand_in
+from project_fixtures import register_stand_in
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_budgets, plan_check, plan_store
-from orchestrator.project_store import hosted_origin
+from orchestrator.record_shapes import hosted_origin
 from orchestrator.root import REPO_ROOT
 
 
@@ -304,33 +304,3 @@ def test_an_example_breaking_another_rule_is_still_refused(
     assert not any(
         TASK_REVIEW_REFUSAL in line or PLAN_REVIEW_REFUSAL in line for line in refusals
     ), checked.stderr
-
-
-def test_the_direct_path_holds_the_examples_to_everything_but_a_review_record(
-    tmp_path: Path,
-) -> None:
-    """Against an engine with no `plan check`, an example passes as exempt and a broken one is not.
-
-    The direct path reads no loader, so the rule broken here is one it does read: a budget's
-    target changed in its record without regenerating the task.
-    """
-    project = f"{EXAMPLES}:health-endpoint"
-    environment = _registry(tmp_path, [project])
-    # llmlint: ignore-block[e2e_not_mocked] The direct path is reached only against an
-    # engine carrying no `plan check`, for the reason `older_engine` states.
-    environment[plan_check.ENGINE_ENV] = str(older_engine(tmp_path))
-    # llmlint: ignore-end[e2e_not_mocked]
-
-    accepted = _check_plan(project, environment)
-    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
-    assert "as a shipped example it is held to no review record" in accepted.stdout
-
-    copied = tmp_path / EXAMPLES
-    shutil.copytree(REPO_ROOT / EXAMPLES, copied)
-    environment[EXAMPLES_ROOT] = str(copied)
-    _break_the_budget(project, environment)
-    refused = _check_plan(project, environment)
-    assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "does not carry the `## Budgets` section" in refused.stderr, refused.stderr
-    assert TASK_REVIEW_REFUSAL not in refused.stderr, refused.stderr
-    assert PLAN_REVIEW_REFUSAL not in refused.stderr, refused.stderr

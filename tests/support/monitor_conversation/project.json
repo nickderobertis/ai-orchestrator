@@ -12,6 +12,7 @@
     "testSupport": [
       "{workspaceRoot}/tests/monitor_conversation.py",
       "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/config/onepipeline.launch.yaml",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

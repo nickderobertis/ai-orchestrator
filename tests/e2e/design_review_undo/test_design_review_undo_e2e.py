@@ -8,7 +8,6 @@ engine is `tests/e2e/board_copy_approval/test_design_review_items_e2e.py`.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
@@ -19,7 +18,8 @@ import boundary_home
 import pytest
 
 from orchestrator import design_approval, plan_store
-from orchestrator.project_store import PlanNode, frontmatter, write_plan_project
+from orchestrator.plan_records import write_plan_project
+from orchestrator.record_shapes import PlanNode
 from orchestrator.root import REPO_ROOT
 
 
@@ -34,6 +34,34 @@ def _no_repositories_registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     for name, value in boundary_home.environment(None, home).items():
         if os.environ.get(name) != value:
             monkeypatch.setenv(name, value)
+
+
+#: The answers the plan's design document is rendered from: one unit, and the plan's one task.
+DESIGN = {
+    "what": "One node that changes nothing.",
+    "why": "Something has to be approved for an undo to remove it.",
+    "architecture": "One node.",
+    "units": [
+        {
+            "name": "First",
+            "repository": "ai-orchestrator",
+            "part": "",
+            "summary": "Nothing outside this plan reads it.",
+            "reversible": [],
+            "decisions": [],
+        }
+    ],
+    "acceptance_criteria": ["The approval is recorded."],
+    "planned_tasks": [
+        {
+            "task": "first",
+            "unit": "First",
+            "delivers": "nothing",
+            "depends_on": "none",
+            "location": "the store's own location",
+        }
+    ],
+}
 
 
 class ApprovedPlan(NamedTuple):
@@ -51,35 +79,33 @@ def _approved_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ApprovedP
         source,
         {"name": "demo", "tasks": [PlanNode(id="first", title="First", task="Do first.")]},
     )
-    drafts = tmp_path / "drafts"
-    write_plan_project(drafts, {"name": "demo", "tasks": []})
-    documents = drafts / "documents"
-    documents.mkdir(parents=True)
-    body = "The design."
-    # llmlint: ignore-block[tests_mirror_real_usage] The undo reads only the approval record, so the
-    # document is stored with real provenance fields, the digest the engine resolves, and no
-    # template render, which `tests/e2e/board_copy_approval` drives on the way to the same undo.
-    rendering = {
-        "template": design_approval.TEMPLATE_REFERENCE,
-        "digest": design_approval.resolved_digest(),
-        "body_digest": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
-    }
-    (documents / "design.md").write_text(
-        frontmatter(
-            {
-                "title": "Design",
-                "project": "demo",
-                "metadata": {design_approval.PROVENANCE: rendering},
-            },
-            body,
-        ),
-        encoding="utf-8",
-    )
-    # llmlint: ignore-end[tests_mirror_real_usage]
     _source(monkeypatch, "sdksource", source)
-    _source(monkeypatch, "sdkdraft", drafts)
     _no_repositories_registered(monkeypatch, tmp_path)
-    plan_store.sdk(plan_store.client().document_copy(["sdkdraft:design"], to="sdksource"))
+    # The design document rendered as a writer renders one: the pinned engine's resolve piped
+    # into the store's own `document create`, so its provenance is the store's and the
+    # engine's template check holds it to being that rendering.
+    answers = tmp_path / "design.answers.json"
+    answers.write_text(json.dumps(DESIGN), encoding="utf-8")
+    resolved = subprocess.run(
+        [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "template", "resolve"]
+        + [design_approval.TEMPLATE_NAME, "--json"]
+        + ["--template-root", str(design_approval.TEMPLATE_ROOT)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    created = subprocess.run(
+        [str(plan_store.locked_binary()), "document", "create", "sdksource", "--project", "demo"]
+        + ["--title", "Design", "--id", "design", "--template-loader", "-"]
+        + ["--answers", str(answers), "--no-interactive"],
+        cwd=REPO_ROOT,
+        input=resolved.stdout,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stdout + created.stderr
     runs = tmp_path / "runs"
     runs.mkdir()
     monkeypatch.setenv(design_approval.RUNS_ROOT_ENV, str(runs))
@@ -208,7 +234,7 @@ def test_a_driver_claim_or_a_claimed_task_refuses_the_undo_and_a_released_claim_
     plan_store.sdk(client.project_metadata_set(project, claim, "null"))
     assert design_approval.launch_evidence(project) is None
 
-    plan_store.sdk(client.task_status_set("sdksource:demo/first", "queued"))
+    plan_store.sdk(client.task_status_set("sdksource:first", "queued"))
     _refused(project, key, "is at queued, past todo")
 
 
@@ -216,6 +242,6 @@ def test_a_status_the_store_cannot_place_refuses_the_undo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project, key, _ = _approved_plan(tmp_path, monkeypatch)
-    plan_store.sdk(plan_store.client().task_status_set("sdksource:demo/first", "unknown"))
+    plan_store.sdk(plan_store.client().task_status_set("sdksource:first", "unknown"))
 
     _refused(project, key, "cannot place the status")

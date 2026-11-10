@@ -100,7 +100,7 @@ from orchestrator import follow_up_drafts as drafts
 from orchestrator import human_items, npm_installs, plan_store
 from orchestrator.plan_budgets import BUDGETS_FILE, Direction
 from orchestrator.plan_store import RECORD_COMPONENT, QualifiedTaskId
-from orchestrator.project_store import TASKS_DIRECTORY, frontmatter, hosted_origin
+from orchestrator.record_shapes import TASKS_DIRECTORY, frontmatter, hosted_origin
 
 #: The plan-store source a ticket is stored in, and the directory beside a run's drafts it
 #: is stored under — both the drafts module's, since a ticket sits in the run's draft tree.

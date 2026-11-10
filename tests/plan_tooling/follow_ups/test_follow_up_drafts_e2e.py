@@ -14,9 +14,9 @@ repository's configuration, scripts and package. The recorded run the member tra
 reads are driven against is a fixture of this repository, under this project's own key.
 
 Nothing below the paid model is doubled, and no paid model is involved: the node a draft
-names is resolved from a dispatch registry naming this test's own process, which is a real
-ancestor of the command it starts, and the transcript a monitor draft points at is run
-against the installed engine. What a real launch hands a real dispatch is
+names is the `ONEPIPELINE_NODE_ID` the engine's dispatch-env hook passes on, stated here as
+that hook states it, and the transcript a monitor draft points at is run against the
+installed engine. What a real launch hands a real dispatch is
 `tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py`'s.
 """
 
@@ -233,16 +233,14 @@ def _git(cwd: Path, *arguments: str) -> None:
     )
 
 
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey already sat behind `plan-tooling-follow-ups:test`, the edge every drafting journey here shares because `scripts/follow-up-draft.sh` reads the scripts and the package that key names; this change only states the node variable the engine now hands a dispatch, adds no work to it, and a project of its own would be keyed on the same files.  # noqa: E501
 def test_a_draft_is_stamped_by_the_machinery_from_where_the_command_ran(tmp_path: Path) -> None:
     """Run and dispatch come from the command's environment and directory, never its flags.
 
-    Drafted by a process no recorded dispatch of the run is an ancestor of — the runs root
-    holds no such run — so the node is `unresolved` and the transcript reads the whole run,
-    and the draft is written all the same. The node a real dispatch resolves to is read off
-    a real launch's own registry by
-    `tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py`, and a stale
-    registry entry is refused against real processes by
-    `tests/test_follow_up_drafts.py`: neither is state this journey should manufacture.
+    Drafted by a process the engine named no node to — a blank `ONEPIPELINE_NODE_ID` — so
+    the node is `unresolved` and the transcript reads the whole run, and the draft is
+    written all the same. The node a real launch hands a real dispatch is
+    `tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py`'s.
     """
     worktree = tmp_path / "worktree"
     worktree.mkdir()
@@ -253,6 +251,7 @@ def test_a_draft_is_stamped_by_the_machinery_from_where_the_command_ran(tmp_path
         **{
             drafts.NODE_SCRATCH_ENV: str(tmp_path / "scratch"),
             drafts.SESSION_ENV: "s-0123456789ab",
+            drafts.NODE_ID_ENV: "",
         },
     )
 

@@ -30,12 +30,10 @@ from orchestrator import adoption_guard
 from orchestrator.adoption_guard import (
     JUDGED_TIER,
     Adoption,
-    AdoptionError,
     Host,
     Node,
     Target,
     Targets,
-    check_plan,
     nodes,
     refusals,
     releasing,
@@ -777,10 +775,10 @@ def test_a_dependency_is_placed_against_the_node_it_holds(
     assert resolved_adoption(placeless, host) is Adoption.FAST
 
 
-def test_the_raising_face_reports_the_first_refusal_with_its_field(
+def test_every_refusal_is_reported_with_its_field(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The direct path prints one refusal; it names the node, the field and the rule."""
+    """Every refusal names the node, the field and the rule, and a correction clears it."""
     _onevcs(
         tmp_path,
         monkeypatch,
@@ -789,16 +787,12 @@ def test_the_raising_face_reports_the_first_refusal_with_its_field(
     )
     plan = _plan(_producer(), _consumer(consumes={"producer": "pypi"}), _consumer(id="held"))
 
-    with pytest.raises(AdoptionError) as raised:
-        check_plan(plan)
-
-    first, *_ = refusals(plan)
-    assert str(raised.value) == f"consumer: consumes: {first.reason}"
-    assert len(refusals(plan)) == 3
+    found = refusals(plan)
+    assert (found[0].node, found[0].field) == ("consumer", "consumes"), found
+    assert len(found) == 3
 
     corrected = _plan(_producer(), _consumer(merge_policy="change-open"))
     assert refusals(corrected) == []
-    assert check_plan(corrected) is None
 
 
 #: An adoption no release of `onevcs` has ever named, so the override has to refuse it —

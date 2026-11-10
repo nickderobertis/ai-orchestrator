@@ -10,8 +10,7 @@ accepted there and failed an hour of work at its last step, on a refusal
 
 So the rules that read a node's **fields** — where it publishes, what it waits on, how it
 adopts — are listed here once, and every tier reads this list rather than naming the
-guards itself: :func:`orchestrator.criteria_guard.check_plan` and
-:func:`orchestrator.plan_check.refusals` at the plan tier, and
+guards itself: :func:`orchestrator.plan_check.refusals` at the plan tier, and
 :func:`orchestrator.envelope_review.structural_refusal` at the live one. A rule added to
 either guard reaches both tiers with nothing to follow, and a guard added here reaches
 both too; `tests/test_structural_guard.py` fails when a module shaped like a guard is
@@ -30,13 +29,10 @@ from orchestrator.publication_guard import Refusal
 
 
 class Guard(Protocol):
-    """What a structural rule module offers: every refusal, and the first one raised."""
+    """What a structural rule module offers: every refusal it makes."""
 
     def refusals(self, plan: object) -> list[Refusal]:
         """Everything this guard refuses about ``plan``."""
-
-    def check_plan(self, plan: object) -> None:
-        """Raise this guard's own error for the first thing it refuses about ``plan``."""
 
 
 #: The structural rules, in the order the plan tier has always asked them: where a node
@@ -47,9 +43,3 @@ GUARDS: tuple[Guard, ...] = (publication_guard, adoption_guard)
 def refusals(plan: object) -> list[Refusal]:
     """Every refusal every structural guard makes about ``plan``, guard by guard."""
     return [refused for guard in GUARDS for refused in guard.refusals(plan)]
-
-
-def check_plan(plan: object) -> None:
-    """Raise the first structural refusal about ``plan``, in each guard's own words."""
-    for guard in GUARDS:
-        guard.check_plan(plan)

@@ -41,7 +41,7 @@ from project_fixtures import budget_section, budgeted, designed, no_budgets, own
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import design_approval, npm_installs, plan_budgets, plan_store, task_body
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 
@@ -178,7 +178,7 @@ def _checked(project: str) -> list[plan_budgets.Refusal]:
     """What the check refuses, over the document shape the engine's `plan check` hands it.
 
     Each task carries its metadata map verbatim, as the engine's loader hands it to the
-    registered check; the store path is asked the same and must agree.
+    registered check.
     """
     plan, records = plan_store.read_project(project)
     tasks = plan["tasks"]
@@ -191,9 +191,7 @@ def _checked(project: str) -> list[plan_budgets.Refusal]:
             for node in tasks
         ],
     }
-    found = plan_budgets.refusals(project, document)
-    assert found == plan_budgets.refusals(project, plan, plan_budgets.tasks_of_records(records))
-    return found
+    return plan_budgets.refusals(project, document)
 
 
 def _broken(**changes: object) -> Record:
@@ -399,11 +397,7 @@ def test_a_budget_id_repeated_across_tasks_is_refused() -> None:
     native = plan_store.qualified(project).native
     owning(plan_fixture_source.SOURCE, native, "paging", [BUDGET])
 
-    found = plan_budgets.refusals(
-        project,
-        plan_store.read_plan(project, records := plan_store.read_tasks(project)),
-        plan_budgets.tasks_of_records(records),
-    )
+    found = _checked(project)
 
     # The second node records the budget without rendering it, and repeats its id.
     assert ("paging", "budgets") in [(refused.node, refused.field) for refused in found]

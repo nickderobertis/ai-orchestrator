@@ -1,17 +1,17 @@
-"""The half of `tests/test_project_store.py` that reads this repository's prose.
+"""The half of `tests/test_record_shapes.py` that reads this repository's prose.
 
 It sits in the `manager-guidance` project.
 
-These hold the documented reference shape to the one the renderer reads. That project's key
-names each file they read, and `tests/conftest.py` holds them to it; the tests of that
-module that read no prose stay there, in `orchestrator:test`.
+These hold the documented reference shape to the one `orchestrator/record_shapes.py`
+reads. That project's key names each file they read, and `tests/conftest.py` holds them
+to it; the tests of that module that read no prose stay there, in `orchestrator:test`.
 """
 
 from __future__ import annotations
 
 import re
 
-from orchestrator import project_store
+from orchestrator import record_shapes
 from orchestrator.root import REPO_ROOT
 
 
@@ -30,16 +30,16 @@ def test_the_documented_reference_shape_is_the_one_the_renderer_reads() -> None:
         r"cross-DAG references of the form\s+`([^`]+)`", " ".join(section.split())
     )
     assert documented is not None, "the node-shapes section no longer states the reference shape"
-    assert documented.group(1) == project_store.CROSS_DAG_REFERENCE_SHAPE
+    assert documented.group(1) == record_shapes.CROSS_DAG_REFERENCE_SHAPE
 
-    placeholders = re.findall(r"<([^<>]+)>", project_store.CROSS_DAG_REFERENCE_SHAPE)
+    placeholders = re.findall(r"<([^<>]+)>", record_shapes.CROSS_DAG_REFERENCE_SHAPE)
     assert placeholders == ["run_id", "node_id"], placeholders
-    filled = project_store.CROSS_DAG_REFERENCE_SHAPE
+    filled = record_shapes.CROSS_DAG_REFERENCE_SHAPE
     for placeholder, value in zip(placeholders, ("r-upstream-0001", "adopt"), strict=True):
         filled = filled.replace(f"<{placeholder}>", value)
-    assert project_store.cross_dag_reference(filled) == filled
+    assert record_shapes.cross_dag_reference(filled) == filled
     for placeholder in placeholders:
-        emptied = project_store.CROSS_DAG_REFERENCE_SHAPE.replace(f"<{placeholder}>", "")
+        emptied = record_shapes.CROSS_DAG_REFERENCE_SHAPE.replace(f"<{placeholder}>", "")
         for other in placeholders:
             emptied = emptied.replace(f"<{other}>", "x")
-        assert project_store.cross_dag_reference(emptied) is None, emptied
+        assert record_shapes.cross_dag_reference(emptied) is None, emptied

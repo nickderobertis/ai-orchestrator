@@ -9,7 +9,7 @@ whose answers break a rule, or whose bodies are not their records' renderings â€
 rule â€” while a plan keeping them all passes, and so does a project of a plan kind exempt from
 design approval, with no answers at all.
 
-Everything is real: the plan written through this repository's own record renderer into
+Everything is real: the plan written through the store's own `project create` and `task create` into
 this process's own fixture source, each owning task's section rendered by the pinned store
 and its record set through the store's `task metadata set`, the description rendered by the
 pinned engine's `template resolve` piped into the pinned store's `project create`, the review
@@ -38,13 +38,13 @@ from typing import Any
 import boundary_home
 import plan_fixture_source
 import pytest
-from project_fixtures import budget_section, budgeted, older_engine, owning, reviewed
+from project_fixtures import budget_section, budgeted, owning, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, plan_budgets, plan_store
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 
@@ -221,27 +221,14 @@ def _store(*arguments: str) -> None:
     assert done.returncode == 0, done.stderr
 
 
-def _narrower(root: Path) -> dict[str, str]:
-    """The environment that takes `just check-plan` down its path for an engine with no
-    `plan check`, which reads each task's budgets off the store's records rather than off the
-    document the engine hands a registered check."""
-    # llmlint: ignore[e2e_not_mocked] The narrower path is reached only against an engine
-    # carrying no `plan check`, for the reason `older_engine` states; the recipe, this
-    # repository's checks and the store it reads are all real.
-    return os.environ | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(older_engine(root))}
-
-
-def test_a_plan_whose_budgets_keep_every_rule_passes(tmp_path: Path) -> None:
-    """A task owning a budget passes on both paths, its plan-level review read as current."""
+def test_a_plan_whose_budgets_keep_every_rule_passes() -> None:
+    """A task owning a budget passes, its plan-level review read as current."""
     project = _drafted(ANSWERS)
 
     checked = _check(project)
-    directly = _check(project, _narrower(tmp_path))
 
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert "budgets" not in checked.stderr, checked.stderr
-    assert directly.returncode == 0, directly.stdout + directly.stderr
-    assert "carries no `plan check`" in directly.stdout, directly.stdout
 
 
 @pytest.mark.parametrize("change", ["add", "change"])
@@ -382,8 +369,8 @@ def test_a_task_carrying_a_budgets_section_and_no_record_is_refused() -> None:
     ) in checked.stderr
 
 
-def test_a_task_whose_section_is_not_its_records_rendering_is_refused(tmp_path: Path) -> None:
-    """Refused on both paths, each naming the node whose section and record disagree."""
+def test_a_task_whose_section_is_not_its_records_rendering_is_refused() -> None:
+    """Refused, naming the node whose section and record disagree."""
     project = _drafted(ANSWERS, record=[{**BUDGET, "threshold": 900}])
     differs = (
         "its body does not carry the `## Budgets` section its `orchestrator.budgets` metadata "
@@ -391,13 +378,10 @@ def test_a_task_whose_section_is_not_its_records_rendering_is_refused(tmp_path: 
     )
 
     checked = _check(project)
-    directly = _check(project, _narrower(tmp_path))
 
     assert checked.returncode == 1, checked.stdout + checked.stderr
     assert differs in checked.stderr, checked.stderr
-    assert directly.returncode == 1, directly.stdout + directly.stderr
-    assert f"check-plan: {NODE}: " in directly.stderr, directly.stderr
-    assert differs in directly.stderr, directly.stderr
+    assert NODE in checked.stderr, checked.stderr
 
 
 def test_a_description_that_is_not_its_records_rendering_is_refused() -> None:
@@ -832,13 +816,12 @@ def test_summary_keeps_scoped_omissions_with_added_budgets_and_omits_all_effects
 
 @pytest.mark.parametrize("unchanged", [False, True])
 def test_omitted_analysis_accepts_overview_only_and_preserves_task_budgets(
-    tmp_path: Path, unchanged: bool
+    unchanged: bool,
 ) -> None:
     budgets = [{**BUDGET, "file_change": "none"}] if unchanged else []
     project = _drafted(None, budgets)
-    for environment in (None, _narrower(tmp_path)):
-        checked = _check(project, environment)
-        assert checked.returncode == 0, checked.stdout + checked.stderr
+    checked = _check(project)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
     held = plan_store.project_record(project)
     assert plan_budgets.PLAN_RECORD not in held["metadata"]
     assert held["content"].strip() == "Page the listing."

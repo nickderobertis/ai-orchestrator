@@ -1,0 +1,44 @@
+# What every `onepipeline start` on this host declares about its run, as the engine's own
+# launch config (`start --launch-config`; onepipeline's `LaunchConfig`, `src/filter.rs`, at
+# the release config/onepipeline.version pins). `scripts/onepipeline.sh` names this file on
+# every `start` and passes none of the flags it carries; `adopt` names nothing, because an
+# adopted run replays its launch record.
+#
+# Every path below is relative to the launch directory, which `scripts/onepipeline.sh`
+# makes this checkout's root for a `start`: the engine resolves the template root, the bus
+# configuration, the maintenance schedule and the drafting graph against it, and spawns the
+# hooks there, so a relative command names this checkout's script wherever the run is
+# adopted from.
+#
+# A caller's own flag beats the key it names, a blank one included, which is how a launch
+# says it has none — the engine orders it so. `just orchestrate` takes every key as it
+# stands; every other launcher (`just plan`, the design-document launch, `just follow-ups`,
+# the spike-brief flow) names `--success-hook=`, `--failure-hook=` and `--pr-author-graph=`
+# blank where it names none of its own, so its run keeps the hooks and the drafting graph
+# it had before this file existed, which is none.
+schema_version: 13
+# Every agent node a launch dispatches is the rendering its provenance records.
+require_rendered: true
+# This host's template registrations; `scripts/template-env.sh` exports the same root for
+# the verbs that read no launch config, and to every dispatch through the dispatch-env hook.
+template_root: templates
+# The planner channel's policy: authors, grants and the monitor binding.
+bus_config: config/onemessagebus.yaml
+# Re-runs this checkout's environment resolvers before every node-scope dispatch.
+dispatch_env_hook: scripts/dispatch-env-hook.sh
+# How often an idle driver maintains each identity's warm worktree slots.
+maintenance_config: config/onepipeline.maintenance.yaml
+# What a run does when it ends: `scripts/run-ended.sh` launches the follow-up run of a run
+# whose every node ended `done`, and says how to verify the drafts of one that did not.
+success_hook: scripts/run-ended.sh
+failure_hook: scripts/run-ended.sh
+# The engine's own default, stated so the run-end hooks' bound is read here.
+hook_timeout: 600
+# The graph a lifecycle change request's body is drafted by.
+pr_author_graph: graphs/pr-author.yaml
+# Every reply envelope carrying edits is held to the criteria bar — the deterministic tier,
+# then the judged one — before any of it is applied; `orchestrator/envelope_review.py` is
+# that bar's one entry point. Only a pass is recorded, under the run's own
+# `validator-passes/`, keyed on the document judged and on what the bar command prints.
+envelope_reviewer: scripts/envelope-review.sh
+envelope_reviewer_bar: scripts/envelope-review-bar.sh

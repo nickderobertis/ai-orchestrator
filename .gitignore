@@ -57,8 +57,9 @@ dist/
 !/scratch/issue-24-followups.md
 /runs/
 
-# The planner channel's envelope pass cache (config/onemessagebus.yaml): the bus's own
-# record of envelopes the criteria bar passed, keyed on the bar, and never content.
+# The pass cache the planner channel's bus validator kept before the engine's envelope
+# reviewer replaced it (config/onepipeline.launch.yaml): nothing writes it now, and a
+# checkout that ran the old validator still holds one, which is never content.
 /.cache/envelope-passes/
 
 # Preserved command output (scripts/preserved-log.sh). Deliberately per-worktree

@@ -1,25 +1,26 @@
-"""Every live edit stating task prose is held to the criteria bar before it is sent.
+"""Every live edit stating task prose is held to the criteria bar before it is applied.
 
 Four ops put task prose in front of a dispatch: `amend` replaces the binding correction
-composed onto a node's effective task, and `add`, `retry` and `requeue` each state a
-whole task; a `note` may carry a criterion beside its text. All of them reach a node over
-the planner channel rather than through the plan store, so `just check-plan` never sees
-one and `just review-plan` never records one. `config/onemessagebus.yaml` therefore
-declares :mod:`orchestrator.envelope_review` as the command validator on the `replies`
-queue, and the bus runs it — for `just channel-reply` and for the engine alike — before
-anything is appended, caching only a pass.
+composed onto a node's effective task, and `add`, `retry` and a `requeue` carrying an
+amendment each leave a whole task. All of them reach a node over the planner channel rather
+than through the plan store, so `just check-plan` never sees one and `just review-plan`
+never records one. `config/onepipeline.launch.yaml` therefore names
+:mod:`orchestrator.envelope_review` as the engine's envelope reviewer, and the engine offers
+it every envelope carrying edits — for `just channel-reply` and any other author alike —
+before anything is applied, recording only a pass.
 
-What is proven here is what that validator decides on its own: which of the bar's
-questions apply to each carrier, that a whole task is read past the block one heading
-opens, that the envelope shapes around them are passed over rather than judged, that a
-text the free tier takes is then put to one judged turn, that a node the envelope states
-is held to the plan tier's structural rules over the graph the envelope's own nodes form,
-and the exit protocol the bus reads — ``0`` pass, ``1`` refuse with stderr as the reason,
-``2`` unjudged — with ``--bar-fingerprint`` printing what the bus keys its pass cache on.
-The envelope is judged as it states itself: no run is read, so nothing here builds one.
-`tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drives the same validator through
-the real `just channel-reply` and the real bus against a launched run, with the real `oneharness`
-spending the judged turn against a scripted provider.
+What is proven here is what that reviewer decides on its own: which of the bar's questions
+apply to each change, that a whole task is read past the block one heading opens, that the
+document shapes around them are passed over rather than judged, that a text the free tier
+takes is then put to one judged turn, that a node the envelope states is held to the plan
+tier's structural rules over the plan the document carries, and the exit protocol the
+engine reads — ``0`` pass, ``1`` refuse with stderr as the reason and an ``objection:``
+line naming the node, ``2`` unjudged — with ``--bar-fingerprint`` printing what the engine
+keys a recorded pass on. The document each journey hands over is composed by
+:func:`_envelope` the way the engine composes it for the ops it lists as changes;
+`tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drives the same reviewer through
+the real `just channel-reply` and the real engine against a launched run, with the real
+`oneharness` spending the judged turn against a scripted provider.
 
 The judged turn is stood in at the one boundary it crosses into this module — the
 ``judge`` :func:`orchestrator.envelope_review.refusal` and :func:`main` take — and nowhere
@@ -34,7 +35,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from onevcs_stand_in import install_three_verb_stand_in, release_answer
@@ -61,7 +62,6 @@ from orchestrator.envelope_review import (
     bar_in_force,
     main,
     reviewables,
-    stated_graph,
     structural_refusal,
 )
 from orchestrator.plan_review import Finding, Verdict
@@ -121,7 +121,8 @@ def refusal(envelope: object, judge: Judge | None = None) -> str | None:
 
     So a refusal a journey reads is the free tier's unless it scripted otherwise.
     """
-    return envelope_review.refusal(envelope, ScriptedJudge(PASSES) if judge is None else judge)
+    refused = envelope_review.refusal(envelope, ScriptedJudge(PASSES) if judge is None else judge)
+    return None if refused is None else refused.reason
 
 
 #: An amendment stating what the finished tree must carry, which is what every refusal
@@ -134,16 +135,47 @@ SOUND = (
 
 
 def _envelope(*commands: dict[str, Any]) -> dict[str, Any]:
-    """One reply envelope carrying ``commands``, as the bus hands the validator one.
+    """The document the engine hands its envelope reviewer for an envelope of ``commands``.
 
-    `Any` because a reply envelope is the planner channel's own open contract and its
-    commands are heterogeneous by design — a `note` carries an addressee, a `retry` a
-    whole replacement node — and the module under test reads it as the untyped JSON it
-    arrives as. A typed model here would be a second declaration of somebody else's
-    schema, and the shapes these journeys hand over on purpose are the ones no such
-    model would let them write.
+    Composed as onepipeline's `EnvelopeReview::of` composes it, for the ops it lists as
+    changes: an `add` or a `retry` is the node it states, an `amend` the node it names
+    carrying its text as the node's `amendment`, a `requeue` carrying an amendment the
+    node its overrides leave, and a `reparent` the node with its new `deps`; every other
+    op is left out, as the engine leaves it out. A node an `add` or a `retry` states is in
+    the `plan` too. `Any` because the document is the engine's own open JSON and the shapes
+    these journeys hand over on purpose are the ones a typed model would not let them write.
     """
-    return {"version": 2, "author": "planner", "commands": list(commands)}
+    changes: list[dict[str, Any]] = []
+    tasks: dict[str, Any] = {}
+    for command in commands:
+        match command.get("op"):
+            case "add" | "retry" as op:
+                node = command.get("node")
+                changes.append({"op": op, "node": node})
+                if isinstance(node, dict) and isinstance(node.get("id"), str):
+                    tasks[node["id"]] = node
+            case "amend":
+                changes.append(
+                    {
+                        "op": "amend",
+                        "node": {"id": command.get("id"), "amendment": command.get("text")},
+                    }
+                )
+            case "requeue" if command.get("amend"):
+                changes.append(
+                    {"op": "requeue", "node": {"id": command.get("id"), **command["amend"]}}
+                )
+            case "reparent":
+                changes.append(
+                    {"op": "reparent", "node": {"id": command["id"], "deps": command["deps"]}}
+                )
+            case _:
+                continue
+    return {
+        "goal": "close the coverage gap",
+        "changes": changes,
+        "plan": {"schema_version": 3, "tasks": list(tasks.values())},
+    }
 
 
 def _amend(text: str, node: str = "work") -> dict[str, Any]:
@@ -441,36 +473,6 @@ def test_a_note_and_an_op_carrying_no_task_prose_are_passed_over() -> None:
     assert refusal(unjudged, ScriptedJudge()) is None
 
 
-def test_the_note_delivery_fields_and_a_withdrawal_carry_nothing_for_the_bar() -> None:
-    """A `turn-end` note, a delivery deadline and a `withdraw-note` state no criteria.
-
-    `deliver`, `delivery_timeout_seconds` and `persist` say how a note travels, and a
-    `withdraw-note` names an envelope position and the planner's reason for taking a note
-    back; none of them is task prose, so this bar passes them over and leaves their shape
-    to the engine. A note's `criterion` is still read whatever its delivery.
-    """
-    unjudged = _envelope(
-        {
-            "op": "note",
-            "id": "work",
-            "addressee": "worker",
-            "text": "run `just gate` first",
-            "deliver": "turn-end",
-            "delivery_timeout_seconds": 600,
-            "persist": False,
-        },
-        {"op": "withdraw-note", "envelope": "3", "index": 0, "reason": "run `just gate`"},
-    )
-
-    assert reviewables(unjudged) == []
-    assert refusal(unjudged, ScriptedJudge()) is None
-
-    bounded = {**_note("x", "The required checks pass."), "deliver": "turn-end"}
-    said = refusal(_envelope(bounded))
-    assert said is not None
-    assert said.startswith("the criterion of the note for node 'work':"), said
-
-
 def test_a_node_nothing_dispatches_from_is_passed_over() -> None:
     """A node declaring `expects_no_diff` settles without a worker, so no judge reads it.
 
@@ -512,58 +514,6 @@ def test_a_step_nothing_dispatches_from_is_passed_over_while_its_siblings_are_re
 
     assert said is not None
     assert "the replacement task for node 'work-2/second'" in said, said
-
-
-# `Any` for the reason `_retry` gives: a note's criterion may be any JSON, and a journey
-# below holds the review to one that is not text.
-def _note(text: str, criterion: str | None = None, node: str | None = "work") -> dict[str, Any]:
-    """One `note`, with the criterion it may carry beside its observational text."""
-    command: dict[str, Any] = {"op": "note", "addressee": "both", "text": text}
-    if node is not None:
-        command["id"] = node
-    if criterion is not None:
-        command["criterion"] = criterion
-    return command
-
-
-def test_a_notes_criterion_is_read_as_a_correction_and_its_text_is_not() -> None:
-    """A note's `criterion` enters the acceptance criteria its judge decides against.
-
-    So it is asked an amendment's two questions and owes no judged turn, exactly as an
-    amendment does. The text beside it names a route on purpose and is not read. The
-    refusal names the field and the escape that fits it, which is the note's own `text`
-    rather than "a note".
-    """
-    said = refusal(_envelope(_note("run `just gate` first", "The required checks pass.")))
-
-    assert said is not None
-    assert said.startswith("the criterion of the note for node 'work':"), said
-    assert "required checks pass" in said, said
-    assert "belongs in the note's `text`" in said, said
-
-    (found,) = reviewables(_envelope(_note("run `just gate` first", SOUND)))
-    assert found.text == SOUND
-    assert not found.whole_task and not found.judged
-    assert refusal(_envelope(_note("run `just gate` first", SOUND)), ScriptedJudge()) is None
-
-
-def test_a_note_naming_no_node_is_still_named_in_its_refusal() -> None:
-    """A refusal must never read as though it were about no node at all."""
-    said = refusal(_envelope(_note("x", "The required checks pass.", node=None)))
-
-    assert said is not None
-    assert said.startswith("the criterion of the note in commands[0]:"), said
-
-
-@pytest.mark.parametrize("criterion", ("", "   ", 7))
-def test_a_notes_criterion_that_is_blank_or_not_text_is_left_to_the_engine(
-    criterion: object,
-) -> None:
-    """Blank and non-string criteria are the engine's to refuse, as an amend's text is."""
-    # `cast` because the wrong type is the subject: `_note` is typed to what a manager
-    # sends, and the `7` here is what the engine refuses on its own, sent to prove that
-    # the reader leaves it rather than refusing it under a name of its own.
-    assert reviewables(_envelope(_note("x", cast(Any, criterion)))) == []
 
 
 def test_the_engine_renders_an_amendment_into_the_acceptance_criteria() -> None:
@@ -706,19 +656,6 @@ def test_a_shape_this_check_does_not_act_on_is_left_to_the_engine(envelope: obje
     assert refusal(envelope, ScriptedJudge()) is None
 
 
-def test_an_amendment_naming_no_node_is_still_named_in_its_refusal() -> None:
-    """A refusal must never read as though it were about no node at all.
-
-    An `amend` without an `id` is a shape the engine refuses on its own, but if this is
-    reached first, the position in the envelope is what a manager can act on, where
-    `None` would be a refusal naming nothing.
-    """
-    said = refusal({"commands": [{"op": "amend", "text": "the required checks pass"}]})
-
-    assert said is not None
-    assert said.startswith("the amendment in commands[0]:"), said
-
-
 def test_the_first_refused_resulting_task_is_the_one_reported() -> None:
     """The bus refuses the whole envelope, so one reason is the whole answer."""
     said = refusal(
@@ -856,16 +793,17 @@ def _main(
     return status, said.out, said.err
 
 
-def test_the_hook_answers_on_the_protocol_the_bus_reads(
+def test_the_reviewer_answers_on_the_hook_protocol_the_engine_reads(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A pass prints the envelope back and exits 0; 1 refuses with stderr; 2 is unjudged.
+    """A pass prints the document back and exits 0; 1 refuses with stderr; 2 is unjudged.
 
-    The bus reads a hook's stdout as the message from then on: the input printed back
-    byte for byte is a keep, and nothing at all is a drop, so a pass prints exactly what
-    it read and every word a manager is told is on stderr. A turn that answered nothing
-    is neither verdict: it exits with the status the bus reads as unjudged, and its repair
-    is to send the same envelope again rather than to correct it.
+    The engine reads a reviewer's stdout as a hook's: the input printed back byte for byte
+    is a keep, and nothing at all or anything else is no verdict, so a pass prints exactly
+    what it read and every word a manager is told is on stderr. A refusal declares the node
+    it objects to on the `objection:` line the engine lifts out of what it quotes. A turn
+    that answered nothing is neither verdict: it exits with the status the engine reads as
+    unjudged, and its repair is to send the same envelope again rather than to correct it.
     """
     sound = json.dumps(_envelope(_amend(SOUND)))
     assert _main(monkeypatch, capsys, sound, ScriptedJudge()) == (0, sound, "")
@@ -880,12 +818,14 @@ def test_the_hook_answers_on_the_protocol_the_bus_reads(
         "this reply states task prose a judge would hold its worker to as work — "
         "the amendment for node 'work':"
     ), err
-    assert "nothing was sent" in err and "correct it" in err, err
+    assert "nothing was applied" in err and "correct it" in err, err
+    assert err.endswith(f"\n{envelope_review.OBJECTION_PREFIX} work\n"), err
 
     whole = json.dumps(_envelope(_retry(_task())))
     status, out, err = _main(monkeypatch, capsys, whole, ScriptedJudge(REFUSES))
     assert (status, out) == (REFUSED, "")
     assert "the replacement task for node 'work-2' was refused by its judged review" in err, err
+    assert err.endswith(f"\n{envelope_review.OBJECTION_PREFIX} work-2\n"), err
 
     def unanswered(prompt: str) -> Verdict:
         raise OSError("no candidate answered the review; run `oneharness doctor`")
@@ -896,26 +836,27 @@ def test_the_hook_answers_on_the_protocol_the_bus_reads(
     assert "the replacement task for node 'work-2' could not be reviewed" in err, err
     assert "send the whole envelope again unchanged" in err, err
     assert "correct it" not in err, err
+    assert envelope_review.OBJECTION_PREFIX not in err, err
 
 
 def test_an_envelope_that_is_not_json_is_unjudged_rather_than_passed(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Nothing is known about bytes this cannot read, and the bus sends nothing unjudged.
+    """Nothing is known about bytes this cannot read, and the engine applies nothing unjudged.
 
-    The bus parses an envelope before it runs a validator, so this is a broken hand-over
-    rather than a manager's typo — and a pass here would send an envelope nothing read.
+    The engine serializes the document it hands over, so this is a broken hand-over rather
+    than a manager's typo — and a pass here would apply an envelope nothing read.
     """
     status, out, err = _main(monkeypatch, capsys, "{not json", ScriptedJudge())
 
     assert (status, out) == (UNJUDGED, "")
-    assert "is not JSON" in err and "nothing was sent" in err, err
+    assert "is not JSON" in err and "nothing was applied" in err, err
 
 
-def test_an_argument_the_validator_does_not_take_is_unjudged(
+def test_an_argument_the_reviewer_does_not_take_is_unjudged(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A configuration naming the validator with another argument judges nothing.
+    """A launch naming the reviewer with another argument judges nothing.
 
     Read as a pass it would wave every envelope through; read as a refusal it would tell
     a manager their sound edit is wrong. So it is unjudged, naming what it takes.
@@ -924,7 +865,7 @@ def test_an_argument_the_validator_does_not_take_is_unjudged(
     status, out, err = _main(monkeypatch, capsys, sound, ScriptedJudge(), ["run-1"])
 
     assert (status, out) == (UNJUDGED, "")
-    assert "['run-1'] is not what this validator takes" in err, err
+    assert "['run-1'] is not what this reviewer takes" in err, err
     assert BAR_FINGERPRINT_FLAG in err, err
 
 
@@ -1111,33 +1052,26 @@ def test_the_correction_the_refusal_names_is_not_refused(
         {"op": "add", "node": _consumer_node(merge_policy="change-open")},
     )
 
-    assert structural_refusal(envelope) is None
+    assert structural_refusal(envelope) == []
     assert "release targets library --json" in asked.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize(
-    "remedy",
-    (
-        {"op": "reparent", "id": "consumer", "deps": ["gate"]},
-        {"op": "drop", "id": "producer", "dependents": "detach"},
-    ),
-    ids=("reparent", "drop"),
-)
-def test_a_release_edge_a_later_command_removes_is_not_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remedy: dict[str, object]
+def test_a_dependency_the_plan_already_carries_is_read_off_the_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The rules are asked over the graph the whole envelope forms, folded in order.
+    """A stated node behind a node the run already holds is asked about with that node.
 
-    "Drop the edge if the work does not need the release" is the refusal's third remedy,
-    and a `reparent` of the consumer, or a detaching `drop` of the producer, later in the
-    same envelope takes it.
+    The engine hands over the plan the envelope leaves, so a consumer added behind a
+    producer the plan carried before this envelope is refused as it would be in a plan,
+    while the producer, which the envelope does not state, is never reported.
     """
     _releasing_host(tmp_path, monkeypatch)
-    envelope = _envelope(
-        {"op": "add", "node": PRODUCER_NODE}, {"op": "add", "node": _consumer_node()}, remedy
-    )
+    document = _envelope({"op": "add", "node": _consumer_node()})
+    document["plan"]["tasks"].append(PRODUCER_NODE)
 
-    assert structural_refusal(envelope) is None
+    (refused,) = structural_refusal(document)
+
+    assert (refused.node, refused.field) == ("consumer", "adoption"), refused
 
 
 def test_a_retrys_replacement_is_held_to_the_same_rules(
@@ -1150,260 +1084,27 @@ def test_a_retrys_replacement_is_held_to_the_same_rules(
         {"op": "retry", "id": "consumer", "node": _consumer_node(id="again")},
     )
 
-    refused = structural_refusal(envelope)
+    (refused,) = structural_refusal(envelope)
 
-    assert refused is not None
-    assert refused.startswith("node 'again', as this reply states it: adoption: "), refused
+    assert (refused.node, refused.field) == ("again", "adoption"), refused
 
 
 def test_an_envelope_stating_no_node_asks_onevcs_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A note, an amendment, a cancel and a requeue state no node, so nothing is asked.
+    """An amendment and a requeue state no new node, so nothing is asked.
 
-    The requeue is the case to read twice: it states overrides of a node the run holds,
-    and this validator reads no run, so it moves nothing here and the engine and the merge
-    path are what refuse the node it returns.
+    The requeue is the case to read twice: it leaves a node the run already held, which
+    the plan tier asked about when it was planned, so the engine and the merge path are
+    what refuse the node it returns. A note and a cancel are not in the document at all.
     """
     asked = _releasing_host(tmp_path, monkeypatch)
     envelope = _envelope(
         _amend(SOUND, "consumer"),
-        _note("Keep going.", node="consumer"),
         {"op": "cancel", "id": "consumer", "reason": "park it"},
         {"op": "requeue", "id": "consumer", "amend": {"adoption": "fast"}},
     )
 
-    assert structural_refusal(envelope) is None
-    assert structural_refusal("not an envelope") is None
+    assert structural_refusal(envelope) == []
+    assert structural_refusal("not an envelope") == []
     assert not asked.exists(), asked.read_text(encoding="utf-8")
-
-
-def test_the_graph_an_envelope_forms_folds_every_command_in_order() -> None:
-    """Each command reads what the one before it did, as the engine applies them.
-
-    An added node is retried and its dependent redirected; an added node is reparented; a
-    cascading drop takes its dependents with it and a detaching one takes only their
-    edges; a node added and dropped in one envelope is not one it results in; and every
-    command naming a node the envelope has not stated, or stating no shape the engine
-    accepts, moves nothing.
-    """
-    envelope = _envelope(
-        {"op": "add", "node": {"id": "gate", "kind": "human"}},
-        {"op": "add", "node": {"id": "work", "deps": ["gate"]}},
-        {"op": "add", "node": {"id": "after", "deps": ["work"]}},
-        {"op": "add", "node": {"id": "tail", "deps": ["after", "gate"]}},
-        {"op": "add", "node": {"id": "loose", "deps": ["gate"]}},
-        {"op": "requeue", "id": "work", "amend": {"adoption": "fast"}},
-        {"op": "retry", "id": "work", "node": {"id": "work-2", "deps": ["gate"]}},
-        {"op": "add", "node": {"id": "fresh", "deps": ["work-2"]}},
-        {"op": "reparent", "id": "fresh", "deps": ["gate"]},
-        {"op": "drop", "id": "after", "dependents": "drop"},
-        {"op": "drop", "id": "gate", "dependents": "detach"},
-        {"op": "add", "node": {"id": "doomed"}},
-        {"op": "drop", "id": "doomed", "dependents": "detach"},
-        {"op": "add", "node": {"task": "no id"}},
-        {"op": "reparent", "id": "absent", "deps": []},
-        # `cast` because this entry is deliberately not a command at all: an envelope is
-        # the channel's open contract, and the fold is held to passing over what it
-        # cannot read as one.
-        cast(Any, "not a command"),
-    )
-
-    graph, resulting = stated_graph(envelope)
-
-    assert graph == {
-        "loose": {"id": "loose", "deps": []},
-        "work-2": {"id": "work-2", "deps": []},
-        "fresh": {"id": "fresh", "deps": []},
-    }
-    assert resulting == ["loose", "work-2", "fresh"]
-    assert stated_graph({"version": 2}) == ({}, [])
-
-
-def test_a_command_the_engine_refuses_for_its_target_moves_nothing() -> None:
-    """A retry onto an id the envelope holds, an add of one, and every shape the engine refuses.
-
-    Each is refused by the engine for its target or its shape, so none results in a node
-    the rules are asked about — a node that will never be committed would otherwise be
-    refused here for fields no graph will ever carry. A retry of a node the envelope did
-    not state is the ordinary retry of a run's node, and puts its replacement in.
-    """
-    held = _envelope(
-        {"op": "add", "node": {"id": "gate", "kind": "human"}},
-        {"op": "add", "node": {"id": "work", "deps": ["gate"]}},
-    )
-    envelope = _envelope(
-        *held["commands"],
-        {"op": "retry", "id": "work", "node": {"id": "gate"}},
-        {"op": "add", "node": {"id": "work", "deps": []}},
-        {"op": "add", "node": {"id": "unknown", "surprise": True}},
-        {"op": "add", "node": {"id": "extra"}, "surprise": True},
-        {"op": "retry", "id": "work", "node": {"id": "work-3"}, "surprise": True},
-        {"op": "requeue", "id": "gate", "amend": {"id": "rewritten"}},
-        {"op": "reparent", "id": "work", "deps": ["gate", 7]},
-        {"op": "reparent", "id": "work", "deps": [], "surprise": True},
-        {"op": "drop", "id": "gate", "dependents": "unknown"},
-        {"op": "drop", "id": "gate", "dependents": "detach", "surprise": True},
-    )
-
-    assert stated_graph(envelope) == stated_graph(held)
-    graph, resulting = stated_graph(
-        _envelope({"op": "retry", "id": "run-node", "node": {"id": "replacement", "deps": ["x"]}})
-    )
-    assert graph == {"replacement": {"id": "replacement", "deps": ["x"]}}
-    assert resulting == ["replacement"]
-
-
-def test_a_stated_node_sizing_its_own_workspace_placement_is_read_as_one() -> None:
-    """`pool` and `overflow` are fields the engine's `Node` accepts, so a node stating them is read.
-
-    They arrived with onepipeline 0.40.0 and are copied onto the session request a
-    lifecycle step opens with; a preflight that did not know them would pass over a
-    node the engine commits, and its task would reach a dispatch unjudged.
-    """
-    graph, resulting = stated_graph(
-        _envelope(
-            {"op": "add", "node": {"id": "placed", "pool": 0, "overflow": "unlimited"}},
-            {"op": "add", "node": {"id": "unplaced", "slot": 1}},
-        )
-    )
-
-    assert graph == {"placed": {"id": "placed", "pool": 0, "overflow": "unlimited"}}
-    assert resulting == ["placed"]
-
-
-def test_a_stated_node_keeping_its_branch_is_read_as_one() -> None:
-    """`publish` is a field the engine's `Node` accepts, so a node stating it is read.
-
-    A `publish: "preserve"` node is dispatched like any lifecycle node and only its
-    closeout differs, so its task is one a worker is judged against; a preflight that
-    did not know the field would pass over a node the engine commits.
-    """
-    graph, resulting = stated_graph(
-        _envelope(
-            {"op": "add", "node": {"id": "spike", "publish": "preserve"}},
-            {"op": "add", "node": {"id": "kept", "keep": True}},
-        )
-    )
-
-    assert graph == {"spike": {"id": "spike", "publish": "preserve"}}
-    assert resulting == ["spike"]
-
-
-def test_the_graph_an_envelope_forms_carries_deps_and_consumes_as_the_engine_does() -> None:
-    """The fields the adoption rules read move with the edges, as `edits.rs` moves them.
-
-    A retry whose replacement states no deps inherits the superseded node's `deps` and
-    `consumes`, and one stating no `delivers` inherits those on that condition alone — a
-    replacement restating its deps still takes the tickets over, one stating its own keeps
-    them, and one whose predecessor stated tickets in no shape the engine gives the field
-    inherits none — while a dependent redirected onto it takes its `consumes` entry along; a
-    reparent keeps only the `consumes` keyed on a dependency it still names; and a node
-    that leaves the graph is consumed by nothing — its detached dependents lose the edge
-    and the entry, and a node that consumed it without the edge loses the entry too. The
-    envelope's own commands are left untouched.
-    """
-    envelope = _envelope(
-        {"op": "add", "node": {"id": "producer", "repo": "library"}},
-        {"op": "add", "node": {"id": "gate", "kind": "human"}},
-        {
-            "op": "add",
-            "node": {"id": "work", "deps": ["producer"], "consumes": {"producer": "pypi"}},
-        },
-        {"op": "add", "node": {"id": "after", "deps": ["work"], "consumes": {"work": "pypi"}}},
-        {
-            "op": "add",
-            "node": {
-                "id": "keep",
-                "deps": ["producer", "gate"],
-                "consumes": {"producer": "pypi"},
-            },
-        },
-        {"op": "add", "node": {"id": "stale", "consumes": {"producer": "pypi"}}},
-        {"op": "add", "node": {"id": "bare", "deps": "gate"}},
-        {
-            "op": "add",
-            "node": {"id": "ticketed", "deps": ["gate"], "delivers": ["followups:issue-7"]},
-        },
-        {"op": "add", "node": {"id": "reticketed", "delivers": ["followups:issue-8"]}},
-        {"op": "add", "node": {"id": "misticketed", "delivers": "followups:issue-10"}},
-        {"op": "retry", "id": "bare", "node": {"id": "bare-2"}},
-        {"op": "retry", "id": "work", "node": {"id": "work-2"}},
-        {"op": "retry", "id": "ticketed", "node": {"id": "ticketed-2", "deps": ["gate"]}},
-        {
-            "op": "retry",
-            "id": "reticketed",
-            "node": {"id": "reticketed-2", "delivers": ["followups:issue-9"]},
-        },
-        {"op": "retry", "id": "misticketed", "node": {"id": "misticketed-2"}},
-        {"op": "add", "node": {"id": "emptied", "delivers": ["followups:issue-11"]}},
-        {"op": "retry", "id": "emptied", "node": {"id": "emptied-2", "delivers": []}},
-        {"op": "reparent", "id": "keep", "deps": ["gate"]},
-        {"op": "drop", "id": "producer", "dependents": "detach"},
-    )
-    sent = json.loads(json.dumps(envelope))
-
-    graph, resulting = stated_graph(envelope)
-
-    assert graph == {
-        "gate": {"id": "gate", "kind": "human"},
-        "after": {"id": "after", "deps": ["work-2"], "consumes": {"work-2": "pypi"}},
-        "keep": {"id": "keep", "deps": ["gate"], "consumes": {}},
-        "stale": {"id": "stale", "consumes": {}},
-        "bare-2": {"id": "bare-2", "deps": []},
-        "work-2": {"id": "work-2", "deps": [], "consumes": {}},
-        "ticketed-2": {"id": "ticketed-2", "deps": ["gate"], "delivers": ["followups:issue-7"]},
-        "reticketed-2": {"id": "reticketed-2", "deps": [], "delivers": ["followups:issue-9"]},
-        # A `delivers` not in the engine's shape is the engine's to refuse, not to inherit.
-        "misticketed-2": {"id": "misticketed-2", "deps": []},
-        # `[]` states none, as an absent field does: the engine's `is_empty()`.
-        "emptied-2": {"id": "emptied-2", "deps": [], "delivers": ["followups:issue-11"]},
-    }
-    assert resulting == [
-        "gate",
-        "after",
-        "keep",
-        "stale",
-        "bare-2",
-        "work-2",
-        "ticketed-2",
-        "reticketed-2",
-        "misticketed-2",
-        "emptied-2",
-    ]
-    assert envelope == sent, "folding the graph rewrote the envelope's own commands"
-
-
-def test_folding_includes_a_classified_node_and_omits_one_with_an_unknown_field() -> None:
-    """Folding keeps the adopted classification field and omits a misspelled field."""
-    node = {"id": "classified", "classification": "private"}
-    graph, resulting = stated_graph(
-        _envelope(
-            {"op": "add", "node": node},
-            {"op": "add", "node": {"id": "unknown", "classificaton": "private"}},
-        )
-    )
-    assert graph == {"classified": node}
-    assert resulting == ["classified"]
-
-
-def test_folding_includes_a_human_node_carrying_its_human_item_metadata() -> None:
-    """A `kind: human` node stating the engine's optional `human_item` is folded in whole."""
-    node = {
-        "id": "sign-off",
-        "kind": "human",
-        "human_item": {
-            "kind": "task",
-            "priority": "high",
-            "title": "Sign off the release",
-            "body": "Confirm the release notes before it ships.",
-        },
-    }
-    graph, resulting = stated_graph(
-        _envelope(
-            {"op": "add", "node": node},
-            {"op": "add", "node": {"id": "misspelled", "kind": "human", "human_items": {}}},
-        )
-    )
-    assert graph == {"sign-off": node}
-    assert resulting == ["sign-off"]

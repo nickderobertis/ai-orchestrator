@@ -505,7 +505,6 @@ ASK_SEAM_JOURNEYS: tuple[AskSeamJourney, ...] = (
         f"{ASK_SEAM_ROOT}/follow_up_drafts_launch",
         "askSeamFollowUpDraftsLaunch",
     ),
-    AskSeamJourney("ask-seam-hook-golden", f"{ASK_SEAM_ROOT}/hook_golden", "askSeamHookGolden"),
     AskSeamJourney("ask-seam-launch", f"{ASK_SEAM_ROOT}/launch", "askSeamLaunch"),
     AskSeamJourney(
         "ask-seam-planner-fallback-ask",
@@ -683,13 +682,12 @@ HOST_VIEWS_SCOPED = "test"
 #: each project under `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 HOST_VIEWS_ROOT = "tests/host_views"
 
-#: The project whose test target owns the two-process replacement race over
-#: `orchestrator/project_store.py`: writer processes replacing one project's records
-#: for a fixed span of the clock while a reader process reads the root back through
-#: the module's own reader. A project of its own for the reason `unwatched` is, at a
-#: smaller scale: a race bounded by the clock costs the same on every host and every
-#: edit, so keeping it behind its own edge is what lets `nx affected` charge it to a
-#: change of the store rather than to every change of `orchestrator/`.
+#: The project whose test target owns the two-process fixture-root isolation journey:
+#: two concurrent pytest sessions each write one project through the store into a root of
+#: their own, and one removes it while the other keeps reading its own. A project of its
+#: own for the reason `unwatched` is, at a smaller scale: each journey pays for two whole
+#: pytest sessions, which `nx affected` can only keep off an unrelated edit of
+#: `orchestrator/` where it is a separate project.
 PROJECT_STORE_RACE_PROJECT = "project-store-race"
 #: That project's one test target: nothing here reads this repository's prose.
 PROJECT_STORE_RACE_SCOPED = "test"

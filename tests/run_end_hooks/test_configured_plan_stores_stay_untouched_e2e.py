@@ -201,6 +201,15 @@ def _drafted(root: Path, run: str, title: str) -> Path:
     return Path(matched["path"])
 
 
+def _seeded_task(native: str) -> str:
+    """The native id the store gives the one task :func:`_seeded_project` writes.
+
+    The store names a task by the slug of its title, so the title carries the project's
+    own unique id and the task's name cannot collide with a record already in the root.
+    """
+    return f"{native}-authored"
+
+
 def _seeded_project(root: Path, native: str) -> None:
     """A plan project written under ``root`` through this repository's own writer.
 
@@ -215,22 +224,23 @@ def _seeded_project(root: Path, native: str) -> None:
         "tasks": [
             {
                 "id": "authored",
+                "title": _seeded_task(native),
                 "persona": "engineer",
                 "task": f"## What\n{SEEDED_GOAL}\n\n## Why\nA developer wrote it.\n\n"
                 "## Acceptance criteria\n- It is still here afterwards.",
             }
         ],
     }
-    # llmlint: ignore-block[tests_mirror_real_usage] `python -m orchestrator.project_store <root>`
-    # *is* how a plan reaches the authoring source here: `scripts/plan.sh:384` and
-    # `scripts/finish-plan.sh:572` each pipe a planner's plan into that exact command line,
+    # llmlint: ignore-block[tests_mirror_real_usage] `python -m orchestrator.plan_records <root>`
+    # *is* how a plan reaches the authoring source here: `scripts/plan.sh` and
+    # `scripts/finish-plan.sh` each pipe a generated plan into that exact command line,
     # and it is the only way an authored project is written. Reaching for `just plan`
     # instead would spend a real planner dispatch to produce the one record this seed needs.
-    written = subprocess.run(  # noqa: S603 - this repository's own project writer
+    written = subprocess.run(  # noqa: S603 - this repository's writer over the store
         [
             str(REPO_ROOT / ".venv" / "bin" / "python3"),
             "-m",
-            "orchestrator.project_store",
+            "orchestrator.plan_records",
             str(root),
         ],
         cwd=REPO_ROOT,
@@ -389,7 +399,7 @@ def launched(  # noqa: PLR0915 - one journey, seeded and read back in order
         draft=seeded_draft,
         draft_id=f"{drafts.SOURCE}:{run}/{drafts.DRAFTS}/{seeded_draft.stem}",
         project=follow_up_native,
-        task_id=f"authoring:{follow_up_native}/authored",
+        task_id=f"authoring:{_seeded_task(follow_up_native)}",
     )
     draft_before = _record(reading, configured.draft_id)
     task_before = _record(reading, configured.task_id)
@@ -435,7 +445,7 @@ def launched(  # noqa: PLR0915 - one journey, seeded and read back in order
         _remove(
             configured_drafts / "tasks" / run,
             configured_drafts / "projects" / f"{run}.md",
-            configured_authoring / "tasks" / follow_up_native,
+            configured_authoring / "tasks" / f"{_seeded_task(follow_up_native)}.md",
             configured_authoring / "projects" / f"{follow_up_native}.md",
         )
 

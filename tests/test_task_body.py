@@ -145,12 +145,6 @@ def test_a_body_over_the_limit_is_refused_naming_the_size_the_limit_and_what_is_
     assert f"{task_body.BODY_LIMIT:,}-character limit" in refused.reason
     assert task_body.UNMEASURED in refused.reason
     assert "`just copy-plan`" in refused.reason
-    # The raising face walks past the record within the limit and names the one over it,
-    # which is the accepted path and the refused one read in a single observable outcome.
-    fits = _record("fits", _sized(task_body.BODY_LIMIT - 100))
-    task_body.check_records([fits])
-    with pytest.raises(task_body.BodyError, match=r"^big: task: its composed issue body"):
-        task_body.check_records([fits, _record("big", _sized(task_body.BODY_LIMIT + 1))])
 
 
 def test_a_body_exactly_at_the_limit_is_taken_and_warned_about() -> None:

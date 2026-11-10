@@ -34,6 +34,7 @@ from typing import Any, NewType
 import boundary_home
 import plan_fixture_source
 import pytest
+import yaml
 from github_board import _serving_board
 from project_fixtures import (
     FIXTURE_UNIT,
@@ -100,7 +101,7 @@ def _task(criteria: str = STATES_ITS_BAR) -> str:
 
 
 #: The hosted repository every node here names, as its record's own `repositories`
-#: holds it: the record renderer turns the clone URL `_node` writes into this normalized
+#: holds it: the store's writer turns the clone URL `_node` writes into this normalized
 #: origin, and the copy has to carry the field to the destination byte for byte.
 REPOSITORY = "github.com/nickderobertis/some-service"
 
@@ -218,8 +219,25 @@ def _reported(output: str) -> list[dict[str, Any]]:
 
 
 def _records(root: Path) -> list[str]:
-    """Every record file the destination store holds, as paths below its root."""
-    return sorted(str(one.relative_to(root)) for one in root.rglob("*.md")) if root.is_dir() else []
+    """Every record the destination store holds, as paths below its root.
+
+    A task is named `tasks/<project>/<node id>` from its own front matter rather than by its
+    file, because the store files a task under an id of its own choosing — the slug of its
+    title, suffixed where another record holds it — and what a copy has to land is the
+    plan's node in the plan's project.
+    """
+    if not root.is_dir():
+        return []
+    return sorted(_named(root, one) for one in root.rglob("*.md"))
+
+
+def _named(root: Path, record: Path) -> str:
+    relative = record.relative_to(root)
+    if relative.parts[0] != "tasks":
+        return str(relative)
+    front = record.read_text(encoding="utf-8").removeprefix("---\n").partition("\n---")[0]
+    fields = yaml.safe_load(front)
+    return f"tasks/{fields['project']}/{fields['metadata']['onepipeline.id']}.md"
 
 
 @pytest.fixture
@@ -284,7 +302,8 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     assert _records(destination) == [], "a trial run wrote to the destination"
     # The trial reports every record the copy would create — the document among them, so
     # the flag reached the document copy — and names no destination, because nothing was.
-    would_create = {f"{project}", f"{project}/route", f"{project}-design"}
+    (route,) = [task.qualified_id for task in plan_store.read_tasks(project)]
+    would_create = {f"{project}", route, f"{project}-design"}
     assert {one["source"] for one in _reported(trial.stdout)} == would_create, trial.stdout
     assert {(one["action"], one.get("destination")) for one in _reported(trial.stdout)} == {
         ("created", None)
@@ -294,11 +313,16 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     assert copy.returncode == 0, copy.stdout + copy.stderr
     # One report line per record, the project's before its document's, each naming the
     # id it landed under: the store's own per-record report, reaching the operator whole.
-    assert [(one["action"], one["destination"]) for one in _reported(copy.stdout)] == [
+    reported = [(one["action"], one["destination"]) for one in _reported(copy.stdout)]
+    destination_source = copied_id.partition(":")[0]
+    assert [reported[0], reported[2]] == [
         ("created", copied_id),
-        ("created", f"{copied_id}/route"),
         ("created", f"{copied_id}-design"),
     ], copy.stdout
+    # The task lands under the id the destination's store gives it.
+    assert reported[1][0] == "created", copy.stdout
+    assert reported[1][1].startswith(f"{destination_source}:"), copy.stdout
+    assert len(reported) == 3, copy.stdout
     # The plan's **document** lands beside its tasks, and that is the store's own
     # `project copy` being composed with rather than trusted: that verb carries a project
     # and its tasks and no document at all, so a plan copied without this arrives with

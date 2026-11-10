@@ -30,7 +30,7 @@ import short_state
 from waits import timeout as e2e_timeout
 
 from orchestrator import npm_installs
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: The roles this repository's prose says `oneagentgraph` compiles in. Stated here as

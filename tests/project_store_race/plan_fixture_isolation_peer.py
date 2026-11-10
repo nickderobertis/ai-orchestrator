@@ -13,7 +13,8 @@ from typing import TypedDict
 import plan_fixture_source
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator.project_store import TASKS_DIRECTORY, write_plan_project
+from orchestrator.plan_records import write_plan_project
+from orchestrator.record_shapes import TASKS_DIRECTORY
 from orchestrator.root import REPO_ROOT
 
 #: The shared scratch directory the two peers rendezvous through, and which role this
@@ -62,6 +63,9 @@ PLAN: FixturePlan = {
     "name": SHARED_NATIVE,
     "tasks": [{"id": "only", "task": "Be readable."}],
 }
+#: Where the store files that plan's one task in a root holding nothing else: under the
+#: slug of its title, which is its id.
+TASK_RECORD = "only.md"
 
 #: How long either peer waits for the other to reach the next point of the rendezvous.
 #: Generous, because both are paying for a pytest session start; an expiry here is a peer
@@ -124,12 +128,9 @@ def _stored_project() -> object:
 
 
 def _remove(root: Path) -> None:
-    """Remove the shared record from this process's own root, record and tasks alike."""
+    """Remove the shared record from this process's own root, record and task alike."""
     (root / "projects" / f"{SHARED_NATIVE}.md").unlink()
-    tasks = root / TASKS_DIRECTORY / SHARED_NATIVE
-    for child in tasks.iterdir():
-        child.unlink()
-    tasks.rmdir()
+    (root / TASKS_DIRECTORY / TASK_RECORD).unlink()
 
 
 def test_a_peer_writes_a_record_and_plays_its_half_of_the_removal() -> None:
@@ -154,7 +155,7 @@ def test_a_peer_writes_a_record_and_plays_its_half_of_the_removal() -> None:
     if role is Role.REMOVER:
         _remove(root)
         assert not (root / "projects" / f"{SHARED_NATIVE}.md").exists()
-        assert not (root / TASKS_DIRECTORY / SHARED_NATIVE).exists()
+        assert not (root / TASKS_DIRECTORY / TASK_RECORD).exists()
         _announce("removed")
         return
 
@@ -168,4 +169,4 @@ def test_a_peer_writes_a_record_and_plays_its_half_of_the_removal() -> None:
     _stored_project()
     # Check while this session owns its files; session close removes its temporary root.
     assert (root / "projects" / f"{SHARED_NATIVE}.md").is_file()
-    assert (root / TASKS_DIRECTORY / SHARED_NATIVE).is_dir()
+    assert (root / TASKS_DIRECTORY / TASK_RECORD).is_file()

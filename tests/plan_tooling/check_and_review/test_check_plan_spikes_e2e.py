@@ -8,7 +8,7 @@ template's `spikes` answer. The check refuses each break of that convention, nam
 and the rule, and passes a well-formed spikes project and a task linking a report that is
 there.
 
-Everything is real: the plans written through this repository's own record renderer into
+Everything is real: the plans written through the store's own `task create` into
 this process's own fixture source, a dependent task's body rendered by the pinned plan
 store from the pinned engine's `template resolve plan-task`, the spike reports and budgets
 documents rendered through `template resolve` piped into the pinned store's `document
@@ -43,7 +43,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, plan_store
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 

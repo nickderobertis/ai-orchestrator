@@ -604,9 +604,11 @@ record whole, so it stages every field the store just reported rather than the o
 repository cares about.
 
 *What invalidates one.* A document is approvable only while it is a rendering of the
-template in force: it records `onepipeline:design-doc` provenance, the chain digest it
-records is the one the pinned engine resolves through this host's template root *now*, and
-its content hashes to the body digest the store recorded. The key is a digest of the
+template in force, and whether it is one is the pinned engine's answer, never this host's:
+`onepipeline template check design-doc --item <document>`, through this host's template
+root and the layer the plan's rule picks, holds the stored document to its recorded
+`onepipeline:design-doc` provenance, to that provenance's chain digest being the one the
+chain resolves to *now*, and to its content being the body it records. The key is a digest of the
 document's title, that resolved chain digest, that recorded body digest, and — for a
 document that shows images — a map of each image asset's name to the SHA-256 of its bytes,
 read from the file beside a document in a local Markdown source or from the `onetaskgraph.assets` record a
@@ -646,8 +648,9 @@ A project holding more than one document is a third answer — which of them is 
 document cannot be decided, so it is refused rather than guessed at. A document that is
 not the rendering in force — one recording no design-doc provenance, one rendered from a
 template since changed, or one whose body was edited after it was rendered — is refused by
-both `just approve-design` and the launch, each naming the regenerate above as the repair.
-A board copy whose body no longer hashes to its recorded digest is refused the same way,
+the engine's check, and so by both `just approve-design` and the launch, each carrying the
+engine's reason and naming the regenerate above as the repair, chosen by what the document
+records. A board copy the engine refuses as edited is refused the same way,
 and because it carries the store's `onetaskgraph.origin`, the refusal also names the other
 way it gets there: a copy made by a plan store before onetaskgraph 0.2.53 rewrote its
 references to the plan's tasks without re-recording the digest, and copying it again from
@@ -1289,9 +1292,11 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   `kind: oneharness` member that reads a verified branch's diff and answers with
   the body its change request opens under. Like the observer it is opt-in —
   `--pr-author-graph <REF>` ships naming nothing, and a launch that names nothing
-  opens its change requests with the body its plan states, or with none — and `just
-  orchestrate` names this file so every remote publication from this host is
-  drafted. Unlike `--dag-graph` it takes no `off`: leave the flag off instead.
+  opens its change requests with the body its plan states, or with none — and
+  `config/onepipeline.launch.yaml` names this file as `pr_author_graph` for `just
+  orchestrate`'s launches, so every remote publication from this host is drafted; every
+  other launcher names the flag blank, which beats the document. Unlike `--dag-graph` it
+  takes no `off`: a blank value is how a launch names none.
 
   Its member is a `schema_file` member, and that decides two things nothing else
   here does. `../oneharness.pr-author.toml` names
@@ -2381,7 +2386,8 @@ as itself; the monitor drafts `--as monitor --member monitor`; the pacemaker dra
 project holds; a manager drafts with `just follow-up <run-id>`. The party supplies only a
 title, the repository, the paths and a body carrying four headings; the command stamps the
 rest — the run, the dispatch's scratch, session, working directory, branch and head, the
-node resolved from the run's dispatch registry by process ancestry, and the command that
+node the engine names to the dispatch-env hook, which that hook passes on to the dispatch
+as `ONEPIPELINE_NODE_ID`, and the command that
 reads the turns the draft came from. `orchestrator/follow_up_drafts.py` is the one source
 of that record, and `"$ORCHESTRATOR_FOLLOW_UP_DRAFT" --help` states it in full.
 
@@ -2605,9 +2611,10 @@ is a `related` entry of `## Related tickets`, with no edge. The same-root-cause 
 unchanged: an accepted item for a ticket's own root cause takes the run's evidence as a
 comment and is never depended on.
 
-**The run-end hooks are what launch it.** `just orchestrate` names
-`scripts/run-ended.sh`, by its absolute path in the launching checkout, as both the
-engine's `--success-hook` and its `--failure-hook`, unless the caller named that flag;
+**The run-end hooks are what launch it.** `config/onepipeline.launch.yaml` names
+`scripts/run-ended.sh`, relative to the launching checkout the engine spawns it in, as
+both the engine's success hook and its failure hook, and `just orchestrate` takes
+both unless the caller named that flag; every other launcher names both blank, and
 `just orchestrate --adopt` names neither, because the engine replays both from the
 launch record. The engine runs at most one of them, once, when the run **ends** —
 after the driver has let go of the run, in the launch directory, awaited under
@@ -2850,39 +2857,41 @@ Its exits are the engine's:
 | Exit | Meaning | stdout |
 | --- | --- | --- |
 | 0 | the envelope was taken: its verdict delivered, its edits applied — by the driver or by the reply — or still queued for the driver holding the run once the wait elapsed; or a hook dropped it whole, `state` `dropped` with nothing queued, applied or delivered. A `hooked: changed` key says a hook changed or rerouted part of it before it was queued | `{"reply":…,"state":"delivered\|applied\|queued\|dropped",…}` |
-| 2 | refused, with nothing appended or applied: a malformed envelope, an undeclared author or an ungranted op, the hook refusing or not judging the envelope, an edit the graph refuses, a correlation no pending ask holds, or a correlation on an envelope with no verdict | the reason, on stderr |
+| 2 | refused, with nothing appended or applied: a malformed envelope, an undeclared author or an ungranted op, the envelope reviewer refusing or not judging the envelope, an edit the graph refuses, a correlation no pending ask holds, or a correlation on an envelope with no verdict | the reason, on stderr |
 
-Before anything is appended, an envelope carrying commands is held by the one hook
-`config/onemessagebus.yaml` declares on `replies` — `scripts/envelope-review.sh`, which
-runs `orchestrator/envelope_review.py` — to the bar a plan's task is held to: an
-`amend`, the whole task an `add`, a `retry` or a `requeue` states, and the `criterion` a
-`note` may carry. The envelope is judged **as it states itself** and no run state is
-read, because the bus caches a pass on the envelope's bytes and a verdict that also
-depended on the run's journal would make that cache unsound.
-`orchestrator/criteria_guard.py`'s matchers read every stated task, then one judged turn
-of the `just review-plan` reviewer reads a **novel whole task** — an added node, a
-retry's replacement, a requeued node's amended task. A correction — a bare `amend`, a
-note's `criterion` — is matched and never judged; a note's `text` is never read at all.
-The engine has the hook judge the whole offer before any of it is appended or
-applied — on the queued path and on the path that applies an edit to a run nothing
-drives alike — so a refusal by either tier sends nothing and its findings are the reason on stderr; a judged turn that answered
-nothing is **unjudged**, saying `could not be judged`, and is never sent — send the same
-envelope again once the harness answers rather than correcting it. Only a pass is
-cached, by the bus, under `.cache/envelope-passes` keyed on the envelope's bytes and on
-what `--bar-fingerprint` prints, so moving either tier of the bar invalidates every
-recorded pass (onemessagebus's `hooks.md`). It only ever keeps or refuses: a pass prints
-the envelope back byte for byte, which the bus reads as a keep, since a hook that exits 0
-printing nothing drops the message. It was declared as a validator until onemessagebus
-deprecated those; its argv and cache directory are unchanged, so the passes the validator
-recorded read as keeps, and `tests/ask_seam/hook_golden/` holds both declarations to one
-golden file of outcomes and reasons.
+Before any of it is applied, an envelope carrying commands is held by the engine's
+**envelope reviewer** — `scripts/envelope-review.sh`, which `config/onepipeline.launch.yaml`
+names as `envelope_reviewer` and which runs `orchestrator/envelope_review.py` — to the bar a
+plan's task is held to. The engine hands it one document (onepipeline's
+`docs/contract-divergences.md`, entry 45): the run's goal, every node the envelope
+introduces or changes with the op that produced it — `add`, `retry`, `amend`, a `requeue`
+carrying an amendment and `reparent` — as the whole envelope leaves it, and the plan they
+land in; the reviewer reads nothing else, because the engine records a pass keyed on that
+document. `orchestrator/criteria_guard.py`'s matchers read an `amend`'s correction and the
+whole task an `add`, a `retry` or a `requeue` leaves, then one judged turn of the `just
+review-plan` reviewer reads a **novel whole task** — an added node, a retry's replacement,
+a requeued node's amended task. A bare `amend` is matched and never judged; a note's `text`
+is never read at all, and a note's `criterion` is not offered to the reviewer by the pinned
+engine, so it is held to no bar until the engine offers it. The engine has the reviewer
+judge the whole offer before any of it is applied — on the queued path and on the path
+that applies an edit to a run nothing drives alike — so a refusal by either tier applies
+nothing, its findings are the reason on stderr and the node it objects to is named on its
+`objection:` line; a judged turn that answered nothing is **unjudged**, saying `could not be
+judged`, and is never applied — send the same envelope again once the harness answers
+rather than correcting it. The engine runs the reviewer as a message hook (onemessagebus's
+`hooks.md`), so a pass prints the document back byte for byte, which it reads as a keep;
+a reviewer that printed nothing, or anything else, gave no verdict and nothing is applied.
+Only a pass is recorded, by the engine under the run's own
+`validator-passes/`, keyed on the document and on what `envelope_reviewer_bar` —
+`scripts/envelope-review-bar.sh`, printing `--bar-fingerprint` — prints, so moving either
+tier of the bar invalidates every recorded pass.
 
 Ahead of both, every node an envelope states — what an `add` states, and a `retry`'s
 replacement — is held to the structural rules `just check-plan` applies to a plan's
-nodes (`orchestrator/structural_guard.py` lists them once for both tiers), over the
-graph the envelope's own nodes form, and a node they refuse is refused with that rule's
-own message. A `requeue` folding fields onto a parked node's own `repo` and `deps` is
-not in that envelope, so it is the engine's and the merge path's to refuse.
+nodes (`orchestrator/structural_guard.py` lists them once for both tiers), over the plan
+the document carries, and a node they refuse is refused with that rule's own message. A
+`requeue` leaves a node the plan tier already asked about, so what its overrides fold onto
+a parked node is the engine's and the merge path's to refuse.
 
 An edit that reaches the queue can still lose a race to the live frontier. Every
 rejection is surfaced as a `reconciler: rejected ...` proposal and recorded as an

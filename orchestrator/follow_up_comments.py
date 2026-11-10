@@ -241,7 +241,7 @@ from orchestrator import follow_up_drafts as drafts
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
 from orchestrator.plan_store import RECORD_COMPONENT, QualifiedTaskId
-from orchestrator.project_store import TASKS_DIRECTORY
+from orchestrator.record_shapes import TASKS_DIRECTORY
 from orchestrator.root import REPO_ROOT
 
 FEEDBACK_DIRECTORY = "feedback"

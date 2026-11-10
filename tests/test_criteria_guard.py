@@ -23,7 +23,6 @@ cause.
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 from pathlib import Path
 
@@ -37,15 +36,10 @@ from criteria_examples import (
     RELEASED_ELSEWHERE_IN_PROSE,
     STATES_THE_PROPERTY_INSTEAD,
 )
-from project_fixtures import budget_section, described, no_budgets
 
 from orchestrator import (
     criteria_guard,
-    plan_budgets,
-    plan_check,
-    plan_review,
     plan_store,
-    task_body,
 )
 from orchestrator.criteria_guard import (
     AUTHORIZATIONS,
@@ -59,8 +53,6 @@ from orchestrator.criteria_guard import (
     check,
     check_amendment,
     check_changes_allowed,
-    check_directly,
-    check_plan,
     criteria_block,
     criteria_items,
     dispatched_nodes,
@@ -71,9 +63,15 @@ from orchestrator.criteria_guard import (
 )
 from orchestrator.root import REPO_ROOT
 
-#: The plan-level budget answers every plan here carries: one needing no budget, as a plan
-#: whose tasks name no repository answers it.
-NO_BUDGETS = no_budgets([])
+
+def check_plan(plan: object) -> int:
+    """Hold every dispatched node of ``plan`` to its bar; answer how many were held."""
+    checked = 0
+    for node in dispatched_nodes(plan):
+        check(node.task, node.id, resolve_bar(node.persona))
+        checked += 1
+    return checked
+
 
 #: The five names `oneagentgraph` compiles in, which `personas/README.md` and
 #: `tests/e2e/launch_monitor_observer/test_shipped_persona_catalog_e2e.py` both state. Named
@@ -697,158 +695,6 @@ def test_a_node_that_dispatches_but_states_no_task_is_refused() -> None:
         check_plan(_plan(persona="engineer"))
 
 
-@pytest.fixture
-def project_record(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
-    """The project record the store answers the direct path for every project here.
-
-    Stood in at the store CLI, the one boundary the plan-level record crosses into
-    `check_directly`, the way `tests/test_plan_check.py` stands it in for the spawned
-    check: it starts carrying no record, and `_planned` writes the key for a plan into it
-    the way `just review-plan` would.
-    """
-    # llmlint: ignore-block[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] The  # noqa: E501
-    # description is rendered by the pinned store's own `template render`, once per process,
-    # because a hand-written body would not be the rendering its provenance records and the
-    # reader under test refuses exactly that. It is not a host tool: the store is the pinned
-    # install `uv.lock` names and `templates/` is in `codeWorkspace`, so both are in the key
-    # this tier is memoized on, as `tests/test_design_approval.py` says of the same engine.
-    record: dict[str, object] = described(NO_BUDGETS)
-    # llmlint: ignore-end[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]
-    monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
-    # And its documents, which the spike convention reads: a plan holding none.
-    monkeypatch.setattr(plan_store, "read_documents", lambda _project: [])
-    return record
-
-
-def _planned(record: dict[str, object], plan: dict[str, object]) -> dict[str, object]:
-    """``plan``, once ``record`` carries a plan-level record for exactly it."""
-    key = plan_review.plan_key(plan, plan_review.plan_bar_fingerprint(), NO_BUDGETS)
-    held = record["metadata"]
-    assert isinstance(held, dict)
-    record["metadata"] = {**held, plan_review.RECORD_KEY: {"key": key, "by": plan_review.BY_REVIEW}}
-    return plan
-
-
-def test_the_command_accepts_a_plan_that_states_its_bar(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    project_record: dict[str, object],
-) -> None:
-    plan = _planned(project_record, _plan(persona="engineer", task=_task(COMPLETE)))
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, []))
-
-    assert check_directly("authoring:complete") == 0
-    assert "1 dispatched node(s)" in capsys.readouterr().out
-
-
-def test_the_direct_path_lifts_only_the_review_refusals_for_an_exempt_project(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    project_record: dict[str, object],
-) -> None:
-    """An exempt project passes without a review record, and is still refused for a criterion.
-
-    The plan carries no plan-level review record: refused for that alone when not exempt,
-    accepted when exempt, and the exemption still refuses a task whose criteria break a rule.
-    """
-    plan = _plan(persona="engineer", task=_task(COMPLETE))
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, []))
-
-    assert check_directly("authoring:unreviewed") == 1
-    assert "plan-level review record" in capsys.readouterr().err
-    assert check_directly("examples:unreviewed", review_exempt=True) == 0
-    assert "as a shipped example it is held to no review record" in capsys.readouterr().out
-
-    refused = _plan(persona="engineer", task=_task(f"{RELEASED_ELSEWHERE[0]}\n{COMPLETE}"))
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (refused, []))
-    assert check_directly("examples:broken", review_exempt=True) == 1
-    assert "check-plan:" in capsys.readouterr().err
-
-
-def test_the_command_refuses_a_plan_that_does_not(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    refused = _task(f"{RELEASED_ELSEWHERE[0]}\n{COMPLETE}")
-    monkeypatch.setattr(
-        plan_store, "read_project", lambda _: (_plan(persona="engineer", task=refused), [])
-    )
-
-    assert check_directly("authoring:incomplete") == 1
-    assert "check-plan:" in capsys.readouterr().err
-
-
-def test_the_command_refuses_a_task_whose_issue_body_the_board_would_refuse(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The direct path refuses the size the spawned check refuses, naming the same three things.
-
-    Over the store's records rather than the assembled plan, because the plan
-    `read_plan` assembles carries no metadata map and the map is part of the body: the
-    node's own task here is sound, and the record beside it is what is over the limit.
-    """
-    padded = _task(COMPLETE) + "\n## Planner context\n\n" + "Carried context. " * 4_000
-    plan = _plan(persona="engineer", task=_task(COMPLETE))
-    record = dataclasses.replace(_reviewable(), content=padded)
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [record]))
-
-    assert check_directly("authoring:padded") == 1
-    reported = capsys.readouterr().err
-    assert reported.startswith("check-plan: probe: task: its composed issue body"), reported
-    assert f"{task_body.BODY_LIMIT:,}-character limit" in reported, reported
-
-
-def test_the_command_warns_about_a_task_between_the_thresholds_and_accepts_it(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    project_record: dict[str, object],
-) -> None:
-    """Warned over the records, whose map is the one the copy sends, and still accepted."""
-    plan = _planned(project_record, _plan(persona="engineer", task=_task(COMPLETE)))
-    large = dataclasses.replace(_reviewable(), content="x" * task_body.WARN_FROM)
-    key = plan_review.review_key(large, plan_review.bar_fingerprint())
-    warned = dataclasses.replace(
-        large, metadata={**large.metadata, plan_review.RECORD_KEY: {"key": key}}
-    )
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [warned]))
-
-    assert check_directly("authoring:probe") == 0
-    captured = capsys.readouterr()
-    assert captured.err.startswith("check-plan: warning: probe: "), captured.err
-    assert f"{task_body.BODY_LIMIT:,}-character limit" in captured.err, captured.err
-    assert "carries a review record" in captured.out, captured.out
-
-
-def test_the_command_reports_a_checkout_that_cannot_answer_what_the_bar_is(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A checkout missing its own base config says so, rather than raising through.
-
-    The plan was readable and nothing about it was refused — what failed is this
-    checkout — so it exits 2 like an unreadable plan and names the recipe that
-    repairs it.
-    """
-    monkeypatch.setattr(criteria_guard, "REPO_ROOT", tmp_path / "no-such-checkout")
-    monkeypatch.setattr(
-        plan_store, "read_project", lambda _: (_plan(persona="engineer", task=_task(COMPLETE)), [])
-    )
-
-    assert check_directly("authoring:complete") == 2
-    reported = capsys.readouterr().err
-    assert "review configuration" in reported, reported
-    assert "just bootstrap" in reported, reported
-
-
-def test_the_command_separates_an_unreadable_plan_from_a_refused_one(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Exit 2 rather than 1: an unreadable project leaves nothing to judge."""
-    monkeypatch.setattr(
-        plan_store, "read_project", lambda _: (_ for _ in ()).throw(OSError("missing"))
-    )
-    assert check_directly("authoring:absent") == 2
-    assert "cannot read" in capsys.readouterr().err
-
-
 #: A bar in the shape a role that may not touch the tree states one. Synthetic, so
 #: that what these journeys attribute a refusal to is the pairing rather than any one
 #: release's wording; `test_the_shipped_researcher_is_the_role_this_refuses` is where
@@ -1012,127 +858,6 @@ def test_an_engine_whose_every_role_forbids_changes_says_so_rather_than_offering
 
     assert "none of the shipped roles does" in str(refused.value)
     assert "move the editing into a node of its own" in str(refused.value)
-
-
-def _reviewable(content: str = "", **metadata: object) -> plan_store.StoreTask:
-    return plan_store.StoreTask(
-        qualified_id="authoring:probe/probe",
-        node_id="probe",
-        title="feat: probe",
-        content=f"## What\n\nProbe.\n{content}",
-        metadata={"onepipeline.id": "probe", **metadata},
-        repositories=[],
-        deps=(),
-    )
-
-
-def test_the_command_refuses_a_task_nothing_has_reviewed(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    project_record: dict[str, object],
-) -> None:
-    """Content nothing has reviewed is what reaches a dispatch when nobody is watching.
-
-    Both plans this gate exists to catch were single-node plans an operator wrote and
-    launched with no planner, so `personas/planner.yaml`'s judge — the thing that exists
-    to catch exactly this — never saw their criteria.
-    """
-    plan = _planned(project_record, _plan(persona="engineer", task=_task(COMPLETE)))
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [_reviewable()]))
-
-    assert check_directly("authoring:probe") == 1
-    reported = capsys.readouterr().err
-    assert "no review record" in reported, reported
-    assert "probe" in reported, reported
-    assert "just review-plan authoring:probe" in reported, reported
-
-
-def _recorded(budgets: list[dict[str, object]] | None = None) -> plan_store.StoreTask:
-    """A task carrying a record for exactly its own content, and ``budgets`` when given.
-
-    A budgets record comes with the section the pinned store renders from it, as a planner's
-    task carries it, so the task's own budgets agree with its body.
-    """
-    owned = {} if budgets is None else {plan_budgets.TASK_RECORD: budgets}
-    content = "" if budgets is None else f"\n{budget_section(budgets)}"
-    task = _reviewable(content, **owned)
-    key = plan_review.review_key(task, plan_review.bar_fingerprint())
-    return _reviewable(content, **owned, **{plan_review.RECORD_KEY: {"key": key}})
-
-
-def test_the_command_accepts_a_recorded_pass_without_spending_a_judged_turn(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    project_record: dict[str, object],
-) -> None:
-    """A recorded pass is authoritative: a second opinion is how one tree gets two verdicts."""
-    plan = _planned(project_record, _plan(persona="engineer", task=_task(COMPLETE)))
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [_recorded()]))
-    monkeypatch.setattr(
-        plan_review, "verdict", lambda _: pytest.fail("a recorded pass spent a judged turn")
-    )
-
-    assert check_directly("authoring:probe") == 0
-    assert "carries a review record" in capsys.readouterr().out
-
-
-def test_the_command_refuses_a_plan_every_task_of_which_is_recorded_and_no_plan_level_record(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    project_record: dict[str, object],
-) -> None:
-    """The direct path reads the plan-level record the spawned check reads, and refuses
-    without it rather than falling through to `accepted`.
-
-    Every task carries a record and the project carries none: nothing has read the plan
-    whole for the adoption its goal needs, which no task's own record can say. The
-    refusal is the one text both paths emit, naming `just review-plan` as the remedy,
-    and a record for a *different* plan is no record for this one.
-    """
-    plan = _plan(persona="engineer", task=_task(COMPLETE))
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [_recorded()]))
-    metadata = project_record["metadata"]
-    assert isinstance(metadata, dict) and plan_review.RECORD_KEY not in metadata
-
-    assert check_directly("authoring:probe") == 1
-    captured = capsys.readouterr()
-    assert captured.out == "", captured.out
-    assert "no plan-level review record" in captured.err, captured.err
-    assert "just review-plan authoring:probe" in captured.err, captured.err
-    # The spawned check's refusal about the plan whole is the same text, word for word.
-    (spawned,) = [
-        one for one in plan_check.refusals(plan, "authoring:probe") if one["node"] is None
-    ]
-    assert captured.err == f"check-plan: {spawned['reason']}\n"
-
-    _planned(project_record, {**plan, "goal": {"text": "Something else"}})
-    assert check_directly("authoring:probe") == 1
-    assert "no plan-level review record" in capsys.readouterr().err
-
-    _planned(project_record, plan)
-    assert check_directly("authoring:probe") == 0
-    assert "carries a review record" in capsys.readouterr().out
-
-
-def test_the_command_reports_a_checkout_that_cannot_answer_what_the_review_bar_is(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The bar is tracked files, so a checkout missing one says so rather than passing."""
-    monkeypatch.setattr(
-        plan_store,
-        "read_project",
-        lambda _: (_plan(persona="engineer", task=_task(COMPLETE)), [_reviewable()]),
-    )
-    monkeypatch.setattr(
-        plan_review,
-        "bar_fingerprint",
-        lambda *_: (_ for _ in ()).throw(OSError("no such file")),
-    )
-
-    assert check_directly("authoring:probe") == 2
-    reported = capsys.readouterr().err
-    assert "fingerprint the review bar" in reported, reported
-    assert "just bootstrap" in reported, reported
 
 
 @pytest.mark.parametrize(
@@ -1492,89 +1217,3 @@ def test_the_criteria_fingerprint_reads_the_files_the_deterministic_bar_is(
         moved = criteria_guard.criteria_fingerprint()
         assert moved != before, f"editing {copy.name} left the deterministic bar's digest standing"
         before = moved
-
-
-#: One budget a task records, breaking no budget rule; its `file_change` is each test's own.
-BUDGET: dict[str, object] = {
-    "id": "probe-latency",
-    "name": "Time to the probe's answer",
-    "basis": "measured",
-    "repository": "github.com/acme/app",
-    "file": "budgets.yaml",
-    "file_change": "add",
-    "measure": "time to the probe's answer",
-    "inner_measure_reason": "",
-    "unit": "ms",
-    "direction": "max",
-    "threshold": 800,
-    "workload": "2,000 records",
-    "evidence": "spike-probe: p50 420 ms",
-    "command": "bun run measure:probe",
-}
-
-
-def _unanalysed(
-    record: dict[str, object], plan: dict[str, object], task: plan_store.StoreTask
-) -> None:
-    """``record`` as the store answers a project with no plan-level analysis, reviewed whole.
-
-    Its description is the pinned store's rendering of the overview alone, which is what such
-    a project is created from, and its plan-level review key is over the absent record and
-    ``task``'s budgets, as `just review-plan` keys it.
-    """
-    record["content"] = plan_budgets.render_description({"overview": "A fixture plan."})
-    owned = plan_review.owned_by_node([task])
-    key = plan_review.plan_key(plan, plan_review.plan_bar_fingerprint(), None, owned)
-    record["metadata"] = {
-        "onetaskgraph.template": {"template": plan_budgets.DESCRIPTION_REFERENCE},
-        plan_review.RECORD_KEY: {"key": key, "by": plan_review.BY_REVIEW},
-    }
-
-
-@pytest.mark.parametrize("change", ["add", "change"])
-def test_the_command_refuses_a_plan_carrying_no_plan_level_budget_answers_naming_them(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    project_record: dict[str, object],
-    change: str,
-) -> None:
-    """The direct path reads the budgets the spawned check reads, and says the same thing.
-
-    Every record is in place, a task adds or changes a budget, and the project holds no
-    plan-level budget answers, which is a plan with nowhere stating the analysis that budget
-    owes: refused naming the record it lacks, in the words the spawned check uses.
-    """
-    budgets = [{**BUDGET, "file_change": change}]
-    plan = _plan(
-        persona="engineer",
-        task=f"{_task(COMPLETE)}\n{budget_section(budgets)}",
-        metadata={plan_budgets.TASK_RECORD: budgets},
-    )
-    recorded = _recorded(budgets)
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [recorded]))
-    _unanalysed(project_record, plan, recorded)
-
-    assert check_directly("authoring:probe") == 1
-    captured = capsys.readouterr()
-    (spawned,) = [
-        one for one in plan_check.refusals(plan, "authoring:probe") if one["field"] == "budgets"
-    ]
-    assert captured.err == f"check-plan: budgets: {spawned['reason']}\n", captured.err
-    assert "carries no `orchestrator.plan-budgets` metadata" in captured.err
-
-
-@pytest.mark.parametrize("change", ["none", None], ids=["unchanged-budget", "no-budget"])
-def test_the_command_accepts_a_plan_adding_or_changing_no_budget_with_no_analysis(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    project_record: dict[str, object],
-    change: str | None,
-) -> None:
-    """A plan adding or changing no budget owes no plan-level analysis on the direct path."""
-    budgets = None if change is None else [{**BUDGET, "file_change": change}]
-    plan = _plan(persona="engineer", task=_task(COMPLETE))
-    recorded = _recorded(budgets)
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [recorded]))
-    _unanalysed(project_record, plan, recorded)
-
-    assert check_directly("authoring:probe") == 0, capsys.readouterr().err

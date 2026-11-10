@@ -358,7 +358,7 @@ def test_a_refused_writer_launch_resumes_onto_what_the_first_attempt_left(
     import plan_root_variable
 
     from orchestrator import design_approval, plan_store
-    from orchestrator.project_store import write_plan_project
+    from orchestrator.plan_records import write_plan_project
 
     runs = tmp_path / "runs"
     (tmp_path / "authoring").mkdir()
@@ -855,7 +855,7 @@ def _holding_run(run: str) -> None:
     """
     import plan_fixture_source
 
-    from orchestrator.project_store import write_plan_project
+    from orchestrator.plan_records import write_plan_project
 
     write_plan_project(
         plan_fixture_source.root(),
@@ -923,7 +923,7 @@ def test_delivery_copies_once_surfaces_once_and_retires_its_advisory_item(
     from project_fixtures import FIXTURE_UNIT, budgeted, no_budgets, plan_repositories, reviewed
 
     from orchestrator import plan_store, spike_brief_budgets, unfinished
-    from orchestrator.project_store import write_plan_project
+    from orchestrator.plan_records import write_plan_project
 
     authoring = tmp_path / "authoring"
     authoring.mkdir()

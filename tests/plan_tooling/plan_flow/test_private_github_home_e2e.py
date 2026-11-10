@@ -71,7 +71,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import write_plan_project
+from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: The sources under test, by the names the tracked configuration and the example layer give.

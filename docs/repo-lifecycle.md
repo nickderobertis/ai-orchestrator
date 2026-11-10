@@ -686,7 +686,8 @@ publication-retry loop is requeued onto the same branch and attempt it interrupt
 so a `retry` is never what continues a node the host was merely too busy for.
 
 **Idle slots are maintained on a schedule the engine keeps no state for.** Every
-`start` names `config/onepipeline.maintenance.yaml` as `--maintenance-config` — a
+`start` names `config/onepipeline.launch.yaml`, whose `maintenance_config` is
+`config/onepipeline.maintenance.yaml` — a
 `default` and per-identity `rules` carrying one key each, `every`, whose default and its
 reason that file's header states — and an
 idle driver sweeps every registered identity through `onevcs pool maintain
@@ -1901,7 +1902,7 @@ usually reach a base on this host.
 
 | command | what it lands | how drafting reaches it |
 | --- | --- | --- |
-| `just orchestrate <source:project>` | a run's own lifecycle publications | `onepipeline start --pr-author-graph graphs/pr-author.yaml` |
+| `just orchestrate <source:project>` | a run's own lifecycle publications | `onepipeline start`, whose launch config names `graphs/pr-author.yaml` |
 | `just publish-branch <branch> --repo <checkout>` | a complete branch no session holds | `onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml`, into the linked `onevcs publish-branch` |
 | `just repo-recover <branch> --repo <checkout>` | a preserved branch with an incomplete-step marker | `onepipeline repo-recover --pr-author-graph graphs/pr-author.yaml`, into the linked `onevcs recover` |
 

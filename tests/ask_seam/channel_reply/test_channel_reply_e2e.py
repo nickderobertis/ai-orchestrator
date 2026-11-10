@@ -1384,19 +1384,18 @@ def test_a_live_edit_is_never_asked_the_lifecycle_question(
     assert " ".join(plan_review.LIFECYCLE_NO_DIFF_QUESTION.split()) not in prompt, prompt
 
 
-def test_an_identical_envelope_under_an_unchanged_bar_passes_from_the_cache(
-    replying: Replying, settled: Replying
+def test_an_identical_review_under_an_unchanged_bar_passes_from_the_runs_record(
+    replying: Replying,
 ) -> None:
-    """One judged turn per envelope under one bar, whatever number of times it is sent.
+    """One judged turn per reviewed document under one bar, however often it is offered.
 
-    A novel whole task spends the judged turn once, and its pass is recorded under
-    `config/onemessagebus.yaml`'s cache, which is this checkout's and not any run's. The
-    same envelope sent again under the same bar — to a second run, where the node it adds
-    is new — is passed from that record: the doubled reviewer is not asked again, while
-    both sends are applied. What a manager sees of the cache is exactly that, a second send
-    that costs no turn, so that is what is asserted, and nothing under the cache directory
-    is read. Its record is keyed on content unique to this journey, so no other send can
-    ever be passed by it.
+    The engine records a pass of its envelope reviewer under the run's own
+    `validator-passes/`, keyed on the document it judged — the edit and the plan it lands
+    in — and on what `scripts/envelope-review-bar.sh` prints. So a novel whole task spends
+    the judged turn once; dropping the node it added puts the plan back as it was, and the
+    same envelope sent again is the same document under the same bar, passed from that
+    record: the doubled reviewer is not asked again, while both sends are applied. Its
+    record is keyed on content unique to this journey, so no other send can be passed by it.
     """
     envelope = _adding("cached", _novel_task(replying, "route"))
 
@@ -1405,15 +1404,16 @@ def test_an_identical_envelope_under_an_unchanged_bar_passes_from_the_cache(
     assert first["state"] == "applied", first
     assert _judged_turns(replying) == 1, "the first send did not spend exactly one turn"
 
-    second = _receipt(_send(settled, envelope, environment=replying.environment))
+    dropped = {"version": 3, "commands": [{"op": "drop", "id": "cached", "dependents": "detach"}]}
+    assert _receipt(_send(replying, dropped))["state"] == "applied"
+    second = _receipt(_send(replying, envelope))
 
     assert second["state"] == "applied", second
     assert _judged_turns(replying) == 1, (
-        "the identical envelope under an unchanged bar was judged again rather than "
+        "the identical document under an unchanged bar was judged again rather than "
         "passed from the record the first send left"
     )
-    assert len(_committed(replying, "cached")) == 1
-    assert len(_committed(settled, "cached")) == 1
+    assert len(_committed(replying, "cached")) >= 2
 
 
 #: The manager's allowlist, whose one file-write grant says where a reply's envelope goes.

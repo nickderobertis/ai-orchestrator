@@ -79,8 +79,8 @@ from test_finish_plan_recipe_e2e import (
 from visual_images import TYPICAL, write_noise_png
 from waits import timeout as e2e_timeout
 
+from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import NodeId, QualifiedProjectId
-from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 

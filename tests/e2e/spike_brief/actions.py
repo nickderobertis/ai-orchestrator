@@ -329,7 +329,7 @@ def writer_preparation(project_id: str, parent: str, scratch: Path, *, repair: b
             )
         )
         return
-    from orchestrator.project_store import write_plan_project
+    from orchestrator.plan_records import write_plan_project
 
     write_plan_project(
         plan_store.source_root("authoring"),

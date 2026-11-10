@@ -151,8 +151,8 @@ which is where the landing verbs read a branch from and nowhere else.
 
 A remote lifecycle change request's body is drafted by an agent graph,
 `graphs/pr-author.yaml`, one drafter the engine runs on both roads a branch takes to a
-change request: a run's publication closeout, because `just orchestrate` adds
-`--pr-author-graph graphs/pr-author.yaml`, and the engine's own `onepipeline publish-branch` and `repo-recover`, which `just
+change request: a run's publication closeout, because `config/onepipeline.launch.yaml`
+names it for `just orchestrate`'s launches, and the engine's own `onepipeline publish-branch` and `repo-recover`, which `just
 publish-branch` and `just repo-recover` run naming the same graph. The drafter runs
 after verification and **finishes the description the worker left**, reading the
 worker's transcript for evidence — so a worker starts that description with what only it
@@ -306,8 +306,8 @@ both sweeps; `onevcs pool status <repo>` reads them and `onevcs pool prune <repo
 empties the idle ones. A node the engine cannot place is **held**, not failed:
 `workspace-wait` is a non-blocking surface re-read until the identity admits the node,
 never a stall and never a settlement. An idle driver maintains idle slots on the
-cadence `config/onepipeline.maintenance.yaml` names, which `scripts/onepipeline.sh`
-hands every `start`, running the command each repository declares in its own tracked
+cadence `config/onepipeline.maintenance.yaml` names, which the launch config every `start`
+names hands the engine, running the command each repository declares in its own tracked
 `onevcs.toml` — this host declares none for any repository, so one declaring nothing is
 not maintained — and a sweep that ran something is the `pool-maintenance` record
 `just results` names. A dispatched session is placed by the `onevcs` the engine links,
@@ -1614,21 +1614,23 @@ read with `just channel-next --flow <ID>` and answered with `just channel-reply 
   your prose.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **Task prose in an envelope is criteria, and is held to the criteria bar before any
-  of it is sent** — the one hook `config/onemessagebus.yaml` declares on a reply
-  carrying commands reads an `amend`, and the whole task an `add`, `retry` or `requeue`
-  states, as the envelope states it and reads no run state, so a `requeue` folding bad
-  fields onto a parked node is the engine's and the merge path's to refuse. A pass
-  prints the envelope back unchanged, which the bus keeps. The
-  hook judges the whole offer before any of it is appended or applied, so a
-  refusal refuses the whole envelope, and the escape it names is a `note`'s `text`, which touches no criterion
-  and is never read (a note's `criterion` is). A novel whole task also spends one judged
+  of it is applied** — the engine's envelope reviewer, `scripts/envelope-review.sh`, which
+  `config/onepipeline.launch.yaml` names, reads an `amend`'s correction, and the whole task
+  an `add`, `retry` or `requeue` leaves, off the document the engine hands it: the run's
+  goal, the nodes the envelope changes and the plan they land in. It judges the whole offer
+  before any of it is applied, so a refusal refuses the whole envelope, and the escape it
+  names is a `note`'s `text`, which touches no criterion and is never read. A note's
+  `criterion` is not among what the pinned engine offers its reviewer, so it is held to no
+  bar until the engine offers it. A novel whole task also spends one judged
   turn under the reviewer `just review-plan` uses, because nothing holds a pass for it;
   a correction to a node a review already cleared is deterministic only, because a
   model call there would make every mid-run correction wait and give you a reason to
   route around the guard. A turn that answers nothing is unjudged — `could not be
   judged`, never sent — and re-sent unchanged once the harness answers, never
-  corrected. Only a pass is cached, by the bus, keyed on the envelope's bytes and the
-  bar's fingerprint, so moving either tier of the bar invalidates every recorded pass.
+  corrected. Only a pass is recorded, by the engine under the run's `validator-passes/`,
+  keyed on the document it judged and the bar's fingerprint
+  (`scripts/envelope-review-bar.sh`), so moving either tier of the bar invalidates every
+  recorded pass.
   An edit to a run nothing drives is **applied by the reply itself**, as the run's
   single writer, with no adopt between; and a completion verdict or a `complete`, each
   with a reason, closes a settled run whose driver has exited — the close `just
@@ -1870,17 +1872,17 @@ states none of it. It sits in `templates/`, this host's template root.
 
 `just check-plan` reads a project against the bar each node will be judged against —
 the engine's loader first, then `scripts/plan-check.sh`, each refusal naming its source.
-The loader runs under `require_rendered`, which every plan-loading verb
-`scripts/onepipeline.sh` runs names: a task that is not its template's rendering is
+The loader runs under `require_rendered`, which the launch config states for a `start` and
+`scripts/onepipeline.sh` names for `plan check`: a task that is not its template's rendering is
 refused, naming the regenerate the manager loop states — a hand-written one is rendered by
 it from an `--answers FILE` — and so is one naming a repository with no checkout registered
-here. Exporting `ONEPIPELINE_REQUIRE_RENDERED`, like naming the flag, opts a launch out, so
+here, and a lifecycle `title` the destination's own `commit-msg` hook refuses. Exporting
+`ONEPIPELINE_REQUIRE_RENDERED`, like naming the flag, opts a launch out, so
 nothing but the test suite exports it.
 The registered check then refuses the shapes that have each
 failed correct work on procedure: a criterion
 naming a procedure instead of a property or resting on something outside the dispatch,
-a task carrying no review record, a lifecycle `title` the
-destination's own `commit-msg` hook would refuse, a `consumes` on a `local-direct`
+a task carrying no review record, a `consumes` on a `local-direct`
 identity. It also refuses the release-adoption shapes a matcher can see will never
 complete — a `consumes` naming a target its producer does not resolve, a `published`
 node with no target to wait on, a `fast` node behind a release publishing where no change
@@ -1900,7 +1902,9 @@ criteria are the one block its `## Acceptance criteria` heading opens.
 `just review-plan` spends the judged turn that clears a plan's authored content against
 `personas/planner.yaml`'s bar, and `just approve-design` records the user's approval of
 the document a plan is read as — a rendering of this host's `design-doc` template
-(`templates/design-doc.md.j2`), changed only by regenerating it, and keyed on its title,
+(`templates/design-doc.md.j2`), changed only by regenerating it, held to being that
+template's current rendering by the engine's `onepipeline template check design-doc
+--item`, and keyed on its title,
 the template's chain digest resolved now, the body digest its provenance records and every
 image's bytes; any change to that template moves the chain, which leaves every unlaunched
 plan's approval to be recorded again. Both keep the same four properties: only a pass is
@@ -1940,8 +1944,11 @@ flag is never a reason for the manager to dispatch.
 
 ### What every launch exports
 
-Every launch hands the engine `--bus-config config/onemessagebus.yaml` and exports
-`ORCHESTRATOR_ASK_MANAGER`, with the run id it asks on: `scripts/ask-manager.sh`, the
+Every launch names the engine's launch config, `config/onepipeline.launch.yaml` — the one
+document stating its bus configuration, dispatch-env hook, maintenance schedule, template
+root, rendered-only check, run-end hooks, drafting graph and envelope reviewer, each of
+which a caller's own flag still beats; every launcher but `just orchestrate` blanks the
+hooks and the drafting graph — and exports `ORCHESTRATOR_ASK_MANAGER`, with the run id it asks on: `scripts/ask-manager.sh`, the
 one supported way a dispatched agent asks its manager a blocking question. The verb is
 the engine's `onepipeline ask`, which raises the question on that run's channel under
 the bus policy the run was launched with; the script only execs it from this checkout's
@@ -1964,10 +1971,9 @@ machine-wide file reads as lost. Its `GH_PROJECTS_*` names nominate the board
 **onetaskgraph's own live test lane** writes to — that lane's concern, checked by
 nothing here — while this host's board is `onetaskgraph.yaml`'s `plans` source.
 
-Every launch also names the engine's **dispatch environment hook**,
-`--dispatch-env-hook scripts/dispatch-env-hook.sh` by absolute path, on every `start`
-and without asking the engine first: every engine `config/onepipeline.version` admits
-carries the flag, and the wrapper adapts to no release the pin excludes. The engine runs
+That launch config names the engine's **dispatch environment hook**,
+`scripts/dispatch-env-hook.sh`, which the engine spawns in the launch directory — this
+checkout's root, which `scripts/onepipeline.sh` makes it for every `start`. The engine runs
 the hook immediately before every node-scope dispatch
 — never for the observer graph — and `adopt` replays it from the launch record. It exists
 because a live driver re-reads `oneharness.*.toml` at each dispatch but keeps only the

@@ -20,8 +20,9 @@ import pytest
 from test_follow_up_comments import BOARD, _commented, _filed
 
 from orchestrator import follow_up_comments, plan_store
+from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import WRITABLE_PLUGIN
-from orchestrator.project_store import PlanNode, frontmatter, write_plan_project
+from orchestrator.record_shapes import PlanNode, frontmatter
 
 #: The store's default page, which the default-page case has to pass without naming it.
 DEFAULT_PAGE = 50
@@ -35,7 +36,8 @@ def _source(monkeypatch: pytest.MonkeyPatch, name: str, root: Path) -> None:
 
 def _tasks(count: int, **extra: object) -> list[PlanNode]:
     return [
-        PlanNode(id=f"t{i:02d}", title=f"Task {i}", task=f"Body {i}.") for i in range(1, count + 1)
+        PlanNode(id=f"t{i:02d}", title=f"Task {i:02d}", task=f"Body {i}.")
+        for i in range(1, count + 1)
     ]
 
 
@@ -72,11 +74,9 @@ def test_identity_checks_hold_over_the_union_of_every_page(
     monkeypatch.delenv("ONETASKGRAPH_PAGE_SIZE", raising=False)
     duplicate = tmp_path / "duplicate"
     write_plan_project(duplicate, {"name": "demo", "tasks": _tasks(DEFAULT_PAGE + 1)})
-    last = duplicate / "tasks" / "demo" / "t51.md"
+    last = duplicate / "tasks" / "task-51.md"
     last.write_text(
-        last.read_text(encoding="utf-8").replace(
-            '"onepipeline.id": "t51"', '"onepipeline.id": "t01"'
-        ),
+        last.read_text(encoding="utf-8").replace("onepipeline.id: t51", "onepipeline.id: t01"),
         encoding="utf-8",
     )
     _source(monkeypatch, "duplicate", duplicate)
@@ -87,15 +87,15 @@ def test_identity_checks_hold_over_the_union_of_every_page(
     nodes = _tasks(DEFAULT_PAGE + 1)
     nodes[-1] = PlanNode(id="t51", title="Task 51", task="Body 51.", repo="github.com/acme/one")
     write_plan_project(repositories, {"name": "demo", "tasks": nodes})
-    last = repositories / "tasks" / "demo" / "t51.md"
+    last = repositories / "tasks" / "task-51.md"
     last.write_text(
         last.read_text(encoding="utf-8").replace(
-            '["github.com/acme/one"]', '["github.com/acme/one", "github.com/acme/two"]'
+            "- github.com/acme/one\n", "- github.com/acme/one\n- github.com/acme/two\n"
         ),
         encoding="utf-8",
     )
     _source(monkeypatch, "repositories", repositories)
-    with pytest.raises(OSError, match="demo/t51' has more than one repository"):
+    with pytest.raises(OSError, match="task-51' has more than one repository"):
         plan_store.read_tasks("repositories:demo")
 
 
@@ -117,7 +117,7 @@ def test_task_dependencies_are_read_past_one_page(
     )
     _source(monkeypatch, SOURCE, root)
 
-    edges = plan_store.sdk(plan_store.client().task_deps(f"{SOURCE}:demo/c"))
+    edges = plan_store.sdk(plan_store.client().task_deps(f"{SOURCE}:c"))
     assert len(edges.items) == 1 and edges.next is not None
 
     records = {record.node_id: record for record in plan_store.read_tasks(f"{SOURCE}:demo")}

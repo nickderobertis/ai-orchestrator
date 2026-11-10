@@ -1,18 +1,22 @@
 """Hold every live edit that changes what a node's judge reads to the criteria bar.
 
-This is the command hook `config/onemessagebus.yaml` declares on the planner channel's
-`replies` queue for every envelope carrying commands. The bus runs it before anything is
-appended — for `just channel-reply` and for the engine alike — with the offered envelope
-as one line of JSON on stdin, and reads its answer as onemessagebus's `hooks.md`
-states a hook's: a pass **prints the bytes it read back, unchanged**, and exits ``0``,
-which the bus reads as *keep*; ``1`` refuses the envelope with this module's stderr as
-the reason; and anything else leaves it unjudged, which the bus never sends either. A
-pass must print: an exit ``0`` with nothing on stdout is a *drop*, which would silently
-discard every reply carrying commands. This module never changes an envelope, so keep
-is the only outcome its ``0`` produces. Only a pass is cached, by the bus, keyed on the
-envelope's bytes and on what ``--bar-fingerprint`` prints — which is
-:func:`bar_in_force`, so moving either tier of the bar invalidates every recorded pass —
-and a pass recorded while this module was declared as a validator reads as a keep.
+This is the engine's **envelope reviewer** on this host: `config/onepipeline.launch.yaml`
+names `scripts/envelope-review.sh` as `envelope_reviewer`, so every reply envelope carrying
+edits — sent by `just channel-reply` or by any other author — is offered here once, after
+the engine's own validation and before any of its commands is applied. One document crosses
+stdin, the one onepipeline's `docs/contract-divergences.md` (entry 45) states: the run's
+`goal`, every node the envelope introduces or changes as a `changes` list carrying the
+`op` that produced each — the node as the whole envelope leaves it — and the `plan` they are
+being edited into. The engine runs it as a message hook (onemessagebus's `hooks.md`): a
+pass **prints the document back byte for byte** and exits ``0``, which the engine reads as a
+keep; ``1`` refuses the envelope whole with this module's stderr as the reason, naming the
+node it objects to on an ``objection:`` line; and anything else — a pass printing nothing or
+something else included, which would be a drop or a change of a document the reviewer does
+not own — leaves it unjudged, which the engine never applies either. Only a pass is
+recorded, by the engine, under the run's own `validator-passes/`, keyed on the document
+and on what `envelope_reviewer_bar` — `scripts/envelope-review-bar.sh`, which prints
+``--bar-fingerprint``, that is :func:`bar_in_force` — prints, so moving either tier of the
+bar runs the review again.
 That is the one place this bar can be asked: a live edit reaches a node through the
 channel rather than through the plan store, so `just check-plan` — which reads a plan —
 never sees one, and `just review-plan` never records one.
@@ -32,15 +36,12 @@ answer a demand their own bar makes, whether a criterion could be falsified — 
 edit read by the first tier alone was a task whose judge had been handed exactly the
 rules nobody checked. This module is the envelope reader in front of both.
 
-**The envelope is judged as it states itself, and no run state is read.** The bus caches a
-pass on the envelope's bytes, so a judgement that also depended on the run — its journal,
-its checkpoint, its launch plan — would make that cache unsound: the same bytes would pass
-or fail with the run's state, and a recorded pass would stand over a run that has since
-moved. So an `amend` is read as the correction it is, a `requeue`'s overrides as they are
-stated, and an `add` or a `retry` as the whole node it states. What that gives up is the
-composition this module once did onto a node's current task, and with it the structural
-refusal of a `requeue` folding fields onto a parked node's own `repo` and `deps`; the
-engine and the merge path still refuse such a node, and they are the layer that owns it.
+**The document is judged as the engine states it, and nothing else is read.** The engine
+keys a recorded pass on the document's bytes, so a judgement that also read the run — its
+journal, its checkpoint — would make that record unsound. So an `amend` is read as the
+correction its node now carries, and an `add`, a `retry` or a `requeue` as the whole node
+the envelope leaves; a `reparent` changes edges and no prose, so nothing here asks
+anything of it — the plan it leaves is the engine's to refuse.
 
 **Which resulting tasks owe the judged turn is decided by what the content is, not by
 which op carried it**; :attr:`Reviewable.judged` states that rule and why.
@@ -50,22 +51,17 @@ prose.** What an `add` states, and a `retry`'s replacement, is a node like any a
 carries — its `adoption`, `consumes`, `merge_policy`, `repo`, `deps` and `title` decide
 where it publishes and what it waits on — so it is held to
 :data:`orchestrator.structural_guard.GUARDS`, the one list `just check-plan` reads, over
-the graph the envelope's own nodes form. It is asked first: it spends no provider turn,
-so an envelope it refuses spends none either.
+the plan the document carries. It is asked first: it spends no provider turn, so an
+envelope it refuses spends none either.
 
-**Four ops state task prose and a fifth may carry one criterion — which is the engine's
-own answer rather than this module's.** The live-edit table in `docs/orchestration.md`
-states what each op carries: `add` and `retry` each state a **full node mapping**,
-`requeue` states **partial node overrides** that may include one, and `amend` states the
-binding correction composed onto a node's effective task. A `note` is the fifth and the
-one that is two things at once: its `text` is observational prose that touches no
-acceptance criterion — holding it to a criteria bar would refuse exactly the corrections a
-manager most needs to send — while its optional `criterion` *enters the acceptance
-criteria the judge of the conversation it reaches decides against*, which is the whole
-reason the weaker op it replaced was removed. So a note's criterion is read exactly as a
-correction is and its text is never read. Every other op — `drop`, `reparent`, `cancel`,
-`attest`, `complete`, `settle`, `finding` — carries no task prose, so there is nothing
-here for it to be judged on.
+**Which ops put prose in front of a judge is the engine's answer rather than this
+module's.** `add`, `retry` and a `requeue` carrying an amendment each leave a whole node,
+and `amend` leaves a node whose binding correction is composed onto its task. A `note`'s
+optional `criterion` also enters the acceptance criteria the judge of the conversation it
+reaches decides against, but the pinned engine does not offer a note to its reviewer, so a
+note's criterion is held to no bar until the engine offers it. Every other op — `drop`,
+`cancel`, `attest`, `complete`, `settle`, `finding` — carries no task prose and is not in
+the document's `changes`.
 """
 
 from __future__ import annotations
@@ -73,7 +69,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import NamedTuple, Protocol
 
 from orchestrator import plan_review, structural_guard
@@ -87,23 +83,11 @@ from orchestrator.criteria_guard import (
     dispatched_nodes,
     resolve_bar,
 )
+from orchestrator.publication_guard import Refusal
 
 #: The op whose text becomes part of a node's effective task as a correction to its
 #: criteria rather than as a task of its own.
 AMEND_OP = "amend"
-
-#: The op whose `criterion` — and only that field — is criteria: it enters the acceptance
-#: criteria of the conversation the note reaches, so it is read the way an amendment is.
-#: Its `text` is the escape every refusal here offers, and is never read.
-NOTE_OP = "note"
-
-#: What a refusal of a note's criterion ends with. The bar's own refusals send an author
-#: to a `note`, which is where this text already is; the escape it needs is the note's
-#: other field.
-NOTE_ESCAPE = (
-    "This is the note's `criterion`, which binds the judge of the conversation it reaches; "
-    "an observation belongs in the note's `text`, which no judge reads as criteria."
-)
 
 #: How the engine renders a node's amendment into the task its dispatch receives —
 #: `onepipeline`'s `src/plan.rs`, whose `amended` puts the amendment's clauses at the end
@@ -123,25 +107,35 @@ AMENDMENT_PRECEDENCE = (
 )
 ADDITIONAL_INFO_HEADING = "## Additional info"
 
-#: The field a node carries its binding amendment in, in an `add` or `retry` that states
-#: one outright.
+#: The field a node carries its binding amendment in: the correction an `amend` set, or
+#: one an `add` or `retry` states outright.
 AMENDMENT = "amendment"
 
-#: The three ops that state a whole task, and how each names the text it states in the
-#: refusal a manager reads. A mapping rather than a tuple because the phrase is the
-#: difference between a refusal a manager can act on and one they have to locate first:
-#: `add` names a node the graph does not have yet, `retry` names its replacement, and
-#: `requeue` names the parked node it is amending.
+#: The ops whose node is read as a whole task, and how each names it in the refusal a
+#: manager reads. A mapping rather than a tuple because the phrase is the difference
+#: between a refusal a manager can act on and one they have to locate first: `add` names a
+#: node the graph did not have, `retry` names its replacement, and `requeue` names the
+#: parked node it amended.
 WHOLE_TASK_OPS = {
     "add": "the task added as node",
     "retry": "the replacement task for node",
     "requeue": "the amended task for node",
 }
 
-#: Where each of those states the mapping carrying that task. `add` and `retry` state a
-#: full node; `requeue` states partial overrides of one, which is a different field and
-#: the same shape.
-STATED_IN = {"add": "node", "retry": "node", "requeue": "amend"}
+#: The op whose node changed only edges, which the structural rules read and no judge does.
+REPARENT_OP = "reparent"
+
+#: Every op the engine lists in the document's `changes`, which is every op this module
+#: reads; `tests/test_engine_contracts.py` holds it to the engine's declared list.
+CHANGE_OPS = frozenset({*WHOLE_TASK_OPS, AMEND_OP, REPARENT_OP})
+
+#: The ops whose node the structural rules are asked about: a node an `add` or a `retry`
+#: states is one a plan could carry, and nothing else in the document is new.
+STATED_OPS = frozenset({"add", "retry"})
+
+#: The prefix of the stderr line the engine reads a declared objection from, as its
+#: `docs/contract-divergences.md` entry 45 declares it.
+OBJECTION_PREFIX = "objection:"
 
 #: The field by which a node, or a step of one, declares that it dispatches nobody: it
 #: settles `done (no-changes)` without a worker, so no judge ever reads its task. The
@@ -151,64 +145,20 @@ STATED_IN = {"add": "node", "retry": "node", "requeue": "amend"}
 #: nobody works. A follow-up is not recorded this way; `just follow-up` drafts one.
 NO_DISPATCH = "expects_no_diff"
 
-#: The exit status the bus reads as a refusal, with this module's stderr as its reason.
+#: The exit status the engine reads as a refusal, with this module's stderr as its reason.
 REFUSED = 1
 
-#: The exit status the bus reads as *unjudged*: the judged turn a resulting task needed
+#: The exit status the engine reads as *unjudged*: the judged turn a resulting task needed
 #: could not answer — no provider took it, or none answered with a verdict — so nothing
-#: about the text is known and nothing is sent. Any status but ``0`` and ``1`` is unjudged
-#: to the bus; this is the one this module chooses, so a refusal and a turn that answered
-#: nothing are never the same word to a manager: a refusal is corrected, this is re-sent
-#: once the harness answers.
+#: about the text is known and nothing is applied. Any status but ``0`` and ``1`` is
+#: unjudged to the engine; this is the one this module chooses, so a refusal and a turn
+#: that answered nothing are never the same word to a manager: a refusal is corrected,
+#: this is re-sent once the harness answers.
 UNJUDGED = 2
 
 #: The one argument this module takes: print the bar's fingerprint and exit, which is what
-#: the bus's pass cache is keyed on beside the envelope's bytes.
+#: the engine keys a recorded pass on beside the document's bytes.
 BAR_FINGERPRINT_FLAG = "--bar-fingerprint"
-
-#: Every field the pinned engine's ``Node`` accepts. Commands carrying anything else
-#: are left to the engine's authoritative decoder instead of letting a node that can
-#: never be committed influence this preflight. ``tests/test_engine_contracts.py``
-#: reconciles this set with the release source.
-NODE_FIELDS = frozenset(
-    {
-        "id",
-        "kind",
-        "task",
-        "persona",
-        "deps",
-        "max_turns",
-        "sets",
-        "expects_no_diff",
-        "context",
-        "classification",
-        "amendment",
-        "parked",
-        "executor",
-        "agent_graph",
-        "repo",
-        "repo_type",
-        "workflow",
-        "merge_policy",
-        "base_branch",
-        "branch",
-        "title",
-        "body",
-        "draft",
-        "publish",
-        "execution_checkout",
-        "steps",
-        "resume",
-        "adoption",
-        "consumes",
-        "delivers",
-        "pool",
-        "overflow",
-        "task_record",
-        "assets_from",
-        "human_item",
-    }
-)
 
 
 class Judge(Protocol):
@@ -238,7 +188,7 @@ class ReviewUnanswered(OSError):
 # the two shared tiers this digests, and a persona's own review contract is deliberately
 # outside it: a shipped role's contract is compiled into the engine, and a path persona's
 # is a file this fingerprint would have to discover per envelope, which a bar fingerprint
-# the bus runs once per judgement cannot do. The docstring states the exclusion so a
+# the engine runs once per lookup cannot do. The docstring states the exclusion so a
 # reader is not left to infer it from the name, and the tests move the two fingerprints
 # that do invalidate.
 def bar_in_force() -> plan_review.BarFingerprint:
@@ -253,7 +203,7 @@ def bar_in_force() -> plan_review.BarFingerprint:
     What it deliberately does not digest is the review contract of the **persona** a whole
     task names, which :func:`~orchestrator.criteria_guard.resolve_bar` reads — a shipped
     role's is compiled into the engine and a path's is a file under `personas/`. The
-    persona is in the envelope's bytes by *name*, which is the same coverage a plan task's
+    persona is in the document's bytes by *name*, which is the same coverage a plan task's
     record has of it.
     """
     digest = hashlib.sha256()
@@ -268,28 +218,26 @@ class Reviewable(NamedTuple):
 
     #: The text as the dispatch would meet it: a whole task, or an amendment alone.
     text: str
-    #: The persona whose bar it will be judged under, where the op states one. `None`
-    #: leaves the base config's generic contract, which is what a partial override that
-    #: does not restate the persona resolves to here.
+    #: The persona whose bar it will be judged under, where the node states one. `None`
+    #: leaves the base config's generic contract.
     persona: str | None
-    #: Whether :attr:`text` is a whole task. A correction alone — a note's criterion, or
-    #: an amendment — is criteria and nothing else, so it has no acceptance-criteria
-    #: block of its own to find and no sections to walk.
+    #: Whether :attr:`text` is a whole task. An amendment alone is criteria and nothing
+    #: else, so it has no acceptance-criteria block of its own to find and no sections to
+    #: walk.
     whole_task: bool
     #: How a refusal names it, which is what a manager acts on.
     where: str
+    #: The node it belongs to, which a refusal declares on its ``objection:`` line.
+    node: str
     #: Whether this text owes a judged turn once the free tier takes it. A **novel whole
     #: task** — an added node, a retry's replacement, a requeued node's amended task —
     #: does: it is a complete authored task nothing holds a pass for, and it would have
-    #: been reviewed had it arrived in the plan. A correction — an `amend`, or a note's
-    #: criterion — does not: it is written in the minute after a manager reads a failure
-    #: and has to be answered before the envelope is sent, which is the same reasoning
-    #: that exempts an amendment from the released-artifact refusal. The line is drawn at
-    #: what the content *is*, not at which op carried it.
+    #: been reviewed had it arrived in the plan. A correction — an `amend` — does not: it
+    #: is written in the minute after a manager reads a failure and has to be answered
+    #: before the envelope is sent, which is the same reasoning that exempts an amendment
+    #: from the released-artifact refusal. The line is drawn at what the content *is*, not
+    #: at which op carried it.
     judged: bool = True
-    #: One sentence a refusal of this text ends with, where the escape the bar's own
-    #: refusal names is not the right one.
-    escape: str | None = None
 
 
 def amended(task: str, amendment: str | None) -> str:
@@ -444,102 +392,59 @@ def _effective(node: Mapping[str, object], where: str) -> Iterator[Reviewable]:
     if read is None:
         return
     amendment = read.get(AMENDMENT)
+    named = read.get("id")
     try:
         nodes = list(dispatched_nodes({"tasks": [read]}))
     except CriteriaError:
         return
     for dispatched in nodes:
         text = amended(dispatched.task, amendment if isinstance(amendment, str) else None)
-        yield Reviewable(text, dispatched.persona, True, f"{where} {dispatched.id!r}")
+        yield Reviewable(
+            text,
+            dispatched.persona,
+            True,
+            f"{where} {dispatched.id!r}",
+            named if isinstance(named, str) else dispatched.id,
+        )
 
 
-def _stated_nodes(command: Mapping[str, object], op: str) -> Iterator[Reviewable]:
-    """Every whole task ``command`` states, read as it is stated.
+def _changes(document: object) -> Iterator[tuple[str, Mapping[str, object]]]:
+    """Each ``(op, node)`` of the document's `changes`, in the order the engine wrote them.
 
-    An `add` and a `retry` state a full node, so what they result in is that node with
-    whatever amendment it states. A `requeue` states overrides of a parked node, read
-    here as the overrides alone — the parked node's own persona, amendment and steps are
-    the run's, and this module reads no run — so an override stating a task is judged
-    under the persona it states, or the generic contract where it states none.
+    Lenient about every other shape, for the reason :func:`_effective` gives: a document
+    this cannot read is one the engine wrote, and it refuses nothing here by guessing.
     """
-    stated = command.get(STATED_IN[op])
-    if not isinstance(stated, Mapping):
-        return
-    named = command.get("id")
-    read = dict(stated)
-    if "id" not in read and isinstance(named, str) and named:
-        # A `requeue`'s overrides carry no `id` — the engine refuses one that rewrites it
-        # — so the parked node's own id is what names its amended task in a refusal.
-        read["id"] = named
-    yield from _effective(read, WHOLE_TASK_OPS[op])
-
-
-def _amendment(text: str, named: object, position: int) -> Reviewable:
-    """What an `amend` puts in front of a node's judge, read as the correction it is.
-
-    Owes no judged turn, for the reason :attr:`Reviewable.judged` gives. Named by its node,
-    because that is what a manager is holding in mind when they write one; by its position
-    when the op names none, which is a shape the engine refuses on its own and which must
-    still not produce a refusal naming `None`.
-    """
-    where = (
-        f"the amendment for node {named!r}"
-        if isinstance(named, str) and named
-        else f"the amendment in commands[{position}]"
-    )
-    return Reviewable(text, None, False, where, False)
-
-
-def reviewables(envelope: object) -> list[Reviewable]:
-    """Every resulting task ``envelope`` carries, in the order it states them.
-
-    Lenient about every shape but the ones it acts on, for the reason :func:`_effective`
-    gives: a reply this cannot read is one the engine refuses with a message about the
-    envelope it actually got.
-    """
-    match envelope:
-        case {"commands": [*commands]}:
+    match document:
+        case {"changes": [*changes]}:
             pass
         case _:
-            return []
-    found: list[Reviewable] = []
-    for position, command in enumerate(commands):
-        match command:
-            # Guards on the op rather than value patterns, because a bare name in a
-            # pattern binds. Blank text is left to the engine, which refuses it itself.
-            case {"op": op, "text": str() as text} if op == AMEND_OP and text.strip():
-                found.append(_amendment(text, command.get("id"), position))
-            # A note's criterion and never its text: the criterion binds the judge of the
-            # conversation the note reaches, the text is what a manager sends when the
-            # judge should have no opinion.
-            case {"op": op, "criterion": str() as criterion, "id": str() as named} if (
-                op == NOTE_OP and criterion.strip() and named
-            ):
-                found.append(
-                    Reviewable(
-                        criterion,
-                        None,
-                        False,
-                        f"the criterion of the note for node {named!r}",
-                        False,
-                        NOTE_ESCAPE,
-                    )
-                )
-            case {"op": op, "criterion": str() as criterion} if op == NOTE_OP and criterion.strip():
-                found.append(
-                    Reviewable(
-                        criterion,
-                        None,
-                        False,
-                        f"the criterion of the note in commands[{position}]",
-                        False,
-                        NOTE_ESCAPE,
-                    )
-                )
-            case {"op": str() as op} if op in WHOLE_TASK_OPS:
-                found.extend(_stated_nodes(command, op))
+            return
+    for change in changes:
+        match change:
+            case {"op": str() as op, "node": Mapping() as node} if op in CHANGE_OPS:
+                yield op, node
             case _:
                 continue
+
+
+def reviewables(document: object) -> list[Reviewable]:
+    """Every resulting task the document's `changes` put in front of a dispatch, in order.
+
+    A whole-task op is read as the node it leaves; an `amend` as the correction that node
+    now carries, named by its node; a `reparent` carries no prose and yields nothing.
+    """
+    found: list[Reviewable] = []
+    for op, node in _changes(document):
+        if op in WHOLE_TASK_OPS:
+            found.extend(_effective(node, WHOLE_TASK_OPS[op]))
+            continue
+        named = node.get("id")
+        text = node.get(AMENDMENT)
+        # A blank or absent amendment is the engine's to refuse; it composes nothing.
+        if op == AMEND_OP and isinstance(named, str) and isinstance(text, str) and text.strip():
+            found.append(
+                Reviewable(text, None, False, f"the amendment for node {named!r}", named, False)
+            )
     return found
 
 
@@ -560,7 +465,7 @@ def _refused(reviewable: Reviewable) -> str | None:
         else:
             check_amendment(reviewable.text, reviewable.where)
     except CriteriaError as exc:
-        return f"{exc} {reviewable.escape}" if reviewable.escape else str(exc)
+        return str(exc)
     return None
 
 
@@ -597,8 +502,17 @@ def _judged(reviewable: Reviewable, judge: Judge) -> str | None:
     )
 
 
-def refusal(envelope: object, judge: Judge = plan_review.verdict) -> str | None:
-    """Why this envelope's first refused resulting task is refused, or ``None`` for none.
+class Refused(NamedTuple):
+    """The first refused resulting task: the node a refusal objects to, and why."""
+
+    #: The node the engine names as the one objected to, on the ``objection:`` line.
+    node: str
+    #: The reason, in the bar's own words, that is the refusal's stderr.
+    reason: str
+
+
+def refusal(document: object, judge: Judge = plan_review.verdict) -> Refused | None:
+    """The first refused resulting task's node and why it is refused, or ``None`` for none.
 
     **Two tiers over each resulting task, in cost order.** The deterministic bar first,
     because it is free and refuses the commonest shapes without a provider turn; then, for
@@ -608,226 +522,84 @@ def refusal(envelope: object, judge: Judge = plan_review.verdict) -> str | None:
     be falsified) of the one route to a task that `just review-plan` never reads. Which
     resulting tasks owe one is :attr:`Reviewable.judged`'s to say.
 
-    The first rather than all of them: the bus refuses the whole envelope, so nothing is
-    sent either way, and a manager correcting one command re-sends the envelope and is
+    The first rather than all of them: the engine refuses the whole envelope, so nothing is
+    applied either way, and a manager correcting one command re-sends the envelope and is
     told about the next. Raises :class:`ReviewUnanswered` when a judged turn answered
     nothing.
     """
-    for reviewable in reviewables(envelope):
+    for reviewable in reviewables(document):
         reason = _refused(reviewable)
         if reason is None and reviewable.judged:
             reason = _judged(reviewable, judge)
         if reason is not None:
-            return reason
+            return Refused(reviewable.node, reason)
     return None
 
 
-def _consumes_keeping(node: dict[str, object], keep: Callable[[str], str | None]) -> None:
-    """Rewrite ``node``'s `consumes` keys through ``keep``, dropping a key it answers `None` for.
-
-    Assigned rather than mutated, so a mapping the envelope's own command still holds is
-    never changed underneath it; a node carrying no `consumes` mapping is left as it is.
-    """
-    consumes = node.get("consumes")
-    if not isinstance(consumes, Mapping):
-        return
-    kept: dict[str, object] = {}
-    for key, value in consumes.items():
-        renamed = keep(key)
-        if renamed is not None:
-            kept[renamed] = value
-    node["consumes"] = kept
-
-
-def _renaming(old: str, new: str) -> Callable[[str], str | None]:
-    """A `consumes` key rewrite moving the entry keyed on ``old`` onto ``new``."""
-    return lambda key: new if key == old else key
-
-
-def _keeping_only(kept: Sequence[str]) -> Callable[[str], str | None]:
-    """A `consumes` key rewrite keeping only the entries keyed on one of ``kept``."""
-    return lambda key: key if key in kept else None
-
-
-def _without(graph: dict[str, dict[str, object]], dropped: str, *, cascade: bool) -> None:
-    """Remove ``dropped`` from ``graph``, and its dependents with it or its edges to them.
-
-    A `drop`'s two dispositions, as the engine's `compile_drop` applies them: `drop`
-    removes every node depending on it, recursively, and `detach` removes only the edge
-    each one held. Either way no remaining node consumes a node that has left, which is
-    the engine's `NodeDropped` fold.
-    """
-    graph.pop(dropped, None)
-    for node_id, node in list(graph.items()):
-        deps = node.get("deps")
-        if isinstance(deps, list) and dropped in deps and cascade:
-            _without(graph, node_id, cascade=True)
-            continue
-        if isinstance(deps, list) and dropped in deps:
-            node["deps"] = [one for one in deps if one != dropped]
-        _consumes_keeping(node, lambda key: None if key == dropped else key)
-
-
-# llmlint: ignore[modern_domain_modeling] The graph is the envelope's own open node
-# records, handed straight to the structural guards as the plan document they read
-# leniently. A typed node model here would be a second declaration of the engine's schema,
-# and would drop the fields the guards read that such a model did not name (`metadata`,
-# `consumes`, whatever a later release adds).
-def stated_graph(envelope: object) -> tuple[dict[str, dict[str, object]], list[str]]:
-    """The graph ``envelope``'s own nodes form, and the ids of the nodes it states.
-
-    Every command is folded in order onto what the envelope has stated so far, so a later
-    command reads what an earlier one did, and each is folded as the engine's `edits.rs`
-    compiles and applies it, `consumes` included — because the adoption rules read it: an
-    `add` puts its node in; a `retry` puts its replacement in — in place of the node it
-    names when an earlier command of this envelope added that node, the replacement then
-    inheriting its `deps` and `consumes` when it states no deps of its own, its `delivers`
-    on the separate condition of stating none of those, and taking over its dependents,
-    their `consumes` rekeyed with them; a `reparent` replaces a node's
-    `deps` and keeps only the `consumes` keyed on one of them; and a `drop` removes a node
-    as its `dependents` disposition says. `tests/test_engine_contracts.py` holds each of
-    those folds to the engine's source at the pinned release. A `requeue` states overrides
-    rather than a node, so it moves nothing here, and a command naming a node the envelope
-    has not stated moves nothing either: the run's nodes are not read.
-    """
-    graph: dict[str, dict[str, object]] = {}
-    resulting: list[str] = []
-    match envelope:
-        case {"commands": [*commands]}:
-            pass
-        case _:
-            return graph, resulting
-    for command in commands:
-        match command:
-            # Guards on the op rather than value patterns, for the reason `reviewables`
-            # gives: a bare name in a pattern binds.
-            # An `add` of an id the graph holds, and a `retry` onto an id it holds, are
-            # refused by the engine for their target, so each moves nothing here rather
-            # than checking a node that will never be committed.
-            case {"op": op, "node": Mapping() as node} if (
-                op == "add"
-                and set(command) == {"op", "node"}
-                and set(node) <= NODE_FIELDS
-                and isinstance(node.get("id"), str)
-                and node["id"] not in graph
-            ):
-                graph[node["id"]] = {str(key): value for key, value in node.items()}
-                resulting.append(node["id"])
-            case {"op": op, "id": str() as old, "node": Mapping() as node} if (
-                op == "retry"
-                and set(command) == {"op", "id", "node"}
-                and set(node) <= NODE_FIELDS
-                and isinstance(node.get("id"), str)
-                and node["id"] not in graph
-            ):
-                new = node["id"]
-                replacement = {str(key): value for key, value in node.items()}
-                superseded = graph.pop(old, None)
-                if superseded is not None and not replacement.get("deps"):
-                    inherited = superseded.get("deps")
-                    replacement["deps"] = list(inherited) if isinstance(inherited, list) else []
-                    if "consumes" in superseded:
-                        replacement["consumes"] = superseded["consumes"]
-                # Its own condition, as the engine's: a replacement restating its deps
-                # and saying nothing about tickets still delivers what the superseded
-                # node did, so the board item the lineage keeps stays their deliverer.
-                # Inherited only in the shape the engine's `Node` gives the field — a
-                # list of qualified ticket ids — as `deps` is above; anything else the
-                # envelope stated there is the engine's to refuse, and is not carried.
-                # llmlint: ignore[changed_behavior_has_e2e] No structural guard reads
-                # `delivers`, so this fold changes no verdict an envelope sent over the
-                # channel can receive; what it changes is the graph a guard reads, which
-                # `tests/test_envelope_review.py` holds to the engine's own fold and
-                # `tests/test_engine_contracts.py` holds the pinned engine to. A channel
-                # journey would drive the same code to the same verdict either way.
-                delivered = superseded.get("delivers") if superseded is not None else None
-                # "Stating none" is the engine's `is_empty()`: the field absent, or `[]`.
-                # A supplied value of any other shape is stated, and the engine's to judge.
-                states_none = "delivers" not in replacement or replacement["delivers"] == []
-                if (
-                    states_none
-                    and isinstance(delivered, list)
-                    and all(isinstance(ticket, str) for ticket in delivered)
-                ):
-                    replacement["delivers"] = list(delivered)
-                for other in graph.values():
-                    deps = other.get("deps")
-                    if isinstance(deps, list) and old in deps:
-                        other["deps"] = [new if one == old else one for one in deps]
-                        _consumes_keeping(other, _renaming(old, new))
-                graph[new] = replacement
-                resulting.append(new)
-            case {"op": op, "id": str() as named, "deps": [*deps]} if (
-                op == "reparent"
-                and set(command) == {"op", "id", "deps"}
-                and all(isinstance(one, str) for one in deps)
-                and named in graph
-            ):
-                kept = list(deps)
-                graph[named]["deps"] = kept
-                _consumes_keeping(graph[named], _keeping_only(kept))
-            case {"op": op, "id": str() as named, "dependents": disposition} if (
-                op == "drop"
-                and set(command) == {"op", "id", "dependents"}
-                and isinstance(disposition, str)
-                and disposition in {"drop", "detach"}
-                and named in graph
-            ):
-                _without(graph, named, cascade=command.get("dependents") == "drop")
-            case _:
-                continue
-    return graph, [node_id for node_id in dict.fromkeys(resulting) if node_id in graph]
-
-
-def structural_refusal(envelope: object) -> str | None:
-    """Every structural refusal of a node ``envelope`` states, or ``None`` for none.
+def structural_refusal(document: object) -> list[Refusal]:
+    """Every structural refusal of a node the document's `add` and `retry` changes state.
 
     The rules are :data:`orchestrator.structural_guard.GUARDS`, the list `just check-plan`
-    reads, asked over the stated nodes and the dependencies among them the envelope also
-    states — which is what lets a rule about a dependency's repository resolve it as it
+    reads, asked over each stated node and the dependencies of it the document's `plan`
+    carries — which is what lets a rule about a dependency's repository resolve it as it
     would in a plan — and only a refusal *of a stated node* is reported. Every one rather
     than the first, for the reason :func:`orchestrator.publication_guard.refusals` gives,
-    and each in its rule's own words, naming the node and the field to correct.
+    each in its rule's own words, naming the node and the field to correct.
 
-    An envelope stating no node asks nothing, so a note, an amendment or a cancellation
-    spends no `onevcs` call.
+    A document stating no node asks nothing, so an amendment or a reparent spends no
+    `onevcs` call.
     """
-    graph, resulting = stated_graph(envelope)
-    if not resulting:
-        return None
-    asked = dict.fromkeys(resulting)
-    for node_id in resulting:
-        deps = graph[node_id].get("deps")
-        asked.update(
-            dict.fromkeys(one for one in (deps if isinstance(deps, list) else []) if one in graph)
-        )
-    refused = [
+    stated = {
+        node["id"]: dict(node)
+        for op, node in _changes(document)
+        if op in STATED_OPS and isinstance(node.get("id"), str)
+    }
+    if not stated:
+        return []
+    planned: dict[str, dict[str, object]] = {}
+    match document:
+        case {"plan": {"tasks": [*tasks]}}:
+            planned = {
+                task["id"]: dict(task)
+                for task in tasks
+                if isinstance(task, Mapping) and isinstance(task.get("id"), str)
+            }
+        case _:
+            pass
+    asked = {**stated}
+    for node in stated.values():
+        deps = node.get("deps")
+        for dep in deps if isinstance(deps, list) else []:
+            if isinstance(dep, str) and dep in planned and dep not in asked:
+                asked[dep] = planned[dep]
+    return [
         found
-        for found in structural_guard.refusals({"tasks": [graph[node_id] for node_id in asked]})
-        if found.node in resulting
+        for found in structural_guard.refusals({"tasks": list(asked.values())})
+        if found.node in stated
     ]
-    if not refused:
-        return None
-    return "\n".join(
-        f"node {found.node!r}, as this reply states it: {found.field}: {found.reason}"
-        for found in refused
-    )
 
 
-def _said(reason: str, repair: str) -> None:
-    """Write one verdict's reason and its repair to stderr, where the bus reads a reason."""
+def _said(reason: str, repair: str, *objected: str) -> None:
+    """Write one verdict's reason, its repair and each node it objects to, to stderr.
+
+    Stderr is where the engine reads a reason; an ``objection:`` line per node is how it
+    learns which of the envelope's nodes to name, and it lifts those lines out of what it
+    quotes back.
+    """
     print(f"{reason}\n{repair}", file=sys.stderr)
+    for node in dict.fromkeys(objected):
+        print(f"{OBJECTION_PREFIX} {node}", file=sys.stderr)
 
 
 def _kept(offered: bytes) -> None:
-    """Print the envelope back exactly as it was read, which is how a hook keeps it."""
+    """Print the document back exactly as it was read, which is how a hook keeps it."""
     sys.stdout.flush()
     sys.stdout.buffer.write(offered)
     sys.stdout.buffer.flush()
 
 
 def main(argv: Sequence[str] | None = None, judge: Judge = plan_review.verdict) -> int:
-    """Judge one envelope on stdin, printing it back on a pass, or print the fingerprint.
+    """Judge one envelope document on stdin, printing it back on a pass, or the fingerprint.
 
     ``judge`` is the one judged turn, real by default; a test hands over a scripted one
     at this boundary rather than standing the harness in below it.
@@ -838,49 +610,55 @@ def main(argv: Sequence[str] | None = None, judge: Judge = plan_review.verdict) 
         return 0
     if arguments:
         _said(
-            f"envelope-review: {arguments!r} is not what this validator takes",
-            f"it reads one envelope on stdin, or takes {BAR_FINGERPRINT_FLAG} alone",
+            f"envelope-review: {arguments!r} is not what this reviewer takes",
+            f"it reads one envelope document on stdin, or takes {BAR_FINGERPRINT_FLAG} alone",
         )
         return UNJUDGED
-    # The exact bytes, not a decoding of them: a pass prints them back, and the bus tells
-    # keep from change by bytes, never by parsed value.
+    # The exact bytes, not a decoding of them: a pass prints them back, and the engine
+    # tells a keep from a change by bytes, never by parsed value.
     offered = sys.stdin.buffer.read()
     try:
-        # llmlint: ignore[boundary_inputs_validated] The envelope is the channel's open
-        # contract and the bus has already parsed it as a JSON object before any hook
-        # runs; every field this reads is narrowed where it is read in `reviewables` and
-        # `stated_graph`, and a shape neither reads moves nothing.
-        envelope = json.loads(offered)
+        # llmlint: ignore[boundary_inputs_validated] The document is the engine's own,
+        # serialized from its published plan shapes before any reviewer runs; every field
+        # this reads is narrowed where it is read in `_changes` and `structural_refusal`,
+        # and a shape neither reads moves nothing.
+        document = json.loads(offered)
     except ValueError as unreadable:
         _said(
-            f"the envelope handed to this validator is not JSON ({unreadable})",
-            "nothing is known about it, so nothing was sent; send the envelope as one JSON object",
+            f"the envelope document handed to this reviewer is not JSON ({unreadable})",
+            "nothing is known about it, so nothing was applied; send the envelope again",
         )
         return UNJUDGED
-    structural = structural_refusal(envelope)
-    if structural is not None:
+    structural = structural_refusal(document)
+    if structural:
+        stated = "\n".join(
+            f"node {found.node!r}, as this reply states it: {found.field}: {found.reason}"
+            for found in structural
+        )
         _said(
-            f"this reply states a node this host's structural plan rules refuse — {structural}",
-            "nothing was sent, so no other command in it was applied either; correct the "
+            f"this reply states a node this host's structural plan rules refuse — {stated}",
+            "nothing was applied, so no other command in it was applied either; correct the "
             "field each refusal names and send the whole envelope again",
+            *(found.node for found in structural),
         )
         return REFUSED
     try:
-        reason = refusal(envelope, judge)
+        refused = refusal(document, judge)
     except ReviewUnanswered as unanswered:
         _said(
             f"the task prose in this reply could not be judged: {unanswered}",
-            "nothing was sent; once the harness answers — 'oneharness doctor' says why it did "
-            "not — send the whole envelope again unchanged",
+            "nothing was applied; once the harness answers — 'oneharness doctor' says why it "
+            "did not — send the whole envelope again unchanged",
         )
         return UNJUDGED
-    if reason is None:
+    if refused is None:
         _kept(offered)
         return 0
     _said(
-        f"this reply states task prose a judge would hold its worker to as work — {reason}",
-        "nothing was sent, so no other command in it was applied either; correct it and "
+        f"this reply states task prose a judge would hold its worker to as work — {refused.reason}",
+        "nothing was applied, so no other command in it was applied either; correct it and "
         "send the whole envelope again",
+        refused.node,
     )
     return REFUSED
 

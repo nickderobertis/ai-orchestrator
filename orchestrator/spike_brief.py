@@ -287,9 +287,20 @@ def read_delivery(path: Path, *, complete: bool = False) -> Delivery:
 
 
 def write_delivery(path: Path, value: Delivery) -> None:
-    from orchestrator.project_store import publish_record
+    """Replace the delivery telemetry at ``path`` so a reader sees the old file or the new.
 
-    publish_record(path, json.dumps(value))
+    Staged as a hidden sibling and renamed into place, because the file is read while a
+    spike's run is still writing it.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+    ) as staged:
+        staged.write(json.dumps(value))
+    try:
+        os.replace(staged.name, path)
+    finally:
+        Path(staged.name).unlink(missing_ok=True)
 
 
 def answers(value: object, agents: Sequence[str], rendering: str) -> None:

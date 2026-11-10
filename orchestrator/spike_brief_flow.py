@@ -276,6 +276,10 @@ def launch(project: str, parent: str, spikes: str) -> None:
                 f"--group={project}",
                 "--success-hook",
                 str(REPO_ROOT / "scripts/spike-brief-ready.sh"),
+                # The launch config every `start` names states `just orchestrate`'s failure
+                # hook and drafting graph; this run never took either, so both are blank.
+                "--failure-hook=",
+                "--pr-author-graph=",
             ],
             env=env,
             capture_output=True,

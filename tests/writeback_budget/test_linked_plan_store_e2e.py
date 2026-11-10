@@ -40,7 +40,7 @@ from driven_run import (
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator.project_store import PROJECTS_DIRECTORY, TASKS_DIRECTORY
+from orchestrator.record_shapes import PROJECTS_DIRECTORY, TASKS_DIRECTORY
 from orchestrator.root import REPO_ROOT
 
 #: The session these launches run under, stated rather than inherited: this suite runs
@@ -128,7 +128,13 @@ def _destination_bytes(driven: DrivenRun) -> dict[Path, bytes]:
     """Every record the destination keeps for the launched project, byte for byte."""
     root, native = plan_fixture_source.root(), driven.project.split(":", 1)[1]
     kept = [root / PROJECTS_DIRECTORY / f"{native}.md"]
-    kept += sorted((root / TASKS_DIRECTORY / native).rglob("*.md"))
+    # The store files a task by its own id, so the project's tasks are the ones whose front
+    # matter names it.
+    kept += sorted(
+        path
+        for path in (root / TASKS_DIRECTORY).glob("*.md")
+        if f"\nproject: {native}\n" in path.read_text(encoding="utf-8")
+    )
     return {path: path.read_bytes() for path in kept}
 
 

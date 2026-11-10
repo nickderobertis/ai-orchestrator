@@ -71,7 +71,7 @@ from typing import NamedTuple, NewType
 
 from orchestrator import design_approval, plan_store
 from orchestrator.plan_store import NodeId
-from orchestrator.project_store import qualified_id
+from orchestrator.record_shapes import qualified_id
 
 #: A spike's preserved branch, as `onevcs` names it with the host's prefix in front, and the
 #: id of a spike's report document, as the plan's project holds it.

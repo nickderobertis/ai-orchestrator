@@ -6,9 +6,9 @@ the command line's own `Config::load` and link resolution, beside a copy carryin
 unknown key that the same load refuses by name — without that control, a verb that
 ignored `--config` would pass too. Then each value is held to the statement it comes from:
 the monitor's author to `AGENTS.md` and to the reasons the bus gave before it stopped
-naming the monitor, the reply window to the shim's default, the hook to the one
-in-repo entry point, the frames link to the onejudge this host adopts, and the layout link
-to the engine this host adopts — whose published planner-channel layout is where the
+naming the monitor, the reply window to the shim's default, the absence of a validator
+to the engine's envelope reviewer, the frames link to the onejudge this host adopts, and
+the layout link to the engine this host adopts — whose published planner-channel layout is where the
 channel's queues now come from, since the adopted bus compiles no layout in.
 
 The link is proven with no request leaving the host. Every copy here differs from the
@@ -237,38 +237,19 @@ def test_the_binding_opens_on_the_reply_window_and_the_engines_asker() -> None:
     assert lines[4:6] == ["    select: op", "    frames:"]
 
 
-def test_every_reply_carrying_commands_is_judged_by_the_envelope_review_with_a_cache() -> None:
-    """One hook, over commands, through the in-repo entry point, keyed on its bar.
+def test_no_reply_validator_is_declared_because_the_engine_reviews_every_envelope() -> None:
+    """The criteria bar is the engine's envelope reviewer, so the bus declares no hook.
 
-    It declares no `routes`, so the bus lets it keep, change, drop or refuse and never
-    reroute; and the file declares no `validators:` block, which onemessagebus deprecated in
-    the hook's favour. The argv and the cache directory are the ones the validator it
-    replaced declared, so the passes that validator recorded key the same and read as keeps.
+    A bus hook beside the reviewer would judge every envelope twice and keep a pass
+    cache nothing reads; `config/onepipeline.launch.yaml` names the reviewer and its bar
+    command, and `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drives it.
     """
-    assert re.search(r"^validators:", _lines(), re.MULTILINE) is None, (
-        "config/onemessagebus.yaml declares a deprecated `validators:` block"
-    )
-    hooks = _value(r"^hooks:\n((?:  .+\n)+)")
-    assert hooks.splitlines() == [
-        "  - on: replies",
-        "    when: {carries: commands}",
-        "    command: [scripts/envelope-review.sh]",
-        "    cache:",
-        "      dir: .cache/envelope-passes",
-        "      bar_fingerprint: "
-        "[uv, run, python, -m, orchestrator.envelope_review, --bar-fingerprint]",
-    ]
-    assert (REPO_ROOT / "scripts" / "envelope-review.sh").stat().st_mode & 0o111
-
-
-def test_the_pass_cache_the_configuration_names_is_the_one_git_ignores() -> None:
-    """Moving `cache.dir` in the configuration without `.gitignore` would commit pass records."""
-    cache_dir = _value(r"^      dir: (\S+)$")
-    ignored = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert f"/{cache_dir}/" in ignored, (
-        f"config/onemessagebus.yaml keeps envelope passes under {cache_dir}, which "
-        f".gitignore does not ignore as /{cache_dir}/"
-    )
+    assert re.search(r"^(validators|hooks):", _lines(), re.MULTILINE) is None
+    launch = (REPO_ROOT / "config" / "onepipeline.launch.yaml").read_text(encoding="utf-8")
+    assert "\nenvelope_reviewer: scripts/envelope-review.sh\n" in launch, launch
+    assert "\nenvelope_reviewer_bar: scripts/envelope-review-bar.sh\n" in launch, launch
+    for script in ("envelope-review.sh", "envelope-review-bar.sh"):
+        assert (REPO_ROOT / "scripts" / script).stat().st_mode & 0o111, script
 
 
 def _link() -> tuple[str, str]:

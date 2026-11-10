@@ -29,20 +29,19 @@ from orchestrator.root import REPO_ROOT
 def test_the_task_bearing_ops_are_the_ones_the_live_edit_table_says_carry_a_task() -> None:
     """Which ops put task prose in front of a dispatch is the engine's answer, gated here.
 
-    The module restates three things of the live-edit table — which ops state a whole
-    task, in which field each states it, and which op states an amendment — and this is
-    what holds the restatement to the table rather than to memory.
+    The module restates two things of the live-edit table — which ops leave a whole task,
+    and which op states an amendment — and this is what holds the restatement to the table
+    rather than to memory.
     """
     rows = _live_edit_rows()
     assert rows, f"no live-edit table under {LIVE_EDIT_TABLE_OPENS!r} in {LIVE_EDIT_TABLE}"
 
-    stated_in = {
-        op: "node" if "`node`: full" in fields else "amend"
+    whole = {
+        op
         for op, fields in rows.items()
         if "`node`: full" in fields or "`amend`: partial node overrides" in fields
     }
-    assert stated_in == envelope_review.STATED_IN, (rows, envelope_review.STATED_IN)
-    assert set(stated_in) == set(envelope_review.WHOLE_TASK_OPS)
+    assert whole == set(envelope_review.WHOLE_TASK_OPS), (rows, envelope_review.WHOLE_TASK_OPS)
 
     amending = [op for op, fields in rows.items() if fields == "`id`; `text`"]
     assert amending == [envelope_review.AMEND_OP], rows

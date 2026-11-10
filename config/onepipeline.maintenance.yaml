@@ -1,9 +1,9 @@
 # How often an idle driver on this host maintains each repository's warm worktree slots.
 #
-# `scripts/onepipeline.sh` names this file as `--maintenance-config` on every
-# `onepipeline start` the caller named none for — `just orchestrate`, `just plan`, the
-# design-document launch and the follow-up run alike — exactly as it names the
-# dispatch-env hook.
+# `config/onepipeline.launch.yaml` names this file as `maintenance_config`, and
+# `scripts/onepipeline.sh` names that launch config on every `onepipeline start` — `just
+# orchestrate`, `just plan`, the design-document launch and the follow-up run alike — so
+# every launch the caller named no schedule for keeps this one.
 # `adopt` takes none, because an adopted run replays the schedule its launch record
 # retained. The engine reads it at launch and refuses a run before it is minted for an
 # unknown key, a `version` other than 1, a rule naming no match field or a malformed

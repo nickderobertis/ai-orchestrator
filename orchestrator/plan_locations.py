@@ -27,7 +27,7 @@ import sys
 from collections.abc import Mapping, Sequence
 
 from orchestrator import design_approval, plan_store
-from orchestrator.project_store import qualified_id
+from orchestrator.record_shapes import qualified_id
 
 #: Both locations were read and reported.
 OK = 0

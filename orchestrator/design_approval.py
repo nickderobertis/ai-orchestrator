@@ -199,6 +199,9 @@ REPLACE = (
 )
 
 
+#: Where the pinned engine's refusal of a stored item turns from why to its own repair.
+ENGINE_REPAIR = "; re-render it:"
+
 #: The one shape a chain digest has, as the engine states it and the store records it.
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
@@ -452,32 +455,81 @@ def resolved_loader(root: Path = TEMPLATE_ROOT, repository: str | None = None) -
     return done.stdout
 
 
+def checked(document: StoreDocument, repository: str | None = None) -> str | None:
+    """Why the pinned engine says ``document`` is not the rendering in force, or ``None``.
+
+    Asked of `onepipeline template check design-doc --item`, which holds a stored item to
+    being the rendering its provenance records: rendered from the chain that resolves now,
+    through the layer ``repository`` picks, with its content as rendered. Whether a document
+    is still its template's rendering is the engine's to say, so nothing here re-derives it.
+    An item the engine names in its refusal is a document it read and refused, answered as
+    the engine's reason without the re-render it appends, because which repair works is
+    :func:`body_digest`'s to name — the engine's would regenerate in place a document whose
+    stored answers no longer fit. Any other failure is the engine or the store failing,
+    raised as :class:`OSError`.
+    """
+    qualified = str(document.qualified_id)
+    command = [
+        str(npm_installs.ENGINE),
+        "template",
+        "check",
+        TEMPLATE_NAME,
+        *design_chain.resolve_arguments(repository),
+        "--template-root",
+        str(TEMPLATE_ROOT),
+        "--item",
+        qualified,
+    ]
+    # llmlint: ignore-block[changed_behavior_has_e2e] An engine that cannot be run, or that
+    # fails without naming the item, is a broken checkout or an unreadable store rather than
+    # a state a journey over the real engine reaches; each is driven against a doubled
+    # engine in `tests/test_design_approval.py`.
+    try:
+        done = subprocess.run(
+            command, cwd=REPO_ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True
+        )
+    except OSError as exc:
+        raise OSError(
+            f"the pinned engine could not be run to check {qualified} against the "
+            f"{TEMPLATE_NAME} template ({exc}); provision this checkout with `just bootstrap`, "
+            "then retry"
+        ) from exc
+    if done.returncode == 0:
+        return None
+    said = done.stderr.strip()
+    if f"item {qualified}:" not in said:
+        raise OSError(
+            f"`onepipeline template check {TEMPLATE_NAME} --item {qualified}` failed: {said}"
+        )
+    # llmlint: ignore-end[changed_behavior_has_e2e]
+    return said.split(ENGINE_REPAIR, 1)[0]
+
+
 def body_digest(
     document: StoreDocument,
     digest: ChainDigest,
     repository: str | None = None,
     drafted: spike_plan.DraftedPlan | None = None,
 ) -> str:
-    """The body digest ``document`` records, once it is a rendering of the template in force.
+    """The body digest ``document`` records, once the engine holds it to be the rendering in force.
 
-    Three things make a document not one, each refused as :class:`Unrendered` naming the
-    regenerate that repairs it: it records no design-doc provenance at all (written by hand,
-    or rendered from another template); it was rendered from a chain whose digest is not the
-    one resolved now (the template changed after it was rendered); or its content no longer
-    hashes to the body digest recorded when it was (it was edited by hand since, or — for a
-    copy — an earlier plan store's copy left it so, which :func:`edited` names). Like the
-    plan-review record this trusts the provenance the store recorded: a writer who forges
-    one is not a case this guards.
+    Whether it is one is :func:`checked`'s answer, the pinned engine's. A document it refuses
+    is refused here as :class:`Unrendered`, carrying the engine's own reason and naming the
+    regenerate that repairs it — which repair is read off what the document records, never
+    off a second derivation of its rendering: one recording no design-doc provenance at all
+    (written by hand) is regenerated from supplied answers; a rendering of another template
+    is replaced; one whose recorded chain is not ``digest`` was rendered before the template
+    changed, and goes to the writer when its stored answers no longer fit; and any other is a
+    rendering edited since, which :func:`edited` names.
 
     Every repair names the resolve command the rule gives for ``repository``, the origin
-    `orchestrator/design_chain.py` picked for the document's plan. A document rendered
-    under an older template whose stored answers the template in force no longer takes is
-    sent to the writer instead, because regenerating it in place would be refused.
-    ``drafted`` is the invocation's own record of what the drafting sources hold of the
-    document's plan, when the caller holds one.
+    `orchestrator/design_chain.py` picked for the document's plan. ``drafted`` is the
+    invocation's own record of what the drafting sources hold of the document's plan, when
+    the caller holds one.
     """
     resolve = design_chain.resolve_command(repository)
     regenerate = REGENERATE.replace(RESOLVE, resolve).replace("<id>", str(document.qualified_id))
+    refused = checked(document, repository)
     match document.metadata.get(PROVENANCE):
         case {
             "template": str() as template,
@@ -489,10 +541,10 @@ def body_digest(
             raise Unrendered(
                 f"{document.qualified_id} records no rendering of the {TEMPLATE_NAME} "
                 f"template, so it is not a design document this host can approve and holds no "
-                f"stored answers a regenerate can trust; regenerate it from its design-doc "
-                f"answers with `{regenerate} {SUPPLIED}`"
+                f"stored answers a regenerate can trust ({refused}); regenerate it from its "
+                f"design-doc answers with `{regenerate} {SUPPLIED}`"
             )
-    if template != TEMPLATE_REFERENCE:
+    if refused is not None and template != TEMPLATE_REFERENCE:
         source, _, native = str(document.qualified_id).partition(":")
         replace = (
             REPLACE.replace(RESOLVE, resolve)
@@ -503,16 +555,18 @@ def body_digest(
         )
         raise Unrendered(
             f"{document.qualified_id} is a rendering of {template}, not of "
-            f"{TEMPLATE_REFERENCE}, so it is not a design document this host can approve; "
-            f"`{regenerate}` would lay its design-doc answers over that template's stored "
-            f"ones, so replace it from them with `{replace}`"
+            f"{TEMPLATE_REFERENCE}, so it is not a design document this host can approve "
+            f"({refused}); `{regenerate}` would lay its design-doc answers over that "
+            f"template's stored ones, so replace it from them with `{replace}`"
         )
     validate_document_content(document, drafted)
+    if refused is None:
+        return body
     if recorded != digest and not fits_in_place(document, repository):
         raise Unrendered(
             f"{document.qualified_id} was rendered from the {TEMPLATE_NAME} template at "
-            f"{recorded}, and that template now resolves to {digest}; a template change means "
-            "every not-yet-launched plan needs its approval recorded again with "
+            f"{recorded}, and that template now resolves to {digest} ({refused}); a template "
+            "change means every not-yet-launched plan needs its approval recorded again with "
             "`just approve-design <source>:<project>`; " + REWRITE.replace(RESOLVE, resolve)
         )
     if recorded != digest:
@@ -521,19 +575,16 @@ def body_digest(
             "approval again with `just approve-design <source>:<project>`. "
             f"{document.qualified_id} was rendered from the {TEMPLATE_NAME} template at "
             f"{recorded}, and that template now resolves to {digest}, so what it says was "
-            f"written against a template no longer in force; regenerate it with "
+            f"written against a template no longer in force ({refused}); regenerate it with "
             + EITHER.format(regenerate=regenerate)
         )
-    held = "sha256:" + hashlib.sha256(document.content.encode("utf-8")).hexdigest()
-    if held != body:
-        raise Unrendered(
-            f"{document.qualified_id}'s content is not the rendering its provenance records "
-            f"(it hashes to {held}, the rendering to {body}), so "
-            + edited(document)
-            + "; change its answers and regenerate it with "
-            + EITHER.format(regenerate=regenerate)
-        )
-    return body
+    raise Unrendered(
+        f"{document.qualified_id}'s content is not the rendering its provenance records "
+        f"({refused}), so "
+        + edited(document)
+        + "; change its answers and regenerate it with "
+        + EITHER.format(regenerate=regenerate)
+    )
 
 
 def edited(document: StoreDocument) -> str:

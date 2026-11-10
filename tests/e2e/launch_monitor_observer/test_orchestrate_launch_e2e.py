@@ -28,7 +28,7 @@ import textwrap
 import time
 from collections.abc import Generator, Iterator
 from pathlib import Path
-from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
+from typing import Any, Literal, NamedTuple, NewType, Required, TypedDict, cast
 
 import follow_up_variables
 import plan_root_variable
@@ -62,6 +62,7 @@ from test_short_state_budget import SUFFIX, composition_overhead, shipped_sessio
 from waits import deadline, until
 from waits import timeout as e2e_timeout
 
+from orchestrator import plan_check
 from orchestrator.labels import (
     NODE_LABEL,
     POINTER_FILE_NAME,
@@ -2509,12 +2510,12 @@ def test_the_monitor_is_told_to_ground_a_violation_before_it_alleges_one(
 def test_the_launch_hands_the_engine_this_checkouts_bus_configuration(
     launched: Launched,
 ) -> None:
-    """`just orchestrate` passes `--bus-config config/onemessagebus.yaml`, and the engine kept it.
+    """`just orchestrate`'s launch config names `config/onemessagebus.yaml`, and the engine kept it.
 
-    Every channel verb of the run — the reply hook, the monitor's author and grants,
+    Every channel verb of the run — the monitor's author and grants,
     the monitor binding's reply window — is the configuration the engine was handed, so a
     launch that stopped naming this file would run a planner channel with the layout's
-    defaults: no envelope review, no monitor author to accept a fix from, and no binding
+    defaults: no monitor author to accept a fix from, and no binding
     for the monitor's judge side at all. Nothing about the run would fail until the
     monitor spoke.
 
@@ -2551,14 +2552,10 @@ def test_the_launch_hands_the_engine_this_checkouts_bus_configuration(
     assert bus["authors"]["monitor"]["capabilities"] == grants, (
         f"the launch recorded monitor grants other than this checkout's {grants}: {bus['authors']}"
     )
-    hooks = [hook["command"] for hook in bus["hooks"]]
-    command = [word.strip() for word in declared(r"^    command: \[([^\]]*)\]$").split(",")]
-    assert hooks == [command], (
-        f"the launch recorded envelope hooks other than this checkout's {command}: {bus['hooks']}"
-    )
-    assert not bus.get("validators"), (
-        f"the launch recorded deprecated validators: {bus.get('validators')}"
-    )
+    # The criteria bar is the engine's envelope reviewer, not a bus validator; the journey
+    # below holds the reviewer the launch recorded.
+    assert not bus.get("validators"), bus.get("validators")
+    assert not bus.get("hooks"), bus.get("hooks")
 
 
 #: The member of `graphs/dag-scope.yaml` whose judge side is the planner channel, and
@@ -2667,29 +2664,141 @@ def test_the_launch_hands_the_engine_this_hosts_maintenance_schedule(
     assert schedule.get("rules", []) == [], schedule
 
 
+#: Every launch setting `just orchestrate` handed the engine as a flag before
+#: `config/onepipeline.launch.yaml` carried it, exactly as `scripts/onepipeline.sh` and
+#: `scripts/orchestrate.sh` rendered each one — a path absolute in this checkout, a graph
+#: relative to it — and, for the hook timeout the recipe never named, the engine's own
+#: default. Held here as those flags rather than read back from the new document, so the
+#: document cannot drift from what a launch used to be.
+PRE_LAUNCH_CONFIG_FLAGS = {
+    "--require-rendered": "true",
+    # Exported as `ONEPIPELINE_TEMPLATE_ROOT` by `scripts/template-env.sh`, the rung the
+    # flag beats, to this absolute root.
+    "--template-root": str(REPO_ROOT / "templates"),
+    "--bus-config": str(REPO_ROOT / "config" / "onemessagebus.yaml"),
+    "--dispatch-env-hook": str(REPO_ROOT / "scripts" / "dispatch-env-hook.sh"),
+    "--maintenance-config": str(REPO_ROOT / "config" / "onepipeline.maintenance.yaml"),
+    "--success-hook": str(REPO_ROOT / "scripts" / "run-ended.sh"),
+    "--failure-hook": str(REPO_ROOT / "scripts" / "run-ended.sh"),
+    "--hook-timeout": "600",
+    "--pr-author-graph": PR_AUTHOR_GRAPH,
+}
+
+
+def _launch_record(environment: dict[str, str], run: str) -> dict[str, Any]:
+    """The engine's own record of how ``run`` was launched.
+
+    No view renders the launch settings the engine resolved — `status --json` carries none
+    of them — and the argv says only what a recipe asked for, so the run's launch record is
+    the one place the engine's reading is kept. `Any` because it is the engine's open record.
+    """
+    launch_record = Path(environment["ONEPIPELINE_RUNS_DIR"]) / run / "launch.json"
+    assert launch_record.is_file(), f"the launched run wrote no launch record at {launch_record}"
+    # llmlint: ignore[tests_mirror_real_usage] no view renders the launch settings; see above
+    return cast(dict[str, Any], json.loads(launch_record.read_text(encoding="utf-8")))
+
+
+def _spawned(recorded: dict[str, Any], key: str) -> Path:
+    """The file a recorded command names, resolved as the engine spawns it: in the launch
+    directory the record keeps."""
+    return (Path(recorded["dir"]) / recorded[key]).resolve()
+
+
 @pytest.mark.xdist_group("orchestrate-launch")
-# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] Placed beside the schedule read it mirrors, on the one `launched` fixture this module already spends a real launch on; a project of its own would spend a second launch to read one key off the same record.  # noqa: E501
-def test_the_launch_hands_the_engine_this_checkouts_dispatch_env_hook(
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] Placed beside the schedule read it mirrors, on the one `launched` fixture this module already spends a real launch on; a project of its own would spend a second launch to read the same record.  # noqa: E501
+def test_the_launch_config_records_every_setting_the_recipe_once_passed_as_a_flag(
     launched: Launched,
 ) -> None:
-    """`just orchestrate` names `scripts/dispatch-env-hook.sh` absolutely, and the engine kept it.
+    """`just orchestrate`'s launch config set each setting the recipe once passed as a flag
+    to the value that flag set, and adds the envelope reviewer and its bar.
 
-    The wrapper names the hook on every `start` without asking the engine whether it
-    takes the flag — every engine the pin admits does — so what is left to hold is that
-    the launch record carries this checkout's hook, which is what the engine runs before
-    every node-scope dispatch.
-    `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py` holds the rendering; the
-    two hook journeys at the end of this module drive what the hook does.
+    A path the engine resolves (the template root, the drafting graph) is recorded
+    absolute, so it is compared as the flag spelled it; a command the engine spawns (the
+    hooks, the reviewer and its bar) is recorded as the document spells it and run in the
+    launch directory, so it is compared as the file it runs. The two documents the engine
+    parses are compared as documents: the bus configuration and the maintenance schedule are
+    each the same file the flag named, which the journeys beside this one hold value by value.
+    `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py` holds that the recipe
+    renders none of those flags.
     """
-    launch_record = Path(launched.environment["ONEPIPELINE_RUNS_DIR"]) / SHIPPED_RUN / "launch.json"
-    # llmlint: ignore[tests_mirror_real_usage] no view renders the retained hook; see above
-    recorded = json.loads(launch_record.read_text(encoding="utf-8"))
-    assert recorded.get("dispatch_env_hook") == str(
-        REPO_ROOT / "scripts" / "dispatch-env-hook.sh"
-    ), (
-        f"the launch recorded no dispatch-env hook, so no dispatch of this run is handed a "
-        f"refreshed environment: {recorded.get('dispatch_env_hook')!r}"
+    recorded = _launch_record(launched.environment, SHIPPED_RUN)
+    flags = PRE_LAUNCH_CONFIG_FLAGS
+
+    assert Path(recorded["dir"]).resolve() == REPO_ROOT.resolve(), recorded["dir"]
+    # The recipe named `--require-rendered true` only where `ONEPIPELINE_REQUIRE_RENDERED`
+    # said nothing, and the engine lets that variable beat the launch config as it beat
+    # the flag; this suite exports it `false` for its hand-written plans, so this launch
+    # records what the variable says. `tests/e2e/launch_monitor_observer/
+    # test_onetaskgraph_host_e2e.py` launches a rendered plan through this recipe with the
+    # variable unset and holds the record to the document's `true`.
+    exported = launched.environment.get(plan_check.REQUIRE_RENDERED_ENV)
+    expected = flags["--require-rendered"] if exported is None else exported
+    assert recorded.get("require_rendered", False) is (expected == "true"), recorded
+    assert Path(recorded["template_root"]).resolve() == Path(flags["--template-root"]).resolve()
+    for key in ("dispatch_env_hook", "success_hook", "failure_hook"):
+        assert _spawned(recorded, key) == Path(flags[f"--{key.replace('_', '-')}"]).resolve(), (
+            f"the launch recorded {recorded.get(key)!r} as its {key}, which is not the file "
+            f"the recipe's flag named"
+        )
+    assert recorded["hook_timeout"] == int(flags["--hook-timeout"]), recorded["hook_timeout"]
+    assert recorded["pr_author_graph"] == str(REPO_ROOT / flags["--pr-author-graph"])
+    assert isinstance(recorded["bus_config"], dict), recorded.get("bus_config")
+    assert isinstance(recorded["maintenance_config"], dict), recorded.get("maintenance_config")
+    assert _spawned(recorded, "envelope_reviewer") == REPO_ROOT / "scripts" / "envelope-review.sh"
+    assert (
+        _spawned(recorded, "envelope_reviewer_bar")
+        == REPO_ROOT / "scripts" / "envelope-review-bar.sh"
     )
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] One settling launch with no observer, beside the journey it is the converse of; a project of its own would spend the same launch.  # noqa: E501
+def test_a_callers_own_flag_beats_the_launch_config_through_the_recipe(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A setting the caller names on `just orchestrate` is the one the run records.
+
+    The engine orders a flag above the launch config's key, a blank one included, so a
+    caller naming their own success hook and hook timeout, and blanking the failure hook
+    and the drafting graph, gets exactly those, while every setting they did not name is
+    still the document's. The success hook is a no-op the caller chose, so the run's end
+    launches nothing.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    run = f"launch-config-override-{os.getpid()}"
+    environment = _environment(tmp_path, oneharness_bin)
+    source = _settling_project(tmp_path, run)
+    own_hook = shutil.which("true")
+    assert own_hook is not None, "this host has no `true` to name as a hook"
+    try:
+        launch = attached(
+            [
+                "just",
+                "orchestrate",
+                source,
+                "--dag-graph",
+                "off",
+                "--success-hook",
+                own_hook,
+                "--failure-hook=",
+                "--pr-author-graph=",
+                "--hook-timeout",
+                "42",
+            ],
+            environment,
+        )
+        assert launch.returncode == 0, launch.stdout + launch.stderr
+        recorded = _launch_record(environment, run)
+    finally:
+        stop_launch(run, environment)
+
+    assert recorded["success_hook"] == own_hook, recorded.get("success_hook")
+    assert recorded["hook_timeout"] == 42, recorded.get("hook_timeout")
+    for key in ("failure_hook", "pr_author_graph"):
+        assert not recorded.get(key), f"the caller blanked {key}, yet it was recorded: {recorded}"
+    assert _spawned(recorded, "dispatch_env_hook") == REPO_ROOT / "scripts" / "dispatch-env-hook.sh"
+    assert _spawned(recorded, "envelope_reviewer") == REPO_ROOT / "scripts" / "envelope-review.sh"
 
 
 def test_the_pacemaker_is_told_which_run_to_report_on_and_not_to_edit() -> None:

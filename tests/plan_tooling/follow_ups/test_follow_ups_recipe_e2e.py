@@ -80,8 +80,9 @@ from waits import until
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_check
 from orchestrator.plan_budgets import Direction
+from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import WRITABLE_PLUGIN, NodeId
-from orchestrator.project_store import frontmatter, write_plan_project
+from orchestrator.record_shapes import frontmatter
 from orchestrator.root import REPO_ROOT
 from orchestrator.run_reading import RunId
 
@@ -4621,8 +4622,12 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     project = (checkout / ".follow-ups/runs/projects/run-1-follow-ups.md").read_text(
         encoding="utf-8"
     )
-    assert 'title: "run-1-follow-ups"' in project
-    assert '"orchestrator.plan-kind": {"kind": "follow-ups", "nodes": ["follow-ups"]}' in project
+    fields = _front_matter(project)
+    assert fields["title"] == "run-1-follow-ups", project
+    assert fields["metadata"]["orchestrator.plan-kind"] == {
+        "kind": "follow-ups",
+        "nodes": ["follow-ups"],
+    }, project
     node = _one_task_record(checkout)
     validator_lines = [
         line
@@ -4665,7 +4670,7 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     project = (checkout / ".follow-ups/runs/projects/run-1-follow-ups.md").read_text(
         encoding="utf-8"
     )
-    assert 'title: "run-1-follow-ups-2"' in project
+    assert _front_matter(project)["title"] == "run-1-follow-ups-2", project
     # The second launch retired the first one's task before creating its own.
     assert f"template: {REFERENCE}" in _one_task_record(checkout)
 
@@ -4729,6 +4734,13 @@ def test_a_failed_detached_launch_keeps_its_closeout_hook_only_once_the_engine_r
         assert json.loads(snapshot[0].read_text(encoding="utf-8")), "the snapshot is the account"
     else:
         assert left == [], f"a launch the engine never recorded left scratch behind: {left}"
+
+
+def _front_matter(record: str) -> dict[str, Any]:
+    """The fields a stored record's front matter holds, as the store wrote them."""
+    fields = yaml.safe_load(record.removeprefix("---\n").partition("\n---")[0])
+    assert isinstance(fields, dict), record
+    return fields
 
 
 def _one_task_record(checkout: Path, *, root: Path | None = None) -> str:
@@ -4801,7 +4813,7 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
     project = (checkout / ".follow-ups/runs/projects/run-1-follow-ups.md").read_text(
         encoding="utf-8"
     )
-    assert 'title: "Run-1-follow-ups"' in project
+    assert _front_matter(project)["title"] == "Run-1-follow-ups", project
     # The launch above is traced, so the id it named is handed to the real launch gate over
     # the real store, which is the read that refused the capitalised id before; the store's
     # configuration is what makes `authoring` a source the gate reads at all.

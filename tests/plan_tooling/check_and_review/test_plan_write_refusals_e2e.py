@@ -245,12 +245,11 @@ def test_a_plan_that_could_not_be_written_leaves_no_half_written_file_behind(
 ) -> None:
     """A partial plan is removed, because the next launch would otherwise read it.
 
-    A project is a directory of task records and one project record under one root, and
-    the store writes the project record **last** so that a project becomes visible only
-    with its tasks already beside it. So the partial state a failed write leaves is the
-    task records without their project — at exactly the paths a rerun, or a manager
-    relaunching with `just orchestrate`, would pick up — and the refusal has to take them
-    with it.
+    A project is its task records and one project record under one root, and the writer
+    creates the project record **last** so that a project becomes visible only with its
+    tasks already beside it. So the partial state a failed write leaves is task records
+    filed under a project that does not exist — which a rerun, or a manager relaunching
+    with `just orchestrate`, would pick up — and the refusal has to take them with it.
 
     Induced by occupying the project record's own path, which is what makes the write
     fail at its last step with everything before it already on disk. The cause is stood
@@ -283,9 +282,14 @@ def test_a_plan_that_could_not_be_written_leaves_no_half_written_file_behind(
 
     assert refused.returncode != 0, refused.stdout
     assert "could not be written" in refused.stderr, refused.stderr
-    assert not (root / "tasks" / "half-written").exists(), (
+    left = [
+        path
+        for path in (root / "tasks").rglob("*.md")
+        if "\nproject: half-written\n" in path.read_text(encoding="utf-8")
+    ]
+    assert not left, (
         "the task records of a half-written plan were left where the next launch would "
-        f"read them:\n{refused.stderr}"
+        f"read them: {left}\n{refused.stderr}"
     )
     # And what it could not take is named, because the one thing worse than a partial
     # plan left behind is one left behind in silence.

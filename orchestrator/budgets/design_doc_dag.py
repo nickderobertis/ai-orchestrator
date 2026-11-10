@@ -4,7 +4,7 @@ The measurement behind the `design-doc-dag-label-size` and `design-doc-dag-natur
 budgets `orchestrator/budgets.yaml` registers, run by `design-doc-dag-label-size.sh` and
 `design-doc-dag-natural-width.sh` beside this file. Each fixture under `fixtures/` here — 10,
 21, 48 and 100 tasks copying real plan shapes — is first held to how it was made, then loaded
-into a scratch `local-md` store through this repository's own record renderer, read by the
+into a scratch `local-md` store through the store's own `task create`, read by the
 pinned plan store's real `onetaskgraph project graph --format mermaid --direction auto
 --group-by orchestrator.unit` exactly as `scripts/finish-plan.sh` reads it, and drawn:
 
@@ -49,8 +49,8 @@ from typing import NamedTuple
 from onebudgetspec_sdk import report
 
 from orchestrator import plan_units, planned_tasks
+from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import NodeId
-from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 

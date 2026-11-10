@@ -75,6 +75,7 @@
       "{workspaceRoot}/tests/test_launcher_session.py",
       "{workspaceRoot}/tests/fixtures/planner-channel.json",
       "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/config/onepipeline.launch.yaml",
       "{workspaceRoot}/config/oneharness.version",
       "{workspaceRoot}/llmlint.yml"
     ],

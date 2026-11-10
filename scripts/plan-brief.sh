@@ -368,6 +368,28 @@ plan_run_is_free() {
     fi
 }
 
+# The launch-config settings a launch other than `just orchestrate` names blank.
+#
+# config/onepipeline.launch.yaml, which every `start` names, states the run-end hooks and
+# the drafting graph `just orchestrate`'s runs take; a planning-family run never took any
+# of them, and a blank flag beats the document's key and names none. So each of the three
+# is named blank here unless the launch names it itself in "$@" — in either spelling,
+# because the engine refuses a flag given twice. Answers through `PLAN_LAUNCH_BLANKS`, an
+# array, for the reason `plan_options_parse` answers through globals.
+plan_launch_blanks() {
+    PLAN_LAUNCH_BLANKS=()
+    local flag argument named
+    for flag in --success-hook --failure-hook --pr-author-graph; do
+        named=false
+        for argument in "$@"; do
+            case "$argument" in
+                "$flag" | "$flag"=*) named=true ;;
+            esac
+        done
+        [ "$named" = true ] || PLAN_LAUNCH_BLANKS+=("$flag=")
+    done
+}
+
 # Read one planning flow's option grammar off "$@", leaving what it does not own alone.
 #
 # Every option below is shared by both entry points *as a grammar*, and each caller then

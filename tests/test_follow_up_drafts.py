@@ -9,12 +9,9 @@ sentence saying what to do. The command every party drafts through is driven end
 `tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py`; this is the
 in-process half those journeys cannot measure line by line.
 
-Nothing below the module is doubled. The node a draft names is resolved against real
-processes — this test's own, and a child it starts — read out of the real `/proc`, and git
-state is read from real repositories in a temporary directory.
-
-The registry names the draft reads are held to the installed engine by
-`tests/test_engine_contracts.py`.
+Nothing below the module is doubled. The node a draft names is the one the engine's
+dispatch-env hook passes on, set here as that hook sets it, and git state is read from real
+repositories in a temporary directory.
 """
 
 from __future__ import annotations
@@ -26,7 +23,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -34,7 +31,7 @@ import pytest
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import npm_installs
 from orchestrator.follow_up_drafts import Author, DispatchStamp, Draft, Refused
-from orchestrator.project_store import frontmatter
+from orchestrator.record_shapes import frontmatter
 
 #: A body carrying every required heading, with a fenced block whose own `## ` line is code.
 BODY = (
@@ -359,86 +356,24 @@ def test_an_author_names_exactly_what_its_kind_names(
         drafts.checked_author(kind, node, member)
 
 
-def _write_entry(runs: Path, run: str, name: str, content: object) -> None:
-    registry = runs / run / drafts.DISPATCH_REGISTRY
-    registry.mkdir(parents=True, exist_ok=True)
-    text = content if isinstance(content, str) else json.dumps(content)
-    (registry / name).write_text(text, encoding="utf-8")
-
-
-def _entry(pid: int, node: str, started: str | None) -> dict[str, object]:
-    return {"node": node, "pid": pid, "host": "here", "started": started}
-
-
-@pytest.fixture
-def child() -> Iterator[int]:
-    """A process this test starts, so an ancestor walk has a real parent to find: this one."""
-    started = subprocess.Popen(["sleep", "60"])  # noqa: S603, S607 - a child to walk up from
-    try:
-        yield started.pid
-    finally:
-        started.kill()
-        started.wait()
-
-
-def _live_start(pid: int) -> str:
-    started = drafts.process_started(pid)
-    assert started is not None, f"process {pid} has no start time to record"
-    return f"{drafts.PROC_STAT_START}{started}"
-
-
-def test_a_node_is_resolved_from_the_dispatch_a_process_descends_from(
-    tmp_path: Path, child: int
+def test_a_node_is_the_one_the_engine_names_to_the_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The walk starts at the process itself, and a pid matches only on the kernel's start time."""
-    _write_entry(
-        tmp_path, RUN, "self.json", _entry(os.getpid(), "the-node", _live_start(os.getpid()))
-    )
-
-    assert drafts.resolve_node(RUN, runs_root=tmp_path, pid=child) == "the-node"
-    assert drafts.resolve_node(RUN, runs_root=tmp_path, pid=os.getpid()) == "the-node"
-    assert drafts.lineage(child)[:2] == [child, os.getpid()]
+    """Read from the variable the dispatch-env hook passes on, and nothing else."""
+    monkeypatch.setenv(drafts.NODE_ID_ENV, "lane/the-node")
+    assert drafts.dispatched_node() == "lane/the-node"
 
 
-def test_a_recorded_start_time_the_live_process_disagrees_with_is_rejected(
-    tmp_path: Path, child: int
+@pytest.mark.parametrize("named", [None, "", "a\nnode"])
+def test_a_process_the_engine_named_no_node_to_drafts_an_unresolved_one(
+    monkeypatch: pytest.MonkeyPatch, named: str | None
 ) -> None:
-    """A pid the kernel has handed to another process names no dispatch."""
-    _write_entry(
-        tmp_path, RUN, "stale.json", _entry(os.getpid(), "stale-node", f"{drafts.PROC_STAT_START}1")
-    )
-
-    assert drafts.resolve_node(RUN, runs_root=tmp_path, pid=child) == drafts.UNRESOLVED
-
-
-def test_registry_entries_that_cannot_be_checked_are_left_out(tmp_path: Path) -> None:
-    """Unreadable, unchecked, or incomplete entries name nothing rather than a guess."""
-    pid = os.getpid()
-    _write_entry(tmp_path, RUN, "broken.json", "{not json")
-    _write_entry(tmp_path, RUN, "list.json", [pid])
-    _write_entry(tmp_path, RUN, "unstamped.json", _entry(pid, "a", None))
-    _write_entry(tmp_path, RUN, "other-spelling.json", _entry(pid, "b", "boot:1"))
-    _write_entry(tmp_path, RUN, "no-node.json", _entry(pid, "", _live_start(pid)))
-    _write_entry(tmp_path, RUN, "forged-node.json", _entry(pid, "a\nnode", _live_start(pid)))
-    _write_entry(tmp_path, RUN, "not-a-time.json", _entry(pid, "e", "linux-proc-stat:soon"))
-    _write_entry(
-        tmp_path, RUN, "bool-pid.json", {"node": "c", "pid": True, "started": _live_start(pid)}
-    )
-    (tmp_path / RUN / drafts.DISPATCH_REGISTRY / "unreadable.json").mkdir()
-    _write_entry(tmp_path, RUN, "good.json", _entry(pid + 1, "d", "linux-proc-stat:9"))
-
-    assert drafts.registered_dispatches(tmp_path, RUN) == {
-        pid + 1: drafts.RegisteredDispatch("d", "9")
-    }
-    assert drafts.registered_dispatches(tmp_path, "no-such-run") == {}
-    assert drafts.resolve_node("no-such-run", runs_root=tmp_path, pid=pid) == drafts.UNRESOLVED
-
-
-def test_a_process_that_is_gone_has_no_start_time_and_no_parent() -> None:
-    gone = 2**22 + 12345
-    assert drafts.process_started(gone) is None
-    assert drafts.process_parent(gone) is None
-    assert drafts.lineage(gone) == [gone]
+    """Absent, blank, or carrying a control character: no node is named rather than a guess."""
+    if named is None:
+        monkeypatch.delenv(drafts.NODE_ID_ENV, raising=False)
+    else:
+        monkeypatch.setenv(drafts.NODE_ID_ENV, named)
+    assert drafts.dispatched_node() == drafts.UNRESOLVED
 
 
 def test_the_runs_root_is_the_engines_own_resolution(
@@ -453,13 +388,12 @@ def test_the_runs_root_is_the_engines_own_resolution(
     assert named.resolve() == (tmp_path / drafts.DEFAULT_RUNS_ROOT).resolve()
 
 
-def test_a_runs_root_carrying_a_control_character_names_no_registry(
+def test_a_runs_root_carrying_a_control_character_names_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Not read as a path, and not replaced by the default: the node is left unresolved."""
+    """Not read as a path, and not replaced by the default."""
     monkeypatch.setenv(drafts.RUNS_ROOT_ENV, f"{tmp_path}\nruns")
     assert drafts.runs_root() is None
-    assert drafts.resolve_node(RUN, runs_root=None, pid=os.getpid()) == drafts.UNRESOLVED
 
 
 def _git(cwd: Path, *arguments: str) -> None:
@@ -545,6 +479,7 @@ def drafting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv(drafts.RUNS_ROOT_ENV, str(tmp_path / "runs"))
     monkeypatch.delenv(drafts.NODE_SCRATCH_ENV, raising=False)
     monkeypatch.delenv(drafts.SESSION_ENV, raising=False)
+    monkeypatch.delenv(drafts.NODE_ID_ENV, raising=False)
     monkeypatch.setattr(sys, "stdin", io.StringIO(BODY))
     monkeypatch.chdir(tmp_path)
     return root

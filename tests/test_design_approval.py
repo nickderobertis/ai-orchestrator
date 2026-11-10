@@ -117,6 +117,12 @@ OTHERWISE: Mapping[str, object] = {
 RULE = design_chain.plan_repository
 FITS = design_approval.fits_in_place
 CONTENT_READER = design_approval.validate_document_content
+#: The pinned engine's verdict on whether a stored item is its template's rendering in force,
+#: restored by the tests that render a real document into a real store.
+CHECKED = design_approval.checked
+
+#: What the pinned engine says, in its own words, of a stored item it refuses.
+ENGINE_REFUSAL = "item authoring:demo-design: the engine's own reason"
 
 
 @pytest.fixture(autouse=True)
@@ -134,6 +140,9 @@ def _the_working_directory_layer_answers(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(design_approval, "fits_in_place", lambda *_arguments: True)
     # Key tests use fabricated document records; the real-store tests restore this reader.
     monkeypatch.setattr(design_approval, "validate_document_content", lambda *_arguments: None)
+    # And no store holds them, so the engine's check accepts each as the rendering in force;
+    # the real-store tests below restore the engine's own verdict.
+    monkeypatch.setattr(design_approval, "checked", lambda *_arguments: None)
 
 
 @pytest.fixture
@@ -332,13 +341,19 @@ def test_the_key_covers_the_template_the_document_was_rendered_from() -> None:
     ids=["no provenance", "unreadable provenance", "foreign template", "stale chain", "edited"],
 )
 def test_a_document_that_is_not_the_rendering_in_force_has_no_key(
-    document: StoreDocument, said: str
+    document: StoreDocument, said: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each is refused naming the regenerate that repairs it, rather than keyed and unapproved."""
+    """Each the engine refuses is refused naming the regenerate that repairs it, and its reason.
+
+    Which repair is named is read off what the document records; that it is refused at all
+    is the engine's verdict, stated here as the engine states one.
+    """
+    monkeypatch.setattr(design_approval, "checked", lambda *_arguments: ENGINE_REFUSAL)
     with pytest.raises(design_approval.Unrendered) as refused:
         design_approval.approval_key(document, STATED)
     reason = str(refused.value)
     assert said in reason, reason
+    assert ENGINE_REFUSAL in reason, reason
     assert "onepipeline template resolve design-doc --json | onetaskgraph document render" in (
         reason
     ), reason
@@ -356,26 +371,30 @@ RECOPIED = _provenance("## What\n\nWhat was rendered, naming /home/someone/tasks
     ids=["no origin", "an empty origin", "an origin that is no string", "an unqualified origin"],
 )
 def test_a_mismatched_document_that_is_no_copy_is_refused_as_edited_as_it_always_was(
-    origin: object,
+    origin: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A document carrying no readable `onetaskgraph.origin` keeps the refusal it always had."""
+    monkeypatch.setattr(design_approval, "checked", lambda *_arguments: ENGINE_REFUSAL)
     stated = {} if origin is None else {plan_store.ORIGIN_KEY: origin}
     with pytest.raises(design_approval.Unrendered) as refused:
         design_approval.approval_key(_document(metadata=RECOPIED | stated), STATED)
     reason = str(refused.value)
-    assert "rendering to sha256:" in reason, reason
+    assert f"({ENGINE_REFUSAL})" in reason, reason
     assert "), so it was edited after it was rendered; change its answers and regenerate" in (
         reason
     ), reason
     assert "earlier plan store" not in reason and "just copy-plan" not in reason, reason
 
 
-def test_a_mismatched_copy_has_no_key_and_is_sent_to_its_origin_beside_the_regenerate() -> None:
+def test_a_mismatched_copy_has_no_key_and_is_sent_to_its_origin_beside_the_regenerate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A copy is refused like any mismatch, naming the re-copy that re-records its digest.
 
     It is still refused: whatever left the content off its recorded digest, a document that
-    is not the rendering its provenance records has no approval key.
+    the engine says is not the rendering its provenance records has no approval key.
     """
+    monkeypatch.setattr(design_approval, "checked", lambda *_arguments: ENGINE_REFUSAL)
     copied = _document(
         qualified_id="plans:I_1",
         metadata=RECOPIED | {plan_store.ORIGIN_KEY: "authoring:demo-design"},
@@ -764,7 +783,10 @@ def test_the_launch_is_refused_until_the_document_it_holds_is_the_one_approved(
     approved = _approved().metadata
     more = "## What\n\nMore.\n"
     _holds(monkeypatch, _document(metadata=approved, content=more))
+    # What the engine says of a rendering edited by hand, which the real-store tests drive.
+    monkeypatch.setattr(design_approval, "checked", lambda *_arguments: ENGINE_REFUSAL)
     edited = design_approval.assess("authoring:demo").refusal
+    monkeypatch.setattr(design_approval, "checked", lambda *_arguments: None)
     assert edited is not None
     assert "was edited after it was rendered" in edited
     assert (
@@ -1342,6 +1364,7 @@ def _designed(root: Path, monkeypatch: pytest.MonkeyPatch, answers: Mapping[str,
     create`, the way a writer renders one, from ``answers`` as the store then holds them.
     """
     monkeypatch.setattr(design_approval, "validate_document_content", CONTENT_READER)
+    monkeypatch.setattr(design_approval, "checked", CHECKED)
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__SHAPED__PLUGIN", "local-md")
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__SHAPED__CONFIG__ROOT", str(root))
     (root / "projects").mkdir(parents=True)
@@ -1439,6 +1462,87 @@ def test_a_document_holding_no_stored_answers_is_left_to_the_answers_supplied(
     assert FITS(design_approval.design_document(project)) is True
 
 
+def test_the_engine_holds_a_stored_rendering_and_refuses_it_once_edited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Whether a document is still its template's rendering is the pinned engine's answer.
+
+    The real engine's `template check design-doc --item` accepts the rendering a real store
+    holds, keying it, and refuses it once its body is edited by hand, its reason carried.
+    """
+    root = tmp_path / "store"
+    project = _designed(root, monkeypatch, CURRENT)
+    document = design_approval.design_document(project)
+    assert design_approval.checked(document) is None
+    design_approval.approval_key(document, design_approval.resolved_digest())
+
+    record = root / "documents" / "demo-design.md"
+    text = record.read_text(encoding="utf-8")
+    record.write_text(text.replace("A paginated listing.", "Something else.", 1), "utf-8")
+    edited = design_approval.design_document(project)
+    said = design_approval.checked(edited)
+    assert said is not None and "item shaped:demo-design:" in said, said
+    # The engine's own refusal ends with the repair it would run, which `checked` cuts at
+    # `ENGINE_REPAIR`: held here against the pinned engine's real words, so a release that
+    # reworded the delimiter fails rather than leaking a repair that body_digest overrides.
+    raw = subprocess.run(
+        [
+            str(npm_installs.ENGINE),
+            "template",
+            "check",
+            design_approval.TEMPLATE_NAME,
+            "--template-root",
+            str(design_approval.TEMPLATE_ROOT),
+            "--item",
+            str(edited.qualified_id),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert raw.returncode != 0 and design_approval.ENGINE_REPAIR in raw.stderr, raw.stderr
+    assert design_approval.ENGINE_REPAIR not in said, said
+    with pytest.raises(design_approval.Unrendered) as refused:
+        design_approval.approval_key(edited, design_approval.resolved_digest())
+    assert "was edited after it was rendered" in str(refused.value), refused.value
+    assert said in str(refused.value), refused.value
+
+
+@pytest.mark.parametrize(
+    ("engine", "said"),
+    [
+        (None, "`just bootstrap`"),
+        ("echo 'store unreadable' >&2; exit 2", "store unreadable"),
+    ],
+    ids=["no engine", "a failure naming no item"],
+)
+def test_an_engine_that_cannot_check_the_document_is_no_verdict_on_it(
+    engine: str | None, said: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An engine that cannot run, or fails without naming the item, refuses as a failure.
+
+    Raised as a plain :class:`OSError`, never :class:`~orchestrator.design_approval.Unrendered`,
+    so a broken checkout or store is never reported as a document to regenerate.
+    """
+    if engine is not None:
+        doubled = npm_installs.installed_command(node_modules=tmp_path / "node_modules")
+        doubled.parent.mkdir(parents=True)
+        # llmlint: ignore[e2e_not_mocked] Only the published engine this module spawns is
+        # doubled, to fail the way the real one fails on a store it cannot read.
+        doubled.write_text(f"#!/bin/sh\n{engine}\n", encoding="utf-8")
+        doubled.chmod(0o755)
+    monkeypatch.setattr(design_approval, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        npm_installs,
+        "ENGINE",
+        npm_installs.installed_command(node_modules=tmp_path / "node_modules"),
+    )
+    with pytest.raises(OSError, match=said) as failed:
+        CHECKED(_document())
+    assert not isinstance(failed.value, design_approval.Unrendered), failed.value
+
+
 def test_a_document_whose_stored_answers_the_template_no_longer_takes_is_sent_to_the_writer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1449,6 +1553,10 @@ def test_a_document_whose_stored_answers_the_template_no_longer_takes_is_sent_to
     document = design_approval.design_document(project)
     assert FITS(document) is False
     monkeypatch.setattr(design_approval, "fits_in_place", FITS)
+    # The stored document is the rendering in force; what the engine says of one rendered
+    # before the template moved is stated as it says it, and driven for real in
+    # `tests/plan_tooling/plan_flow/test_approve_design_recipe_e2e.py`.
+    monkeypatch.setattr(design_approval, "checked", lambda *_arguments: ENGINE_REFUSAL)
     provenance = document.metadata[design_approval.PROVENANCE]
     assert isinstance(provenance, dict), document.metadata
     stale = dataclasses.replace(
