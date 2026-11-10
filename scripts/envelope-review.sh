@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The planner channel's envelope validator, as config/onemessagebus.yaml names it.
+# The planner channel's envelope hook, as config/onemessagebus.yaml names it.
 #
-# `orchestrator/envelope_review.py` is the validator; this only gives it the environment
+# `orchestrator/envelope_review.py` is the hook; this only gives it the environment
 # its judged turn needs. That turn is one `oneharness run` under a config whose identity
 # chain names a portable indirection per alternate identity — CODEX_HOME for the second
 # Codex identity, CLAUDE_CONFIG_DIR for each alternate Claude subscription — which
@@ -11,10 +11,12 @@
 # reviewer, so an unauthenticated identity falls through the chain rather than leaving
 # every envelope unjudged.
 #
-# The bus reads this command's answer by exit status: 0 passes, 1 refuses with stderr as
-# the reason, and anything else is unjudged, which the bus never sends. The refusals
-# below exit 2 for that reason: a checkout this validator cannot read itself out of is
-# no verdict on the envelope.
+# The bus reads this command's answer as a hook's: exit 0 printing the envelope back
+# passes it (keep), 1 refuses with stderr as the reason, and anything else is unjudged,
+# which the bus never sends. The module prints the envelope on a pass; this wrapper
+# prints nothing of its own on stdout, which is the envelope's. The refusals below exit
+# 2 for that reason: a checkout this hook cannot read itself out of is no verdict on the
+# envelope.
 set -euo pipefail
 # Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
 export UV_NO_SYNC=1

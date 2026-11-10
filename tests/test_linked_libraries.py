@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from linked_divergences import DECLARED_DIVERGENCES, Divergence
 from llmlint_install import LLMLINT_DISTRIBUTION, host_tool_dir, installed_llmlint
 
 from orchestrator import npm_installs
@@ -709,22 +710,6 @@ def test_the_linked_onejudge_lets_a_workers_judge_side_be_a_list() -> None:
     )
 
 
-class Divergence(NamedTuple):
-    """One pin this host deliberately holds away from what the engine linked.
-
-    Both versions are named, so the declaration goes stale the moment either moves:
-    a divergence inherited across a bump is exactly the state these gates exist to
-    end, and one that only named a reason would be inherited silently.
-    """
-
-    #: What the adopted engine resolved.
-    linked: str
-    #: What `config/<crate>.version` names instead.
-    pinned: str
-    #: Why the two cannot be the same release today.
-    because: str
-
-
 #: Every crate the adopted engine links that this repository also pins a CLI for,
 #: as crate → the version file beside it. The pin and the linked copy answer
 #: different questions — one is what this host's own verbs run, the other is what a
@@ -789,7 +774,7 @@ class LinkedCore(NamedTuple):
 #: packages: `config/oneharness.version` reads 0.26.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
 #: against as 0.29.1 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
-#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.104.0 the
+#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.105.0 the
 #: engine links 0.29.1 for every dependent — while the sibling `oneagentgraph-cli`
 #: wheel declares 0.29.1 and `onejudge-cli` 0.29.0, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
@@ -810,9 +795,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.9.3", core="0.29.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.22.2", core="0.29.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.104.0", core="0.29.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.11.0", core="0.29.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.22.4", core="0.29.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.105.0", core="0.29.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -831,15 +816,6 @@ LINKED_IN_BINARY = re.compile(
     + b"|".join(crate.encode() for crate in sorted(LINKED_CRATES, key=len, reverse=True))
     + rb")-([0-9]+\.[0-9]+\.[0-9]+)\b"
 )
-
-#: The pins that may not be reconciled today, each with the measured pair it was
-#: declared against. A divergence is permitted where the linked release is not
-#: installable from PyPI at all, or where this host's own verbs must run a later release
-#: than any engine links — never as a convenience, and never as "not yet looked at",
-#: because both read identically from here a release cycle later. Empty, and kept: the
-#: adopted engine 0.104.0 links the onevcs 0.62.1 the manager's verbs run, so the last
-#: declared pair closed with it.
-DECLARED_DIVERGENCES: dict[str, Divergence] = {}
 
 
 def _pinned_cli(version_file: str) -> str:

@@ -253,13 +253,13 @@ ANSWER = "An opaque token; the node id would leak the ordering."
 
 #: What every launch's recorded bus configuration must say, read as the values that make
 #: it *this checkout's* `config/onemessagebus.yaml` rather than any configuration at all —
-#: the layout, the envelope validator this host adds, and the reply window this host
+#: the layout, the envelope hook this host adds, and the reply window this host
 #: measured. `tests/test_onemessagebus_config.py` holds each to the file and to the release
 #: that loads it; these are restated rather than parsed because nothing in this suite's
 #: environment reads YAML, and the three together are what a launch that dropped
 #: `--bus-config` or pointed it elsewhere would lose.
 BUS_PROFILE = "planner-channel"
-BUS_VALIDATOR_COMMAND = ["scripts/envelope-review.sh"]
+BUS_HOOK_COMMAND = ["scripts/envelope-review.sh"]
 BUS_REPLY_WINDOW_SECONDS = 3000
 
 #: How long a journey waits for a launch to reach a dispatched turn. Load-scaled like
@@ -1948,11 +1948,11 @@ def test_every_launch_records_this_checkouts_bus_configuration_for_its_run(
     `onepipeline start`, which is the verb every launch shape reaches, and the engine
     records the configuration it parsed in the run's `launch.json` under `bus_config`. So
     the record is read rather than the argv: it says what the engine actually took, which
-    is what decides the validators its replies are judged by and the reply window its
+    is what decides the hooks its replies are judged by and the reply window its
     observer's judge side is served under.
 
     Asserted as the values that make it this checkout's configuration — the layout, this
-    host's envelope validator, and its measured reply window — because an engine given no
+    host's envelope hook, and its measured reply window — because an engine given no
     configuration records none, and one given another file records other values. The
     adopted shape is read after its adoption, which passes no `--bus-config` of its own, so
     it is also the run keeping the configuration its launch retained.
@@ -1974,12 +1974,14 @@ def test_every_launch_records_this_checkouts_bus_configuration_for_its_run(
         f"bus's defaults rather than this host's: {sorted(recorded)}"
     )
     assert bus.get("profile") == BUS_PROFILE, bus
-    validators = bus.get("validators")
-    assert isinstance(validators, list) and [
-        validator.get("command") for validator in validators if isinstance(validator, dict)
-    ] == [BUS_VALIDATOR_COMMAND], (
-        f"run {dispatch.run}'s channel does not judge replies by this host's envelope "
-        f"validator: {validators}"
+    hooks = bus.get("hooks")
+    assert isinstance(hooks, list) and [
+        hook.get("command") for hook in hooks if isinstance(hook, dict)
+    ] == [BUS_HOOK_COMMAND], (
+        f"run {dispatch.run}'s channel does not judge replies by this host's envelope hook: {hooks}"
+    )
+    assert not bus.get("validators"), (
+        f"run {dispatch.run} recorded deprecated validators: {bus.get('validators')}"
     )
     codecs = bus.get("codecs")
     monitor = codecs.get("monitor") if isinstance(codecs, dict) else None

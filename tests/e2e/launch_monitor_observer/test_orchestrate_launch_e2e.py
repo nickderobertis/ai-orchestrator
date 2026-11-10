@@ -2511,7 +2511,7 @@ def test_the_launch_hands_the_engine_this_checkouts_bus_configuration(
 ) -> None:
     """`just orchestrate` passes `--bus-config config/onemessagebus.yaml`, and the engine kept it.
 
-    Every channel verb of the run — the reply validator, the monitor's author and grants,
+    Every channel verb of the run — the reply hook, the monitor's author and grants,
     the monitor binding's reply window — is the configuration the engine was handed, so a
     launch that stopped naming this file would run a planner channel with the layout's
     defaults: no envelope review, no monitor author to accept a fix from, and no binding
@@ -2551,11 +2551,13 @@ def test_the_launch_hands_the_engine_this_checkouts_bus_configuration(
     assert bus["authors"]["monitor"]["capabilities"] == grants, (
         f"the launch recorded monitor grants other than this checkout's {grants}: {bus['authors']}"
     )
-    validators = [validator["command"] for validator in bus["validators"]]
+    hooks = [hook["command"] for hook in bus["hooks"]]
     command = [word.strip() for word in declared(r"^    command: \[([^\]]*)\]$").split(",")]
-    assert validators == [command], (
-        f"the launch recorded envelope validators other than this checkout's {command}: "
-        f"{bus['validators']}"
+    assert hooks == [command], (
+        f"the launch recorded envelope hooks other than this checkout's {command}: {bus['hooks']}"
+    )
+    assert not bus.get("validators"), (
+        f"the launch recorded deprecated validators: {bus.get('validators')}"
     )
 
 

@@ -42,6 +42,7 @@ from typing import NamedTuple
 
 import pytest
 from harness_configs import extends_chain, harness_routing
+from linked_divergences import DECLARED_DIVERGENCES
 from project_fixtures import helper
 from waits import timeout as e2e_timeout
 
@@ -285,7 +286,12 @@ def _engine_linked_onejudge() -> str:
 
 @pytest.fixture(scope="module")
 def onejudge_bin(adopted_onejudge_version: str) -> str:
-    """The pinned onejudge, which must be the release the adopted engine links."""
+    """The pinned onejudge, which must be the release the adopted engine links.
+
+    Or the release `tests/linked_divergences.py` declares this host holds instead of the
+    linked one — the one source for a pin held away from the engine, and named by both
+    versions so it goes stale the moment either moves.
+    """
     if not ONEJUDGE.is_file():
         pytest.fail(f"worktree-local onejudge missing at {ONEJUDGE} — run 'just bootstrap'")
     reported = subprocess.run(
@@ -293,7 +299,12 @@ def onejudge_bin(adopted_onejudge_version: str) -> str:
     )
     assert reported.stdout.strip() == f"onejudge {adopted_onejudge_version}", reported
     linked = _engine_linked_onejudge()
-    assert linked == adopted_onejudge_version, (
+    divergence = DECLARED_DIVERGENCES.get("onejudge")
+    declared = divergence is not None and (divergence.linked, divergence.pinned) == (
+        linked,
+        adopted_onejudge_version,
+    )
+    assert linked == adopted_onejudge_version or declared, (
         f"the adopted engine links onejudge {linked} while config/onejudge.version names "
         f"{adopted_onejudge_version}, so this journey would not drive what a dispatch runs"
     )

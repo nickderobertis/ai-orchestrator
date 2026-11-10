@@ -42,9 +42,9 @@ import json
 import subprocess
 from pathlib import Path
 
+from linked_divergences import DECLARED_DIVERGENCES
 from provisioning import run_setup, setup_repo
 from test_linked_libraries import (
-    DECLARED_DIVERGENCES,
     LINKED_HARNESS_CORES,
     LINKED_IN_BINARY,
     RECONCILED_PINS,

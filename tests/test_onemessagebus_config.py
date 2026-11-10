@@ -6,7 +6,7 @@ the command line's own `Config::load` and link resolution, beside a copy carryin
 unknown key that the same load refuses by name — without that control, a verb that
 ignored `--config` would pass too. Then each value is held to the statement it comes from:
 the monitor's author to `AGENTS.md` and to the reasons the bus gave before it stopped
-naming the monitor, the reply window to the shim's default, the validator to the one
+naming the monitor, the reply window to the shim's default, the hook to the one
 in-repo entry point, the frames link to the onejudge this host adopts, and the layout link
 to the engine this host adopts — whose published planner-channel layout is where the
 channel's queues now come from, since the adopted bus compiles no layout in.
@@ -56,7 +56,7 @@ ENGINE_QUEUES = ["command-outcomes", "commands", "replies", "surfaces"]
 #: The bus this checkout pins, never one the ambient PATH offers first.
 BUS = str(REPO_ROOT / ".venv" / "bin" / "onemessagebus")
 
-#: A verdict alone: judged by no validator (it carries no commands), so a `validate` of it
+#: A verdict alone: judged by no hook (it carries no commands), so a `validate` of it
 #: answers what loading and resolving the configuration answered.
 VERDICT = '{"version":3,"completion":true,"message":"main"}'
 
@@ -238,12 +238,20 @@ def test_the_binding_opens_on_the_reply_window_and_the_engines_asker() -> None:
 
 
 def test_every_reply_carrying_commands_is_judged_by_the_envelope_review_with_a_cache() -> None:
-    """One validator, over commands, through the in-repo entry point, keyed on its bar."""
-    validators = _value(r"^validators:\n((?:  .+\n)+)")
-    assert validators.splitlines() == [
+    """One hook, over commands, through the in-repo entry point, keyed on its bar.
+
+    It declares no `routes`, so the bus lets it keep, change, drop or refuse and never
+    reroute; and the file declares no `validators:` block, which onemessagebus deprecated in
+    the hook's favour. The argv and the cache directory are the ones the validator it
+    replaced declared, so the passes that validator recorded key the same and read as keeps.
+    """
+    assert re.search(r"^validators:", _lines(), re.MULTILINE) is None, (
+        "config/onemessagebus.yaml declares a deprecated `validators:` block"
+    )
+    hooks = _value(r"^hooks:\n((?:  .+\n)+)")
+    assert hooks.splitlines() == [
         "  - on: replies",
         "    when: {carries: commands}",
-        "    kind: command",
         "    command: [scripts/envelope-review.sh]",
         "    cache:",
         "      dir: .cache/envelope-passes",

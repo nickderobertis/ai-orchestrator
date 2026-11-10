@@ -505,6 +505,7 @@ ASK_SEAM_JOURNEYS: tuple[AskSeamJourney, ...] = (
         f"{ASK_SEAM_ROOT}/follow_up_drafts_launch",
         "askSeamFollowUpDraftsLaunch",
     ),
+    AskSeamJourney("ask-seam-hook-golden", f"{ASK_SEAM_ROOT}/hook_golden", "askSeamHookGolden"),
     AskSeamJourney("ask-seam-launch", f"{ASK_SEAM_ROOT}/launch", "askSeamLaunch"),
     AskSeamJourney(
         "ask-seam-planner-fallback-ask",

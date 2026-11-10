@@ -1,0 +1,23 @@
+{
+  "name": "support-linked-divergences",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/linked_divergences.py",
+      "{projectRoot}/project.json"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

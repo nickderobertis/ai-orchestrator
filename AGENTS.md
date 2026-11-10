@@ -1587,17 +1587,21 @@ read with `just channel-next --flow <ID>` and answered with `just channel-reply 
   never send it again, not even after `just orchestrate --adopt`, because the adopting
   driver replays each envelope a dead one had claimed exactly once. The run's
   `edit-committed` and `edit-rejected` records stay the record, each naming the
-  `envelope` it came in, and are where a `queued` edit's fate is read. The asker's answer is the reply
+  `envelope` it came in, and are where a `queued` edit's fate is read. `dropped` means a
+  bus hook discarded the whole envelope: exit 0, `reply` 0, and nothing queued, applied
+  or delivered. `hooked: changed` means a hook rewrote or rerouted part of the envelope
+  before it was queued, so what was applied is not what you sent. The asker's answer is the reply
   echoing its correlation and nothing else:
   a wait that elapses answers `timeout` at exit 1, never a ruling, so no token goes in
   your prose.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **Task prose in an envelope is criteria, and is held to the criteria bar before any
-  of it is sent** — the one validator `config/onemessagebus.yaml` declares on a reply
+  of it is sent** — the one hook `config/onemessagebus.yaml` declares on a reply
   carrying commands reads an `amend`, and the whole task an `add`, `retry` or `requeue`
   states, as the envelope states it and reads no run state, so a `requeue` folding bad
-  fields onto a parked node is the engine's and the merge path's to refuse. The
-  validator judges the whole offer before any of it is appended or applied, so a
+  fields onto a parked node is the engine's and the merge path's to refuse. A pass
+  prints the envelope back unchanged, which the bus keeps. The
+  hook judges the whole offer before any of it is appended or applied, so a
   refusal refuses the whole envelope, and the escape it names is a `note`'s `text`, which touches no criterion
   and is never read (a note's `criterion` is). A novel whole task also spends one judged
   turn under the reviewer `just review-plan` uses, because nothing holds a pass for it;

@@ -850,24 +850,28 @@ def _main(
     argv: list[str] | None = None,
 ) -> tuple[int, str, str]:
     """``main``'s exit status, stdout and stderr for ``stdin``, as the bus runs it."""
-    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(stdin.encode("utf-8"))))
     status = main([] if argv is None else argv, judge=judge)
     said = capsys.readouterr()
     return status, said.out, said.err
 
 
-def test_the_validator_answers_on_the_exit_protocol_the_bus_reads(
+def test_the_hook_answers_on_the_protocol_the_bus_reads(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Exit 0 passes; 1 refuses with stderr as the reason; 2 is unjudged.
+    """A pass prints the envelope back and exits 0; 1 refuses with stderr; 2 is unjudged.
 
-    The bus discards a validator's stdout, so every word a manager is told is on stderr,
-    and a pass says nothing at all. A turn that answered nothing is neither verdict: it
-    exits with the status the bus reads as unjudged, and its repair is to send the same
-    envelope again rather than to correct it.
+    The bus reads a hook's stdout as the message from then on: the input printed back
+    byte for byte is a keep, and nothing at all is a drop, so a pass prints exactly what
+    it read and every word a manager is told is on stderr. A turn that answered nothing
+    is neither verdict: it exits with the status the bus reads as unjudged, and its repair
+    is to send the same envelope again rather than to correct it.
     """
     sound = json.dumps(_envelope(_amend(SOUND)))
-    assert _main(monkeypatch, capsys, sound, ScriptedJudge()) == (0, "", "")
+    assert _main(monkeypatch, capsys, sound, ScriptedJudge()) == (0, sound, "")
+    # The bytes, not a re-serialization: other spacing and a trailing newline survive.
+    spaced = json.dumps(_envelope(_amend(SOUND)), indent=None, separators=(" ,", " : ")) + "\n"
+    assert _main(monkeypatch, capsys, spaced, ScriptedJudge()) == (0, spaced, "")
 
     harmful = json.dumps(_envelope(_amend("The required checks pass.")))
     status, out, err = _main(monkeypatch, capsys, harmful, ScriptedJudge())

@@ -359,10 +359,10 @@ def test_each_planning_launch_records_the_session_that_made_it(
 
 
 #: What makes a recorded bus configuration this checkout's: the layout, this host's
-#: envelope validator, and its measured reply window, each held to the file itself by
+#: envelope hook, and its measured reply window, each held to the file itself by
 #: `tests/test_onemessagebus_config.py`.
 BUS_PROFILE = "planner-channel"
-BUS_VALIDATOR_COMMAND = ["scripts/envelope-review.sh"]
+BUS_HOOK_COMMAND = ["scripts/envelope-review.sh"]
 BUS_REPLY_WINDOW_SECONDS = 3000
 
 
@@ -388,12 +388,14 @@ def test_each_planning_launch_records_this_checkouts_bus_configuration(
         f"defaults rather than this host's. The flow reported:\n{observed.reported}"
     )
     assert bus.get("profile") == BUS_PROFILE, bus
-    validators = bus.get("validators")
-    assert isinstance(validators, list) and [
-        validator.get("command") for validator in validators if isinstance(validator, dict)
-    ] == [BUS_VALIDATOR_COMMAND], (
-        f"run {launched}'s channel does not judge replies by this host's envelope validator: "
-        f"{validators}"
+    hooks = bus.get("hooks")
+    assert isinstance(hooks, list) and [
+        hook.get("command") for hook in hooks if isinstance(hook, dict)
+    ] == [BUS_HOOK_COMMAND], (
+        f"run {launched}'s channel does not judge replies by this host's envelope hook: {hooks}"
+    )
+    assert not bus.get("validators"), (
+        f"run {launched} recorded deprecated validators: {bus.get('validators')}"
     )
     codecs = bus.get("codecs")
     monitor = codecs.get("monitor") if isinstance(codecs, dict) else None

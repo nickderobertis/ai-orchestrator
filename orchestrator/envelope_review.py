@@ -1,13 +1,18 @@
 """Hold every live edit that changes what a node's judge reads to the criteria bar.
 
-This is the command validator `config/onemessagebus.yaml` declares on the planner
-channel's `replies` queue for every envelope carrying commands. The bus runs it before
-anything is appended — for `just channel-reply` and for the engine alike — with the
-offered envelope as one line of JSON on stdin, and reads its answer by exit status alone:
-``0`` passes the envelope, ``1`` refuses it with this module's stderr as the reason, and
-anything else leaves it unjudged, which the bus never sends either. Only a pass is cached,
-by the bus, keyed on the envelope's bytes and on what ``--bar-fingerprint`` prints — which
-is :func:`bar_in_force`, so moving either tier of the bar invalidates every recorded pass.
+This is the command hook `config/onemessagebus.yaml` declares on the planner channel's
+`replies` queue for every envelope carrying commands. The bus runs it before anything is
+appended — for `just channel-reply` and for the engine alike — with the offered envelope
+as one line of JSON on stdin, and reads its answer as onemessagebus's `hooks.md`
+states a hook's: a pass **prints the bytes it read back, unchanged**, and exits ``0``,
+which the bus reads as *keep*; ``1`` refuses the envelope with this module's stderr as
+the reason; and anything else leaves it unjudged, which the bus never sends either. A
+pass must print: an exit ``0`` with nothing on stdout is a *drop*, which would silently
+discard every reply carrying commands. This module never changes an envelope, so keep
+is the only outcome its ``0`` produces. Only a pass is cached, by the bus, keyed on the
+envelope's bytes and on what ``--bar-fingerprint`` prints — which is
+:func:`bar_in_force`, so moving either tier of the bar invalidates every recorded pass —
+and a pass recorded while this module was declared as a validator reads as a keep.
 That is the one place this bar can be asked: a live edit reaches a node through the
 channel rather than through the plan store, so `just check-plan` — which reads a plan —
 never sees one, and `just review-plan` never records one.
@@ -814,8 +819,15 @@ def _said(reason: str, repair: str) -> None:
     print(f"{reason}\n{repair}", file=sys.stderr)
 
 
+def _kept(offered: bytes) -> None:
+    """Print the envelope back exactly as it was read, which is how a hook keeps it."""
+    sys.stdout.flush()
+    sys.stdout.buffer.write(offered)
+    sys.stdout.buffer.flush()
+
+
 def main(argv: Sequence[str] | None = None, judge: Judge = plan_review.verdict) -> int:
-    """Judge one reply envelope on stdin, or print the bar's fingerprint.
+    """Judge one envelope on stdin, printing it back on a pass, or print the fingerprint.
 
     ``judge`` is the one judged turn, real by default; a test hands over a scripted one
     at this boundary rather than standing the harness in below it.
@@ -830,12 +842,15 @@ def main(argv: Sequence[str] | None = None, judge: Judge = plan_review.verdict) 
             f"it reads one envelope on stdin, or takes {BAR_FINGERPRINT_FLAG} alone",
         )
         return UNJUDGED
+    # The exact bytes, not a decoding of them: a pass prints them back, and the bus tells
+    # keep from change by bytes, never by parsed value.
+    offered = sys.stdin.buffer.read()
     try:
         # llmlint: ignore[boundary_inputs_validated] The envelope is the channel's open
-        # contract and the bus has already parsed it as a JSON object before any validator
+        # contract and the bus has already parsed it as a JSON object before any hook
         # runs; every field this reads is narrowed where it is read in `reviewables` and
         # `stated_graph`, and a shape neither reads moves nothing.
-        envelope = json.load(sys.stdin)
+        envelope = json.loads(offered)
     except ValueError as unreadable:
         _said(
             f"the envelope handed to this validator is not JSON ({unreadable})",
@@ -860,6 +875,7 @@ def main(argv: Sequence[str] | None = None, judge: Judge = plan_review.verdict) 
         )
         return UNJUDGED
     if reason is None:
+        _kept(offered)
         return 0
     _said(
         f"this reply states task prose a judge would hold its worker to as work — {reason}",

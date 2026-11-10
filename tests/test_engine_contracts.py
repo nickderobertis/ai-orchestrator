@@ -3772,6 +3772,54 @@ def test_what_this_host_reads_of_the_unpublished_verdict_is_the_engines_declared
     )
 
 
+#: The JSON block onepipeline's `docs/contract-divergences.md` states the reply receipt in
+#: (entry 64): each key, whether it is always present, and the words it may answer.
+REPLY_RECEIPT_CONTRACT = re.compile(r'```json\n(\{\n  "reply": .*?\n\})\n```', re.DOTALL)
+
+#: What AGENTS.md's *Answering on the channel* tells a manager the two hook receipt words
+#: mean, as one passage each, read with presentation dropped.
+MANAGER_DROPPED_SENTENCE = (
+    "dropped means a bus hook discarded the whole envelope: exit 0, reply 0, and nothing "
+    "queued, applied or delivered."
+)
+MANAGER_HOOKED_SENTENCE = (
+    "hooked: changed means a hook rewrote or rerouted part of the envelope before it was "
+    "queued, so what was applied is not what you sent."
+)
+
+
+def test_the_hook_receipt_words_the_manager_reads_are_the_engines_own() -> None:
+    """`dropped` and `hooked: changed` mean on the receipt what AGENTS.md says they mean.
+
+    Read off the adopted engine's own statement of the reply receipt — its JSON block, which
+    the engine's suite holds its `submit` to, and the hooks amendment beneath it — so a
+    release that renamed a word, moved what a dropped receipt answers or stopped reporting a
+    change fails here rather than as a manager misreading a receipt.
+    """
+    divergences = _source(ONEPIPELINE_DOCS, "contract-divergences.md")
+    declared = REPLY_RECEIPT_CONTRACT.search(divergences)
+    assert declared is not None, (
+        f"onepipeline {ONEPIPELINE_DOCS.ref}'s contract-divergences.md no longer states the "
+        "reply receipt as its JSON block (entry 64); re-read where the receipt is stated"
+    )
+    receipt = json.loads(declared.group(1))
+    assert "dropped" in receipt["state"]["values"], receipt["state"]
+    assert receipt["hooked"]["values"] == ["changed"], receipt["hooked"]
+    amendment = _plain(divergences)
+    assert (
+        "state answers dropped when hooks dropped the whole envelope: nothing was queued, "
+        "applied or delivered, reply is 0, and that is a receipt at exit 0 rather than a refusal"
+    ) in amendment, "entry 64's hooks amendment no longer says what a dropped receipt answers"
+    assert (
+        "hooked is present, answering changed, only when a hook changed or rerouted any part "
+        "of the envelope before it was queued, and what was applied is then the changed envelope"
+    ) in amendment, "entry 64's hooks amendment no longer says when `hooked` is present"
+
+    manager = _plain(MANAGER.read_text("utf-8"))
+    assert MANAGER_DROPPED_SENTENCE in manager, "AGENTS.md no longer says what `dropped` means"
+    assert MANAGER_HOOKED_SENTENCE in manager, "AGENTS.md no longer says what `hooked` means"
+
+
 def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it() -> None:
     """A node an envelope states is judged on the task its dispatch will read, so how the
     engine renders an amendment into a task is restated in `orchestrator/envelope_review.py`,

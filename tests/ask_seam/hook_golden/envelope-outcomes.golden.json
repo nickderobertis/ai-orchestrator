@@ -1,0 +1,134 @@
+[
+  {
+    "name": "add-whole-task-passes",
+    "judge": "passes",
+    "run": "gated",
+    "envelope": {
+      "version": 3,
+      "commands": [
+        {
+          "op": "add",
+          "node": {
+            "id": "golden-added",
+            "persona": "engineer",
+            "deps": [
+              "gate"
+            ],
+            "task": "## What\n\nAdd the golden refund route the checkout flow needs and the test that drives it.\n\n## Why\n\nThe user cannot complete a purchase without it.\n\n## Acceptance criteria\n\n- The finished tree carries an assertion whose subject is that behaviour, so removing it fails.\n\n## Additional info\n\nRun `just test` over what you changed, and commit it."
+          }
+        }
+      ]
+    },
+    "outcome": "pass"
+  },
+  {
+    "name": "amend-deterministic-refusal",
+    "judge": "passes",
+    "run": "gated",
+    "envelope": {
+      "version": 3,
+      "commands": [
+        {
+          "op": "amend",
+          "id": "work",
+          "text": "The required checks pass."
+        }
+      ]
+    },
+    "outcome": "refuse",
+    "reason": "this reply states task prose a judge would hold its worker to as work — the amendment for node 'work': it names 'required checks pass' — that is work the dispatch cannot do, so this amendment holds the worker to state that arrives after it is gone. State the worker-side precondition instead. Or send it as a `note`, which touches no acceptance criterion.\nnothing was sent, so no other command in it was applied either; correct it and send the whole envelope again\n"
+  },
+  {
+    "name": "add-judged-refusal",
+    "judge": "refuses",
+    "run": "gated",
+    "envelope": {
+      "version": 3,
+      "commands": [
+        {
+          "op": "add",
+          "node": {
+            "id": "golden-reviewed",
+            "persona": "engineer",
+            "deps": [
+              "gate"
+            ],
+            "task": "## What\n\nAdd the golden invoice export the checkout flow needs and the test that drives it.\n\n## Why\n\nThe user cannot complete a purchase without it.\n\n## Acceptance criteria\n\n- The finished tree carries an assertion whose subject is that behaviour, so removing it fails.\n\n## Additional info\n\nRun `just test` over what you changed, and commit it."
+          }
+        }
+      ]
+    },
+    "outcome": "refuse",
+    "reason": "this reply states task prose a judge would hold its worker to as work — the task added as node 'golden-reviewed' was refused by its judged review, which named 1 criterion(s):\nthe task added as node 'golden-reviewed': - The finished tree carries an assertion whose subject is that behaviour — names no journey a reader could run to watch that assertion fail\nnothing was sent, so no other command in it was applied either; correct it and send the whole envelope again\n"
+  },
+  {
+    "name": "add-structural-refusal",
+    "judge": "passes",
+    "run": "gated",
+    "envelope": {
+      "version": 3,
+      "author": "planner",
+      "commands": [
+        {
+          "op": "add",
+          "node": {
+            "id": "library-2",
+            "repo": "library",
+            "title": "feat: release the library again",
+            "deps": [
+              "gate"
+            ],
+            "expects_no_diff": true,
+            "task": "Release.\n\n## Acceptance criteria\n- Released."
+          }
+        },
+        {
+          "op": "add",
+          "node": {
+            "id": "follow-up",
+            "repo": "service",
+            "title": "feat: record the follow-up",
+            "deps": [
+              "library-2"
+            ],
+            "adoption": "fast",
+            "expects_no_diff": true,
+            "task": "Report.\n\n## Acceptance criteria\n- Reported."
+          }
+        }
+      ]
+    },
+    "outcome": "refuse",
+    "reason": "this reply states a node this host's structural plan rules refuse — node 'follow-up', as this reply states it: adoption: this node adopts `fast` behind a dependency that releases (library-2 ({registry}/library-origin)) while it publishes under 'local-direct', which opens no change request. When the release is not out at publication, a `fast` node is published as a draft carrying the reason, and 'local-direct' refuses a draft by name — so this node would fail at its last step after all of its work. State `adoption: published` so it waits for the release, publish it under a policy that opens a change request (change-open, change-auto, change-direct), or drop the edge if the work does not need the release.\nnothing was sent, so no other command in it was applied either; correct the field each refusal names and send the whole envelope again\n"
+  },
+  {
+    "name": "note-carrying-a-criterion",
+    "judge": "passes",
+    "run": "gated",
+    "envelope": {
+      "version": 3,
+      "commands": [
+        {
+          "op": "note",
+          "id": "work",
+          "addressee": "worker",
+          "deliver": "next",
+          "text": "The golden corpus reached this node.",
+          "criterion": "The finished tree carries an assertion whose subject is the behaviour this change adds, so removing that behaviour fails it."
+        }
+      ]
+    },
+    "outcome": "pass"
+  },
+  {
+    "name": "verdict-without-commands",
+    "judge": "passes",
+    "run": "settled",
+    "envelope": {
+      "version": 3,
+      "completion": true,
+      "reason": "golden corpus: every node settled done"
+    },
+    "outcome": "pass"
+  }
+]
