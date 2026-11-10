@@ -46,7 +46,8 @@
 #   - A producer this host will install but has not yet adopted may carry its rule
 #     ahead of its first release, so a node adopting that release waits for the right
 #     artifact from the start. `orchestrator/host_installs.py` names each such producer
-#     in `AWAITING_FIRST_ADOPTION` until the node adopting it adds its row and pin.
+#     in `AWAITING_FIRST_ADOPTION` until the node adopting it adds its row and pin:
+#     `onefollowup`, whose `pypi` is the `onefollowup-cli` wheel.
 # `release_change.head` finds the producer's open release change request by its
 # release-plz head-branch prefix, so `release holdup` can name its failing checks.
 version: 1
@@ -106,3 +107,7 @@ repositories:
   - match: {host: github.com, owner: nickderobertis, name: onetaskgraph-ui}
     declaration: merge
     default_target: npm
+  - match: {host: github.com, owner: nickderobertis, name: onefollowup}
+    release_change: {head: "release-plz-*"}
+    declaration: merge
+    default_target: pypi

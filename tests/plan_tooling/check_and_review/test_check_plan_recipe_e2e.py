@@ -3173,10 +3173,11 @@ AWAITING = "github.com/nickderobertis/awaiting-producer"
 def _awaiting_copy(root: Path) -> tuple[Path, dict[str, str]]:
     """A copy of this tree whose set and override both name ``AWAITING``, and its variables.
 
-    The tracked set is empty, so the one way to drive R7 over a producer awaiting its
-    first adoption through the recipe is a tree that names one: this tree exactly, with
-    one entry added to `AWAITING_FIRST_ADOPTION` and the rule that goes with it appended to
-    the override, run on this checkout's install with `orchestrator` imported from the copy.
+    The tracked set may be empty, so the one way to drive R7 over a producer awaiting its
+    first adoption through the recipe, whatever the set holds, is a tree that names one: this
+    tree exactly, with one entry added to `AWAITING_FIRST_ADOPTION` and the rule that goes
+    with it appended to the override, run on this checkout's install with `orchestrator`
+    imported from the copy.
     """
     copy = root / "checkout"
     copy.mkdir()
@@ -3184,13 +3185,13 @@ def _awaiting_copy(root: Path) -> tuple[Path, dict[str, str]]:
     answering_this_checkouts_origin(copy)
     shared = share_this_checkouts_install(copy)
     installs = copy / "orchestrator" / "host_installs.py"
-    empty = "AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset()\n"
     text = installs.read_text(encoding="utf-8")
-    assert empty in text, "the tracked set is no longer empty, so this copy has nothing to add"
+    declared = re.search(r"^AWAITING_FIRST_ADOPTION: frozenset\[str\] = .*\n", text, re.M)
+    assert declared is not None, "the copy names no AWAITING_FIRST_ADOPTION to add to"
     installs.write_text(
-        text.replace(
-            empty, f"AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset({{{AWAITING!r}}})\n"
-        ),
+        text[: declared.end()]
+        + f"AWAITING_FIRST_ADOPTION = AWAITING_FIRST_ADOPTION | {{{AWAITING!r}}}\n"
+        + text[declared.end() :],
         encoding="utf-8",
     )
     releases = copy / "config" / "onevcs.releases.yml"

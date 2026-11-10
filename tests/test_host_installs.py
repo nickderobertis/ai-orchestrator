@@ -329,9 +329,11 @@ def _override_default_targets() -> dict[RepoIdentity, str]:
 
 
 #: The producers whose override rule precedes their first adoption, stated here in full
-#: for the reason `EXPECTED_ROWS` is: none, since `onebudgetspec`'s first release was
-#: adopted with its row, its pin and its dependency.
-EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset()
+#: for the reason `EXPECTED_ROWS` is: `onefollowup`, whose `pypi` target is the
+#: `onefollowup-cli` wheel, until the node adopting its first release gives it a row, a
+#: pin and a dependency.
+ONEFOLLOWUP: RepoIdentity = "github.com/nickderobertis/onefollowup"
+EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset({ONEFOLLOWUP})
 #: The producers whose override default is the artifact a consumer outside this repository
 #: waits on, stated in full for the same reason: printobserver, whose `github-release` is the
 #: program's own release, privateterms, whose `crate` is the specification's Rust crate, and
@@ -343,8 +345,8 @@ EXPECTED_CONSUMER_DEFAULTS: frozenset[RepoIdentity] = frozenset(
     {PRINTOBSERVER, PRIVATETERMS, TASK_UI}
 )
 #: A producer that has released nothing yet, standing in for the next one whose override
-#: rule precedes its first adoption: the set is empty, and what it admits still has to be
-#: shown on a copy holding one.
+#: rule precedes its first adoption, so what the set admits is shown on a copy of the
+#: override as well as on the tracked one.
 UNRELEASED: RepoIdentity = "github.com/nickderobertis/unreleased"
 #: The one row every "in two sets" case below puts in a second one.
 ONEBUDGETSPEC: RepoIdentity = "github.com/nickderobertis/onebudgetspec"
@@ -388,6 +390,8 @@ def test_the_overrides_default_target_per_producer_is_the_rows_target() -> None:
     assert _override_default_targets()[PRINTOBSERVER] == "github-release"
     assert _override_default_targets()[PRIVATETERMS] == "crate"
     assert _override_default_targets()[TASK_UI] == "npm"
+    assert _override_default_targets()[ONEFOLLOWUP] == "pypi"
+    assert by_producer(ONEFOLLOWUP) is None
     assert (
         override_complaints(_override_default_targets(), INSTALLED, AWAITING_FIRST_ADOPTION) == []
     )
@@ -428,9 +432,19 @@ def test_the_set_is_what_admits_an_awaiting_producer() -> None:
     """A rule ahead of a first adoption passes on the set, and is unaccounted for off it."""
     defaults = {**_override_default_targets(), UNRELEASED: "pypi"}
 
-    assert override_complaints(defaults, INSTALLED, frozenset({UNRELEASED})) == []
-    assert override_complaints(defaults, INSTALLED, frozenset()) == [
+    assert override_complaints(defaults, INSTALLED, AWAITING_FIRST_ADOPTION | {UNRELEASED}) == []
+    assert override_complaints(defaults, INSTALLED, AWAITING_FIRST_ADOPTION) == [
         f"config/onevcs.releases.yml names {UNRELEASED}'s default target 'pypi', and neither "
+        "a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it"
+    ]
+
+
+def test_the_set_is_what_admits_the_tracked_onefollowup_rule() -> None:
+    """Off the set, onefollowup's tracked `pypi` rule is a default target nothing accounts for."""
+    assert override_complaints(
+        _override_default_targets(), INSTALLED, AWAITING_FIRST_ADOPTION - {ONEFOLLOWUP}
+    ) == [
+        f"config/onevcs.releases.yml names {ONEFOLLOWUP}'s default target 'pypi', and neither "
         "a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it"
     ]
 
@@ -450,20 +464,20 @@ def test_the_onebudgetspec_row_is_what_accounts_for_its_tracked_rule() -> None:
     "awaiting,consumers,holding",
     (
         pytest.param(
-            frozenset({ONEBUDGETSPEC}),
+            AWAITING_FIRST_ADOPTION | {ONEBUDGETSPEC},
             CONSUMER_DEFAULTS,
             f"{ONEBUDGETSPEC} is in a row of orchestrator/host_installs.py and "
             "AWAITING_FIRST_ADOPTION",
             id="a row awaiting its first adoption",
         ),
         pytest.param(
-            frozenset(),
+            AWAITING_FIRST_ADOPTION,
             CONSUMER_DEFAULTS | {ONEBUDGETSPEC},
             f"{ONEBUDGETSPEC} is in a row of orchestrator/host_installs.py and CONSUMER_DEFAULTS",
             id="a row that is a consumer default",
         ),
         pytest.param(
-            frozenset({PRINTOBSERVER}),
+            AWAITING_FIRST_ADOPTION | {PRINTOBSERVER},
             CONSUMER_DEFAULTS,
             f"{PRINTOBSERVER} is in AWAITING_FIRST_ADOPTION and CONSUMER_DEFAULTS",
             id="a consumer default awaiting its first adoption",
@@ -676,7 +690,7 @@ def test_a_producer_awaiting_its_first_adoption_passes_with_no_row(tmp_path: Pat
     """
     producer, target = UNRELEASED, "pypi"
     defaults = {**_override_default_targets(), producer: target}
-    awaiting = frozenset({producer})
+    awaiting = AWAITING_FIRST_ADOPTION | {producer}
     manifest = _scratch_producers(tmp_path, defaults)
     assert by_producer(producer) is None
     assert _contradictions(manifest, defaults, awaiting) == []
@@ -696,6 +710,28 @@ def test_a_producer_awaiting_its_first_adoption_passes_with_no_row(tmp_path: Pat
     assert _contradictions(manifest, defaults, awaiting) == []
 
 
+def test_onefollowup_declaring_nothing_before_its_bootstrap_contradicts_nothing(
+    tmp_path: Path,
+) -> None:
+    """The tracked state until onefollowup's base carries a `release-targets.toml`.
+
+    Its rule names `pypi` ahead of any declaration, which the awaiting set admits; off
+    the set the same checkout is a producer declaring nothing that the override names a
+    default for.
+    """
+    manifest = _scratch_producers(tmp_path)
+    advance(_checkout(manifest, ONEFOLLOWUP), {"release-targets.toml": None})
+
+    assert declared_targets(_checkout(manifest, ONEFOLLOWUP)) is None
+    assert _contradictions(manifest) == []
+    assert _contradictions(manifest, awaiting=AWAITING_FIRST_ADOPTION - {ONEFOLLOWUP}) == [
+        f"config/onevcs.releases.yml names {ONEFOLLOWUP}'s default target 'pypi', and neither "
+        "a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it",
+        f"{ONEFOLLOWUP} declares no release targets at its base, and "
+        "config/onevcs.releases.yml names 'pypi' as its default target",
+    ]
+
+
 def test_a_producer_awaiting_its_first_adoption_still_contradicts_by_dropping_its_target(
     tmp_path: Path,
 ) -> None:
@@ -707,7 +743,7 @@ def test_a_producer_awaiting_its_first_adoption_still_contradicts_by_dropping_it
         {"release-targets.toml": declaration({"crate": "crate:unreleased"})},
     )
 
-    assert _contradictions(manifest, defaults, frozenset({producer})) == [
+    assert _contradictions(manifest, defaults, AWAITING_FIRST_ADOPTION | {producer}) == [
         f"{producer} no longer declares the default target {target!r} "
         "config/onevcs.releases.yml names for it; it declares ['crate']"
     ]
@@ -793,7 +829,7 @@ def test_the_readers_refuse_each_way_the_three_sets_can_miss_the_override(tmp_pa
     }
 
     assert _contradictions(manifest, tracked) == []
-    assert _contradictions(manifest, tracked, frozenset({PRINTOBSERVER})) == [
+    assert _contradictions(manifest, tracked, AWAITING_FIRST_ADOPTION | {PRINTOBSERVER}) == [
         f"{PRINTOBSERVER} is in AWAITING_FIRST_ADOPTION and CONSUMER_DEFAULTS; a producer the "
         "override gives a default target is in exactly one of the three"
     ]

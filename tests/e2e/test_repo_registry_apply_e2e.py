@@ -185,6 +185,11 @@ GRAPHQL_NODE_COUNT: RepoIdentity = "github.com/nickderobertis/github-graphql-nod
 BUDGET_ONEVCS: RepoIdentity = "github.com/nickderobertis/onebudgetspec-plugin-onevcs"
 BUDGET_ACTION: RepoIdentity = "github.com/nickderobertis/onebudgetspec-github-action"
 TASK_UI: RepoIdentity = "github.com/nickderobertis/onetaskgraph-ui"
+#: The producer registered ahead of its first release, which a node of this repository
+#: adopts as the `onefollowup-cli` wheel under the override's `pypi` default.
+ONEFOLLOWUP: RepoIdentity = "github.com/nickderobertis/onefollowup"
+ONEFOLLOWUP_TARGET = "pypi"
+ONEFOLLOWUP_ARTIFACT = "pypi:onefollowup-cli"
 
 RepoType = Literal["single-owner", "team"]
 Workflow = Literal["local", "remote"]
@@ -1779,8 +1784,15 @@ def test_the_tracked_registration_routes_onebudgetspec_and_names_the_wheel_its_r
 # journey of `just repos-apply` lives in this module, in the tier it already runs in.
 @pytest.mark.parametrize(
     "identity",
-    [PRUNER, GRAPHQL_NODE_COUNT, BUDGET_ONEVCS, BUDGET_ACTION, TASK_UI],
-    ids=["pruner", "graphql-node-count", "budget-onevcs", "budget-action", "task-ui"],
+    [PRUNER, GRAPHQL_NODE_COUNT, BUDGET_ONEVCS, BUDGET_ACTION, TASK_UI, ONEFOLLOWUP],
+    ids=[
+        "pruner",
+        "graphql-node-count",
+        "budget-onevcs",
+        "budget-action",
+        "task-ui",
+        "onefollowup",
+    ],
 )
 def test_the_tracked_registration_routes_a_sibling_through_its_own_rule(
     tmp_path: Path, identity: RepoIdentity, monkeypatch: pytest.MonkeyPatch
@@ -1816,8 +1828,57 @@ def test_the_tracked_registration_routes_a_sibling_through_its_own_rule(
         assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
         assert reported(checked.stdout, "approvals") == "none", checked.stdout
         assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
-        if identity in (BUDGET_ONEVCS, BUDGET_ACTION, TASK_UI):
+        if identity in (BUDGET_ONEVCS, BUDGET_ACTION, TASK_UI, ONEFOLLOWUP):
             assert reported(checked.stdout, "checks wait") == "3600 s", checked.stdout
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - llmlint reads a directive's rule list off one line
+# A sibling of the routing journeys above, for the reason their directive states: every
+# journey of `just repos-apply` lives in this module, in the tier it already runs in.
+def test_the_tracked_registration_names_the_onefollowup_wheel_ahead_of_its_first_adoption(
+    tmp_path: Path,
+) -> None:
+    """A producer registered ahead of its first release resolves `pypi` with no row.
+
+    The release override installed by `just repos-apply` has to answer `pypi` as its
+    default target, because a `published` node of this repository adopting the
+    `onefollowup-cli` wheel names no `consumes`. The scratch checkout's base declares
+    that target, as the producer's own declaration will once it is bootstrapped.
+    """
+    assert by_producer(ONEFOLLOWUP) is None
+    assert ONEFOLLOWUP in AWAITING_FIRST_ADOPTION
+    entries = tracked_checkouts_of("onefollowup")
+    assert len(entries) == 2, entries
+
+    path = declaring_checkout(
+        tmp_path / "checkouts" / Path(entries[0]).name,
+        f"https://{ONEFOLLOWUP}.git",
+        {ONEFOLLOWUP_TARGET: ONEFOLLOWUP_ARTIFACT},
+    )
+    manifest = tmp_path / "checkouts.list"
+    manifest.write_text(f"{path}\n", encoding="utf-8")
+    home = tmp_path / "onevcs"
+
+    applied = apply_registry(manifest, home)
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert (home / "releases.yml").read_bytes() == TRACKED_RELEASES.read_bytes()
+
+    answer = release_targets(home, ONEFOLLOWUP)
+    assert answer["default_target"] == ONEFOLLOWUP_TARGET, answer
+    assert answer["adoption"] == GLOBAL_RUNG, answer
+    declared = {target["name"]: target["probe"]["args"][0] for target in answer["targets"]}
+    assert declared[ONEFOLLOWUP_TARGET] == ONEFOLLOWUP_ARTIFACT, declared
+    assert (
+        default_target_complaint(
+            ONEFOLLOWUP,
+            answer.get("default_target"),
+            override_default_targets(TRACKED_RELEASES.read_text(encoding="utf-8")),
+        )
+        is None
+    )
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501

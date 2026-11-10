@@ -278,6 +278,11 @@ def test_a_design_document_past_the_warning_threshold_is_warned_about_and_copied
     assert size > task_body.measure(document.content, document.metadata), size
     assert task_body.WARN_FROM <= size <= task_body.BODY_LIMIT, size
     _, _, native = project.partition(":")
+    # The store names a task it creates, so the copy is expected under the name the
+    # drafted plan's one task carries rather than one spelled from its node id here.
+    (task,) = plan_store.read_tasks(project)
+    assert task.node_id == "route", task
+    _, _, task_native = str(task.qualified_id).partition(":")
 
     copied = _just("copy-plan", project, "--to", DESTINATION)
 
@@ -290,7 +295,7 @@ def test_a_design_document_past_the_warning_threshold_is_warned_about_and_copied
     assert _records(destination) == [
         f"documents/{native}-design.md",
         f"projects/{native}.md",
-        f"tasks/{native}/route.md",
+        f"tasks/{task_native}.md",
     ], copied.stdout + copied.stderr
 
 

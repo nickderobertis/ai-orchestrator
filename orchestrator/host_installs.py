@@ -185,12 +185,13 @@ INSTALLED: tuple[Installed, ...] = (
 #: ``consumes``, so without the override's rule its hold would wait on a target it never
 #: resolves and never release. A producer stands here instead of in ``INSTALLED`` — never
 #: in both — and the node that adopts its release moves it into a row, with the pin and
-#: the dependency, emptying its entry. `tests/test_host_installs.py` holds the override
-#: to the three sets together.
+#: the dependency, emptying its entry: for `onefollowup`, whose `pypi` target is the
+#: `onefollowup-cli` wheel, the plan's ``aio-followups-cutover`` node.
+#: `tests/test_host_installs.py` holds the override to the three sets together.
 # llmlint: ignore-block[modern_domain_modeling] Each entry is an `Installed.producer` value
 # waiting to become one, compared against that `str` field and against the identity text
 # `onevcs` prints, for the reason the block above `Installed` gives.
-AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset()
+AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset({"github.com/nickderobertis/onefollowup"})
 # llmlint: ignore-end[modern_domain_modeling]
 
 #: Producers `config/onevcs.releases.yml` gives a ``default_target`` that this host

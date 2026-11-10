@@ -87,6 +87,12 @@
 ~/projects/onebudgetspec-github-action
 ~/.ai-orchestrator/repos/nickderobertis__onebudgetspec-plugin-onevcs
 ~/projects/onebudgetspec-plugin-onevcs
+
+# `onefollowup`, which publishes the `onefollowup-cli` wheel this host will install once a
+# node adopts its first release. Listed under both layouts.
+~/.ai-orchestrator/repos/nickderobertis__onefollowup
+~/projects/onefollowup
+
 ~/.ai-orchestrator/repos/nickderobertis__onetaskgraph
 
 # `onetaskgraph-ui`, the React components that show onetaskgraph tasks, published as an
