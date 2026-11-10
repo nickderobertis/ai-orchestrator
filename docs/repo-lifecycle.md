@@ -156,11 +156,13 @@ The adoption after that moves the engine to 0.104.0 and the read API to 0.74.0, 
 linked crate unchanged: a session whose `post-checkout` provisioning failed at open tells
 its worker in the task and hands its manager a non-blocking `provisioning-failed` surface
 carrying the re-run command.
-The adoption after that moves the engine to 0.105.0, the read API to 0.75.0, onemessagebus
+The adoption after that moves the engine to 0.105.0, the read API to 0.76.0, onemessagebus
 to 0.10.0 and, rebuilt on it, onevcs to 0.63.0, oneagentgraph to 0.11.0 and onejudge to
 0.22.5 — the engine links 0.22.4, which was never published to PyPI, a divergence
 `tests/test_linked_libraries.py` declares: the planner channel's replies run the bus's
-hooks, and the criteria bar on a reply is declared as one.
+hooks, and the criteria bar on a reply is declared as one; a question item offers
+choices, an answer names a choice, the person's own words or both, and several answers go
+as one batch that a manager's watch receives as one delivery.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole

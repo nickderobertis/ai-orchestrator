@@ -177,7 +177,7 @@ def _spans(document: Path) -> list[str]:
             if line.lstrip()[:1] == "#"
         )
         return [" ".join(match.group("code").split()) for match in INLINE.finditer(text)]
-    found = []
+    found: list[str] = []
     for block in FENCE.finditer(text):
         found.extend(line.strip() for line in block.group().splitlines()[1:-1] if line.strip())
     for match in INLINE.finditer(FENCE.sub("", text)):
@@ -246,6 +246,27 @@ def _accepted_by(delegates: tuple[tuple[str, tuple[str, ...]], ...]) -> frozense
     return frozenset(accepted)
 
 
+def _forwarded_into(
+    delegates: tuple[tuple[str, tuple[str, ...]], ...], tokens: list[str], start: int
+) -> tuple[tuple[tuple[str, tuple[str, ...]], ...], int]:
+    """The verb a recipe forwarding its arguments reaches, and where its words end.
+
+    `just human-items answer <item> --choice <id>` runs `onepipeline human-items answer`,
+    because the recipe forwards every word after its name: the flags it takes are that
+    subcommand's, not the parent's alone. Only a recipe reaching one published verb is
+    descended — with several, which one a word selects is not the span's to say.
+    """
+    if len(delegates) != 1:
+        return delegates, start
+    tool, path = delegates[0]
+    surface = surface_of(tool)
+    ahead = start
+    while ahead < len(tokens) and tokens[ahead] in surface.subcommands(path):
+        path = (*path, tokens[ahead])
+        ahead += 1
+    return ((tool, path),), ahead
+
+
 def _drift_in(span: str, where: str, recipes: dict[str, Recipe]) -> list[Drift]:
     """Every command or flag one span names that the pinned CLIs do not have."""
     tokens = [token.strip(TRIM) for token in span.split()]
@@ -271,9 +292,11 @@ def _drift_in(span: str, where: str, recipes: dict[str, Recipe]) -> list[Drift]:
                     )
                     invoked = None
                 elif recipe.delegates:
-                    invoked = Invocation(
-                        f"just {named}", _accepted_by(recipe.delegates) | recipe.absorbs
-                    )
+                    delegates, ahead = _forwarded_into(recipe.delegates, tokens, index + 2)
+                    written = " ".join(("just", *tokens[index + 1 : ahead]))
+                    invoked = Invocation(written, _accepted_by(delegates) | recipe.absorbs)
+                    index = ahead
+                    continue
                 else:
                     # A recipe reaching neither pinned CLI — `just gate`, `just history`.
                     # Its flags are somebody else's surface, so they are not judged here.
@@ -332,6 +355,24 @@ def test_a_flag_after_a_pipe_is_read_against_the_program_the_pipe_starts() -> No
     unpiped = "onepipeline template resolve design-doc --json --template-loader -"
     assert [drift.named for drift in _drift_in(unpiped, "here", {})] == [
         "the flag `--template-loader`"
+    ]
+
+
+def test_a_recipe_forwarding_its_words_is_read_against_the_subcommand_they_name() -> None:
+    """`just human-items answer` takes `answer`'s flags, and still not one it lacks.
+
+    The recipe forwards every word to `onepipeline human-items`, so the subcommand a span
+    names after it is the verb whose flags are judged — read from the justfile and the
+    pinned engine's own `--help`, as every other span is.
+    """
+    recipes = _recipes()
+    answered = "just human-items answer <item> --choice <id> --text words"
+    assert _drift_in(answered, "here", recipes) == []
+
+    wrong = "just human-items answer <item> --input <file>"
+    assert [str(drift) for drift in _drift_in(wrong, "here", recipes)] == [
+        "here: `just human-items answer <item> --input <file>` names the flag `--input`, "
+        "which `just human-items answer` does not accept"
     ]
 
 

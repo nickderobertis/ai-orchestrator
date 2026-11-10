@@ -87,6 +87,7 @@ CONTROLS = {
     "POST /api/v2/shutdown": "the host by its one host-wide shutdown",
     "POST /api/human-items": "a human item by its raise,",
     "POST /api/human-items/{id}/answer": "answer,",
+    "POST /api/human-items/answers": "batch of answers,",
     "POST /api/human-items/{id}/complete": "completion",
     "POST /api/human-items/{id}/dismiss": "and dismissal",
     "POST /api/human-items/{id}/reopen": "its reopen",

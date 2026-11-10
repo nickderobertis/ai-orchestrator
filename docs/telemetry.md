@@ -467,7 +467,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.75.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.76.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 27 on the envelope, where
    0.55.0, 0.52.0 and 0.51.0 served 26 and

@@ -52,12 +52,13 @@ OWNERS = (PLANNER, MANAGER, MECHANICS)
 #: its own test below rather than a link to resolve here.
 CROSS_REFERENCING_OWNERS = (MANAGER, MECHANICS)
 
-#: The manager's statement of how it talks to its user, one phrase per rule: ask in the
-#: chat unless truly blocked, restate open questions, write self-contained plain updates,
-#: and send them regularly. Read by both the ownership check and the once-in-the-loop one.
+#: The manager's statement of how it talks to its user, one phrase per rule: a blocking
+#: question tool only when truly blocked, restate the open question items, write
+#: self-contained plain updates, and send them regularly. Read by both the ownership check
+#: and the once-in-the-loop one.
 USER_COMMUNICATION = (
-    "use it only when you can do nothing useful until the answer arrives",
-    "It restates every question still awaiting the user",
+    "Claude Code's built-in question tool is one such harness tool",
+    "It restates every open question item `just human-items report` shows",
     "who may not have read any earlier message",
     "at least every thirty minutes while work runs",
 )

@@ -76,6 +76,12 @@ prefix_rule(pattern=["just", "human-items", "raise"], decision="allow")
 # allowed_tools: Bash(just human-items dismiss:*)
 prefix_rule(pattern=["just", "human-items", "dismiss"], decision="allow")
 
+# allowed_tools: Bash(just human-items answer:*)
+prefix_rule(pattern=["just", "human-items", "answer"], decision="allow")
+
+# allowed_tools: Bash(just human-items answer-batch:*)
+prefix_rule(pattern=["just", "human-items", "answer-batch"], decision="allow")
+
 # allowed_tools: Bash(just channel-next:*)
 prefix_rule(pattern=["just", "channel-next"], decision="allow")
 

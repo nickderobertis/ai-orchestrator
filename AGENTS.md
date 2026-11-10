@@ -788,10 +788,11 @@ them reach you; `manager` names the session role and is never a command.
    when the search fails or leaves several strong candidates.
 3. **Answer its questions while it plans.** A planner asks at every fork that could
    change a key outcome, batched. Decide yourself anything the brief implies and
-   anything about this harness, this host, or how the work will be run; take to the
-   user what is genuinely theirs — a goal that reads two ways, a constraint you would
-   have to relax, a scope or cost decision, a contract that changes what they asked
-   for. Answer promptly: a blocking question stalls the planner completely and
+   anything about this harness, this host, or how the work will be run; raise what is
+   genuinely the user's as a question item, by the rule below that every
+   question to the user is a question item — a goal that reads two ways, a
+   constraint you would have to relax, a scope or cost decision, a contract that changes
+   what they asked for. Answer promptly: a blocking question stalls the planner completely and
    produces no other signal while it waits. A planner's escalated exceptions are
    **high-value to put in front of the user** — each is a constraint not met, a goal
    reached another way, or an assumption made for want of an answer — so never let
@@ -973,12 +974,30 @@ publication it waits on, branch and change request left open, and taking back a 
 to it no turn has taken, which is answered `refused` — and `requeue` resumes it. Neither
 is how a correction reaches a running worker: a live note interrupts its turn already.
 
-**Ask the user in the chat unless you are truly blocked.** A harness's built-in
-question tool — Claude Code's is one — holds you until it is answered, so use it only
-when you can do nothing useful until the answer arrives. Otherwise put the question in
-your message and keep supervising, your watches armed and other work moving; where a
-default is reasonable, state it and proceed on it. Write every update for a user with
-limited attention, running several managers, who may not have read any earlier message:
+**Every question to the user is a question item.** In the engine's words: Every question
+a manager asks a person is a question item, offering choices where a few answers cover
+it, and a person may always answer in their own words. An asker that must block on its
+harness's own question tool, because it can do nothing useful until the answer arrives,
+raises the question as an item first and records the answer that tool returns on that
+item, acting for the person, so the item store stays the record of every question. Raise
+it with `just human-items raise`, its `--input` file the engine's item shape, and never
+ask it only as a line of chat, because the item is what a person running several managers
+reads, on the **Action items** page from a phone as much as anywhere, and what every
+other manager sees. Keep supervising while it waits, your watches armed and unrelated
+nodes moving; where a default is reasonable, state it in the item and proceed on it.
+Claude Code's built-in question tool is one such harness tool, and its answer is recorded
+on the item with `just human-items answer`, acting for the user.
+
+**An answer is recorded on its item.** When the user answers in chat, record it with
+`just human-items answer <item> --choice <id>` and/or `--text "<their words>"`, or `just
+human-items answer-batch --input <file>` for several, acting for them as completing a
+task for them does, so the page and every other manager see it answered. A batch the user
+sends from the page arrives as answered items — one `just human-items watch` delivery
+listing every answer, or one `human-item` surface on each tied run's watch — so read it
+as their answers and never ask again.
+
+Write every update for a user with limited attention, running several managers, who may
+not have read any earlier message:
 
 - **It stands on its own.** It names the effort, gives the status against the user's
   goal — done, in progress, next, and any risk — and says what needs the user, in plain
@@ -989,8 +1008,9 @@ limited attention, running several managers, who may not have read any earlier m
   Each is a markdown link whose text is the words that already name it — the spike
   report, the ticket — never a bare URL or a `Ticket: <url>` line, which on a phone
   costs several lines of address and adds nothing the words do not say.
-- **It restates every question still awaiting the user**, until that question is
-  answered, rather than pointing to where it was first asked.
+- **It restates every open question item `just human-items report` shows**, until it
+  leaves the store, rather than pointing to where it was first asked; the chat holds no
+  question that has no item.
 - **It comes at each milestone and at least every thirty minutes while work runs**,
   not only when something fails or finishes.
 - **It relays only this session's human items**: the items of this session and its runs,
@@ -1008,12 +1028,10 @@ manager session on the host; the browser's **Action items** page acts on the sam
 the CLI and the page show and do the same things.
 An item names its source — the plan and run it came from, the manager session for a
 question raised outside a run, or the host — and, when it blocks, says "blocks N steps in
-<plan>", "blocks all of <plan>" or "blocks all work on this host". Put a question that is
-genuinely the user's as a question item where it fits — `just human-items raise`, its
-`--input` file the engine's item shape — and keep unrelated nodes moving while it waits.
-**A worker's `ORCHESTRATOR_ASK_MANAGER` question is worker-to-manager**: answer it yourself;
-where only the user can, raise it as a question item, and relay the answer it records back
-on that run's channel. Complete an item for the user only after they decided in this chat —
+<plan>", "blocks all of <plan>" or "blocks all work on this host".
+**A worker's `ORCHESTRATOR_ASK_MANAGER` question is worker-to-manager**, on that run's
+channel: answer it yourself; where only the user can, raise it as a question item, with
+choices where they fit, and relay the answer it records back on that run's channel. Complete an item for the user only after they decided in this chat —
 `just human-items complete <item>`, approved on its own, like `just approve-design`, because
 completing a design review records their approval; the receipt records this session acting
 for them. Dismiss what nothing needs with `just
@@ -1185,9 +1203,9 @@ recorded budget still stands and asks the user whether that budget should change
 miss in an uncovered dimension proposes a general planner-checklist concept and the
 repository's own budget through a plan, never by editing the planner directly.
 
-**When a run ends any other way**, the failure hook launches nothing. Decide with the user
-whether to verify its drafts by hand with `just follow-ups <run-id>`, which verifies the
-drafts of any run that ended. A pause on a decision is not an ending. A run fires at most one
+**When a run ends any other way**, the failure hook launches nothing. Raise a question item
+asking the user whether to verify its drafts by hand with `just follow-ups <run-id>`, which
+verifies the drafts of any run that ended. A pause on a decision is not an ending. A run fires at most one
 hook for each ending it reaches; an
 accepted edit that makes the run live again, or that carries it from one ending to a
 different one, starts a new epoch, so a recovered run fires the hook for its later ending
@@ -1452,7 +1470,7 @@ projection lets the run dispatch before `Queued` reaches the board, and says so 
 planner channel.
 
 **`complete` waits for the follow-up run's settlement and the links you relayed**, or for
-that decision with the user. Hooks come with an engine adopted between runs, so a run
+the user's recorded answer to that question item. Hooks come with an engine adopted between runs, so a run
 launched before the adoption gets no follow-up run.
 
 ### Never let dispatched work run unwatched

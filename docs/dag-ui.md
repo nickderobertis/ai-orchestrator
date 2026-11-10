@@ -110,7 +110,10 @@ from the unwatched route, and the one **host-wide shutdown**
 ([below](#shutting-the-host-down-from-the-browser)). **Action items** is another page
 of its own: the host-wide queue of human tasks and questions from
 `/api/human-items`, where an item is raised, answered, completed or dismissed, and a
-resolved one reopened or noted. It is the
+resolved one reopened or noted. A question offering choices is answered with one press on
+a choice, in the person's own words, or both, and several answered questions are sent as
+one batch (`POST /api/human-items/answers`), which reaches each owning manager's watch as
+one delivery. It is the
 same live store `just human-items` reads and writes — one journal beneath the runs root,
 so the page and the CLI show and act on the same items; there is no sample mode. A host
 whose effective `human_items` configuration (`just human-items config`) does not enable
@@ -145,7 +148,7 @@ nothing can act on.
 
 **Those controls are the whole of what the view acts through.** A run is acted on by
 its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, a human
-item by its raise, answer, completion and dismissal, its reopen and its note, and the host by its one host-wide
+item by its raise, answer, batch of answers, completion and dismissal, its reopen and its note, and the host by its one host-wide
 shutdown; every other route the view calls reads. Every read lives in the project
 sidebar, the run's three tabs, **Run details**, **Host** and **Action items**.
 **Watching, adopting and shutting down one run or one session's runs are not the
@@ -295,7 +298,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.75.0**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.76.0**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, the run's **Channel** tab with its byte-for-byte
 reply composer and `attest`, the per-run **Stop** with the owner-naming refusal, and the

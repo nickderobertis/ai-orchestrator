@@ -81,6 +81,8 @@
       "Bash(just human-items watch:*)",
       "Bash(just human-items raise:*)",
       "Bash(just human-items dismiss:*)",
+      "Bash(just human-items answer:*)",
+      "Bash(just human-items answer-batch:*)",
       "Bash(just channel-next:*)",
       "Bash(just channel-reply:*)",
       "Edit(scratch/envelopes/*.json)",

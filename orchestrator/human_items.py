@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -51,9 +52,61 @@ PRIORITIES: tuple[Priority, ...] = ("urgent", "high", "medium", "low")
 #: An item's id, as the engine mints it from its dedup key.
 ItemId = NewType("ItemId", str)
 
+#: A choice's id, unique within its question (onepipeline's `HumanItemChoice`).
+ChoiceId = NewType("ChoiceId", str)
+
+#: The schema's bounds on a question's choices: how many, and how an id and a title are spelled.
+MAX_CHOICES = 6
+CHOICE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+CHOICE_TITLE_LENGTH = 80
+CHOICE_FIELDS = frozenset({"id", "title", "description"})
+
+#: Every field the engine's `HumanItemResolution` declares; it declares no other.
+RESOLUTION_FIELDS = frozenset({"actor", "on_behalf_of", "text", "choice", "reason"})
+
 #: The document version a task stored: opaque to the engine, and for a design review the
 #: approval key `orchestrator/design_approval.py` computes.
 VersionKey = NewType("VersionKey", str)
+
+
+class Choice(NamedTuple):
+    """One answer a question offers: an id, a one-line title, and a markdown description."""
+
+    id: ChoiceId
+    title: str
+    description: str
+
+
+def _choices(value: object) -> tuple[Choice, ...]:
+    """A record's ``choices`` as the schema allows them, or :class:`OSError` naming why not.
+
+    Absent is no choices, because the engine omits the field when there are none.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list) or len(value) > MAX_CHOICES:
+        raise OSError(f"the engine answered an item whose choices are {value!r}")
+    choices = []
+    for entry in value:
+        if not isinstance(entry, dict) or set(entry) != CHOICE_FIELDS:
+            raise OSError(f"the engine answered an item offering the choice {entry!r}")
+        identifier, title, description = entry["id"], entry["title"], entry["description"]
+        if (
+            not isinstance(identifier, str)
+            or CHOICE_ID.fullmatch(identifier) is None
+            or not isinstance(title, str)
+            or not title.strip()
+            or "\n" in title
+            or "\r" in title
+            or len(title) > CHOICE_TITLE_LENGTH
+            or not isinstance(description, str)
+            or not description.strip()
+        ):
+            raise OSError(f"the engine answered an item offering the choice {entry!r}")
+        choices.append(Choice(ChoiceId(identifier), title, description))
+    if len({choice.id for choice in choices}) != len(choices):
+        raise OSError(f"the engine answered an item offering one choice id twice: {value!r}")
+    return tuple(choices)
 
 
 class Approval(NamedTuple):
@@ -76,6 +129,12 @@ class Item:
     approval: Approval | None
     #: Why it was dismissed, when it was dismissed with a reason.
     reason: str | None
+    #: The answers a question offers; none on a task, and none on a question offering none.
+    choices: tuple[Choice, ...] = ()
+    #: The choice an answered question was answered with, when it names one.
+    choice: ChoiceId | None = None
+    #: An answer's own words, or a completed task's comment, when there are any.
+    text: str | None = None
 
     @classmethod
     def parse(cls, record: object) -> Item:
@@ -99,9 +158,28 @@ class Item:
         resolution = fields.get("resolution")
         if resolution is not None and not isinstance(resolution, dict):
             raise OSError(f"the engine answered an item whose resolution is {resolution!r}")
-        reason = None if resolution is None else resolution.get("reason")
+        held: Mapping[str, object] = {} if resolution is None else resolution
+        if not set(held) <= RESOLUTION_FIELDS:
+            raise OSError(f"the engine answered an item whose resolution is {resolution!r}")
+        reason, answer, choice = held.get("reason"), held.get("text"), held.get("choice")
         if reason is not None and not isinstance(reason, str):
             raise OSError(f"the engine answered an item whose reason is {reason!r}")
+        if answer is not None and not isinstance(answer, str):
+            raise OSError(f"the engine answered an item whose text is {answer!r}")
+        choices = _choices(fields.get("choices"))
+        if choices and kind != "question":
+            raise OSError(
+                f"the engine answered a {kind} offering choices, which only a question may"
+            )
+        if choice is not None and (
+            not isinstance(choice, str)
+            or state != "answered"
+            or choice not in {offered.id for offered in choices}
+        ):
+            raise OSError(
+                f"the engine answered a {state} item whose choice is {choice!r}, which only an "
+                "answered question offering that choice may carry"
+            )
         return cls(
             id=ItemId(text("id")),
             kind=kind,
@@ -116,6 +194,9 @@ class Item:
                 VersionKey(text("key", approval)),
             ),
             reason=reason,
+            choices=choices,
+            choice=None if choice is None else ChoiceId(choice),
+            text=answer,
         )
 
 

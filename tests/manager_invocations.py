@@ -177,9 +177,7 @@ _CHECK_RESPONSES = (
 _FOLLOW_UP = (
     "Draft a follow-up with `just follow-up <run-id>` only when nobody needs it during the run"
 )
-_FOLLOW_UPS = (
-    "Decide with the user whether to verify its drafts by hand with `just follow-ups <run-id>`"
-)
+_FOLLOW_UPS = "asking the user whether to verify its drafts by hand with `just follow-ups <run-id>`"
 _FEEDBACK = "anything more goes back with `just follow-ups <run-id> --feedback FILE`"
 _COMMENTS = (
     "People's board comments are answered by `just follow-ups-answer-comments`, which reads the"
@@ -209,7 +207,18 @@ _APPROVE = "record their decision with `just approve-design <source>:<project>`"
 _HUMAN_ITEMS = (
     "`just human-items report` with no flags is the engine's short view of exactly those items"
 )
-_HUMAN_ITEMS_QUEUE = "Put a question that is genuinely the user's as a question item where it fits"
+_HUMAN_ITEMS_QUEUE = (
+    "Raise it with `just human-items raise`, its `--input` file the engine's item shape, and "
+    "never ask it only as a line of chat"
+)
+_HUMAN_ITEMS_ANSWER = (
+    "When the user answers in chat, record it with `just human-items answer <item> --choice "
+    '<id>` and/or `--text "<their words>"`'
+)
+_HUMAN_ITEMS_ANSWER_BATCH = (
+    "or `just human-items answer-batch --input <file>` for several, acting for them as "
+    "completing a task for them does"
+)
 _HUMAN_ITEMS_DISMISS = (
     "Dismiss what nothing needs with `just human-items dismiss <item> [--reason TEXT]`"
 )
@@ -353,6 +362,16 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "human-items-dismiss",
         "just human-items dismiss hi-0a1b2c3d --reason obsolete",
         _HUMAN_ITEMS_DISMISS,
+    ),
+    _allow(
+        "human-items-answer",
+        'just human-items answer hi-0a1b2c3d --choice ship --text "after the fix"',
+        _HUMAN_ITEMS_ANSWER,
+    ),
+    _allow(
+        "human-items-answer-batch",
+        "just human-items answer-batch --input {file}",
+        _HUMAN_ITEMS_ANSWER_BATCH,
     ),
     _allow("repos", "just repos", _REPOS),
     _allow("repos-apply", "just repos-apply", _REPOS_APPLY),

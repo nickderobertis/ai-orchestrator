@@ -169,6 +169,12 @@ ITEM = {
 }
 
 
+#: A question, and one answer it may offer, as the engine's schema shapes them.
+QUESTION = {**ITEM, "kind": "question", "title": "Which release ships?"}
+SHIP = {"id": "ship", "title": "Ship it", "description": "Release **today**."}
+ANSWERED = {"actor": "user:a", "on_behalf_of": None, "text": None, "reason": None}
+
+
 @pytest.mark.parametrize(
     ("answer", "refusal"),
     [
@@ -187,6 +193,75 @@ ITEM = {
         (
             json.dumps({"item": {"item": {**ITEM, "resolution": {"reason": 3}}}}),
             "whose reason is 3",
+        ),
+        (
+            json.dumps({"item": {"item": {**ITEM, "resolution": {"verdict": "yes"}}}}),
+            "resolution is",
+        ),
+        (
+            json.dumps({"item": {"item": {**ITEM, "resolution": {"text": 3}}}}),
+            "whose text is 3",
+        ),
+        *(
+            (json.dumps({"item": {"item": {**QUESTION, "choices": choices}}}), refusal)
+            for choices, refusal in (
+                ("ship", "whose choices are 'ship'"),
+                ([SHIP] * 7, "whose choices are"),
+                (["ship"], "offering the choice 'ship'"),
+                ([{**SHIP, "extra": 1}], "offering the choice"),
+                ([{**SHIP, "id": "Ship"}], "offering the choice"),
+                ([{**SHIP, "title": " "}], "offering the choice"),
+                ([{**SHIP, "title": "one\ntwo"}], "offering the choice"),
+                ([{**SHIP, "title": "x" * 81}], "offering the choice"),
+                ([{**SHIP, "description": ""}], "offering the choice"),
+                ([SHIP, SHIP], "offering one choice id twice"),
+            )
+        ),
+        (json.dumps({"item": {"item": {**ITEM, "choices": [SHIP]}}}), "a task offering choices"),
+        (
+            json.dumps(
+                {
+                    "item": {
+                        "item": {
+                            **QUESTION,
+                            "choices": [SHIP],
+                            "state": "answered",
+                            "resolution": {**ANSWERED, "choice": "hold"},
+                        }
+                    }
+                }
+            ),
+            "answered item whose choice is 'hold'",
+        ),
+        (
+            json.dumps(
+                {
+                    "item": {
+                        "item": {
+                            **QUESTION,
+                            "choices": [SHIP],
+                            "state": "dismissed",
+                            "resolution": {**ANSWERED, "choice": "ship"},
+                        }
+                    }
+                }
+            ),
+            "dismissed item whose choice is 'ship'",
+        ),
+        (
+            json.dumps(
+                {
+                    "item": {
+                        "item": {
+                            **QUESTION,
+                            "choices": [SHIP],
+                            "state": "answered",
+                            "resolution": {**ANSWERED, "choice": ["ship"]},
+                        }
+                    }
+                }
+            ),
+            r"answered item whose choice is \['ship'\]",
         ),
     ],
 )
@@ -229,6 +304,54 @@ def test_a_list_that_is_not_one_is_refused(
     monkeypatch.setattr(human_items, "verb", lambda arguments: answer)
     with pytest.raises(OSError, match=refusal):
         human_items.open_items()
+
+
+def test_a_question_offering_choices_and_its_answer_are_read_as_the_engine_records_them(
+    store: Path, tmp_path: Path
+) -> None:
+    """The installed engine's own records of a question with choices, open and then answered
+    with a choice and the person's words, read through this host's parser."""
+    hold = {"id": "hold", "title": "Hold it", "description": "Wait for the fix."}
+    request = tmp_path / "question.json"
+    request.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "dedup_key": "choices:release",
+                "kind": "question",
+                "title": "Which release ships?",
+                "body": "Pick one.",
+                "choices": [SHIP, hold],
+                "priority": "medium",
+                "owner": {"session": SESSION, "run": None, "plan": None},
+                "block": {"scope": "nothing"},
+                "approval": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    raised = human_items.receipt_item(human_items.verb(["raise", "--input", str(request)]))
+    offered = (
+        human_items.Choice(human_items.ChoiceId("ship"), "Ship it", "Release **today**."),
+        human_items.Choice(human_items.ChoiceId("hold"), "Hold it", "Wait for the fix."),
+    )
+    assert (raised.kind, raised.state, raised.choices, raised.choice) == (
+        "question",
+        "open",
+        offered,
+        None,
+    )
+    assert [item.choices for item in human_items.open_items(kind="question")] == [offered]
+
+    answered = human_items.receipt_item(
+        human_items.verb(["answer", raised.id, "--choice", "hold", "--text", "after the fix"])
+    )
+    assert (answered.state, answered.choices, answered.choice, answered.text) == (
+        "answered",
+        offered,
+        "hold",
+        "after the fix",
+    )
 
 
 def test_raising_completing_and_dismissing_go_through_the_engine_and_narrow_by_plan(

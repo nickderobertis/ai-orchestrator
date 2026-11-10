@@ -3107,8 +3107,9 @@ The task is visible to both the worker and judge, so its Acceptance criteria hol
 all detailed, change-specific requirements — and, since schema version 2, they are
 the *only* place a per-node requirement can live. `Why` is the user-facing
 impact and what drove the decision, not an orchestration handoff. If the request
-does not make that why clear, the planner must ask the user before dispatch rather
-than inventing it.
+does not make that why clear, the planner must ask its manager before dispatch, who puts
+it to the user as a question item by `AGENTS.md`'s manager-loop rule, rather than inventing
+it.
 
 ### Where a node's review bar lives
 
@@ -3264,7 +3265,8 @@ or the shape already in the store until the implementation lands.
 A consumer that finds a departure it wants — a missing field, a wrong shape, a
 column or module boundary it would rather have drawn elsewhere, a better
 decomposition — does not change the interface. It surfaces the ordinary
-`kind: "proposal"` its dispatch already has, and the planner decides with the user
+`kind: "proposal"` its dispatch already has, and the planner decides — raising it as a
+question item for the user where the decision is theirs, by `AGENTS.md`'s manager-loop rule —
 whether to amend the contract or defer it as a follow-up. Amending it is a [live
 edit](#live-graph-edits), and which edit depends on what the node is doing: a node
 that has not started is parked with `cancel` and returned by a `requeue` whose
@@ -4392,7 +4394,8 @@ manager session on the host. `just human-items` runs the engine's own verbs over
 `report` is where a manager reads the items its update relays: with no flags, the asking
 session's items and those from elsewhere holding its work, blocking first, each one compact
 entry with one line of its body and a line counting the host's other open items, while
-`--full` prints every body whole and `--all` the whole host; `list`, `show`, `answer`, `complete`, `dismiss [--reason
+`--full` prints every body whole and `--all` the whole host; `list`, `show`, `answer
+[--choice ID] [--text TEXT]`, `answer-batch --input FILE`, `complete`, `dismiss [--reason
 TEXT]`, `raise --input FILE`, `watch` and `config` are the rest. The browser's **Action
 items** page ([`docs/dag-ui.md`](dag-ui.md)) shares that store. With explicit matching filters, the CLI and the page show
 and do the same things. Its host-wide resolution and design-approval authority,
@@ -4460,6 +4463,19 @@ going.
   ticket with no priority counting as medium and named in a finding to the owning manager.
   A re-dispatch's closeout updates that one task; a run that touched no ticket has none.
 
+**A question is answered by a choice, in the person's own words, or both.** Every question
+a manager puts to the user is a question item, by `AGENTS.md`'s manager-loop rule; one a few
+answers cover offers up to six `choices`, each an id, a one-line title and a description, and
+a person may always answer in their own words instead or as well. `report`, `list` and `show`
+print an answered question's choice by its title and id, and its text. Several answers go as
+one **batch** — `answer-batch --input FILE`, its file `{"answers": [{"id", "choice"?,
+"text"?}]}`, or the page's send — under one batch id: each entry is accepted or refused on
+its own, the receipt naming both, and the batch reaches the owning manager's next `just
+human-items watch` as one delivery printing every answer it recorded, and each tied run's
+channel as one `human-item` surface listing that run's answers. A manager that recorded an
+answer the user gave in chat did so acting for them, so a reader of the page sees the
+question answered, not still open.
+
 **An item ends one of three ways.** A person answers or completes it; somebody dismisses it,
 with an optional reason, because nothing needs it any more; or the engine dismisses it —
 **when a run settles, ends or is stopped, every open item holding that run's work or plan is
@@ -4486,10 +4502,11 @@ launch record — saying that the plan has already launched and removing the app
 stop it, and the item stays completed. Anything it cannot read refuses too, naming what, because
 a wrong "not launched" is the misleading case. A cancelled member task counts as past `todo`.
 
-**A person's action reaches the managers of the runs it touches.** Each completed, dismissed,
-reopened or noted event not written by the engine is also a non-blocking planner surface of
-kind `human-item` on every live run tied to the item, naming the item, the action, the actor and
-any text. It reports what a person did and asks nothing of the run.
+**A person's action reaches the managers of the runs it touches.** Each answered, completed,
+dismissed, reopened or noted event not written by the engine is also a non-blocking planner
+surface of kind `human-item` on every live run tied to the item, naming the item, the action,
+the actor and any choice and text; a batch is one such surface per tied run. It reports what a
+person did and asks nothing of the run.
 
 ## The graph of record is the live graph
 

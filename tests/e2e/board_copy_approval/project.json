@@ -95,6 +95,7 @@
       "{workspaceRoot}/tests/e2e/board_copy_approval/test_shared_human_item_defaults_e2e.py",
       "{workspaceRoot}/tests/e2e/board_copy_approval/test_human_board_projection_launch_e2e.py",
       "{workspaceRoot}/tests/e2e/board_copy_approval/test_human_items_report_e2e.py",
+      "{workspaceRoot}/tests/e2e/board_copy_approval/test_human_items_answer_batch_e2e.py",
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/scripts/dispatch-env.sh",

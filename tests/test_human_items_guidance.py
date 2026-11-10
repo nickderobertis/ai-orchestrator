@@ -23,12 +23,19 @@ module borrows their checkout reader rather than opening a second one.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 
 import pytest
 import yaml
 from published_tools import ENGINE_BIN
-from test_engine_contracts import ONEPIPELINE_DOCS, ONEPIPELINE_SCHEMAS, _source
+from test_engine_contracts import (
+    ONEPIPELINE_DOCS,
+    ONEPIPELINE_SCHEMAS,
+    Engine,
+    _pinned_tag,
+    _source,
+)
 
 from orchestrator import human_items
 from orchestrator.root import REPO_ROOT
@@ -149,14 +156,95 @@ def test_no_guidance_still_has_the_manager_paste_the_whole_report() -> None:
     assert "report is the one printable manager report" in _contract()
 
 
-def test_the_manager_routes_the_users_questions_through_items_and_keeps_workers_apart() -> None:
+#: The pinned engine's library source, where its published question guidance is declared.
+ONEPIPELINE_SOURCE = Engine("onepipeline", _pinned_tag("onepipeline"), "src")
+QUESTION_GUIDANCE = re.compile(r'pub const QUESTION_GUIDANCE: &str = "((?:[^"\\]|\\.)*)";')
+
+#: Each property of the manager's rule that every question to the user is a question item,
+#: as AGENTS.md words it beside the engine's own guidance — which says choices where they fit,
+#: and a blocking question tool only where nothing useful can be done and only after the item,
+#: and is held word for word below: raised with the recipe and never only in chat, the tool's
+#: answer and a chat answer recorded on the item acting for the user, a page batch read as
+#: answers, and a worker's question kept worker-to-manager and relayed through an item.
+QUESTION_RULE = (
+    "**Every question to the user is a question item.** In the engine's words:",
+    "Raise it with `just human-items raise`, its `--input` file the engine's item shape, and "
+    "never ask it only as a line of chat",
+    "Keep supervising while it waits, your watches armed and unrelated nodes moving",
+    "Claude Code's built-in question tool is one such harness tool, and its answer is recorded "
+    "on the item with `just human-items answer`, acting for the user.",
+    "When the user answers in chat, record it with `just human-items answer <item> --choice "
+    '<id>` and/or `--text "<their words>"`',
+    "or `just human-items answer-batch --input <file>` for several, acting for them as "
+    "completing a task for them does, so the page and every other manager see it answered",
+    "A batch the user sends from the page arrives as answered items — one `just human-items "
+    "watch` delivery listing every answer, or one `human-item` surface on each tied run's "
+    "watch — so read it as their answers and never ask again",
+    "**It restates every open question item `just human-items report` shows**, until it "
+    "leaves the store",
+    "the chat holds no question that has no item",
+    "**A worker's `ORCHESTRATOR_ASK_MANAGER` question is worker-to-manager**, on that run's "
+    "channel: answer it yourself; where only the user can, raise it as a question item, with "
+    "choices where they fit, and relay the answer it records back on that run's channel.",
+)
+
+
+@pytest.mark.parametrize("said", QUESTION_RULE)
+def test_the_manager_puts_every_question_to_the_user_through_an_item(said: str) -> None:
     manager = _manager()
-    assert "Put a question that is genuinely the user's as a question item where it fits" in (
-        manager
+    assert manager.count(said) == 1, f"AGENTS.md's manager loop must state {said!r} exactly once"
+    whole = _flat((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    assert whole.count(said) == 1, f"AGENTS.md states {said!r} outside the manager loop"
+
+
+def test_the_manager_restates_the_pinned_engines_question_guidance_exactly_once() -> None:
+    """The engine's own sentence, read off the pinned release's source, stands word for word
+    in the manager loop and nowhere else in `AGENTS.md`."""
+    declared = QUESTION_GUIDANCE.search(_source(ONEPIPELINE_SOURCE, "human_items.rs"))
+    assert declared is not None, (
+        f"onepipeline {ONEPIPELINE_SOURCE.ref} no longer declares QUESTION_GUIDANCE in "
+        "src/human_items.rs; re-read where the engine states it and restate AGENTS.md"
     )
-    assert "keep unrelated nodes moving while it waits" in manager
-    assert "A worker's `ORCHESTRATOR_ASK_MANAGER` question is worker-to-manager" in manager
-    assert "relay the answer it records back on that run's channel" in manager
+    guidance = _flat(json.loads(f'"{declared.group(1)}"'))
+    assert guidance in _contract(), guidance
+    whole = _flat((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    assert _manager().count(guidance) == 1, (
+        f"AGENTS.md's manager loop must restate onepipeline {ONEPIPELINE_SOURCE.ref}'s "
+        f"QUESTION_GUIDANCE exactly once: {guidance!r}"
+    )
+    assert whole.count(guidance) == 1, "AGENTS.md restates QUESTION_GUIDANCE twice"
+
+
+#: Wordings that lead a manager to put a question for the user in chat rather than in an item.
+ASKS_IN_CHAT = (
+    "ask the user in the chat",
+    "put the question in your message",
+    "take to the user",
+    "decide with the user",
+    "decides with the user",
+    "that decision with the user",
+    "put that question to the user",
+    "ask the user before dispatch",
+    "unless you are truly blocked",
+)
+
+
+def _guidance_files() -> list[str]:
+    """Every file a manager or a dispatch reads guidance from, relative to the checkout."""
+    files = [REPO_ROOT / "AGENTS.md", REPO_ROOT / "docs" / "orchestration.md"]
+    for directory in ("personas", "templates"):
+        files += sorted(path for path in (REPO_ROOT / directory).rglob("*") if path.is_file())
+    return [str(path.relative_to(REPO_ROOT)) for path in files]
+
+
+@pytest.mark.parametrize("relative", _guidance_files())
+def test_no_guidance_leads_a_manager_to_ask_the_user_in_chat(relative: str) -> None:
+    said = _flat((REPO_ROOT / relative).read_text(encoding="utf-8")).lower()
+    asked = [wording for wording in ASKS_IN_CHAT if wording in said]
+    assert not asked, (
+        f"{relative} still says {asked}; every question to the user is a question item, by "
+        "AGENTS.md's manager-loop rule, so point there instead"
+    )
 
 
 def test_the_manager_acts_for_the_user_only_after_their_decision_and_dismisses_with_reasons() -> (
@@ -189,7 +277,7 @@ def test_the_planner_states_every_human_nodes_item_with_an_explicit_priority() -
 
 
 def test_the_item_vocabulary_this_host_parses_is_the_engines_whole_schema() -> None:
-    """Every kind, state and priority the pinned engine's schema declares, and no other.
+    """Every kind, state, priority and choice bound the pinned engine's schema declares.
 
     `orchestrator/human_items.py` refuses an item outside these sets, so an engine that grows
     a member fails here before a host refuses its real items.
@@ -203,6 +291,15 @@ def test_the_item_vocabulary_this_host_parses_is_the_engines_whole_schema() -> N
     assert declared["HumanItemKind"] == human_items.KINDS
     assert declared["HumanItemState"] == human_items.STATES
     assert tuple(item["properties"]["priority"]["enum"]) == human_items.PRIORITIES
+    choices = item["properties"]["choices"]
+    choice = item["$defs"]["HumanItemChoice"]
+    assert choices["maxItems"] == human_items.MAX_CHOICES
+    assert choice["properties"]["id"]["pattern"] == f"^{human_items.CHOICE_ID.pattern}$"
+    assert choice["properties"]["title"]["maxLength"] == human_items.CHOICE_TITLE_LENGTH
+    assert set(choice["required"]) == human_items.CHOICE_FIELDS
+    resolution = item["$defs"]["HumanItemResolution"]
+    assert set(resolution["properties"]) == human_items.RESOLUTION_FIELDS
+    assert resolution["additionalProperties"] is False
     labels = schema["priority_labels"]
     assert [labels[priority] for priority in human_items.PRIORITIES] == [
         "Critical",
