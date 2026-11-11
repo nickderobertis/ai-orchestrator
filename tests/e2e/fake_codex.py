@@ -76,7 +76,8 @@ tell one outcome from another deterministically:
   llmlint judge batch, recognized by the ``## Target files`` and ``## Rules to evaluate``
   sections llmlint's prompt carries, is answered in the shape llmlint's schema asks for,
   every rule the batch lists holding — except each rule this JSON object names, mapped to
-  the ``file``, ``line`` and ``message`` of the violation it is answered with. A violation
+  the ``file``, ``line`` and ``message`` of the violation it is answered with, or to a list
+  of them for a rule failing in several files. A violation
   is reported only in a file the batch lists and the rule's ``Scope:`` line covers, as a
   model reading the prompt would. The batch is answered outside the scripted launches:
   it is not counted in ``FAKE_CODEX_ATTEMPT_LOG``, takes no ``FAKE_CODEX_ANSWERS`` entry,
@@ -475,18 +476,16 @@ def llmlint_verdict(batch: Batch) -> str:
         if name in omitted or "*" in omitted:
             continue
         scripted = failing.get(name)
-        violations: list[Violation] = (
-            [
-                Violation(
-                    file=str(scripted["file"]),
-                    line=int(scripted.get("line", 1)),
-                    message=str(scripted["message"]),
-                )
-            ]
-            if isinstance(scripted, dict)
-            and in_scope(str(scripted["file"]), rule.scope, batch.targets)
-            else []
-        )
+        each = [scripted] if isinstance(scripted, dict) else scripted or []
+        violations: list[Violation] = [
+            Violation(
+                file=str(one["file"]),
+                line=int(one.get("line", 1)),
+                message=str(one["message"]),
+            )
+            for one in each
+            if isinstance(one, dict) and in_scope(str(one["file"]), rule.scope, batch.targets)
+        ]
         verdict = RuleVerdict(
             name=name,
             rationale=f"fake_codex: {name} {'fails' if violations else 'holds'} as scripted",

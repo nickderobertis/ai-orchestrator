@@ -1163,6 +1163,13 @@ excerpted; each path listed is a file you may open read-only, and you open only 
 your judgment needs — a node's task file, up to the operational notes it ends with,
 where a question below turns on its criteria or on a budget's detail.
 
+Who ruled on a decision does not settle it. A decision the plan records as the manager's
+ruling — an answer to the planner's question, an exception the manager accepted, a
+contract the manager ruled to keep — is judged under every question here on its merits,
+exactly like one the planner chose. Only a decision the plan attributes to the user's own
+words is exempt from that judgment, because the user's ruling binds: never refuse what the
+plan records as the user's own words.
+
 On the adoption, ask two questions.
 
 First: does the goal need a change in one of the producers the table names to be **in

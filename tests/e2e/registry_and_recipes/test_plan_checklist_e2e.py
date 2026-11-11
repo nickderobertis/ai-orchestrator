@@ -9,9 +9,11 @@ the pinned `onejudge` runs with the script itself as the side's `bin`.
 
 The plan is the committed copy of the real `authoring:nonfunctional-requirements-are-budgets`
 plan, `tests/fixtures/plan-checklist-plans/`, beside a second plan in the same authoring root
-that the checklist must never read. Its task bodies quote this host's dispatch appendix,
-`llmlint: ignore` directive included, which llmlint's structural pre-flight would refuse
-before any judge ran.
+that the checklist must never read. The same fixture holds the plans of the incident the
+seam-ownership rule comes from, `first-screen-read-contract` and its user-ruled twin, which
+the review of the first plan never reads either. Its task bodies quote this host's dispatch
+appendix, `llmlint: ignore` directive included, which llmlint's structural pre-flight would
+refuse before any judge ran.
 
 Only the paid model is doubled, at the harness boundary: llmlint's judge reaches the real
 `oneharness` under the `oneharness.llmlint.toml` the configuration names, which spawns the
@@ -89,8 +91,29 @@ TASK_RULE = "tests_hold_no_nonfunctional_thresholds"
 #: The task whose budget leaves how `own-sessions-read-seconds` is taken to its worker.
 BUDGETS_TASK = "tasks/feat-budgets-move-the-cost-thresholds-tests-assert-into-budgets-yaml-files.md"
 PLAN_RULE = "budget_commands_measure_directly"
-#: The documents the plan store locates for the plan, relative to the authoring root.
-DOCUMENTS = {DESCRIPTION, *(f"tasks/{task.name}" for task in (FIXTURE / "tasks").iterdir())}
+
+
+def _documents_of(plan: str) -> set[str]:
+    """The documents the plan store locates for ``plan``, relative to the authoring root."""
+    tasks = {
+        f"tasks/{task.name}"
+        for task in (FIXTURE / "tasks").iterdir()
+        if yaml.safe_load(task.read_text(encoding="utf-8").split("---\n", 2)[1])["project"] == plan
+    }
+    return {f"projects/{plan}.md", *tasks}
+
+
+DOCUMENTS = _documents_of(PLAN)
+#: The incident the seam-ownership rule comes from: one plan holding the three contracts it
+#: went through, the first kept by a manager's ruling its **Decided** part records.
+SEAM_RULE = "seam_decisions_rest_with_their_owner"
+SEAM_PLAN = "first-screen-read-contract"
+SEAM_DOCUMENTS = _documents_of(SEAM_PLAN)
+#: The caller naming the callee's internals, and the callee absorbing the caller's concern.
+STUB_KINDS = "tasks/feat-engine-select-a-first-screen-by-the-record-kinds-its-caller-names.md"
+ENGINE_OWNS_THE_SCREEN = "tasks/feat-engine-select-every-record-a-first-screen-draws.md"
+#: The accepted shape: heads for every record, and whole records fetched by handle.
+LIST_THEN_FETCH = "tasks/feat-engine-list-record-heads-and-fetch-records-by-handle.md"
 
 # llmlint: ignore[e2e_not_mocked] Only the paid model is substituted; see the docstring.
 FAKE_CODEX = helper("fake_codex.py")
@@ -386,12 +409,12 @@ def _worded_rules() -> list[dict[str, object]]:
     return [rule for rule in _declared_rules() if not rule.get("override")]
 
 
-def _in_scope(scope: str) -> set[str]:
+def _in_scope(scope: str, documents: set[str] = DOCUMENTS) -> set[str]:
     """The plan's documents a judge prompt's `Scope:` line covers."""
     if scope == "all target files":
-        return set(DOCUMENTS)
+        return set(documents)
     if scope.startswith("all target files except: "):
-        return DOCUMENTS - {part.strip() for part in scope.split(": ", 1)[1].split(",")}
+        return documents - {part.strip() for part in scope.split(": ", 1)[1].split(",")}
     return {part.strip() for part in scope.split(",")}
 
 
@@ -406,7 +429,7 @@ def test_each_rule_the_checklist_words_is_judged_over_the_plans_documents(
     and on the description's 10x answer, fail there, and every other one passes.
     """
     worded = _worded_rules()
-    assert len(worded) == 11, [rule["name"] for rule in worded]
+    assert len(worded) == 12, [rule["name"] for rule in worded]
     failing = {
         "plan_budget_measurement_is_decided": {
             "file": BUDGETS_TASK,
@@ -447,6 +470,49 @@ def test_each_rule_the_checklist_words_is_judged_over_the_plans_documents(
         assert _in_scope(_scope(prompt, name)) == selected, name
         expected = "fail" if name in failing else "pass"
         assert outcomes[name]["outcome"] == expected, outcomes[name]
+
+
+def test_the_seam_rule_refuses_both_misplaced_contracts_and_passes_list_then_fetch(
+    checklist: Checklist,
+) -> None:
+    """The seam-ownership rule reaches the judge worded in full over the incident's plan.
+
+    The stand-in judge is scripted to refuse the two contracts that put a decision on the
+    side that does not own it — the one the plan records as the manager's ruling among
+    them — and the report carries both refusals under the rule's name, while the
+    list-then-fetch contract is named by none of them.
+    """
+    (declared,) = [rule for rule in _worded_rules() if rule["name"] == SEAM_RULE]
+    refused = {STUB_KINDS: 24, ENGINE_OWNS_THE_SCREEN: 30}
+    failing = {
+        SEAM_RULE: [
+            {"file": document, "line": line, "message": f"misplaces a decision: {document}"}
+            for document, line in refused.items()
+        ]
+    }
+
+    ran = subprocess.run(
+        [str(SCRIPT), "review", f"authoring:{SEAM_PLAN}", "--format", "json"],
+        cwd=REPO_ROOT,
+        env=checklist.environment | {"FAKE_CODEX_LLMLINT_FAIL": json.dumps(failing)},
+        text=True,
+        capture_output=True,
+        timeout=RUN_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    assert ran.returncode == 1, ran.stdout + ran.stderr
+    (prompt,) = checklist.prompts()
+    assert FRAMING in prompt
+    assert _targets(prompt) == SEAM_DOCUMENTS
+    section = " ".join(prompt.split(f"### {SEAM_RULE}\n", 1)[1].split("\n### ", 1)[0].split())
+    assert " ".join(str(declared["description"]).split()) in section, section
+    assert _in_scope(_scope(prompt, SEAM_RULE), SEAM_DOCUMENTS) == SEAM_DOCUMENTS
+    (outcome,) = [rule for rule in json.loads(ran.stdout)["rules"] if rule["name"] == SEAM_RULE]
+    assert outcome["outcome"] == "fail", outcome
+    reported = {(found["file"], found["line"]) for found in outcome["violations"]}
+    assert reported == set(refused.items()), outcome
+    assert LIST_THEN_FETCH in SEAM_DOCUMENTS and LIST_THEN_FETCH not in json.dumps(outcome)
 
 
 def _graph_judges() -> list[dict[str, str]]:

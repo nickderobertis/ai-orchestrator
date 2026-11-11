@@ -7,7 +7,8 @@ clause by clause, a split weighed against the parallelism it buys. The plan chec
 a time. A check stated in both drifts, and two tiers judging one property refuse each
 other's wording, so this holds the split: the moved checks stay out of the bar, the ones
 that need judgment stay in it, the checklist's own rules are exactly the ones the planner's
-judge gave up plus the two that make a plan state what the fragment rules judge, and none of
+judge gave up, plus the two that make a plan state what the fragment rules judge, plus the one
+that asks which side of a contract owns each decision it encodes, and none of
 their wording is copied into the documents that instruct a planner, which name each rule
 instead.
 """
@@ -29,7 +30,8 @@ BUDGETS_DOC = "docs/budgets.md"
 #: The rules the checklist words itself: the nine checks moved out of the planner's judge —
 #: the last of them the rule that replaced the one demanding a budget owner's criteria name
 #: each budget, once a task's budgets derived their own criteria — then the two that make a
-#: plan state the facts a re-declared fragment rule judges.
+#: plan state the facts a re-declared fragment rule judges, and last the one no judge held
+#: before it: which side of a contract owns the knowledge each decision it encodes rests on.
 NEW_RULES = (
     "plan_criteria_satisfiable_inside_the_dispatch",
     "plan_criteria_require_realistic_tests",
@@ -42,8 +44,9 @@ NEW_RULES = (
     "plan_criteria_do_not_restate_budgets",
     "plan_budget_names_its_telemetry_source",
     "plan_budget_measurement_is_decided",
+    "seam_decisions_rest_with_their_owner",
 )
-COMPLETENESS_RULES = NEW_RULES[-2:]
+COMPLETENESS_RULES = NEW_RULES[-3:-1]
 #: The fragment rules re-declared for plans, whose wording stays upstream.
 FRAGMENT_RULES = (
     "budgets_track_product_owner_outcomes",
@@ -89,6 +92,10 @@ STAYS_IN_THE_BAR = {
     ),
     "a target quietly loosened": "a requested target quietly loosened rather than escalated",
     "an unrecorded exception": "reject an exception only when it is **unrecorded**",
+    "a manager's ruling judged on its merits": "**a manager's ruling is judged on its merits.**",
+    "only the user's own words exempt": (
+        "only a decision the plan attributes to the user's own words"
+    ),
     "the acceptance standard": "accept nothing until all six hold",
 }
 #: The invariant of each rule the checklist applies, as the planner's instructions have
@@ -211,7 +218,7 @@ def test_the_checklist_words_exactly_the_rules_the_planners_judge_gave_up() -> N
     worded = [rule["name"] for rule in _rules() if not rule.get("override")]
     assert sorted(worded) == sorted(NEW_RULES), (
         f"{CONFIG} words {sorted(worded)} itself, where it words exactly the nine checks "
-        "moved out of the planner's judge and the two completeness rules"
+        "moved out of the planner's judge, the two completeness rules and the seam-ownership rule"
     )
     for rule in _rules():
         assert rule.get("agent") == "plan", f"{rule['name']} is not judged under the plan agent"
