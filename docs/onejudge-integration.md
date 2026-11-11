@@ -44,11 +44,9 @@ root with no node scratch to hold that:
 A third role sits beside both: the **monitor** `just orchestrate` attaches watches
 a tracked graph rather than doing the work or driving it, so it has its own config,
 `oneharness.orchestrator.toml` — named by `graphs/dag-scope.yaml`'s `monitor`
-member. The `check-in` pacemaker scheduled beside it in that same
-graph has a fourth, `oneharness.check-in.toml`, which is that routing verbatim and
-differs in one field only; [Choosing a deadline per
-side](#choosing-a-deadline-per-side) is why, and re-merging the two is a silent
-regression rather than a tidy-up.
+member. The monitor also writes the run's plain-language progress report, on the turn its
+scheduled `progress-report` note opens, so no second scheduled member — and no second
+config with a deadline of its own — exists for that report.
 
 One role pairs those two sides the **other way round**, and it is the only one here
 that does. `graphs/design-doc.yaml` runs the role that reads a finished plan and writes
@@ -62,7 +60,8 @@ side writing to the template. That judge side is also the one supervisory side h
 that keeps the working model tier rather than `oneharness.judge.toml`'s cheaper one,
 because this review *is* the deliverable's quality bar. Both name all seven identities
 with the primary Claude subscription last, and both state their own finite deadline;
-neither is shared with any other member, for the reason the pacemaker's is not.
+neither is shared with any other member, for the reason [Choosing a deadline per
+side](#choosing-a-deadline-per-side) gives.
 
 Edit those files to change the harness or model on a side for every run on this
 host. One run changes it with graph config-ref overrides, the only way to give
@@ -73,7 +72,7 @@ concerns (persona defaults, session), never harness/model selection.
 ### Where the identities are stated, and what a role file carries
 
 Every role config above extends a shared parent, so the seven identities are written down
-once rather than fourteen times:
+once rather than thirteen times:
 
 | File | What it holds |
 | --- | --- |
@@ -124,7 +123,7 @@ But `codex:primary`'s mask cannot live in a parent at all. That identity honours
 ambient `CODEX_HOME` and masks nothing except the plan store's two credentials, so for those three
 roles its correct mask is *empty* — and empty is exactly what a child cannot say, since
 an empty list inherits. So `oneharness.identities.toml` and `oneharness.dispatch.toml`
-state no mask at that variant, and each of the eleven roles that masks either says so
+state no mask at that variant, and each of the ten roles that masks either says so
 itself — the board-live worker masking the Linear key alone. It is the one place the seven-identity block is not the whole
 story, and both parents carry a note at that variant explaining why.
 
@@ -147,7 +146,7 @@ credential isolation true, which is what a reviewer and the equivalence record b
 both read. A follow-up against oneharness is what retires them.
 
 Both halves are held, and it takes both.
-`tests/e2e/launch_monitor_observer/test_oneharness_config_equivalence_e2e.py` holds all fourteen roles' reported
+`tests/e2e/launch_monitor_observer/test_oneharness_config_equivalence_e2e.py` holds all thirteen roles' reported
 configurations to a committed record under `tests/e2e/launch_monitor_observer/oneharness_resolved/`, so a
 deliberate routing change is a visible update to that record in the same commit.
 `tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` drives a **real turn** on every identity of
@@ -169,7 +168,7 @@ two basenames — give a graph `worker.toml` and `judge.toml` through `--set` an
 member directory still holds `oneharness.toml` and `oneharness.judge.toml`. A two-party
 member gets both files; a single-sided one gets only the agent's, which is how
 `tests/e2e/fake_backend.py` — the double for the paid model at that seam — tells a
-pacemaker turn from a two-party agent turn, and a judge turn from either.
+single-sided member's turn from a two-party agent turn, and a judge turn from either.
 
 ### The mode a judge runs in, and the tools a supervisory Codex turn is offered
 
@@ -208,8 +207,7 @@ mode asked for the remaining work.
 Neither setting is in a shared parent, because `oneharness.dispatch.toml` is also the
 worker's.
 
-Every supervisory Codex role — both judges, the monitor, the pacemaker, the plan
-reviewer, the drafter and the judged lint tier — also passes `-c features.apps=false` in
+Every supervisory Codex role — both judges, the monitor, the plan reviewer, the drafter and the judged lint tier — also passes `-c features.apps=false` in
 its `[harness.codex]` args, which removes the ChatGPT-app connector tools
 (`mcp__codex_apps__…`, some 260 of a judge turn's 275) and leaves the shell. The worker
 roles and the shared parents carry none of these settings.
@@ -220,25 +218,21 @@ set other than the read-only one, or a lost `--strict-mcp-config`.
 
 ### The access a channel-writing supervisory member runs with
 
-The two observer members that write a run's channel — the `monitor`, raising findings and
-live edits, and the `check-in` pacemaker, raising the regular update — declare
-**`mode = "bypass"`** in their own role files, `oneharness.orchestrator.toml` and
-`oneharness.check-in.toml`. Their access is declared in tracked configuration and is
-independent of identity homes: no shared parent states a mode, so a role that stated none
-would run each identity in `default`, where codex obeys whatever `sandbox_mode` that
-identity's home configures, and only bypass puts a flag on the provider's command line that
-outranks it. That gap is how a check-in turn that fell from a rate-limited `codex:primary`
-to a `codex:alternate` whose home was read-only completed without its surface, and the
-manager read the quiet run as a healthy one. The fix is never an edit to a `~/.codex*` or
-`~/.claude*` home. The file is the one place the pacemaker can state it, because the
-oneagentgraph the engine links admits no `mode` on a single-sided `kind: oneharness`
-member. The monitor's graph member states `mode: bypass` as well, and its file says the same
-so the two cannot disagree. Both files declare the same value, which keeps them one field —
-`timeout` — apart. No other role's mode moved, and the judges stay `read-only`.
+The observer member that writes a run's channel — the `monitor`, raising findings, live
+edits and the run's progress report — declares **`mode = "bypass"`** in its own role
+file, `oneharness.orchestrator.toml`. Its access is declared in tracked configuration and
+is independent of identity homes: no shared parent states a mode, so a role that stated
+none would run each identity in `default`, where codex obeys whatever `sandbox_mode` that
+identity's home configures, and only bypass puts a flag on the provider's command line
+that outranks it. That gap is how a supervisory turn that fell from a rate-limited
+`codex:primary` to a `codex:alternate` whose home was read-only completed without its
+surface, and the manager read the quiet run as a healthy one. The fix is never an edit to
+a `~/.codex*` or `~/.claude*` home. The monitor's graph member states `mode: bypass` as
+well, and its file says the same so the two cannot disagree. No other role's mode moved,
+and the judges stay `read-only`.
 `tests/e2e/launch_monitor_observer/test_supervisory_channel_access_e2e.py` forces that
-fallback: a quota refusal on the primary and a read-only alternate home. It reads the
-check-in update back off a real run's channel, and the bypass flag off each fallback
-identity's command line.
+fallback — a quota refusal on the primary and a read-only alternate home — and reads the
+bypass flag off the fallback identity's command line.
 
 ### The judge side may be a list of judges
 
@@ -809,7 +803,7 @@ split long suites to fit one tool call instead. Two dispatched worker roles carr
 `oneharness.toml`, the node-scope worker's agent side, and `oneharness.follow-up.toml`,
 whose turn deadline is 7200 s so a one-hour command fits inside it. The judge carries
 neither setting, because a dispatched judge runs no shell command. Nor do the monitor,
-the pacemaker, the drafter, the plan reviewer, the design-doc pair or the lint tier.
+the drafter, the plan reviewer, the design-doc pair or the lint tier.
 
 | Harness | Setting | What it bounds |
 | --- | --- | --- |
@@ -1142,7 +1136,7 @@ of that check, not a second declaration of it. -->
 | Side | Config | Deadline |
 | --- | --- | --- |
 | Orchestrator agent | `oneharness.orchestrator.toml` | **none** (`timeout = 0`) |
-| `check-in` pacemaker | `oneharness.check-in.toml` | 240s, stated |
+| pr-author drafter | `oneharness.pr-author.toml` | 600s, stated |
 | Judge / simulated user | `oneharness.judge.toml` | **none**, the release default |
 | Worker agent | `oneharness.toml` | **none**, the release default |
 | LLM lint | `oneharness.llmlint.toml` | **none**, the release default |
@@ -1165,11 +1159,11 @@ reading a timeout as an outage: a timeout deliberately does **not** fall through
 and from outside, a killed process is indistinguishable from a harness that
 vanished, so unrelated dispatch failures get misattributed alongside it.
 
-**The pacemaker is why this needed a second file rather than one line.** `check-in`
-shared `oneharness.orchestrator.toml`, and a `0` written there would have given a
-scheduled member no deadline too. That is the worse failure: a killed pacemaker turn
-at least ends and is retried on the next tick, while a wedged one that never dies
-holds its slot silently forever. Everything else was rejected for being unable to
+**This is why a member needing a finite deadline has a file of its own rather than one
+line.** A `0` written into a config two members shared would give the second one no
+deadline too, and that is the worse failure: a killed turn at least ends, while a wedged
+one that never dies holds its slot silently forever — which, for the drafter, holds a
+verified branch unpublished. Everything else was rejected for being unable to
 express one member: `ONEHARNESS_TIMEOUT` is process-wide for the whole
 `oneagentgraph run` **and** beats every file, exactly like `ONEHARNESS_HARNESSES`
 above; and an `ONEHARNESS_BIN` wrapper appending `--timeout 0` is process-wide too,
@@ -1184,8 +1178,8 @@ from the CLI rather than the file —
 ```
 $ oneharness config --config oneharness.orchestrator.toml --format json | jq .timeout
   { "value": 0,   "source": "oneharness.orchestrator.toml" }
-$ oneharness config --config oneharness.check-in.toml --format json | jq .timeout
-  { "value": 240, "source": "oneharness.check-in.toml" }
+$ oneharness config --config oneharness.pr-author.toml --format json | jq .timeout
+  { "value": 600, "source": "oneharness.pr-author.toml" }
 $ oneharness config --config oneharness.toml --format json | jq .timeout
   { "value": null, "source": null }
 ```
@@ -1349,7 +1343,7 @@ Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`,
 `oneharness.identities.toml`, `oneharness.dispatch.toml`, `oneharness.toml`,
 `oneharness.judge.toml`, `oneharness.orchestrator.toml`,
-`oneharness.check-in.toml`, `oneharness.plan-review.toml`, or
+`oneharness.plan-review.toml`, or
 `oneharness.plan-review-whole.toml`; every other pushed diff skips it. The two shared parents
 are on that list because they are where an identity, a model or a credential mask now
 changes — a launch path can move without any role file being touched at all.
@@ -1566,7 +1560,7 @@ from its process table.
   `ONEHARNESS_TIMEOUT` any more**, and nothing should: since oneharness 0.7.0 an
   absent per-turn deadline means *no* deadline, and the worker, judge, and llmlint
   configs take that default deliberately while `oneharness.orchestrator.toml`,
-  `oneharness.check-in.toml`, `oneharness.pr-author.toml`, `oneharness.review-reply.toml`,
+  `oneharness.pr-author.toml`, `oneharness.review-reply.toml`,
   `oneharness.design-doc.toml`, and `oneharness.design-doc-judge.toml` set their own. The
   variable is process-wide for a whole graph run and beats every file, so setting it
   moves every member at once — see [Choosing a deadline per
@@ -1677,7 +1671,7 @@ point.** A launch journey pins `ONEAGENTGRAPH_ONEHARNESS_BIN` at
 `tests/e2e/fake_backend.py`, which delegates to the real CLI under `--mock-harness`.
 It covers every turn `oneagentgraph` reaches by spawning a CLI — which, since
 `oneagentgraph` 0.2.18, is no longer all of them: a single-sided `kind: oneharness`
-member (this repository's `check-in` pacemaker) runs its turn through the oneharness
+member (this repository's change-request and reply drafters) runs its turn through the oneharness
 *library* on a thread of the graph process, so that variable never reaches it, and the
 member would otherwise have gone straight to a paid subscription. What is still a
 process there is the provider itself, so the journeys also pin `ONEHARNESS_BIN_CODEX`

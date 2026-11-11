@@ -14,7 +14,6 @@ launch_paths=(
   "oneharness.toml"
   "oneharness.judge.toml"
   "oneharness.orchestrator.toml"
-  "oneharness.check-in.toml"
   "oneharness.plan-review.toml"
   "oneharness.plan-review-whole.toml"
 )

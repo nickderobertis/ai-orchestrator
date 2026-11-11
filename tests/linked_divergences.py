@@ -32,16 +32,17 @@ class Divergence(NamedTuple):
 #: installable from PyPI at all, or where this host's own verbs must run a later release
 #: than any engine links — never as a convenience, and never as "not yet looked at",
 #: because both read identically from here a release cycle later. The adopted engine
-#: 0.105.0 links onejudge 0.22.4, which — like 0.22.3 — was tagged but never published to
-#: PyPI, so no pin can name it; 0.22.5, the first published release built on the same
-#: onemessagebus 0.10, adds one engine fix over it and is what this host's verbs run.
+#: 0.106.3 links onejudge 0.23.0, which was tagged but never published to PyPI, so no
+#: pin can name it; the one published release past it, 0.23.1, builds on onemessagebus
+#: 0.11 while that engine links onemessagebus 0.10.0 and `config/onemessagebus.version`
+#: names 0.10.0, so this host's verbs keep 0.22.5, the last published release on 0.10.
 DECLARED_DIVERGENCES: dict[str, Divergence] = {
     "onejudge": Divergence(
-        linked="0.22.4",
+        linked="0.23.0",
         pinned="0.22.5",
         because=(
-            "onejudge 0.22.4 is not on PyPI; 0.22.5 is the first published release built "
-            "on the same onemessagebus 0.10"
+            "onejudge 0.23.0 is not on PyPI, and 0.23.1 builds on onemessagebus 0.11 while "
+            "the engine and config/onemessagebus.version stay on 0.10"
         ),
     ),
 }

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# The command every dispatch, the monitor and the pacemaker drafts a non-blocking
+# The command every dispatch and the monitor draft a non-blocking
 # follow-up with, reached through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, and the one
 # `just follow-up` runs for the manager:
 #
 #     "$ORCHESTRATOR_FOLLOW_UP_DRAFT" --title TITLE --repository HOST/OWNER/NAME \
-#         [--path PATH]... [--as node|monitor|pacemaker|manager] [--member NAME] \
+#         [--path PATH]... [--as node|monitor|manager] [--member NAME] \
 #         [--run RUN-ID] < body.md
 #
 # Everything a draft is — the flags, the body's headings, what is stamped, the refusals,

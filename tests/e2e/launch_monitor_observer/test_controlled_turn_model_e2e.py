@@ -1,7 +1,7 @@
 """A controlled codex turn runs under the model its side's config names.
 
-Every codex-first supervisory side on this host — the monitor, the pacemaker, the judge,
-the llmlint tier — runs its turn with `--control`, driven over `codex app-server`, and
+Every codex-first supervisory side on this host — the monitor, the judge, the llmlint
+tier — runs its turn with `--control`, driven over `codex app-server`, and
 names its model in `[harness.codex].model` rather than at the run level, because model
 names differ per provider and a side's tier is chosen per harness. Until
 https://github.com/nickderobertis/oneharness/pull/1284 that name reached the record and

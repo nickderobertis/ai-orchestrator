@@ -304,7 +304,7 @@ def test_the_worktree_environment_is_put_at_the_front_of_a_dispatchs_path(
 def test_a_bare_onepipeline_on_a_dispatchs_path_is_this_checkouts_npm_install(
     tmp_path: Path,
 ) -> None:
-    """The monitor, the pacemaker and the planner run a bare `onepipeline`.
+    """The monitor and the planner run a bare `onepipeline`.
 
     `bun.lock` installs it into this checkout's `node_modules`, and no Python environment
     carries it, so the constructed PATH is the only thing that lets those members reach it.

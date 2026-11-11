@@ -49,8 +49,8 @@ tell one outcome from another deterministically:
   ``oneharness_core`` call rather than a spawned CLI, so
   ``ONEAGENTGRAPH_ONEHARNESS_BIN`` — and with it ``tests/e2e/fake_backend.py`` — is
   not on that member's path at all. The provider binary is, and this is it. These
-  single-sided members here take that path: the ``check-in`` pacemaker,
-  ``graphs/pr-author.yaml``'s drafter and ``graphs/review-reply.yaml``'s.
+  single-sided members here take that path: ``graphs/pr-author.yaml``'s drafter
+  and ``graphs/review-reply.yaml``'s.
 * ``FAKE_CODEX_RUN_ON_MARKER`` names a JSON file mapping a marker to the argument
   vectors a turn whose prompt carries that marker runs, in order, where the turn runs.
   It is ``tests/e2e/fake_backend.py``'s ``FAKE_BACKEND_RUN_ON_MARKER`` at the one seam a

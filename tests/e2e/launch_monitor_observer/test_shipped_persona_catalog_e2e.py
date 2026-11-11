@@ -38,8 +38,8 @@ from orchestrator.root import REPO_ROOT
 #: this tuple and what the binary answered rather than somewhere downstream.
 SHIPPED_ROLES = ("docs-writer", "engineer", "planner", "researcher", "reviewer")
 
-#: Names this repository uses that are deliberately NOT built in. `orchestrator` and
-#: `check-in` are `graphs/dag-scope.yaml`'s members, `pr-author` is
+#: Names this repository uses that are deliberately NOT built in. `orchestrator` is
+#: `graphs/dag-scope.yaml`'s member's persona, `pr-author` is
 #: `graphs/pr-author.yaml`'s and `review-reply` is `graphs/review-reply.yaml`'s drafter's, and
 #: every one of them is named there BY PATH because of
 #: what this file measures. `crozier/crozier-corpus` is the repo-specific catalog
@@ -47,7 +47,6 @@ SHIPPED_ROLES = ("docs-writer", "engineer", "planner", "researcher", "reviewer")
 #: what happens to these.
 NOT_SHIPPED = (
     "orchestrator",
-    "check-in",
     "pr-author",
     "review-reply",
     "crozier/crozier-corpus",

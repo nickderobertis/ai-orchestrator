@@ -287,7 +287,6 @@ RESTATING_SITES = (
     RestatingSite("oneharness.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.board-live.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.judge.toml", labels.ENGINE_LABEL_PREFIX),
-    RestatingSite("oneharness.check-in.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.design-doc.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.design-doc-judge.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.follow-up.toml", labels.ENGINE_LABEL_PREFIX),

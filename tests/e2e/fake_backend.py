@@ -12,8 +12,8 @@ those two compose.
 **A single-sided `kind: oneharness` member does not reach here, and since
 oneagentgraph 0.2.18 it cannot.** That member runs oneharness *in process* —
 `member-started` reports `runner: library` — so no oneharness binary is spawned for
-this file to be, and the variable above cannot redirect it. Two members here are that
-shape: the `check-in` pacemaker and `graphs/pr-author.yaml`'s change-request drafter.
+this file to be, and the variable above cannot redirect it. The members here of that
+shape are `graphs/pr-author.yaml`'s change-request drafter and its siblings.
 Nothing here is wrong about them; they simply never arrive, and a journey that
 assumed otherwise would spend real provider quota rather than fail. The seam that
 still covers those members is one layer lower, at the provider binary:
@@ -40,7 +40,8 @@ here by the config's NAME:
   answers the two JSON shapes onejudge asks it for: the supervisor verdict, and
   the `done_when` evaluation.
 * `--config .../oneharness.toml` with NO judge config beside it — a single-sided
-  `kind: oneharness` member (the check-in pacemaker). `oneagentgraph` writes both
+  `kind: oneharness` member, or the monitor, whose judge side is a command rather than
+  a harness config. `oneagentgraph` writes both
   configs into a two-party member's scratch and only the one into a single-sided
   member's, so the sibling is what tells those two apart.
 * anything else — the agent side of a two-party member. Since onepipeline 0.3.1 that
@@ -163,12 +164,12 @@ def _judged(config: str) -> bool:
     return beside.is_dir() and any(_judges(str(path)) for path in beside.iterdir())
 
 
-#: What this stand-in answers for a single-sided member — one with no judge config
-#: beside it, which on this host is `graphs/dag-scope.yaml`'s `check-in` pacemaker.
-#: Named rather than inlined because a journey asserting that member's surface still
-#: reaches the planner's queue has to recognise it, and two copies of the sentence
-#: would let that assertion pass against a report nothing produced.
-PACEMAKER_REPORT = "the stand-in pacemaker reported"
+#: What this stand-in answers for a member with no judge config beside it — the
+#: monitor, whose judge side is a command, when nothing scripts its answer. Named rather
+#: than inlined because a journey relaying that answer onto the planner's queue has to
+#: recognise it, and two copies of the sentence would let that assertion pass against a
+#: report nothing produced.
+UNJUDGED_REPORT = "the stand-in reported"
 
 #: The task `onepipeline` composes for the dag-scope graph. Since onepipeline 0.2.0 it
 #: says what the run *is* — its id and its goal — and no longer what to do with it;
@@ -260,6 +261,18 @@ OBSERVER_MEMBER_ENV = "FAKE_BACKEND_OBSERVER_MEMBER"
 #: report. Nothing here writes what a lost turn looks like.
 OBSERVER_LOSES_ENV = "FAKE_BACKEND_OBSERVER_LOSES"
 MOCK_EXIT_ENV = "MOCK_EXIT"
+
+#: Optionally have THAT member answer a turn whose prompt carries this text — the
+#: `progress-report` note `graphs/dag-scope.yaml` schedules, as onejudge hands it into the
+#: turn — by raising the progress report the way `personas/orchestrator.yaml` tells it to:
+#: one `onepipeline surface --kind check-in "$ONEPIPELINE_RUN_ID"`, its text on stdin. A
+#: real model runs that heredoc inside its turn; the stand-in runs the same verb with the
+#: same bytes, once per such turn, and nothing below the model is substituted.
+OBSERVER_REPORTS_ON_ENV = "FAKE_BACKEND_OBSERVER_REPORTS_ON"
+#: The report it raises, named so a journey can count exactly these on the run's queue.
+PROGRESS_REPORT = "the stand-in monitor's progress report: the run is under way and on track"
+#: The surface kind the report is raised as, the kind the manager reads a report under.
+PROGRESS_REPORT_KIND = "check-in"
 
 #: Optionally answer only THAT member's first this-many agent turns, and hold every turn
 #: after them open, unanswered, until whatever is running it stops it.
@@ -943,6 +956,34 @@ def _controlled_turn(config: str | None, prompt: str) -> ControlledTurn | None:
     )
 
 
+def _raise_the_progress_report(cwd: str | None) -> None:
+    """Raise one progress report on the observed run, as the monitor's persona spells it.
+
+    The run comes from `ONEPIPELINE_RUN_ID`, which the engine exports to an observer
+    member, and the verb is the `onepipeline` the member's own `PATH` resolves.
+    """
+    raised = subprocess.run(  # noqa: S603 - the persona's own verb, where the turn runs
+        [
+            "onepipeline",
+            "surface",
+            "--kind",
+            PROGRESS_REPORT_KIND,
+            os.environ["ONEPIPELINE_RUN_ID"],
+        ],  # noqa: S607
+        cwd=cwd or None,
+        input=PROGRESS_REPORT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if raised.returncode != 0:
+        print(
+            f"fake_backend: raising the progress report exited {raised.returncode}:\n"
+            f"{raised.stdout}{raised.stderr}",
+            file=sys.stderr,
+        )
+
+
 def _passed_through(argv: list[str]) -> int:
     """Hand a verb that reaches no provider to the real CLI exactly as it arrived."""
     real = os.environ.get(REAL_BINARY_ENV)
@@ -1043,9 +1084,12 @@ def _turn(original: list[str], argv: list[str], prompt: str) -> int:
     # but its JUDGE side is a `command` — `onemessagebus serve --codec monitor` — so
     # `oneagentgraph` writes no judge harness config beside its agent one, and the "no judge
     # sibling" test below reads that member as single-sided. Answered there, every scripted
-    # monitor answer was replaced by the pacemaker's report while the prompt log went on
+    # monitor answer was replaced by the unjudged report while the prompt log went on
     # recording the script, so a journey asserting on the log passed while the model said
     # something else entirely.
+    reports_on = os.environ.get(OBSERVER_REPORTS_ON_ENV)
+    if observed and reports_on and reports_on in prompt:
+        _raise_the_progress_report(_flag(argv, CWD_FLAG))
     if scripted_answer is not None or loses:
         _hold_past_the_answered_turns()
         return _answer(argv, scripted_answer or "", lost=loses)
@@ -1054,7 +1098,7 @@ def _turn(original: list[str], argv: list[str], prompt: str) -> int:
     if read is not None:
         return _answer(argv, read)
     if config and not _judged(config):
-        return _answer(argv, PACEMAKER_REPORT)
+        return _answer(argv, UNJUDGED_REPORT)
     _ask_manager(config)
     _author_plan(config)
     _run_on_marker(config, prompt, _flag(argv, CWD_FLAG))

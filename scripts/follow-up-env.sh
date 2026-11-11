@@ -6,7 +6,7 @@
 #
 # A draft is an unverified, non-blocking follow-up stored as a local Markdown task in
 # the `drafts` plan source (`orchestrator/follow_up_drafts.py` states the record). Every
-# party that may write one — a dispatched worker, the monitor, the pacemaker — runs
+# party that may write one — a dispatched worker, the monitor — runs
 # somewhere other than the launching checkout: a worktree of its own, or a graph member's
 # scratch. `onetaskgraph.yaml` roots `drafts` at the relative `.follow-ups`, which the
 # adopted store resolves against the directory of the document it read that root from —

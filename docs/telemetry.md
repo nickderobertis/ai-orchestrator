@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.105.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.106.3 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -320,10 +320,10 @@ turns onejudge 0.19.0 ran through
 `oneharness.judge.toml` and `oneharness.design-doc-judge.toml`, two on Codex and two on
 Claude Code: each record's `usage` block is the same five keys and nothing else.
 It moved again to 0.19.5 with the engine 0.75.0, to 0.20.0 with the engine 0.80.2 and to
-0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0 and to 0.22.1 with the engine 0.96.1 and to 0.22.2 with the engine 0.101.2 and to 0.22.4 with the engine 0.105.0, and both files are unchanged between `onejudge-v0.19.0` and
+0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0 and to 0.22.1 with the engine 0.96.1 and to 0.22.2 with the engine 0.101.2 and to 0.22.4 with the engine 0.105.0 and to 0.22.5 with the engine 0.106.0 and to 0.23.0 with the engine 0.106.3, and both files are unchanged between `onejudge-v0.19.0` and
 `onejudge-v0.22.2` too; from there to `onejudge-v0.22.5`, the CLI this host pins, only
-doc comments in `report.rs` moved. The
-engine links `oneharness-core` 0.29.1 for itself, onejudge 0.22.4 and oneagentgraph 0.11.0, read off the
+doc comments in `report.rs` moved, and neither file moved from there to `onejudge-v0.23.0`. The
+engine links `oneharness-core` 0.29.1 for itself, onejudge 0.23.0 and oneagentgraph 0.11.4, read off the
 SBOM its npm platform package ships. Between `oneharness-core-v0.24.2` and `oneharness-core-v0.28.2`, `domain/usage.rs`
 gains the reset-credit report above and a millisecond RFC 3339 reader
 ([oneharness#1464](https://github.com/nickderobertis/oneharness/pull/1464)), touching
@@ -340,7 +340,7 @@ line carrying a turn's whole prompt, neither touching the `usage` a run line car
 it was not re-taken on judge turns.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
-counters; `surfaces_read` is what resets the planner-update pacemaker.
+counters; each surface read restarts the monitor's `progress-report` note clock.
 
 ## One change at a time: `--changes`
 
@@ -432,14 +432,15 @@ document over a run whose `pre-push` gate it timed.
 
 ## Seeing the supervisory tier
 
-The `monitor` member and the scheduled `check-in` dispatches beside it are agents
-like any other, and they are visible the same way — with one addition and one gap
-this document is explicit about.
+The `monitor` member is an agent like any other, and it is visible the same way —
+with one addition and one gap this document is explicit about. It writes the run's
+progress report too, as a `check-in` surface on the turn its scheduled note opens, so
+that report is one of its turns rather than a dispatch of its own.
 
 They were invisible for longer than the workers, and the reason is worth keeping:
 oneharness *was* recording them. This host's history store holds 157 supervisory
-and 728 `check-in` run records, correctly role-labelled, out of 12,387 runs. Nothing
-served them.
+and 728 run records of the scheduled reporting member this host has since retired,
+correctly role-labelled, out of 12,387 runs. Nothing served them.
 
 1. **`just status <run-id>` and `just runs`** report two independent liveness
    verdicts, and confusing them is the common mistake. The **driver** verdict is
@@ -467,7 +468,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.76.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.78.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 27 on the envelope, where
    0.55.0, 0.52.0 and 0.51.0 served 26 and
@@ -504,7 +505,8 @@ served them.
    time from the members each document under `graphs/` declares.
    **The dispatch tier is two span kinds, and confusing them is the easy mistake.** A
    **`dispatch`** span is one supervisory conversation, parented on the *run*, with an
-   `agent_role` of `monitor` or `check-in` (the pacemaker) — the monitor was served as
+   `agent_role` naming its observer member — `monitor` on this host's graph, or
+   whichever member a recorded run's graph declared — the monitor was served as
    `orchestrator` before 0.9.0 — a
    `transport_role`, a `status`, and a `reference` of `{kind: conversation}`. A
    **`rollup`** span is the per-node tier, parented on the *node*, and comes in two

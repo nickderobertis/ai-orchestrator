@@ -195,8 +195,8 @@ upgrade:
 # because the published crate ships the flags and not the documents:
 #
 #   * `--dag-graph graphs/dag-scope.yaml` — no agent is required to run a plan at
-#     all, and this is the opt-in: the active monitor that watches the run and the
-#     pacemaker that reports it.
+#     all, and this is the opt-in: the active monitor that watches the run and
+#     reports its progress.
 #   * `--review-reply-graph graphs/review-reply.yaml` — a launch naming none answers
 #     no reviewer: a rework's owed replies stay owed and surfaced, and a `decline` is
 #     refused, so `just review-comments` would find comments nothing could reply to.

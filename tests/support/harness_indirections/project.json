@@ -12,7 +12,6 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/e2e/harness_indirections.py",
-      "{workspaceRoot}/oneharness.check-in.toml",
       "{workspaceRoot}/oneharness.identities.toml",
       "{workspaceRoot}/oneharness.pr-author.toml",
       "{workspaceRoot}/oneharness.review-reply.toml",

@@ -1,27 +1,18 @@
-"""What this host's two supervisory members are really told, read out of real launches.
+"""What this host's supervisory member is really told, read out of a real launch.
 
-Three defects in that prose each had a supervisor misinform the operator it exists to
-inform: a message body the shell executed before the verb ever saw it, a monitor that
-surfaced its own turn preamble as a planner update, and a pacemaker that could not tell
-a bounded wait from a hang. Whether a model then writes a *good* finding is the paid
-model's business and untestable here. Which prose the model is given is neither, and it
-is the half that kept regressing — because the two members are given their prose by two
-different mechanisms, and an editor who knows only one of them changes nothing:
+Defects in that prose each had a supervisor misinform the operator it exists to inform: a
+message body the shell executed before the verb ever saw it, a monitor that surfaced its
+own turn preamble as a planner update, and a reporter that could not tell a bounded wait
+from a hang. Whether a model then writes a *good* finding or a *good* report is the paid
+model's business and untestable here. Which prose the model is given is neither, and it is
+the half that kept regressing.
 
-* the **monitor** is `graphs/dag-scope.yaml`'s two-party `kind: onejudge` member, so its
-  effective system prompt is `config/onejudge.base.yaml` merged with
-  `personas/orchestrator.yaml`, and it is readable off a launched run's own turns;
-* the **check-in** pacemaker is single-sided `kind: oneharness`, which layers no persona
-  at all — its effective prompt is the member's own `task`, so editing
-  `personas/check-in.yaml` alone changes nothing the model reads.
-
-Each is therefore read at the seam its own shape reaches a provider through, and only
-the paid model is substituted. The pacemaker gets its own launch rather than riding the
-first one for a reason the design makes unavoidable: its schedule is resettable, so every
-planner-visible surface on the run restarts its clock before it can come due, and a
-journey that waited for it on a run whose other members raise surfaces could wait
-forever. So its member is launched on its own, taken verbatim out of the shipped graph
-rather than retyped, which is the only way its own turn is observable at all.
+The **monitor** is `graphs/dag-scope.yaml`'s two-party `kind: onejudge` member, so its
+effective system prompt is `config/onejudge.base.yaml` merged with
+`personas/orchestrator.yaml`, and it is readable off a launched run's own turns. It is also
+the author of the run's plain-language progress report, which its scheduled note says
+*when* to write and its persona says *what* to write — so the report's rules are read here
+off the same prompt, and only the paid model is substituted.
 """
 
 from __future__ import annotations
@@ -40,19 +31,13 @@ from example_records import isolated_examples
 from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
 from harness_indirections import established_indirections
 from project_fixtures import helper
-from test_orchestrate_launch_e2e import (
-    FORBIDDEN_OF_THE_PACEMAKER_TURN,
-    PACEMAKER_SEQUENCE,
-    UNANSWERED_IS_REPORTED,
-    out_of_sequence,
-)
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
 #: The stand-in for the paid model at the `oneharness` seam a two-party member reaches
 #: it through, and the stand-in one layer lower for the provider a single-sided member's
-#: in-library turn spawns. Both, because the two members here are one of each.
+#: in-library turn spawns — the change-request drafter a launch also attaches.
 FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
 
@@ -60,9 +45,6 @@ FAKE_CODEX = helper("fake_codex.py")
 #: turn — the identities `ONEHARNESS_BIN_*` cannot reach, since that seam keys on a
 #: harness id and reaches no variant.
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
-
-#: The variable `tests/e2e/fake_codex.py` records a single-sided member's prompt to.
-CODEX_PROMPT_LOG_ENV = "FAKE_CODEX_PROMPT_LOG"
 
 #: The shipped example the monitor's launch runs, and the run id `onepipeline` mints
 #: from its `name`. A one-node plan: what is under test is the observer graph every
@@ -75,10 +57,9 @@ SHIPPED_RUN = "scheduler-research"
 #: certain to have taken one without slowing the watch.
 WORKER_HELD_SECONDS = 20
 
-#: The shipped observer graph, and the member of it each half of this journey reads.
+#: The shipped observer graph, and the member of it this journey reads.
 DAG_SCOPE_GRAPH = "graphs/dag-scope.yaml"
 MONITOR_MEMBER = "monitor"
-PACEMAKER_MEMBER = "check-in"
 
 #: Who `harness_indirections` attributes an unresolvable alternate identity to.
 INDIRECTION_CALLER = "tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py"
@@ -87,18 +68,14 @@ INDIRECTION_CALLER = "tests/e2e/launch_monitor_observer/test_supervisory_prompt_
 #: says only what the run is, so this is what tells a monitor turn from any other.
 WATCH_ROLE = "Actively monitor one executing tracked graph"
 
-#: The task the pacemaker's own launch composes, stated here rather than copied from
-#: `onepipeline`: the member replaces whatever it is handed and must interpolate it
-#: back in, so any distinctive text proves the expansion.
-PACEMAKER_TASK = "onepipeline run `supervisory-prompt-probe`."
-
-#: The byte-carrying form each member is told to raise a surface through: the verb
+#: The byte-carrying form the monitor is told to raise a surface through: the verb
 #: reading its text off stdin, with a single-quoted heredoc delimiter so the shell
-#: expands nothing on the way there. Per member, because each names its own kind and
-#: its own delimiter, and neither is interchangeable with a command-line word.
+#: expands nothing on the way there. Per surface, because a finding and the progress
+#: report each name their own kind and their own delimiter, and neither is
+#: interchangeable with a command-line word.
 BYTE_CARRYING_FORM = {
-    MONITOR_MEMBER: "onepipeline surface --kind finding \"$ONEPIPELINE_RUN_ID\" <<'FINDING'",
-    PACEMAKER_MEMBER: "onepipeline surface --kind check-in <run-id> <<'UPDATE'",
+    "finding": "onepipeline surface --kind finding \"$ONEPIPELINE_RUN_ID\" <<'FINDING'",
+    "progress report": "onepipeline surface --kind check-in \"$ONEPIPELINE_RUN_ID\" <<'REPORT'",
 }
 
 #: The form the incident was measured on, which no member may be told to use again.
@@ -226,22 +203,6 @@ NARRATION_BAN = "Never narrate what you are about to do"
 PROSE_REACHES_NOBODY = "The prose of your reply reaches nobody"
 ALWAYS_SOME_OUTPUT = "**Always produce some output, on every turn"
 
-#: The pacemaker's discipline on what it may call a hang. Both halves, because the three
-#: false escalations in one session split evenly between them: an elapsed time read
-#: without the bound it was running against, and an absence of events read as silence
-#: while the dispatch's own heartbeat was live.
-BOUND_RULE = "compared its elapsed time against a bound you located and can name"
-HEARTBEAT_RULE = "absence of events beside a live heartbeat as generation"
-
-#: The pacemaker's discipline on what it may call dead. Both halves again, and for the
-#: same reason the two above are separate: nine claims in one run that its driver had
-#: gone were refuted by that run's own records, and each half is one of the two things
-#: that would have caught them — showing the command and its output, which none of the
-#: nine did, and reading again before the verdict, which is what parts a momentary gap
-#: from a state.
-LIVENESS_EVIDENCE_RULE = "Quote the command you ran and that command's own output"
-LIVENESS_SECOND_READ_RULE = "read it a second time before you escalate to a terminal verdict"
-
 #: The structured route the monitor is told to report a finding through, and the two
 #: properties that make it different from every other op it may issue. Read out of the
 #: effective prompt, because a route stated only in `personas/orchestrator.yaml` is a
@@ -318,12 +279,11 @@ GRAPH_STATE_ENV = "ONEAGENTGRAPH_STATE_DIR"
 #: to the reviewer is enforced against an agent nobody told.
 REVIEW_SIDE = "\nuser:\n"
 
-#: The monitor's edit allowlist and the pacemaker's prohibition on issuing an edit at
-#: all, asserted from the same effective prompts. The allowlist moves with the adopted
-#: engine — `finding` joined it, and the weaker manager-note op left it when the engine
-#: collapsed that op into `note` and kept `note` off the list — so what is held here is
-#: that the five the engine really accepts are the five the model is offered, and that
-#: what it refuses is still named as refusals.
+#: The monitor's edit allowlist, asserted from the effective prompt. The allowlist
+#: moves with the adopted engine — `finding` joined it, and the weaker manager-note op
+#: left it when the engine collapsed that op into `note` and kept `note` off the list —
+#: so what is held here is that the five the engine really accepts are the five the model
+#: is offered, and that what it refuses is still named as refusals.
 MONITOR_ALLOWLISTED_OPS = (
     "`retry`",
     "`cancel`",
@@ -332,7 +292,56 @@ MONITOR_ALLOWLISTED_OPS = (
     "`finding`",
 )
 MONITOR_ALLOWLIST_CLAUSE = "You may issue exactly these five ops"
-PACEMAKER_EDIT_PROHIBITION = "Never send `onepipeline reply`"
+
+#: The progress report, as the persona defines it: written when the scheduled note
+#: arrives, even when nothing is wrong, as a plain-language overview a manager can relay,
+#: drawn from the stream and the conversation, and raised as exactly one `check-in`
+#: surface. The note says *when*; this is the *what*, on both sides.
+REPORT_WHEN_THE_NOTE_ARRIVES = OnBothSides(
+    monitor="When it arrives, write the report now, on that turn, **even when nothing is wrong**",
+    review="reject one that skipped it because nothing was wrong",
+)
+REPORT_CONTENT = "what is **done**, what is **in progress**, what comes **next**, and any **risk**"
+REPORT_DRAWN_FROM = (
+    "Draw it from the detailed stream you have been reading and from this conversation's "
+    "own history"
+)
+REPORT_RAISED_ONCE = OnBothSides(
+    monitor="Raise it with exactly one `check-in` surface",
+    review="raise exactly one `check-in` surface",
+)
+
+#: The surfaces the engine already raises to the planner itself, which the monitor is
+#: told not to restate, each named as the engine names it.
+ENGINE_SURFACES_NOT_RESTATED = OnBothSides(
+    monitor="**Do not restate what the engine already surfaces to the planner.**",
+    review="Reject a finding that only restates a surface the engine already raises",
+)
+ENGINE_SURFACES = (
+    ("quiet-worker alerts", "a quiet worker (`quiet-worker`)"),
+    ("settlements", "for every node's settlement"),
+    ("check failures", "a failing check on a published change (`check-failed`)"),
+    ("release waits", "a node waiting on a release (`release-wait`)"),
+)
+ADDS_ONLY_WHAT_THE_SURFACE_LACKS = "Add to one only with what that surface does not carry"
+
+#: The undriven-node rule the adopted engine calls for. Its source raises `quiet-worker`
+#: only for a dispatch its own driver holds in flight, and its surface vocabulary has no
+#: kind for a node its ledger calls running that nothing drives — so the alarm stays the
+#: monitor's, behind a second reading, on both sides.
+UNDRIVEN_ALARM_KEPT = OnBothSides(
+    monitor=(
+        "**A node the ledger calls running that nothing drives is yours to raise, after a "
+        "second reading.**"
+    ),
+    review=(
+        "Reject an alarm that a node the ledger calls running has nothing driving it "
+        "unless it quotes two readings"
+    ),
+)
+UNDRIVEN_BOTH_READINGS_AGREE = (
+    "raise it only when both readings agree, quoting each command and its output"
+)
 
 
 class Recorded(NamedTuple):
@@ -499,124 +508,30 @@ def monitor_prompt(monitored: Monitored) -> str:
     return monitored.system
 
 
-def _shipped_pacemaker_member() -> str:
-    """The `check-in` member of the shipped graph, verbatim, with its schedule removed.
+def _assert_surface_text_travels_as_bytes(prompt: str) -> None:
+    """The monitor's prompt hands the engine every surface's text rather than a shell word.
 
-    Verbatim because retyping the member would prove a copy rather than the document an
-    operator's runs actually attach; the schedule goes because it is half an hour, and
-    what this fixture needs is the turn rather than the wait. Refs are rewritten from
-    `../` to absolute, which is what they already resolve to: `oneagentgraph` resolves a
-    relative ref against the directory the document was read from, and this copy is read
-    from somewhere else.
-
-    Read with a reader written for this one block rather than with a YAML library — the
-    workspace installs none, and `oneagentgraph validate` on the real document is what
-    holds it well-formed. Read as text at the same time: a graph the reader below could
-    not find its member in would otherwise silently probe an empty document.
-    """
-    lines = (REPO_ROOT / DAG_SCOPE_GRAPH).read_text(encoding="utf-8").splitlines()
-    opened = next(
-        (index for index, line in enumerate(lines) if line.strip() == f"{PACEMAKER_MEMBER}:"),
-        None,
-    )
-    assert opened is not None, (
-        f"{DAG_SCOPE_GRAPH} declares no `{PACEMAKER_MEMBER}` member, so this journey "
-        "is reading a document that has moved on without it"
-    )
-    indent = len(lines[opened]) - len(lines[opened].lstrip())
-    block = [lines[opened]]
-    for line in lines[opened + 1 :]:
-        if line.strip() and len(line) - len(line.lstrip()) <= indent:
-            break
-        block.append(line)
-    kept = [line for line in block if not line.strip().startswith("schedule:")]
-    resolved = "\n".join(kept).replace("../", f"{REPO_ROOT}/")
-    assert "task: |" in resolved, (
-        f"the `{PACEMAKER_MEMBER}` member no longer claims its own `task`, which is the "
-        "only prose a single-sided member is given"
-    )
-    return resolved
-
-
-@pytest.fixture(scope="module")
-def pacemaker_prompt(
-    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
-) -> Iterator[str]:
-    """The pacemaker's whole effective prompt, off a real run of the shipped member.
-
-    Its own launch, because on a supervised run it never comes due — the monitor resets
-    its resettable clock on every turn — and because `oneagentgraph` is the party that
-    composes this prompt: the member's `task` with `{task}` expanded, its persona
-    contributing nothing, and `oneharness.check-in.toml` selecting the provider. The
-    prompt is read out of the member's own report, which is where a library turn records
-    what it composed, and is a better witness than a log because it is the producing
-    library's own record.
-    """
-    tmp_path = tmp_path_factory.mktemp("pacemaker-prompt")
-    environment = _environment(tmp_path, oneharness_bin)
-    environment[CODEX_PROMPT_LOG_ENV] = str(tmp_path / "codex-prompts.jsonl")
-
-    declared = next(
-        line
-        for line in (REPO_ROOT / DAG_SCOPE_GRAPH).read_text(encoding="utf-8").splitlines()
-        if line.startswith("version:")
-    )
-    graph = tmp_path / "pacemaker-probe.yaml"
-    graph.write_text(
-        f"{declared}\nname: supervisory-prompt-probe\nmembers:\n{_shipped_pacemaker_member()}\n",
-        encoding="utf-8",
-    )
-
-    ran = subprocess.run(
-        ["oneagentgraph", "run", str(graph), "--task", PACEMAKER_TASK, "--dir", str(tmp_path)],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(180),
-        check=False,
-    )
-    assert ran.returncode == 0, (
-        f"the shipped `{PACEMAKER_MEMBER}` member did not run to a settlement:\n"
-        f"{ran.stdout}\n{ran.stderr}"
-    )
-    settled = [
-        json.loads(line)
-        for line in ran.stdout.splitlines()
-        if line.startswith("{") and json.loads(line)["kind"] == "member-settled"
-    ]
-    assert settled, f"the pacemaker member never settled:\n{ran.stdout}\n{ran.stderr}"
-    report = json.loads(Path(settled[0]["payload"]["report_path"]).read_text(encoding="utf-8"))
-    assert PACEMAKER_TASK in report["prompt"], (
-        "the member was given a prompt that never expanded `{task}`, so this is not the "
-        f"prompt a launched run composes:\n{report['prompt']}"
-    )
-    yield cast(str, report["prompt"])
-
-
-def _assert_surface_text_travels_as_bytes(member: str, prompt: str) -> None:
-    """One member's prompt hands the engine a surface's text rather than a shell word.
-
-    The same four properties for each member, because the incident and the protection
-    are the same: the verb reads the text from a file it is named or from stdin when it
-    is named none, so a single-quoted heredoc on that stdin is prose the shell never
-    parsed. The inline option survives for text a person typed, which is why the
-    prohibition has to be present rather than the option merely unused.
+    The same properties for a finding and for the progress report, because the incident
+    and the protection are the same: the verb reads the text from a file it is named or
+    from stdin when it is named none, so a single-quoted heredoc on that stdin is prose the
+    shell never parsed. The inline option survives for text a person typed, which is why
+    the prohibition has to be present rather than the option merely unused.
     """
     flat = _flat(prompt)
 
-    assert BYTE_CARRYING_FORM[member] in flat, (
-        f"the {member} is no longer told to hand a surface's text to the verb as "
-        f"bytes on its stdin, so its prose is shell input again:\n{prompt}"
-    )
+    for surface, form in BYTE_CARRYING_FORM.items():
+        assert form in flat, (
+            f"the monitor is no longer told to hand a {surface}'s text to the verb as "
+            f"bytes on its stdin, so its prose is shell input again:\n{prompt}"
+        )
     assert SUBSTITUTING_FORM not in flat, (
-        f"the {member} is told to build a surface message with command substitution "
+        "the monitor is told to build a surface message with command substitution "
         f"again, which is the exact form the incident was measured on:\n{prompt}"
     )
     # Every mention, not merely one: an instruction that also offers the inline form is
     # an instruction to use the inline form, and that is how this came back before.
     assert flat.count(INLINE_OPTION) == flat.count(INLINE_OPTION_PROHIBITION), (
-        f"the {member}'s prompt mentions `{INLINE_OPTION}` somewhere other than the "
+        f"the monitor's prompt mentions `{INLINE_OPTION}` somewhere other than the "
         f"sentence forbidding it, so the unsafe form is on offer again:\n{prompt}"
     )
     assert SUBSTITUTION_REASON in flat, (
@@ -640,7 +555,7 @@ def test_the_monitor_is_told_to_hand_a_surface_message_over_as_bytes(
     mutation as the only trace. The verb now reads its text from a file or from stdin,
     so the protection is the form rather than a quoting rule the model has to apply.
     """
-    _assert_surface_text_travels_as_bytes(MONITOR_MEMBER, monitor_prompt)
+    _assert_surface_text_travels_as_bytes(monitor_prompt)
 
 
 def _assert_bound_to_the_run_it_observes(side: str, prose: str) -> None:
@@ -796,120 +711,89 @@ def test_the_monitor_is_told_to_report_findings_rather_than_narrate_intent(
     )
 
 
-@pytest.mark.xdist_group("supervisory-prompts")
-def test_the_pacemaker_is_told_to_hand_its_update_over_as_bytes(
-    pacemaker_prompt: str,
-) -> None:
-    """The same defect, in the member whose prose actually executed a command here.
-
-    Read off the pacemaker's own prompt rather than off `personas/check-in.yaml`,
-    because that file reaches this member only as a label: a single-sided
-    `kind: oneharness` member layers no persona, so the `task` below is the whole of
-    what the model is given and the only copy that can be relied on.
-    """
-    _assert_surface_text_travels_as_bytes(PACEMAKER_MEMBER, pacemaker_prompt)
-
-
-@pytest.mark.xdist_group("supervisory-prompts")
-def test_the_pacemaker_is_told_to_measure_a_bound_before_calling_anything_a_hang(
-    pacemaker_prompt: str,
-) -> None:
-    """Elapsed time is not a verdict without the bound it was running against.
-
-    Three escalations from this member in one session were false, and two of them are
-    these: a command reported as unable to advance was 3m25s into a 360s bound and
-    completed on its own at 360.068s, and "no turn activity for over two minutes" was a
-    model mid-generation with a live heartbeat. A supervisor whose alarms are usually
-    wrong stops being read, which costs more than the alarm was worth.
-    """
-    flat = _flat(pacemaker_prompt)
-
-    assert BOUND_RULE in flat, (
-        "the pacemaker may call something a hang again without naming the bound it "
-        f"measured against:\n{pacemaker_prompt}"
-    )
-    assert HEARTBEAT_RULE in flat, (
-        "the pacemaker is no longer told to read an absence of events beside a live "
-        f"heartbeat as generation rather than as silence:\n{pacemaker_prompt}"
-    )
-
-
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] No journey below
-# adds a launch to this tier: `pacemaker_prompt` and `monitored` are module-scoped and
-# both already existed, so each reads a further answer off a launch `tests/e2e` was
-# already spending, and `xdist_group` selects an xdist worker rather than a tier.
-# Re-homing `tests/e2e` into an Nx project of its own is a restructuring of that whole
-# tree and is enforcement configuration this change may not move in order to pass.
+# adds a launch to this tier: `monitored` is module-scoped and already existed, so each
+# reads a further answer off a launch `tests/e2e` was already spending, and `xdist_group`
+# selects an xdist worker rather than a tier. Re-homing `tests/e2e` into an Nx project of
+# its own is a restructuring of that whole tree and is enforcement configuration this
+# change may not move in order to pass.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
 # journeys, same reason: what an edge of their own would spare is a launch none of
 # them spends, since each takes a module-scoped fixture that already existed.
 @pytest.mark.xdist_group("supervisory-prompts")
-def test_the_pacemaker_is_told_to_show_the_reading_behind_a_liveness_verdict(
-    pacemaker_prompt: str,
+def test_the_monitor_is_told_to_write_the_progress_report_when_its_note_arrives(
+    monitored: Monitored,
 ) -> None:
-    """Nothing is alive or dead until a command and its output say so, read twice.
+    """The report is the monitor's, written on the note's turn, even when nothing is wrong.
 
-    The false-escalation shape the bound rule above cannot reach: an elapsed time is at
-    least a measurement, while a driver reported gone is a claim about a state with no
-    reading shown for it at all. Nine such claims came from this member in one run, none
-    quoting an output. What it cost was not a wrong action — the verb refuses to adopt a
-    run something is still driving — but a supervisor whose terminal verdicts a planner
-    learns to discount.
-
-    Read off the pacemaker's own prompt, for the reason the byte-carrying journey above
-    reads it there: `personas/check-in.yaml` reaches this member as a label and nothing
-    else, so the `task` is the only copy that is in force.
+    The note `graphs/dag-scope.yaml` schedules says only *when*; what the report is lives
+    in the persona, so it is read off the prompt a real launch composed and off the bar
+    the planner holds the turn to. The report the manager relays to a user who has heard
+    nothing for half an hour is the whole point of the note, so a turn that skipped it
+    because the run was healthy is the one failure both sides name.
     """
-    flat = _flat(pacemaker_prompt)
+    flat, review = _flat(monitored.system), _flat(monitored.review_bar)
 
-    assert LIVENESS_EVIDENCE_RULE in flat, (
-        "the pacemaker may report something dead again without showing the command it "
-        f"ran or what that command answered:\n{pacemaker_prompt}"
+    assert REPORT_WHEN_THE_NOTE_ARRIVES.monitor in flat, (
+        "the monitor is no longer told to write the report on the note's turn even when "
+        f"nothing is wrong:\n{monitored.system}"
     )
-    assert LIVENESS_SECOND_READ_RULE in flat, (
-        "the pacemaker may escalate to a terminal verdict on one reading again, which "
-        f"cannot tell a momentary gap from a state:\n{pacemaker_prompt}"
+    assert REPORT_WHEN_THE_NOTE_ARRIVES.review in review, (
+        f"the monitor's reviewing bar no longer rejects a skipped report:\n{monitored.review_bar}"
+    )
+    assert REPORT_CONTENT in flat, (
+        f"the monitor is no longer told what the report covers:\n{monitored.system}"
+    )
+    assert REPORT_DRAWN_FROM in flat, (
+        "the monitor is no longer told to draw the report from the stream and its own "
+        f"conversation:\n{monitored.system}"
+    )
+    assert REPORT_RAISED_ONCE.monitor in flat, monitored.system
+    assert REPORT_RAISED_ONCE.review in review, monitored.review_bar
+    assert BYTE_CARRYING_FORM["progress report"] in flat, (
+        "the monitor is no longer told to raise the report with `onepipeline surface "
+        f"--kind check-in` reading a single-quoted heredoc:\n{monitored.system}"
     )
 
 
 @pytest.mark.xdist_group("supervisory-prompts")
-def test_the_pacemaker_is_given_a_bounded_sequence_and_forbidden_the_walks_that_spent_it(
-    pacemaker_prompt: str,
+def test_the_monitor_is_told_not_to_restate_what_the_engine_already_surfaces(
+    monitored: Monitored,
 ) -> None:
-    """Two run-scoped reads, one surface, exit — and the three walks it may not take.
+    """Quiet workers, settlements, check failures and release waits are the engine's to say.
 
-    Under `oneharness.check-in.toml`'s 240-second deadline, two recorded turns of this
-    member spent the whole budget on `--help` walks, an unscoped `just runs`, and
-    recursive `rg` over the checkout and `$HOME/.local/state`, and were killed having
-    raised nothing — the one outcome a pacemaker exists to prevent. The prose it was
-    given said only to read the run "with the read-only views", which is a choice, and
-    a choice under a deadline is what was spent. So the sequence is held in the order
-    it is prescribed, the three walks are held forbidden by name, and a question the
-    two readings leave open is held to be reported rather than chased.
-
-    Read off the prompt a real run of the shipped member was given, for the reason the
-    journeys above read it there: the member's `task` is the only prose it gets, and
-    `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` holds the same
-    sequence on the document.
+    Each already reaches the manager as the engine's own surface, so a finding restating
+    one costs the manager's attention for nothing new. Named one by one, because a rule
+    naming none of them is one a model cannot apply, and held on the reviewing side too.
     """
-    flat = _flat(pacemaker_prompt)
+    flat, review = _flat(monitored.system), _flat(monitored.review_bar)
 
-    missing = out_of_sequence(flat, PACEMAKER_SEQUENCE)
-    assert missing is None, (
-        f"the pacemaker was not given {missing} in its bounded sequence "
-        f"{PACEMAKER_SEQUENCE}, so a turn under its deadline is back to deciding what to "
-        f"read:\n{pacemaker_prompt}"
-    )
-    for named, prohibition in FORBIDDEN_OF_THE_PACEMAKER_TURN:
-        assert prohibition in flat, (
-            f"the pacemaker is no longer forbidden {named} by name in the prose it is "
-            f"given; a recorded turn spent its whole deadline on exactly that:\n"
-            f"{pacemaker_prompt}"
+    assert ENGINE_SURFACES_NOT_RESTATED.monitor in flat, monitored.system
+    assert ENGINE_SURFACES_NOT_RESTATED.review in review, monitored.review_bar
+    for named, phrase in ENGINE_SURFACES:
+        assert phrase in flat, (
+            f"the monitor is no longer told the engine already surfaces {named}, so it may "
+            f"restate them:\n{monitored.system}"
         )
-    assert UNANSWERED_IS_REPORTED in flat, (
-        "the pacemaker is no longer told that a question its two readings cannot answer "
-        f"is reported as unanswered rather than investigated:\n{pacemaker_prompt}"
-    )
+    assert ADDS_ONLY_WHAT_THE_SURFACE_LACKS in flat, monitored.system
+
+
+@pytest.mark.xdist_group("supervisory-prompts")
+def test_the_monitor_raises_an_undriven_node_only_on_two_agreeing_readings(
+    monitored: Monitored,
+) -> None:
+    """The adopted engine raises no surface for a running node nothing drives, so it is kept.
+
+    `quiet-worker` covers only a dispatch the engine's own driver holds in flight, so the
+    alarm stays the monitor's — but every false one so far came from a view lagging a
+    session already opened, so it is raised only when a second reading agrees, and the
+    bar rejects one that quotes fewer.
+    """
+    flat, review = _flat(monitored.system), _flat(monitored.review_bar)
+
+    assert UNDRIVEN_ALARM_KEPT.monitor in flat, monitored.system
+    assert UNDRIVEN_BOTH_READINGS_AGREE in flat, monitored.system
+    assert UNDRIVEN_ALARM_KEPT.review in review, monitored.review_bar
 
 
 @pytest.mark.xdist_group("supervisory-prompts")
@@ -1070,18 +954,15 @@ def test_the_monitor_is_told_to_read_the_stream_from_a_cursor(monitored: Monitor
 
 
 @pytest.mark.xdist_group("supervisory-prompts")
-def test_neither_members_action_space_moved_with_its_reporting_discipline(
-    monitor_prompt: str, pacemaker_prompt: str
+def test_the_monitors_action_space_did_not_move_with_its_reporting_discipline(
+    monitor_prompt: str,
 ) -> None:
-    """What these agents may *do* matches what the engine really allows them.
+    """What the monitor may *do* matches what the engine really allows it.
 
-    The monitor's six ops are the engine's allowlist restated to the model it bounds —
+    The monitor's ops are the engine's allowlist restated to the model it bounds —
     `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` is what drives the
-    engine's own refusal of the four outside it — and the pacemaker is forbidden the edit
-    verb outright because it takes one finitely deadlined turn and exits, so an edit it
-    issued would be answered after it had stopped watching. A prompt that offered an op the
-    engine refuses, or withheld one it accepts, would be invisible in the prose it shipped
-    beside.
+    engine's own refusal of those outside it. A prompt that offered an op the engine
+    refuses, or withheld one it accepts, would be invisible in the prose it shipped beside.
     """
     flat_monitor = _flat(monitor_prompt)
 
@@ -1097,7 +978,3 @@ def test_neither_members_action_space_moved_with_its_reporting_discipline(
         assert f"{refused}" in flat_monitor, (
             f"the monitor is no longer told {refused} is not its to issue:\n{monitor_prompt}"
         )
-    assert PACEMAKER_EDIT_PROHIBITION in _flat(pacemaker_prompt), (
-        "the pacemaker's prohibition on issuing a live edit is gone from the only prose "
-        f"it is given:\n{pacemaker_prompt}"
-    )

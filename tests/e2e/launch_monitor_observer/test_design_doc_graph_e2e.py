@@ -212,7 +212,6 @@ def test_the_graph_gives_each_side_its_own_config() -> None:
             "oneharness.toml",
             "oneharness.judge.toml",
             "oneharness.orchestrator.toml",
-            "oneharness.check-in.toml",
             "oneharness.pr-author.toml",
             "oneharness.review-reply.toml",
             "oneharness.plan-review.toml",

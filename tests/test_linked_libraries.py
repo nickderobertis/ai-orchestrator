@@ -264,6 +264,26 @@ SHARED_APP_SERVER_CORE_FLOOR = Release(0, 28, 0)
 #: `just publish-branch`. Held on the linked copy because every dispatched publication,
 #: and every manager landing verb, publishes through it.
 REMOVALS_PASS_ONEVCS_FLOOR = Release(0, 57, 4)
+#: oneagentgraph https://github.com/nickderobertis/oneagentgraph/pull/259 (`3ce1da7`), first
+#: cut as 0.10.0, with https://github.com/nickderobertis/oneagentgraph/pull/266 (`908120c`),
+#: cut as 0.11.1, delivering a scheduled supervisor note exactly once: `run::Request::follow_events`
+#: and `config::OnejudgeMember::scheduled_notes` (`config::FIRST_SCHEDULED_NOTE_VERSION`
+#: is 11), so a two-party member takes a note on a clock whose `reset_on` reads the run's
+#: journal. Held at 0.11.3, for
+#: https://github.com/nickderobertis/oneagentgraph/pull/272 (`2e5f9c3`): `resets::Restart::announce`
+#: publishes `cron-reset` before the clock restarts, so a manager's read holds the next
+#: report off for a whole interval — below it a reset could fire the note early. Held on
+#: the linked copy because graphs/dag-scope.yaml's `progress-report` note runs through it
+#: rather than through `config/oneagentgraph.version`; onepipeline
+#: https://github.com/nickderobertis/onepipeline/pull/1514 (`a049b2b4`), cut as 0.106.3,
+#: is the engine that links it.
+SCHEDULED_NOTES_ONEAGENTGRAPH_FLOOR = Release(0, 11, 3)
+#: onepipeline https://github.com/nickderobertis/onepipeline/pull/1483 (`97c0242d`), first
+#: cut as 0.106.0: `agentgraph::Launch::follow_events`, which passes the run's own journal
+#: to every observer launch, restart and adoption as `--follow-events`, so a `reset_on`
+#: naming `planner-surfaced` restarts its clock when the planner reads a surface; the same
+#: release drops `start`'s `--heartbeat-interval`.
+JOURNAL_FOLLOWING_ENGINE_FLOOR = Release(0, 106, 0)
 
 
 #: The three sibling releases carrying https://github.com/nickderobertis/ai-orchestrator/issues/1004's
@@ -795,9 +815,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.11.0", core="0.29.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.22.4", core="0.29.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.105.0", core="0.29.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.11.4", core="0.29.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.23.0", core="0.29.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.106.3", core="0.29.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -1358,6 +1378,17 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
             REMOVALS_PASS_ONEVCS_FLOOR,
             "never refuses a removal at the public boundary check",
         ),
+        (
+            "oneagentgraph",
+            SCHEDULED_NOTES_ONEAGENTGRAPH_FLOOR,
+            "carries `run::Request::follow_events` and `scheduled_notes`, "
+            "a reset waiting a whole interval",
+        ),
+        (
+            "onepipeline",
+            JOURNAL_FOLLOWING_ENGINE_FLOOR,
+            "passes the run's journal to its observer graph",
+        ),
     ],
     ids=(
         "onevcs",
@@ -1370,6 +1401,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
         f"{UNRECONCILABLE_PIN.crate}-plugins-off",
         f"{UNRECONCILABLE_PIN.crate}-shared-app-server",
         "onevcs-removals-pass",
+        "oneagentgraph-scheduled-notes",
+        "onepipeline-journal-following",
     ),
 )
 def test_the_linked_sibling_carries_this_plans_change_to_it(
@@ -1382,9 +1415,10 @@ def test_the_linked_sibling_carries_this_plans_change_to_it(
     from that release on. Held on the *linked* copy because that is what a dispatch runs:
     an engine that reconciled perfectly against unfixed siblings would leave every pin
     reading current with none of this in force, which is the failure this repository
-    has recorded twice.
+    has recorded twice. The engine's own row is read as its SBOM's subject, because an
+    SBOM declares what a build links and not the build itself.
     """
-    linked = Release.parse(_linked_version(crate))
+    linked = _engine_release() if crate == "onepipeline" else Release.parse(_linked_version(crate))
 
     assert linked >= floor, (
         f"the adopted engine links {crate} {linked}, below the {floor} that {carries}; "

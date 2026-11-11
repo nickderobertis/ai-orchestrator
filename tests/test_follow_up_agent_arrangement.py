@@ -8,10 +8,10 @@ would silently stop being true if the graph moved:
 
 * **it claims no `task` of its own.** `oneagentgraph` hands the node's composed task to every
   member that claims none, and a member's own `task` *replaces* it as the whole prompt —
-  `graphs/dag-scope.yaml`'s `check-in` member says so where it claims one;
+  `graphs/pr-author.yaml`'s member says so where it claims one;
 * **it layers no persona.** A single-sided member has no onejudge base config to layer a
   persona delta over, so `personas/follow-up.yaml` is named for the label alone, exactly as
-  `tests/test_pacemaker_discipline.py` holds for the pacemaker — and a judge added here would
+  `graphs/pr-author.yaml` names `personas/pr-author.yaml` — and a judge added here would
   turn it into a two-party member reading that persona instead.
 
 A third thing is where the member's **mode** is declared. Its turn works in the agent graph's

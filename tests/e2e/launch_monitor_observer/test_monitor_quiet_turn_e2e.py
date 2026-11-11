@@ -24,10 +24,10 @@ immediately before them. And obeying an instruction to be quiet used to be fatal
 quiet turn — `spanish-language-tutor-upgrade` lost its observer five minutes into a two-hour
 run, with nothing announcing the loss. So the two outcomes are also driven across a whole
 `just orchestrate` launch whose monitor really takes its turns: a run of quiet turns, where
-the member has to survive and the channel has to stay empty of its prose — beside the
-periodic `check-in` member's own update, which is what makes "nothing was raised" a
-statement about the monitor — and a run of lost turns, where the member has to die and say
-so once each time.
+the member has to survive and the channel has to stay empty of its prose — beside a
+progress report raised through the verb the monitor's persona names for it, which is what
+makes "nothing was raised" a statement about the prose — and a run of lost turns, where
+the member has to die and say so once each time.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ from fake_backend import (
     OBSERVER_LOSES_ENV,
     OBSERVER_MEMBER_ENV,
     OBSERVER_TURNS_ENV,
-    PACEMAKER_REPORT,
+    PROGRESS_REPORT,
     PROMPT_LOG_ENV,
 )
 from monitor_conversation import Conversation, Held, Taken
@@ -70,7 +70,6 @@ from test_monitor_survives_the_channel_e2e import _monitor_prompts
 # indirections, the isolated state root, and the argv read out of the graph.
 from test_orchestrate_launch_e2e import (
     MONITOR_MEMBER,
-    PACEMAKER_MEMBER,
     RUN_ID_ENV,
     SETTLES_UNWATCHED,
     _judge_command,
@@ -673,10 +672,10 @@ def test_the_planners_statement_of_surface_kinds_is_what_the_engine_relays(
     for kind, relayed in KINDS_AND_WHETHER_RELAYED:
         assert bool(form.fullmatch(kind)) is relayed, f"the stated form misreads {kind!r}"
         before = _records(judged_run, JUDGED_RUN)
-        raised = _raised_by_the_pacemakers_own_verb(judged_run, JUDGED_RUN, kind)
+        raised = _raised_by_the_reports_own_verb(judged_run, JUDGED_RUN, kind)
         assert (raised.returncode == 0) is relayed, f"{kind!r}: {raised.stderr}"
         queued = _raised_since(judged_run, JUDGED_RUN, before)
-        expected = [(kind, PACEMAKER_REPORT)] if relayed else []
+        expected = [(kind, PROGRESS_REPORT)] if relayed else []
         assert [(one["kind"], one["message"].strip()) for one in queued] == expected, queued
 
 
@@ -693,11 +692,6 @@ CANCELLED_RUN = "monitor-cancelled-turn"
 
 #: The run a monitor whose every turn is lost watches, held the same way.
 LOST_RUN = "monitor-lost-turn"
-
-#: How often the launch tells the pacemaker to come due. Short, so the run has a second
-#: supervisory member producing surfaces — which is what makes "no MONITOR surface" a
-#: statement about the monitor rather than about a run nothing surfaced on.
-PACEMAKER_INTERVAL_SECONDS = 1
 
 #: How long the launch tells the graph to hold the monitor between its turns. The
 #: shipped `graphs/dag-scope.yaml` paces that conversation one turn per 300 seconds, and
@@ -746,44 +740,47 @@ def _launch_environment(tmp_path: Path, oneharness_bin: str, answer: str) -> dic
     return environment
 
 
-#: How the shipped `check-in` member's own task tells it to raise its update. Read out
-#: of `graphs/dag-scope.yaml` rather than retyped, so the journey below drives the verb
-#: and the kind that member is really given and fails if either moves.
-PACEMAKER_SURFACE_FORM = re.compile(r"onepipeline surface --kind (?P<kind>\S+) <run-id>")
+#: How the monitor's persona tells it to raise the progress report: the surface verb
+#: reading a single-quoted `REPORT` heredoc. Read out of `personas/orchestrator.yaml`
+#: rather than retyped, so the journey below drives the verb and the kind the monitor is
+#: really given and fails if either moves.
+REPORT_SURFACE_FORM = re.compile(
+    r"onepipeline surface --kind (?P<kind>\S+) \"\$ONEPIPELINE_RUN_ID\" <<'REPORT'"
+)
 
 #: The `onepipeline` this checkout pins. A bare name would let the ambient environment
 #: decide which release answers.
 PINNED_ONEPIPELINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 
-def _pacemaker_surface_kind() -> str:
-    """The surface kind the shipped pacemaker's own task names, off the shipped graph."""
-    declared = (REPO_ROOT / "graphs" / "dag-scope.yaml").read_text(encoding="utf-8")
-    named = PACEMAKER_SURFACE_FORM.search(declared)
+def _report_surface_kind() -> str:
+    """The surface kind the monitor's persona names for its progress report."""
+    declared = (REPO_ROOT / "personas" / "orchestrator.yaml").read_text(encoding="utf-8")
+    named = REPORT_SURFACE_FORM.search(declared)
     assert named is not None, (
-        "graphs/dag-scope.yaml no longer tells its pacemaker to raise its update with "
-        "`onepipeline surface --kind <kind> <run-id>`, so this journey is driving a "
-        "route that member has moved off"
+        "personas/orchestrator.yaml no longer tells the monitor to raise its progress "
+        'report with `onepipeline surface --kind <kind> "$ONEPIPELINE_RUN_ID"` reading a '
+        "`REPORT` heredoc, so this journey is driving a route the monitor has moved off"
     )
     return named.group("kind")
 
 
-def _raised_by_the_pacemakers_own_verb(
+def _raised_by_the_reports_own_verb(
     environment: dict[str, str], run: str, kind: str
 ) -> subprocess.CompletedProcess[str]:
-    """Raise one update the way the pacemaker's task tells it to: bytes on the verb's stdin.
+    """Raise one report the way the monitor's persona tells it to: bytes on the verb's stdin.
 
     The published verb, against the run's own durable channel, with the text handed over
-    as bytes rather than as a command-line word — which is the form `graphs/dag-scope.yaml`
-    prescribes and
+    as bytes rather than as a command-line word — which is the form
+    `personas/orchestrator.yaml` prescribes and
     `tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py` holds it
     to.
     """
-    return subprocess.run(  # noqa: S603 - the published verb, as the pacemaker runs it
+    return subprocess.run(  # noqa: S603 - the published verb, as the monitor runs it
         [str(PINNED_ONEPIPELINE), "surface", "--kind", kind, run],
         cwd=REPO_ROOT,
         env=environment,
-        input=PACEMAKER_REPORT,
+        input=PROGRESS_REPORT,
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),
@@ -979,8 +976,6 @@ def _launch_to_settlement(environment: dict[str, str], run: str, tmp_path: Path)
                 "just",
                 "orchestrate",
                 project_from_plan(plan),
-                "--heartbeat-interval",
-                str(PACEMAKER_INTERVAL_SECONDS),
                 "--set",
                 f"members.{MONITOR_MEMBER}.schedule.every={MONITOR_HOLD_SECONDS}",
                 # No run-end hooks: they are not this journey's subject, and an attached
@@ -1122,20 +1117,19 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
         "a monitor's own prose reached the planner's queue, which is the route a finding "
         f"is supposed to own: {queued}"
     )
-    # And the periodic member's own route still reaches that queue, driven in the SAME
-    # run rather than asserted. `graphs/dag-scope.yaml`'s `check-in` member is
-    # single-sided — `kind: oneharness`, with no judge side — so it never reaches the
-    # bus binding at all: its task tells it to raise its update with `onepipeline surface`,
-    # and that verb is what is run here, under the kind read out of the shipped task
-    # rather than retyped. Its schedule is half an hour and this run is under a minute, so
-    # the member does not come due inside it; what is under test here is the route, and
-    # `tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py` is what
-    # reads the turn.
-    kind = _pacemaker_surface_kind()
-    raised = _raised_by_the_pacemakers_own_verb(environment, run, kind)
+    # And the progress report's own route still reaches that queue, driven in the SAME
+    # run rather than asserted. The report never travels through the bus binding: the
+    # persona tells the monitor to raise it with `onepipeline surface`, and that verb is
+    # what is run here, under the kind read out of the persona rather than retyped. The
+    # note that times it fires after half an hour and this run is under a minute; what is
+    # under test here is the route, and
+    # `tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py` drives the
+    # note through a real launch.
+    kind = _report_surface_kind()
+    raised = _raised_by_the_reports_own_verb(environment, run, kind)
     assert raised.returncode == 0, (
-        f"the `{PACEMAKER_MEMBER}` member's own verb was refused on a run whose monitor "
-        f"prose raised nothing: {raised.stderr}"
+        f"the monitor's report verb was refused on a run whose monitor prose raised "
+        f"nothing: {raised.stderr}"
     )
     # Without the completion question: a run that settles ends its monitor's conversation,
     # the binding puts that conversation's bar to the planner as a `monitor-completion`
@@ -1147,13 +1141,13 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
         for one in _surfaces(environment, run)
         if one.get("kind") != SURFACE_KIND_OF_A_COMPLETION_SCORE
     ]
-    assert [one for one in paced if one.get("message", "").strip() == PACEMAKER_REPORT] == paced, (
-        f"the `{PACEMAKER_MEMBER}` member's update did not reach the planner's queue, or "
-        f"did not reach it alone, in a run whose monitor prose raised nothing: {paced}"
+    assert [one for one in paced if one.get("message", "").strip() == PROGRESS_REPORT] == paced, (
+        f"the progress report did not reach the planner's queue, or did not reach it "
+        f"alone, in a run whose monitor prose raised nothing: {paced}"
     )
     assert paced and paced[0]["kind"] == kind and paced[0].get("source") == kind, (
-        f"the `{PACEMAKER_MEMBER}` member's update no longer carries its own kind and "
-        f"source, which is what keeps it clear of every kind the judge side raises: {paced}"
+        f"the progress report no longer carries its own kind and source, which is what "
+        f"keeps it clear of every kind the judge side raises: {paced}"
     )
 
 

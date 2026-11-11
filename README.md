@@ -60,9 +60,9 @@ register <checkout>`, as every lifecycle plan needs.
 | `config/onejudge.base.yaml` | The one base config: settings common to every subtask. |
 | `config/*.version` | The exact adopted release of every tool session setup installs from PyPI: onejudge, oneharness, oneagentgraph, onevcs, onepipeline, and onepipeline-ui. |
 | `personas/` | Per-persona onejudge deltas (roles). See [`personas/README.md`](personas/README.md). |
-| `graphs/` | The three agent graphs a run launches — `dag-scope.yaml` for the monitor and its pacemaker (one config each, differing only in the per-turn deadline), `node-scope.yaml` for every dispatched node, and `pr-author.yaml` for the body each remote change request opens under. `onepipeline` ships these *paths*, not the files, because they name the configs and personas above. |
+| `graphs/` | The three agent graphs a run launches — `dag-scope.yaml` for the monitor, which also writes the run's progress report when its scheduled note arrives, `node-scope.yaml` for every dispatched node, and `pr-author.yaml` for the body each remote change request opens under. `onepipeline` ships these *paths*, not the files, because they name the configs and personas above. |
 | `oneharness.toml` / `oneharness.judge.toml` | The two conversation sides (agent / judge) — harness + model selection. |
-| `oneharness.orchestrator.toml` / `oneharness.check-in.toml` | The two dag-scope members' sides. Same routing; only the per-turn deadline differs, and [that is deliberate](docs/onejudge-integration.md#choosing-a-deadline-per-side). |
+| `oneharness.orchestrator.toml` | The dag-scope monitor's agent side, with no per-turn deadline because it watches for the life of the run. |
 | `justfile` | The command surface: one thin wrapper per published verb, plus this repository's own quality tier. |
 | `orchestrator/` | What this layer still decides on its own: the history-label contract and the redaction rule. |
 | `docs/` | [Host setup](docs/host-setup.md) · [tracked graph model](docs/orchestration.md) · [repository lifecycle](docs/repo-lifecycle.md) · [onejudge integration](docs/onejudge-integration.md) · [DAG Observatory](docs/dag-ui.md) |

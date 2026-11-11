@@ -235,7 +235,7 @@ DISPATCH_ENVIRONMENT_WORKTREE_BIN=".venv/bin"
 DISPATCH_ENVIRONMENT_CHECKOUT_BIN=".venv/bin"
 
 #: And behind that, this checkout's npm-installed tools, where `bun.lock` puts the engine
-#: and the read API. The monitor, the check-in pacemaker, the planner and the
+#: and the read API. The monitor, the planner and the
 #: design-document writer each run a bare `onepipeline`, which this is what resolves.
 DISPATCH_ENVIRONMENT_CHECKOUT_ENGINE_BIN="node_modules/.bin"
 

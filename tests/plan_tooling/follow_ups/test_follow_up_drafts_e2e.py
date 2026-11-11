@@ -1,7 +1,7 @@
 """A follow-up drafted through the real command, read back through the real plan store.
 
-`scripts/follow-up-env.sh` is what a launch sources to hand every dispatch, the monitor and
-the pacemaker the `drafts` source's root and plugin and the command they draft with;
+`scripts/follow-up-env.sh` is what a launch sources to hand every dispatch and the monitor
+the `drafts` source's root and plugin and the command they draft with;
 `scripts/follow-up-draft.sh` is that command; `just follow-up` is the manager's recipe for
 it. These journeys drive all three as their callers do, and read what they wrote back
 through the installed `onetaskgraph` — the program the follow-up agent reads drafts with —
@@ -57,8 +57,9 @@ BODY = (
 REPOSITORY = "github.com/nickderobertis/ai-orchestrator"
 TITLE = "The sweep trailer names an unexamined family"
 
-#: A run this repository recorded, whose event store carries turns of both dag-scope
-#: members — the monitor and the `check-in` pacemaker — for the member reads to narrow.
+#: A run this repository recorded, whose event store carries turns of two dag-scope
+#: members — the monitor, and the retired member that drafted as `pacemaker` — for the
+#: member reads to narrow.
 RECORDED_RUN = REPO_ROOT / "tests" / "fixtures" / "timeline-runs" / "dag-ui-truth-monitor-slice"
 
 #: A line of the engine's concise event view, which opens on the event's timestamp.
@@ -371,25 +372,29 @@ def _event_lines(output: str) -> list[str]:
     return [line for line in output.splitlines() if EVENT_LINE.match(line)]
 
 
-@pytest.mark.parametrize(("kind", "member"), [("monitor", "monitor"), ("pacemaker", "check-in")])
-def test_a_member_drafts_transcript_reads_that_members_turns_off_the_installed_engine(
-    tmp_path: Path, kind: str, member: str
-) -> None:
-    """The read a monitor or pacemaker draft points at shows that member's events and no other's.
+def _recorded_members() -> dict[str, int]:
+    """How many events each dag-scope member recorded in :data:`RECORDED_RUN`."""
+    counts: dict[str, int] = {}
+    for line in (RECORDED_RUN / "events.jsonl").read_text(encoding="utf-8").splitlines():
+        member = json.loads(line).get("labels", {}).get("member")
+        if isinstance(member, str):
+            counts[member] = counts.get(member, 0) + 1
+    return counts
 
-    Run against a recorded run holding both members, so the narrowing is visible: the command
-    the draft stores is run as a reader would run it, and its events are counted against the
-    run's own store.
-    """
+
+def _recorded_runs(tmp_path: Path) -> Path:
     runs = tmp_path / "runs"
     shutil.copytree(
         RECORDED_RUN,
         runs / RECORDED_RUN.name,
         ignore=shutil.ignore_patterns("checkpoint.json", "summary.json"),
     )
-    stated = _drafting(tmp_path)
+    return runs
 
-    _, path = _written(
+
+def _monitor_draft(tmp_path: Path, stated: dict[str, str]) -> tuple[str, Path]:
+    """A monitor's draft about :data:`RECORDED_RUN`, written through the real command."""
+    return _written(
         tmp_path,
         _draft(
             "--title",
@@ -397,22 +402,92 @@ def test_a_member_drafts_transcript_reads_that_members_turns_off_the_installed_e
             "--repository",
             REPOSITORY,
             "--as",
-            kind,
+            "monitor",
             "--member",
-            member,
+            "monitor",
             "--run",
             RECORDED_RUN.name,
             cwd=tmp_path,
             **stated,
         ),
     )
-    draft = drafts.parse(path.read_text(encoding="utf-8"))
-    assert (draft.author.kind, draft.author.node, draft.author.member) == (kind, None, member)
-    assert draft.transcript is not None
 
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This is the half of the parametrized member-transcript journey that already ran behind `plan-tooling-follow-ups:test` for both dag-scope members; splitting it in two when one member retired adds no launch and no work, and a project of its own would be keyed on the same `scripts/follow-up-draft.sh`, package and recorded run this key already names.  # noqa: E501
+def test_a_monitor_drafts_transcript_reads_that_members_turns_off_the_installed_engine(
+    tmp_path: Path,
+) -> None:
+    """The read a monitor draft points at shows that member's events and no other's.
+
+    Run against a recorded run holding two members, so the narrowing is visible: the command
+    the draft stores is run as a reader would run it, and its events are counted against the
+    run's own store.
+    """
+    runs = _recorded_runs(tmp_path)
+    stated = _drafting(tmp_path)
+    _, path = _monitor_draft(tmp_path, stated)
+    draft = drafts.parse(path.read_text(encoding="utf-8"))
+    assert (draft.author.kind, draft.author.node, draft.author.member) == (
+        "monitor",
+        None,
+        "monitor",
+    )
+    _assert_reads_only_its_member(draft, "monitor", runs=runs, stated=stated)
+
+
+#: A draft root as the retired `check-in` member left it: one draft it wrote with
+#: `--as pacemaker --member check-in` about :data:`RECORDED_RUN`, and that run's project.
+RETIRED_DRAFT_ROOT = REPO_ROOT / "tests" / "fixtures" / "follow-up-drafts" / "retired-pacemaker"
+
+#: The stored draft's name, which is its id within the run's drafts.
+RETIRED_DRAFT_NAME = "20260917T061908Z-status-reads-a-live-driver-as-dead-while-its-jou"
+
+#: The qualified id the store reads that draft under.
+RETIRED_DRAFT = f"drafts:{RECORDED_RUN.name}/drafts/{RETIRED_DRAFT_NAME}"
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The other half of the parametrized member-transcript journey that already ran behind `plan-tooling-follow-ups:test`; it now reads a stored draft instead of writing one, which is less work than before, and a project of its own would be keyed on the same package, plan-store pin and recorded run this key already names.  # noqa: E501
+def test_a_pacemaker_draft_already_written_reads_back_and_still_narrows_to_its_member(
+    tmp_path: Path,
+) -> None:
+    """A draft stored under the retired `pacemaker` kind is still a draft a follow-up run reads.
+
+    The command no longer writes one, so the draft is the stored record the retired member
+    left, checked in under :data:`RETIRED_DRAFT_ROOT`: it is put where a launch's draft root
+    is, read back through the installed store and verified the way the follow-up agent reads
+    it, and its transcript is run as a reader would run it.
+    """
+    runs = _recorded_runs(tmp_path)
+    stored = tmp_path / "drafts"
+    shutil.copytree(RETIRED_DRAFT_ROOT, stored)
+    root, plugin, _ = follow_up_variables.all_names()
+    stated = _drafting(tmp_path)
+
+    exported = _values(_exported(tmp_path, **{root: str(stored)}))
+    item = _store_show(
+        RETIRED_DRAFT,
+        cwd=REPO_ROOT,
+        stated={name: exported[name] for name in (root, plugin)},
+    )
+    read = drafts.from_store_item(item)
+    path = stored / "tasks" / RECORDED_RUN.name / "drafts" / f"{RETIRED_DRAFT_NAME}.md"
+    assert read == drafts.parse(path.read_text(encoding="utf-8"))
+    assert (read.author.kind, read.author.node, read.author.member) == (
+        "pacemaker",
+        None,
+        "check-in",
+    )
+    assert "check-in" in _recorded_members(), _recorded_members()
+    _assert_reads_only_its_member(read, "check-in", runs=runs, stated=stated)
+
+
+def _assert_reads_only_its_member(
+    draft: drafts.Draft, member: str, *, runs: Path, stated: dict[str, str]
+) -> None:
+    assert draft.transcript is not None
     read = subprocess.run(  # noqa: S603 - the stored read, run as a reader runs it
         ["bash", "-c", draft.transcript],  # noqa: S607
-        cwd=tmp_path,
+        cwd=runs.parent,
         env=_environment(PATH=stated["PATH"], **{drafts.RUNS_ROOT_ENV: str(runs)}),
         text=True,
         capture_output=True,
@@ -534,10 +609,19 @@ REFUSALS = [
     ),
     (
         "member missing",
-        ["--title", TITLE, "--repository", REPOSITORY, "--as", "pacemaker"],
+        ["--title", TITLE, "--repository", REPOSITORY, "--as", "monitor"],
         BODY,
         {},
-        "--as pacemaker needs --member",
+        "--as monitor needs --member",
+    ),
+    (
+        "retired author kind",
+        ["--title", TITLE, "--repository", REPOSITORY, "--as", "pacemaker", "--member", "pacer"],
+        BODY,
+        {},
+        "--as pacemaker is no longer written: the dag-scope member that drafted as it was "
+        "retired, and drafts it wrote are still read; the run's monitor drafts with "
+        "--as monitor --member monitor",
     ),
     (
         "member disagrees",
@@ -617,9 +701,7 @@ def test_help_states_the_whole_contract_and_that_a_draft_never_replaces_the_chan
         )
     assert "NON-BLOCKING follow-up" in text
     assert "Anything blocking" in text and "goes over the channel immediately instead" in text
-    assert (
-        '"$ORCHESTRATOR_ASK_MANAGER"' in text and "`finding`" in text and "check-in update" in text
-    )
+    assert '"$ORCHESTRATOR_ASK_MANAGER"' in text and "`finding`" in text
     assert "is read from stdin, never from an argument" in text
 
 

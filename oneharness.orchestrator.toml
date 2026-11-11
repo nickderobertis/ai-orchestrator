@@ -3,9 +3,8 @@
 # side, so this role never runs under the worker's `oneharness.toml`.
 # See docs/onejudge-integration.md.
 #
-# This file drives ONE member's agent side. The `check-in` pacemaker used to share
-# it and now reads `oneharness.check-in.toml` — the same routing with a finite
-# deadline — because of the `timeout` below. Do not point another member here.
+# This file drives ONE member's agent side, because of the `timeout` below: a member
+# needing a finite deadline reads a config of its own. Do not point another member here.
 #
 # It extends `oneharness.identities.toml` rather than `oneharness.dispatch.toml`: the
 # monitor is started beside a run rather than inside a node's dispatch, so there is no

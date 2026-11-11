@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.105.0. The whole of that reasoning —
+onepipeline 0.106.3. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -708,7 +708,7 @@ It never writes the project's title, description or labels, and on an item it na
 the fields a projection changed — the status word, the engine's own `onepipeline.*` keys,
 and, where the node's definition moved, its title, body, `delivers` and `depends_on` — so
 a body somebody authored on the board survives every settlement of every run launched from
-it, re-read on the adopted onepipeline 0.105.0, and a person's edit to any field stands
+it, re-read on the adopted onepipeline 0.106.3, and a person's edit to any field stands
 until the run next changes that same field. Below the 0.16.3 that fixed it, it did not:
 the shadow project a copy wrote over the board was built with the body hardcoded to an
 empty string and the copy is a total replacement by contract, so every destination
@@ -730,7 +730,7 @@ is written, and the destination is left exactly as it was. A read that could fal
 a default is a read that can delete, so this is the property that makes the preservation
 above worth anything. It is held in onepipeline's own suite rather than here: since
 https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted onepipeline
-0.105.0 among them — reads and projects plans through the linked onetaskgraph crates and
+0.106.3 among them — reads and projects plans through the linked onetaskgraph crates and
 ignores `ONETASKGRAPH_BIN`, so no host seam can
 inject a refused read into the store in process any more, and
 `store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
@@ -743,7 +743,7 @@ prompt first retry to a one-minute ceiling instead of retrying about four times 
 resets that schedule once it recovers, and retries until the projection lands; stopping or
 settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.105.0, that schedule answers only the failures a retry can change. A projection the store
+0.106.3, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. A
@@ -1090,7 +1090,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.105.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.106.3 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -1237,15 +1237,14 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
 - **`graphs/dag-scope.yaml`** is the **observer** graph `just orchestrate`
   attaches: the `monitor` member that watches the run — a foreground conversation
   the graph paces one turn per 300 seconds, see [The monitor is a paced foreground
-  conversation](#the-monitor-is-a-paced-foreground-conversation) — and the
-  resettable-cron `check-in` member that paces planner updates. Neither drives
-  anything. The two
-  name **different** oneharness configs, identical but for the per-turn deadline —
-  a monitor watching a whole run has none, a scheduled pacemaker must keep one —
-  and a member has no `timeout` field of its own, so the file is the seam. See
+  conversation](#the-monitor-is-a-paced-foreground-conversation) — and its one
+  scheduled note, `progress-report`, which tells that member when to write the run's
+  progress report (see [The progress report](#the-progress-report)). It drives
+  nothing. Its agent side names `oneharness.orchestrator.toml`, which has no per-turn
+  deadline because the monitor watches the whole run; a member has no `timeout` field
+  of its own, so a member needing a finite one gets a config of its own — see
   [Choosing a deadline per
-  side](onejudge-integration.md#choosing-a-deadline-per-side) before re-sharing
-  one.
+  side](onejudge-integration.md#choosing-a-deadline-per-side) before sharing one.
 
   Its `judge.command` is the one ref in that file resolved against the directory the
   run was **launched from** rather than against the file itself, because it is an
@@ -1264,15 +1263,14 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   attaches a monitor to neither of its two runs. There is no environment variable for
   any of them; the flag is the only way to move it.
 
-  The document declares **schema 9**, the first that admits every field it uses:
-  `check-in` carries its own `task`, which needs 3; that task opens with `{task}`,
-  which `oneagentgraph` expands only from 4; the monitor's `background` needs 8 and
-  its `schedule`, on a two-party member, 9. `onepipeline` composes one task for this graph — it states
+  The document declares **schema 11**, the first that admits every field it uses: the
+  monitor's `background` needs 8, its `schedule`, on a two-party member, 9, and its
+  `scheduled_notes` with their `reset_on`, 11. `onepipeline` composes one task for this graph — it states
   what the run *is*, its id and its goal — and hands it to every member which does
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.105.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.106.3 by dumping both sides of a monitor member's whole
   environment on the suite's real launches, their paid model doubled: the judge side by
   the probe `tests/e2e/observer_environment.py` stands in for the judge command with, the
   agent side by the stand-in harness's monitor turn recording all of it.
@@ -1282,9 +1280,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   variables it records, so a release that moved the export fails there rather than here. Write the member
   against `{task}` anyway: it is this graph's own contract rather than a per-release
   export, and it carries the run's goal as well as its id. Give a scheduled member
-  its own task whenever its job is not the run-level task, open it with `{task}`, and
-  see [the pacemaker](#the-planner-update-pacemaker) for why this one is scoped away
-  from live edits.
+  its own task whenever its job is not the run-level task, and open it with `{task}`.
 - **`graphs/node-scope.yaml`** is what every dispatched node runs under: one
   worker supervised by one simulated-user judge. A plan node overrides it with
   `agent_graph`, and `ONEPIPELINE_NODE_GRAPH` moves the default.
@@ -1305,14 +1301,13 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   error; and that same config sets `stream = false`, because oneharness validates a
   structured answer against the complete response and `oneagentgraph` refuses a
   member declaring both. It is also a third copy of the supervisory routing rather
-  than a pointer at the monitor's or the pacemaker's, for the same
+  than a pointer at the monitor's, for the same
   [per-deadline](onejudge-integration.md#choosing-a-deadline-per-side) reason: a
   drafter is a bounded job that sits between a passed gate and a publication, so it
   keeps a finite `timeout` where the monitor keeps none.
 
-  It declares **schema 4** for one of the reasons `dag-scope` declares 9: the member carries
-  its own `task`, which needs 3, and that task opens with `{task}`, which expands
-  only from 4. `onepipeline` composes the drafting task — "Read this branch's diff
+  It declares **schema 4**: the member carries its own `task`, which needs 3, and that
+  task opens with `{task}`, which expands only from 4. `onepipeline` composes the drafting task — "Read this branch's diff
   and write the change request's body…", followed by the task the branch delivered —
   and a member's own `task` replaces it, so the interpolation is what keeps the
   drafter looking at a diff it was actually shown. `../personas/pr-author.yaml` is
@@ -1361,20 +1356,19 @@ Two things about them are worth knowing before reading a surprising run:
 
 ### The monitor is a paced foreground conversation
 
-`graphs/dag-scope.yaml` names two members, and both of them carry a clock. The `monitor`
-is a `kind: onejudge` conversation the graph **paces**: `schedule: {every: 300,
+`graphs/dag-scope.yaml` names one member, and it carries two clocks. The `monitor` is a
+`kind: onejudge` conversation the graph **paces**: `schedule: {every: 300,
 start_after: 0}` opens it with the wave and then holds it 300 seconds between the
 judge's answer and the next agent turn, so one conversation takes one turn every five
-minutes rather than one every 23–60 seconds. The `check-in` pacemaker is a scheduled
-single-sided member on its half-hour resettable clock, exactly as before. What keeps the
+minutes rather than one every 23–60 seconds. Its scheduled `progress-report` note runs on
+a half-hour clock of its own that every planner read restarts ([The progress
+report](#the-progress-report)), and a note arriving during a hold ends it. What keeps the
 observer graph alive between the monitor's turns is no longer inferred from which member
 is a conversation: it is a property the document **declares**. The monitor states
 `background: false`, and the run stays open while a foreground member is unfinished — a
 scheduled foreground member never finishes on its own, so the conversation holds the
 run open until its judge completes it, onejudge settles it, `max_turns` bounds it, or the
-driver's cancel at settlement ends it. The pacemaker states nothing, and a scheduled
-member that states nothing is background: it fires inside the monitor's holds, and the
-run does not stay open for it. This section records why that arrangement is the one
+driver's cancel at settlement ends it. This section records why that arrangement is the one
 here, because the belief it replaces — that a scheduled member cannot be the monitor —
 was true on the reader this host used to pin and is what a reader re-derives from the
 same symptom.
@@ -1418,17 +1412,17 @@ defer its first turn, and `oneagentgraph validate` answers:
 ```
 oneagentgraph: invalid config: nothing holds this run open — no member is foreground
 and either scheduled or able to take a turn in the initial waves — so it settles as
-soon as those waves are done and a deferred first turn (check-in, monitor) never comes
-due; declare `background: false` on one of them, give each of them `start_after: 0`,
-or add a foreground member for them to pace
+soon as those waves are done and a deferred first turn (monitor) never comes due;
+declare `background: false` on one of them, give each of them `start_after: 0`, or add
+a foreground member for them to pace
 ```
 
-The shipped document validates (`dag-scope: 2 member(s) OK`); only the removal makes it
+The shipped document validates (`dag-scope: 1 member(s) OK`); only the removal makes it
 invalid, and a document the reader refuses attaches **no** observer at all. Removing the
-line alone, with the monitor's immediate first turn kept, is refused the same way naming
-`check-in`: the pacemaker's first turn is deferred to its period, and once no member is
-foreground nothing holds the run open for it. So reverting the declaration is refused at
-the launch rather than discovered as a run nothing watched.
+line alone, with the monitor's immediate first turn kept, loads — the conversation then
+ends at quiescence after the wave's turn — and the paced launch below fails on the turns
+that never come, so reverting the declaration fails a journey rather than passing
+unnoticed.
 
 **What settled the graph before, kept as history.** On the reader this host pinned
 through oneagentgraph 0.3.17, a graph ran while at least one member was unsettled —
@@ -1437,9 +1431,10 @@ graph made only of scheduled members had nothing left to keep the process alive 
 next tick: the reader refused an all-scheduled document, and the `start_after: 0`
 remedy it named loaded and then settled after one turn each, 125 milliseconds against
 schedules of 600 and 1800 seconds, with the driver printing that the observer had
-stopped watching and continuing without one. The evidence that the pacemaker's survival
-was never a property of its kind is in this host's own recorded runs, counted over every
-`member-settled` a pacemaker had written at the time: **89 of them**, across 27 runs,
+stopped watching and continuing without one. The evidence that a scheduled reporting
+member's survival was never a property of its kind is in this host's own recorded runs,
+counted over every `member-settled` the scheduled reporting member this host has since
+retired had written at the time: **89 of them**, across 27 runs,
 splitting **50/39** on whether a conversation member was beside them. Fifty belong to
 a two-member observer document — the shipped `graphs/dag-scope.yaml`, and the older
 revision that spelled the same member `orchestrator` — and every one of those fifty
@@ -1452,7 +1447,7 @@ tore down under them, started at `08:50:43.215Z` against a monitor death at
 member at all (`scratch/graphs/dag-scope-quiet.yaml`, gitignored — a mitigation for a
 flooding monitor, not a design), and each of those thirty-nine settlements took its whole
 observer graph down with it, within **0.100s to 0.112s**, median 0.103s, every time.
-No pacemaker turn on this host had ever begun after its graph's conversation member
+No turn of that member on this host had ever begun after its graph's conversation member
 ended. Both counts are readings of this host's accumulated journals rather than claims
 about a release, so nothing re-takes them; what replaced the constraint they measured
 is below.
@@ -1474,13 +1469,13 @@ changes, and both are in force on this host:
 
 `tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py` holds all of it against the installed
 engine and the pinned reader: that the shipped document validates and declares the
-monitor paced and foreground and the pacemaker neither; that a real launch under the
-shipped document, with both periods overridden small through `just orchestrate --set
-members.monitor.schedule.every=<seconds>` and `--set members.check-in.schedule.every=…`,
-opens the monitor with the wave, holds it the interval between turns, keeps its
-heartbeat and a clean `just status` through the hold, fires the pacemaker inside a hold
-and survives it, and ends the observer at settlement without waiting the hold out; and
-that a document nothing holds open is refused in the words quoted above. The
+monitor paced, foreground and the graph's one member; that a real launch under the
+shipped document, with the hold overridden small through `just orchestrate --set
+members.monitor.schedule.every=<seconds>`, opens the monitor with the wave, holds it the
+interval between turns, keeps its heartbeat and a clean `just status` through the hold,
+restarts the progress-report clock on a surface read and no other, and ends the observer
+at settlement without waiting the hold out; and that a document nothing holds open is
+refused in the words quoted above. The
 `--set` override is how a journey that needs turns closer together than the shipped
 period says so; the shipped document's values are never edited to make one pass.
 
@@ -1508,8 +1503,8 @@ this host's own recorded runs — the corpus, the eligibility rule, the exclusio
 turn rate and the arithmetic are all written where the value is declared, in
 `personas/orchestrator.yaml`, and restated there at the paced rate: at one turn per five
 minutes the same ceiling is about 375 hours of watching. It stays finite deliberately:
-it is what bounds a wedged or looping supervisory conversation, and the sibling
-`check-in` member keeps a finite deadline for the same reason.
+it is what bounds a wedged or looping supervisory conversation, which a member under no
+bound at all fails silently.
 
 ## The planner channel
 
@@ -1531,14 +1526,14 @@ review-comments` and `just readjust-stack` — and the read-only `just monitor` 
 launched a run, and who may stop
 it](#who-launched-a-run-and-who-may-stop-it).
 
-What the planner hears from is the [monitor](#the-agent-graphs-a-run-launches) and
-the [pacemaker](#the-planner-update-pacemaker), each raising a non-blocking surface
-with the same verb:
+What the planner hears from is the [monitor](#the-agent-graphs-a-run-launches) — its
+findings, and the [progress report](#the-progress-report) its scheduled note times — each
+a non-blocking surface raised with the same verb:
 
 ```sh
-onepipeline surface --kind check-in RUN <<'UPDATE'
-Node X failed its gate; retry with a corrected fixture?
-UPDATE
+onepipeline surface --kind check-in RUN <<'REPORT'
+Two of five nodes are done; the API node is mid-review; next is the client; no risk yet.
+REPORT
 ```
 
 **The verb takes the surface's text as bytes.** It reads them from a `FILE`
@@ -1547,27 +1542,27 @@ kept for text a person typed and refused beside a `FILE` — `the argument
 '--message <TEXT>' cannot be used with '[FILE]'`. Which matters because the two
 callers that raise most of these surfaces are agents whose own prose is the input:
 a message written onto the command line is parsed by the shell first, and a finding
-that quoted a command name has run it here. So both supervisory members are told to
-use the byte-carrying form — see [`personas/orchestrator.yaml`](../personas/orchestrator.yaml)
-and the `check-in` task in [`graphs/dag-scope.yaml`](../graphs/dag-scope.yaml).
+that quoted a command name has run it here. So the monitor is told to use the
+byte-carrying form for a finding and for its report alike — see
+[`personas/orchestrator.yaml`](../personas/orchestrator.yaml).
 
 `--kind` is an **open word**: any kind matching `^[a-z][a-z0-9-]{0,63}$` is relayed
 unchanged — its message, source, blocking flag and unread accounting — and a malformed
 one is refused (the engine's contract, Contract K in onepipeline's `docs/contract.md`).
-The engine acts on two of them: `check-in` is the pacemaker's word, and `finding` is
+The engine acts on two of them: `check-in` is the progress report's word, and `finding` is
 something a watcher saw and decided the planner should know, raised deliberately rather
 than as the side effect of a turn having happened. It raises one of its own,
 `edit-applied`, for each edit a non-planner author applied — `monitor-edit` was that
 kind's name through the engine's 0.36 releases. This host's monitor binding raises
-`monitor-failed` and `monitor-completion` the same way. Reading any surface restarts
-the clock of every observer member the run's graph declares `resettable` — here, the
-`check-in` pacemaker alone.
+`monitor-failed` and `monitor-completion` the same way. Reading any surface journals
+`planner-surfaced`, which the observer graph follows on the run's journal; the
+`progress-report` note's `reset_on` names it, so a read restarts that clock and no other.
 
 The planner reads it with `just channel-next RUN`, which hands out each queued
 surface once, along with the events it was raised against:
 
 ```json
-{"status":"surface","surface":{"id":0,"kind":"check-in","message":"Node X failed its gate; retry with a corrected fixture?","source":"check-in","blocking":false,"queued_at":1786490389925},"events":[]}
+{"status":"surface","surface":{"id":0,"kind":"check-in","message":"Two of five nodes are done; the API node is mid-review; next is the client; no risk yet.","source":"check-in","blocking":false,"queued_at":1786490389925},"events":[]}
 ```
 
 Which events accompany it is the [read profile](#read-profiles)'s decision, and the
@@ -1639,8 +1634,8 @@ active launch; an ambiguous or stale name fails and lists valid run ids.
 
 `just monitor RUN` is the re-attach path: it follows the run and renders a pending
 planner surface without consuming it. Rendering is not reading — `channel-next`
-is the only consumer, so the [pacemaker](#the-planner-update-pacemaker) must not
-depend on consumption to keep ticking.
+is the only consumer, so following a run in `just monitor` never restarts the
+[progress report](#the-progress-report)'s clock.
 
 `channel-next` waits for one surface. A bounded wait with no message returns
 `{"status":"running","surface":null}`; a settled run returns
@@ -1686,7 +1681,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.105.0 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.106.3 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1743,11 +1738,11 @@ requires such a turn be sent back until the finding is on the channel. The cost 
 plainly because it is real — a monitor that notices something, writes it as prose, and is
 not sent back has reported it to nobody.
 
-**The periodic `check-in` member is untouched by all of this.** It is a single-sided
-`kind: oneharness` member with no judge side at all: it raises its own surface with
-`onepipeline surface --kind check-in`, and its report reaches the queue under its own
-kind and source. `tests/e2e/launch_monitor_observer/test_monitor_quiet_turn_e2e.py` reads the pacemaker's
-surface off the queue in the same run whose monitor prose raises none.
+**The progress report is untouched by all of this.** The monitor raises it with its own
+verb, `onepipeline surface --kind check-in`, rather than through the binding, so it
+reaches the queue under its own kind and source.
+`tests/e2e/launch_monitor_observer/test_monitor_quiet_turn_e2e.py` raises a report through
+that verb and reads it off the queue in the same run whose monitor prose raises none.
 
 Structured output would be the heavier way to draw the same line, and one constraint
 rules it out: oneharness validates a structured answer against the complete response, so
@@ -1858,7 +1853,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.105.0**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.106.3**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -2135,7 +2130,7 @@ events stay the record of what an edit became, and are where a `queued` one is r
 **A `queued` receipt resolves even across a driver's death.** A driver claims an
 envelope — moves the channel's command cursor past it — before it answers it, so one
 that died between the two used to take the claimed edits and notes with it. On the
-adopted onepipeline 0.105.0 every record an envelope's effects leave — `edit-committed`,
+adopted onepipeline 0.106.3 every record an envelope's effects leave — `edit-committed`,
 `command-accepted`, `edit-rejected` and `note-shown` — names that `envelope`, and `just
 orchestrate --adopt` replays each envelope the dead driver claimed and never answered
 exactly once: one the journal already shows applied is answered from that record rather
@@ -2172,58 +2167,50 @@ desired graph, which outlives the driver. That is why an `add` is accepted again
 a run whose driver has exited while a *verdict* to the same run is not — see [the
 edit table](#live-graph-edits).
 
-### Planner-update pacemaker
+### The progress report
 
-`just orchestrate` seeds a durable 1800-second planner-update interval; override
-it at launch with `--heartbeat-interval SECONDS`. A channel-side pacemaker keeps
-checking that clock independently of graph reconciliation, including while a node
-is inside a long-running agent step. When due, it claims and dispatches a dedicated
-check-in agent. That read-only actor's turn is a bounded sequence its task
-prescribes in order: `onepipeline status <run-id>` for the one run, the run's
-follow-up drafts through `onetaskgraph task list --source drafts --project
-<run-id> --json`, one compact update composed from those two readings and sent
-exactly once with `onepipeline surface`, then exit. Those two readings are the
-whole of its reading — the task forbids command discovery (`--help` walks, `just
---list`), host-wide run listings (a bare `just runs`, `onepipeline runs`) and
-recursive filesystem searches (`rg`, `grep -r`, `find`) by name, because two
-recorded turns spent the member's whole finite deadline on exactly those and were
-killed having raised nothing — and a question the readings cannot answer is
-reported in the update as unanswered rather than investigated. The surface verb is
-the one [`personas/check-in.yaml`](../personas/check-in.yaml) names, called
-directly because that member's working directory is the graph member's own scratch
-and there is no `justfile` there to reach. `just channel-surface` is the operator's
-spelling of the same verb. The command queues the non-blocking surface without
-waiting for a planner reply; the reconciler neither authors nor relays its content.
+The user relies on a plain-language report of the run they can mostly pass straight on,
+and the `monitor` writes it: it already reads the detailed stream every five minutes with
+its conversation's history intact, so the report is drawn from what the run has actually
+been doing rather than from a fresh status read. **When** it is written is the
+`progress-report` note `graphs/dag-scope.yaml` schedules on that member; **what** it is
+is [`personas/orchestrator.yaml`](../personas/orchestrator.yaml)'s to say — done, in
+progress, next and any risk, in plain language — raised as one `check-in` surface whose
+text travels on stdin through a single-quoted heredoc, and written even when nothing is
+wrong.
 
-**The pacemaker's scope is structural, not advisory.** The member carries its own
-`task` in `graphs/dag-scope.yaml`, and that task both scopes it to reporting and
-forbids `onepipeline reply` by name. Live edits belong to the
-[monitor](#the-agent-graphs-a-run-launches) and the planner. This member is
-single-sided and finitely deadlined by `oneharness.check-in.toml`: it takes one
-short turn and exits, so an edit issued from it would be answered by the reconciler
-after the member that issued it had stopped watching — nobody left to read the
-outcome, and nobody who saw the state that justified it. Its own task is what makes
-that impossible whatever the run-level task happens to say.
-`tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py` launches the shipped member on
-its own and reads the prompt it was actually given — the sequence, the prohibitions
-and the edit ban — so a task that is present in the file but not reaching the model
-fails there; `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` holds the same on the
-document, and `tests/test_pacemaker_discipline.py` reconciles the persona's copy
-against it.
+The note is `{id: progress-report, every: 1800, start_after: 1800, addressee: worker}`
+with `reset_on: {include: [{source: pipeline, kind: planner-surfaced}]}`. The engine
+passes the run's own journal to the observer graph at every launch, restart and
+adoption, and appends `planner-surfaced` to it when `just channel-next` hands a surface
+over, so every update the manager reads restarts the clock. A manager who has just read
+an update therefore hears nothing more for thirty minutes, and one who has read nothing
+for thirty minutes is offered a report — the note is admitted into the monitor's
+conversation, ends the hold it arrives in, and the turn it opens writes the report. No
+separate paid turn is spent on it, and no second member exists for it. The 35-minute wake
+budget, the watch and the Stop guard are unchanged: they are the fallback for a report
+that does not arrive.
 
-Sending and delivery are recorded as two different facts. Queuing the update
-appends `planner-surface-queued` to `events.jsonl` — carrying the surface kind and
-message, the `source` that sent it (`check-in` for a pacemaker update, `proposal`
-for a worker's), and the `workstream` node when one provoked it. Successful
-consumption through `channel-next` is what resets the clock and
-appends `planner-surfaced`. A reader of the journal can therefore tell "nothing was
-sent" from "updates were sent and nobody read them", which the delivered-only
-record could not express.
+The cadence is **launch-only**, like the monitor's hold: `just orchestrate --set
+members.monitor.scheduled_notes.progress-report.every=<seconds>` (and `.start_after=`)
+moves it for one run, and the shipped document is never edited to do so.
+`tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py` compresses it
+that way to drive the note through real launches — once per span in a run nobody reads,
+each raising one report, and restarted by a read in a run that is read — and reads the
+shipped cadence back off a launch that names no override.
+
+Sending and delivery are recorded as two different facts. Queuing a report appends
+`planner-surface-queued` to `events.jsonl` — carrying the surface kind and message, the
+`source` that sent it, and the `workstream` node when one provoked it — and the bus keeps
+one waiting `check-in` at a time, the latest. Consumption through `channel-next` is what
+appends `planner-surfaced` and restarts the note's clock. A reader of the journal can
+therefore tell "nothing was sent" from "updates were sent and nobody read them". Rendering
+a surface in `just monitor` is not reading it, and restarts nothing.
 
 ### A worker that goes quiet
 
-The pacemaker says what the run is doing on a schedule; the engine itself says when
-one of its workers stops doing anything. It watches every in-flight dispatch for
+The monitor's report says what the run is doing on a schedule; the engine itself says
+when one of its workers stops doing anything. It watches every in-flight dispatch for
 the life of the run and surfaces a **non-blocking** proposal for one that has
 recorded nothing past a threshold — naming the node, what was last heard from it,
 and how long ago:
@@ -2252,69 +2239,11 @@ signal, not a duplicate of it: the engine reports that a worker went quiet, and 
 monitor reads the detailed stream to say whether what it was doing before it went
 quiet was the work its task asked for.
 
-#### The claim is a lease on the dispatch, not a lock held until someone reads
-
-The heartbeat record carries an atomic `in_flight` claim so concurrent pacemaker
-ticks cannot dispatch duplicate check-ins. It covers the **dispatch**: taken when a
-due check-in is claimed, handed back when that dispatch settles either way, and
-recorded with the pid and host that took it so a later tick can reclaim a lease
-whose holder is provably gone — the same probe the driver-liveness verdict uses. A
-failed attempt is recorded and becomes eligible again after the next interval
-without blocking the graph frontier.
-
-Held instead until *delivery*, it silenced runs: `record_surface` was the only
-thing that released it and that runs on consumption, so one update nobody read left
-`due=True, in_flight=True` for the life of the run and no later check-in could ever
-be claimed. Two live runs sat that way for over an hour each on 2026-08-01 with the
-interval lowered to 900s, which is the diagnostic that separates this from a clock
-problem — the wedge was the claim, so no cadence change reached it. `just monitor`
-is named everywhere as the way to follow a run, so the documented way to watch one
-was the way to wedge it. Rendering is not reading; only `channel-next` consumes.
-
-Exactly one check-in is ever pending, and it is kept current rather than kept
-still: the next interval's check-in **replaces** the queued update instead of being
-blocked by it. Being ignored therefore makes the harness louder rather than
-quieter. The clock is not reset by queuing, so the staleness `just runs` and `just
-status` report (below) is measured from the last update a planner actually read and
-keeps growing while the queued content stays fresh. A queued update discarded
-unread — behind a surface awaiting a reply — releases the lease with it.
-
-Every planner-visible update — a monitor surface, a worker's proposal, or a
-delivered heartbeat — clears the due signal and restarts the clock. The next
-check-in falls due one interval after the later of the last update a planner read
-(`last_surface_at`) and the last check-in attempt that settled (`last_attempt_at`);
-both are persisted, so a restarted or adopted driver continues the same durable
-countdown rather than starting a fresh interval. That comparison is made against
-the *current* interval on every tick rather than baked into a stored deadline,
-which is what keeps the interval the only knob that changes cadence.
-
-That knob is **launch-only**. `--heartbeat-interval SECONDS` is an option of
-`onepipeline start` and of nothing else — `adopt` does not take it, and no channel
-verb does. The reply envelope is closed to unknown fields and accepts exactly
-`version`, `author`, `completion`, `message`, `reason`, and `commands`, so a reply
-carrying `"heartbeat_interval"` sent through `just channel-reply` is refused whole, with
-nothing appended and a nonzero exit:
-
-```
-onemessagebus: replies: the reply is malformed: Additional properties are not allowed ('heartbeat_interval' was unexpected)
-```
-
-That is the bus's wording, not the engine's, and it names only the field it refused. The
-host's bus prepares a reply by the planner-channel layout document it links, and
-onepipeline's `docs/contract.md` declares this as one of the places where that document's
-bus differs from the engine: a malformed envelope is refused in the bus's words. The
-engine's own wording, which the channel used while the bus compiled the layout in, also
-listed the accepted fields. It does not reach a reply sent through this host's channel
-verbs, so read the list above rather than the refusal for what the envelope takes. The
-verdict and graph edits in that reply are lost with it, so trying costs the whole envelope
-rather than being a no-op. Pick the interval at launch.
-
 Which side of which member a recorded oneharness session is comes from the
 `history_labels` in the config that ran it — `role = "agent"` in
-`oneharness.orchestrator.toml` and `oneharness.check-in.toml`, `role = "judge"` in
-`oneharness.judge.toml` — layered under the run and node labels a dispatch
-inherits. That is what keeps monitor and check-in infrastructure separable from a
-node's implementation worker in `just history`.
+`oneharness.orchestrator.toml`, `role = "judge"` in `oneharness.judge.toml` — layered
+under the run and node labels a dispatch inherits. That is what keeps the monitor's
+infrastructure separable from a node's implementation worker in `just history`.
 
 While a consumed surface is persisted awaiting an answer, `just runs` and `just
 status` report `waiting for planner decision` for blocking surfaces and `waiting
@@ -2364,8 +2293,8 @@ is stuck stays visible without the run reading as live supervision.
 Every proposal includes `surface.blocking`: `true` means the worker is awaiting the
 decision, while `false` is informational and does not stop the graph frontier. Either
 way a proposal is for a decision the planner must see **during** the run. Everything the
-monitor and the pacemaker raise is non-blocking by construction: an observation is not a
-question the graph should stop for.
+monitor raises is non-blocking by construction: an observation is not a question the
+graph should stop for.
 
 ### Follow-ups are drafted, not surfaced
 
@@ -2381,9 +2310,10 @@ completes; nothing reads them during the run.
 Every launch exports the seam through `scripts/follow-up-env.sh`: the source's absolute
 root and its plugin at the plan store's environment layer, and
 `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, the one command every party drafts with. A worker drafts
-as itself; the monitor drafts `--as monitor --member monitor`; the pacemaker drafts
-`--as pacemaker --member check-in` and reports in each update how many drafts the run's
-project holds; a manager drafts with `just follow-up <run-id>`. The party supplies only a
+as itself; the monitor drafts `--as monitor --member monitor`; a manager drafts with
+`just follow-up <run-id>`. `--as pacemaker` named a scheduled member this host has
+retired: a draft already written under it still reads and verifies, because it is a stored
+shape a later follow-up run reads, and writing a new one is refused naming `--as monitor`. The party supplies only a
 title, the repository, the paths and a body carrying four headings; the command stamps the
 rest — the run, the dispatch's scratch, session, working directory, branch and head, the
 node the engine names to the dispatch-env hook, which that hook passes on to the dispatch
@@ -2394,7 +2324,7 @@ of that record, and `"$ORCHESTRATOR_FOLLOW_UP_DRAFT" --help` states it in full.
 Drafting is only for what can wait. Anything blocking — a decision fork, a constraint
 that cannot be met, a finding the planner should act on now — still goes over the channel
 immediately: a worker's blocking question to its manager, the monitor's
-`finding`, the pacemaker's update, a planner's exceptions. A draft never stands in for any
+`finding` or progress report, a planner's exceptions. A draft never stands in for any
 of them.
 
 After the run, `just follow-ups <run-id>` dispatches the follow-up agent over its drafts:
@@ -2697,9 +2627,8 @@ container-private filesystem.
 
 ### A finding names the rule it is grounded in
 
-Both observer surfaces raise findings — the
-[monitor](#the-agent-graphs-a-run-launches) on every turn, the
-[pacemaker](#the-planner-update-pacemaker) when its schedule comes due — and a report
+The observer raises findings — the [monitor](#the-agent-graphs-a-run-launches), on any
+turn, its [progress report](#the-progress-report) included — and a report
 that calls something a **rule violation** has to quote the file and the line the rule
 comes from: a node's task, a persona, a config, or a document of the repository under
 work. What cannot be pointed at that way is an **observation**: what was seen and why
@@ -2707,14 +2636,13 @@ it looked wrong, with the ruling left to the planner.
 
 The distinction is not tidiness. An observer that infers the rule an agent is judged
 against reports a protective act as a breach, which costs a planner more than silence
-would and discredits every other finding in the same update. So each observer's own
+would and discredits every other finding in the same update. So the observer's own
 supervisor rejects an ungrounded violation and requires it re-reported as an
 observation, rather than leaving the planner to sort the two apart.
 
-Stated to the model on both sides of each member, in
-[`personas/orchestrator.yaml`](../personas/orchestrator.yaml) and
-[`personas/check-in.yaml`](../personas/check-in.yaml), and held to this section by
-`tests/test_observer_grounding.py`.
+Stated to the model on both sides of the member, in
+[`personas/orchestrator.yaml`](../personas/orchestrator.yaml), and held to this section
+by `tests/test_observer_grounding.py`.
 
 A launch leaves a board plan's withdrawn tasks (closed as not planned) out of the
 executable graph and refuses a dependency on one. Re-copying a plan uses
@@ -4018,7 +3946,7 @@ the contract.
 
 **A landing a manager starts is owed the same way, from before it acts until it closes.**
 `just publish-branch`, `just repo-recover` and `just integrate` run the engine's own landing
-verbs, which on the adopted onepipeline 0.105.0 register each landing as supervised work of the
+verbs, which on the adopted onepipeline 0.106.3 register each landing as supervised work of the
 session that started it — in the live flow of that session the verb runs inside, or in a
 flow registered for that landing alone — before drafting, preparing or pushing anything,
 and print it:
@@ -4105,8 +4033,9 @@ further supervision. A qualifying watch belongs to the owning session, ends on
 `surface`, and is bounded within this host's 2100-second wake budget. A bare
 `just watch <run>` supplies those terms; `--timeout none` does not qualify.
 
-The observer graph's `check-in` normally raises a planner surface every 30 minutes.
-Any planner surface wakes the watch. The 35-minute deadline is the fallback: if its
+The observer graph's monitor raises a progress report, a `check-in` surface, when its
+scheduled note arrives after 30 minutes in which no update was read; each read restarts
+that clock. Any planner surface wakes the watch. The 35-minute deadline is the fallback: if its
 summary says no planner surface arrived during the wait, repair the missing or dead
 observer before re-arming. A watch armed on an undriven run waits for action or its
 bound, rather than returning immediately. Held waits re-surface on a slowing cadence.
@@ -4616,7 +4545,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.105.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.106.3 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and four optional fields: a `criterion`; a `deliver` of `live`, `turn-end` or
@@ -4774,7 +4703,7 @@ outcome` — is answered by that next driver before anything it claims itself, s
 lost.
 
 **A `cancel` does not wait behind a note its node never answers.** On the adopted
-onepipeline 0.105.0 a `cancel` its envelope would apply refuses, in its node's
+onepipeline 0.106.3 a `cancel` its envelope would apply refuses, in its node's
 conversation's place, each note to that node still outstanding — offered or waiting
 behind another — with a reason naming the cancelling envelope, so no turn is presented
 with it; each such refusal is the note's own `edit-rejected` record, and the notes'

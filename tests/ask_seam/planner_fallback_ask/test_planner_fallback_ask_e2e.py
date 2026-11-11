@@ -138,7 +138,7 @@ def launched(tmp_path: Path) -> Iterator[Launched]:
     """One real run whose frontier is a human gate, so its channel outlives the launch.
 
     `--dag-graph off` deliberately: with this host's observer graph attached, the monitor
-    and the pacemaker raise surfaces of their own on the same channel, and the two this
+    raises surfaces of its own on the same channel, and the two this
     journey compares would be read out of theirs.
     """
     if shutil.which("just") is None:

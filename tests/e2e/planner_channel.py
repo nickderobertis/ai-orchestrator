@@ -204,7 +204,7 @@ def answer_each(
     """Read surfaces until a blocking question appears, then reply to it. Once per answer.
 
     A surface that is not a blocking question the bus asked is read and passed over: this
-    host's monitor and pacemaker raise their own on the same channel. Hands back what
+    host's monitor raises its own on the same channel. Hands back what
     `channel-reply` answered each send, which is the engine's one-line receipt.
     """
     limit = deadline(seconds)

@@ -1,12 +1,11 @@
 """Every persona a run reads BY PATH still loads, through a real graph.
 
-`graphs/dag-scope.yaml` names `../personas/orchestrator.yaml` and
-`../personas/check-in.yaml` by path, and those two files are what the monitor and
-the heartbeat pacemaker are actually given on every orchestrated run. Everything
-else in `personas/` is a catalog and a validation target — a plan node's bare
+`graphs/dag-scope.yaml` names `../personas/orchestrator.yaml` by path, and that file is
+what the monitor is actually given on every orchestrated run. Everything else in
+`personas/` is a catalog and a validation target — a plan node's bare
 `persona: engineer` resolves to a role built into the crate, not to this directory
-(`personas/README.md`). So these two are the ones whose shape a release can cost
-this host the whole watching tier over.
+(`personas/README.md`). So this is the one whose shape a release can cost this host the
+whole watching tier over.
 
 `just validate-personas` is not enough to hold them, and that is a measurement
 rather than a worry. A persona shape is read by **two** binaries: the oneagentgraph
@@ -23,8 +22,7 @@ journeys run each path-named persona through a real `oneagentgraph run` — the 
 verb `onepipeline` runs the observer graph with — in the member shape
 `graphs/dag-scope.yaml` gives it, and read that. Only the paid provider is
 substituted: `tests/e2e/fake_backend.py` at the spawned-CLI seam a two-party member
-reaches, and `tests/e2e/fake_codex.py` at the provider binary a single-sided
-member's in-library turn spawns.
+reaches.
 """
 
 from __future__ import annotations
@@ -92,11 +90,9 @@ class ObserverMember(NamedTuple):
 class PathDispatched(NamedTuple):
     """One persona a run reads by path, in the member shape that reads it.
 
-    `kind` is not a detail: a two-party `kind: onejudge` member merges the persona
-    over its base config and the role reaches the model, while a single-sided
-    `kind: oneharness` member layers no config at all and takes only the persona's
-    label. Both still **parse** the document, which is what a shape break costs — so
-    both are journeys here, each asserting what its own shape actually consumes.
+    A two-party `kind: onejudge` member merges the persona over its base config and the
+    role reaches the model, so its journey asserts both that the document parsed and that
+    its role reached the turn.
     """
 
     #: The member name in `graphs/dag-scope.yaml`.
@@ -114,7 +110,7 @@ class PathDispatched(NamedTuple):
         return ObserverMember(self.member, self.persona, self.harness_config)
 
 
-#: The two members of `graphs/dag-scope.yaml`, in that document's own shapes. Every
+#: The members of `graphs/dag-scope.yaml`, in that document's own shapes. Every
 #: field here except `label` is that document's, and none of them is remembered:
 #: `test_the_declared_set_is_every_persona_the_observer_graph_names_by_path` reads the
 #: member name, the persona ref, and the oneharness config back out of the graph and
@@ -126,12 +122,6 @@ PATH_DISPATCHED = (
         persona="personas/orchestrator.yaml",
         label="monitor",
         harness_config="oneharness.orchestrator.toml",
-    ),
-    PathDispatched(
-        member="check-in",
-        persona="personas/check-in.yaml",
-        label="check-in",
-        harness_config="oneharness.check-in.toml",
     ),
 )
 
@@ -294,72 +284,6 @@ def test_the_monitors_persona_loads_and_reaches_the_turn(
         assert role in turn["system"], (
             f"{dispatched.persona}'s own role is missing from the composed system "
             f"prompt, so the file loaded but did not reach the turn:\n{turn['system']}"
-        )
-
-
-@pytest.mark.xdist_group("path-dispatched-personas")
-def test_the_pacemakers_persona_loads_and_labels_its_member(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """`personas/check-in.yaml` loads, and is the label alone — which is the shipped shape.
-
-    The pacemaker is `graphs/dag-scope.yaml`'s single-sided `kind: oneharness` member.
-    Such a member has no onejudge base config to layer a persona over, so the document
-    is read for its `name` and nothing else: the prose the model is given is the
-    member's own `task`. That is what `graphs/pr-author.yaml` records about its own
-    drafter, and it is asserted here rather than assumed, because a release that
-    started merging the file would silently change what the pacemaker is told.
-
-    It still has to **parse**, which is the whole reason this journey exists beside
-    the monitor's: the label-only path runs the same reader, so a shape the pinned
-    crate refuses costs this member exactly as completely.
-    """
-    dispatched = PATH_DISPATCHED[1]
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    environment = probe_environment(tmp_path, oneharness_bin, INDIRECTION_CALLER)
-    prompt_log = tmp_path / "codex-prompts.jsonl"
-    environment["FAKE_CODEX_PROMPT_LOG"] = str(prompt_log)
-
-    graph = tmp_path / "check-in-probe.yaml"
-    graph.write_text(
-        "version: 4\n"
-        "name: check-in-persona-probe\n"
-        "members:\n"
-        f"  {dispatched.member}:\n"
-        "    kind: oneharness\n"
-        f"    oneharness_config: {REPO_ROOT / dispatched.harness_config}\n"
-        f"    persona: {REPO_ROOT / dispatched.persona}\n"
-        "    task: |\n"
-        "      {task}\n",
-        encoding="utf-8",
-    )
-
-    envelopes = run_graph(graph, environment, PROBE_TASK)
-    started = started_member(envelopes, dispatched.member)
-
-    assert started["labels"].get("persona") == dispatched.label, (
-        f"the member started under persona label {started['labels'].get('persona')!r} "
-        f"rather than {dispatched.label!r}, so a different document was resolved:\n"
-        f"{json.dumps(started, indent=2)}"
-    )
-    assert settlement(envelopes)["members"] == {dispatched.member: "settled"}, (
-        f"the probe graph did not settle its one member:\n{json.dumps(envelopes, indent=2)}"
-    )
-
-    # llmlint: ignore[tests_mirror_real_usage] No view carries a single-sided member's prompt.
-    turns = recorded_turns(prompt_log)
-    assert turns, "the single-sided member took no provider turn, so nothing here is proven"
-    role = _persona_role(dispatched.persona)
-    for turn in turns:
-        assert PROBE_TASK in turn["prompt"], (
-            "the member's own task did not reach the turn, so `{task}` no longer "
-            f"expands at this graph schema version:\n{turn['prompt']}"
-        )
-        assert role not in turn["prompt"], (
-            f"{dispatched.persona}'s role now reaches a single-sided member's turn. "
-            "That is a change in what the pacemaker is told: reconcile "
-            "`graphs/dag-scope.yaml` and `graphs/pr-author.yaml`, which both record "
-            f"that such a member layers no persona:\n{turn['prompt']}"
         )
 
 

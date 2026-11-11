@@ -27,7 +27,6 @@
       "{workspaceRoot}/docs/orchestration.md",
       "{workspaceRoot}/docs/repo-lifecycle.md",
       "{workspaceRoot}/onetaskgraph.yaml",
-      "{workspaceRoot}/oneharness.check-in.toml",
       "{workspaceRoot}/oneharness.pr-author.toml",
       "{workspaceRoot}/config/oneagentgraph.version",
       "{workspaceRoot}/config/oneharness.version",

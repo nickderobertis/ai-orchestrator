@@ -251,9 +251,9 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
     ),
     # What a run names to the agent graph watching it — `ONEPIPELINE_RUN_ID`, set to
     # the run id — restated in three places because the claim is load-bearing in three
-    # different arguments: why the pacemaker interpolates `{task}`, why the observer
-    # graph's judge command can compose the run's channel directory, and what an operator
-    # should write a member against.
+    # different arguments: why the observer graph's judge command can compose the run's
+    # channel directory, what a monitor member's environment carries, and what an
+    # operator should write a member against.
     # `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` re-takes that
     # measurement on a real launch, and this gate holds each restatement to the release it
     # was taken against, so a bump fails at both halves at once.

@@ -11,13 +11,20 @@ the document *says* the monitor is foreground. The write-up for a manager is in
 `docs/orchestration.md`; this module is what keeps it honest, by driving the reader and
 the launch rather than describing them:
 
-* the shipped document validates under the pinned reader and declares the monitor
-  paced and foreground — `every: 300`, `start_after: 0`, `background: false` — and the
-  pacemaker a scheduled member that says nothing about liveness;
-* a real launch under the shipped document, with both periods overridden small the
-  published way, shows two consecutive monitor turns no closer together than the hold,
-  the run watched between them, the pacemaker firing inside a hold, and the observer
-  ending at settlement without waiting the hold out;
+* the shipped document validates under the pinned reader, declares the monitor paced
+  and foreground — `every: 300`, `start_after: 0`, `background: false` — and declares it
+  the graph's one member, carrying the `progress-report` note that times the run's
+  progress report;
+* a real launch naming no override reads back the document the observer graph was
+  actually given, so the shipped cadence of that note is what a run gets;
+* a real launch under the shipped document, with the hold overridden small the published
+  way, shows two consecutive monitor turns no closer together than the hold, the run
+  watched between them, a surface read restarting the progress-report clock and no
+  other, and the observer ending at settlement without waiting the hold out;
+* real launches with the note's cadence compressed the published way: one whose manager
+  reads nothing gets the note once per span and one report raised for each, and one whose
+  manager reads a surface gets the clock restarted by that read and no note before the
+  clock next fires;
 * the refusal that remains: a document nothing holds open — every member scheduled and
   background, and a first turn deferred — is refused by the reader, in words the write-up
   quotes.
@@ -33,15 +40,20 @@ import shutil
 import subprocess
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+import yaml
 from fake_backend import (
     OBSERVER_ANSWER_ENV,
     OBSERVER_MEMBER_ENV,
+    OBSERVER_REPORTS_ON_ENV,
+    PROGRESS_REPORT,
+    PROGRESS_REPORT_KIND,
     PROMPT_LOG_ENV,
+    TURN_GATE_CEILING_SECONDS,
     TURN_GATE_ENV,
     TURN_GATE_RELEASED,
 )
@@ -58,21 +70,28 @@ from orchestrator.root import REPO_ROOT
 # (`tests/short_state.py`).
 pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
 
-#: The observer graph every `just orchestrate` attaches, and the two members it names.
+#: The observer graph every `just orchestrate` attaches, and the one member it names.
 DAG_SCOPE_GRAPH = "graphs/dag-scope.yaml"
 MONITOR_MEMBER = "monitor"
-PACEMAKER_MEMBER = "check-in"
 
 #: Where the finding is written up for a manager, and what the last journey reads back.
 FINDING_DOCUMENT = "docs/orchestration.md"
 
 MONITOR_HOLD_SECONDS = 300
 MONITOR_FIRST_TURN_SECONDS = 0
-PACEMAKER_PERIOD_SECONDS = 1800
 
-#: The schema the shipped document has to declare: `background` requires 8 and a
-#: `schedule` on a two-party member 9, so 9 is the first that admits every field above.
-SCHEMA_VERSION = 9
+#: The scheduled note that times the run's progress report, as the shipped document
+#: declares it: thirty minutes in which the planner read no update, offered to the
+#: monitor's agent side, its clock restarted by every surface the planner reads.
+PROGRESS_REPORT_NOTE = "progress-report"
+PROGRESS_REPORT_EVERY_SECONDS = 1800
+PROGRESS_REPORT_START_AFTER_SECONDS = 1800
+PROGRESS_REPORT_ADDRESSEE = "worker"
+PROGRESS_REPORT_RESET_ON = {"source": "pipeline", "kind": "planner-surfaced"}
+
+#: The schema the shipped document has to declare: `background` requires 8, a `schedule`
+#: on a two-party member 9 and `scheduled_notes` 11, the first that admits every field.
+SCHEMA_VERSION = 11
 
 #: The lines a member's fields are written on, read with a reader written for this one
 #: document rather than with a YAML library — the workspace installs none, and
@@ -123,11 +142,6 @@ HEARTBEAT_GAP_SECONDS = HEARTBEAT_BOUND_SECONDS / 4 + 1.0
 #: answering, so half a second tells the two apart with room to spare.
 CLOCK_GRANULARITY_SECONDS = 0.5
 
-#: The pacemaker's period for the same launch, overridden the same way. Short, so it
-#: fires several times inside the monitor's holds — which is what shows a background
-#: scheduled member firing while a foreground one holds the run open.
-PACED_PACEMAKER_SECONDS = 5
-
 #: What the stand-in monitor says on every turn: an ordinary quiet turn, so what is
 #: measured is the graph's pacing and not anything the model's words caused.
 SAID_ON_A_QUIET_TURN = "read the detailed stream since the cursor; nothing needed raising"
@@ -171,7 +185,8 @@ class Schedule(NamedTuple):
 
     every: int | None
     start_after: int | None
-    resettable: bool | None
+    #: Whether the schedule names any field beyond those two — a reset of its own, say.
+    others: tuple[str, ...]
 
 
 class Declared(NamedTuple):
@@ -205,7 +220,7 @@ def _member_block(member: str) -> list[str]:
 
 def _declared(member: str) -> Declared:
     """What the shipped document declares about one member's schedule and liveness."""
-    schedule = Schedule(every=None, start_after=None, resettable=None)
+    schedule = Schedule(every=None, start_after=None, others=())
     background: bool | None = None
     for line in _member_block(member):
         if line.strip().startswith("#"):
@@ -218,7 +233,7 @@ def _declared(member: str) -> Declared:
             schedule = Schedule(
                 every=int(fields["every"]) if "every" in fields else None,
                 start_after=int(fields["start_after"]) if "start_after" in fields else None,
-                resettable=fields["resettable"] == "true" if "resettable" in fields else None,
+                others=tuple(sorted(set(fields) - {"every", "start_after"})),
             )
         if backgrounded := BACKGROUND_LINE.match(line):
             background = backgrounded.group("value") == "true"
@@ -230,7 +245,7 @@ def _shipped_document_nothing_holds_open(written_to: Path) -> Path:
 
     Taken from the shipped file rather than retyped, so what is refused below is this
     repository's own observer graph with the one declaration that holds it open removed
-    — the pacemaker, the schema version and every comment travel verbatim. The monitor's
+    — the scheduled note, the schema version and every comment travel verbatim. The monitor's
     first turn is deferred to its period, which is what an omitted `start_after` means,
     because a scheduled member that took an immediate turn would still fire once. Its
     relative refs are rewritten to absolute, which is what they already resolve to: a
@@ -270,7 +285,7 @@ def test_the_shipped_observer_graph_declares_a_paced_foreground_monitor() -> Non
     monitor's `background: false` missing is one the refusal journey below shows cannot
     exist — so what is read here, field by field, is the contract every other file in
     this change restates: the hold, the immediate first turn, the foreground
-    declaration, and a pacemaker that declares nothing and is therefore background.
+    declaration, and the monitor as the graph's one member.
     """
     validated = _validated(REPO_ROOT / DAG_SCOPE_GRAPH)
     assert validated.status == 0, (
@@ -281,8 +296,9 @@ def test_the_shipped_observer_graph_declares_a_paced_foreground_monitor() -> Non
     declared = VERSION_LINE.search((REPO_ROOT / DAG_SCOPE_GRAPH).read_text("utf-8"))
     version = int(declared.group("version")) if declared is not None else None
     assert version == SCHEMA_VERSION, (
-        f"{DAG_SCOPE_GRAPH} declares schema {version}, and `background` needs 8 and a "
-        f"two-party `schedule` 9: {SCHEMA_VERSION} is the first that admits both"
+        f"{DAG_SCOPE_GRAPH} declares schema {version}, and `background` needs 8, a "
+        f"two-party `schedule` 9 and `scheduled_notes` 11: {SCHEMA_VERSION} is the first "
+        "that admits all three"
     )
 
     monitor = _declared(MONITOR_MEMBER)
@@ -295,9 +311,10 @@ def test_the_shipped_observer_graph_declares_a_paced_foreground_monitor() -> Non
         "An omitted `start_after` defaults to `every`, which leaves the first five minutes "
         "of every run unwatched"
     )
-    assert monitor.schedule.resettable is None, (
-        f"the `{MONITOR_MEMBER}` member's schedule states `resettable`, so a planner "
-        f"surface would restart the monitor's hold rather than the pacemaker's: "
+    assert monitor.schedule.others == (), (
+        f"the `{MONITOR_MEMBER}` member's schedule states {monitor.schedule.others}, so "
+        f"something other than its hold paces its turns — a reset of its own would restart "
+        f"the hold on every planner read rather than the progress-report note's clock: "
         f"{monitor.schedule}"
     )
     assert monitor.background is False, (
@@ -305,19 +322,10 @@ def test_the_shipped_observer_graph_declares_a_paced_foreground_monitor() -> Non
         "the one declaration that keeps the observer graph alive between its turns"
     )
 
-    pacemaker = _declared(PACEMAKER_MEMBER)
-    assert pacemaker.schedule.every == PACEMAKER_PERIOD_SECONDS, (
-        f"the `{PACEMAKER_MEMBER}` member's period moved: {pacemaker.schedule}"
-    )
-    assert pacemaker.schedule.resettable is True, (
-        f"the `{PACEMAKER_MEMBER}` member is no longer resettable, so a run already "
-        f"reporting also gets a pacemaker surface: {pacemaker.schedule}"
-    )
-    assert pacemaker.background is None, (
-        f"the `{PACEMAKER_MEMBER}` member states `background: {pacemaker.background}`; a "
-        "scheduled member that states nothing is background, which is what a pacemaker "
-        "is, and `false` would make a member that exits after each firing hold the run "
-        "open forever"
+    members = yaml.safe_load((REPO_ROOT / DAG_SCOPE_GRAPH).read_text("utf-8"))["members"]
+    assert sorted(members) == [MONITOR_MEMBER], (
+        f"{DAG_SCOPE_GRAPH} declares the members {sorted(members)}; the monitor is the one "
+        "observer member, and it writes the progress report its scheduled note times"
     )
 
 
@@ -389,6 +397,25 @@ def _of(events: list[Envelope], kind: str, member: str | None = None) -> list[En
     ]
 
 
+def _note_events(events: list[Envelope], kind: str) -> list[Envelope]:
+    """Every event of one kind about the `progress-report` note, in the order recorded."""
+    return [
+        event
+        for event in _of(events, kind)
+        if event.payload.get("scheduled_note") == PROGRESS_REPORT_NOTE
+    ]
+
+
+def _note_resets(events: list[Envelope]) -> list[Envelope]:
+    """Every restart of the `progress-report` clock that names a planner read as its cause."""
+    return [
+        event
+        for event in _note_events(events, "cron-reset")
+        if isinstance(cause := event.payload.get("cause"), dict)
+        and {key: cause.get(key) for key in PROGRESS_REPORT_RESET_ON} == PROGRESS_REPORT_RESET_ON
+    ]
+
+
 def _agent_turns(events: list[Envelope], member: str) -> list[Envelope]:
     """Every turn one member's agent side opened, which is what a paced turn is."""
     return [
@@ -457,20 +484,15 @@ def _ending(environment: dict[str, str]) -> Ending:
 def _evidenced(events: list[Envelope], readings: list[StatusReading]) -> bool:
     """Whether the record already carries what the run is held open to show.
 
-    `RELEASE_AT_HOLD` holds opened, the pacemaker fired inside a completed one, and a
-    `just status` read wholly inside one. Each lands wherever the host's load puts the
-    turns around it — the pacemaker's firing is its own turn plus its period, which a
-    loaded host stretched to twenty seconds and more — so the run is kept open until each
-    has happened rather than for a time in which each usually does.
+    `RELEASE_AT_HOLD` holds opened, the progress-report clock restarted by the surface
+    read, and a `just status` read wholly inside one hold. Each lands wherever the host's
+    load puts the turns around it, so the run is kept open until each has happened rather
+    than for a time in which each usually does.
     """
     holds = _holds(events)
     return (
         len(_judge_closes(events, MONITOR_MEMBER)) >= RELEASE_AT_HOLD
-        and any(
-            hold.covers(firing.at)
-            for hold in holds
-            for firing in _of(events, "cron-fired", PACEMAKER_MEMBER)
-        )
+        and bool(_note_resets(events))
         and any(
             hold.covers(one.began) and hold.covers(one.ended) for hold in holds for one in readings
         )
@@ -559,10 +581,10 @@ CONSUMED_SURFACE = "a planner-visible update, raised so that reading it resets a
 def _a_surface_raised_and_consumed(environment: dict[str, str]) -> bool:
     """Raise one surface on the live run and read it through the planner's own recipe.
 
-    Reading a surface is what restarts a resettable member's clock — the engine resets
-    every member the run's observer graph declares `resettable` — so this is what makes
-    the graph record which of its members the launched document declared resettable.
-    `False` until the run exists to raise on.
+    Reading a surface journals `planner-surfaced`, which the observer graph follows on
+    the run's journal, and the `progress-report` note's `reset_on` matches it — so this is
+    what makes the graph record which of its clocks a read restarts. `False` until the run
+    exists to raise on.
     """
     raised = subprocess.run(
         [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "surface", "--kind", "check-in"]
@@ -643,7 +665,7 @@ class Paced(NamedTuple):
 
 
 def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
-    """Launch a one-node run under the shipped observer graph, with both periods small.
+    """Launch a one-node run under the shipped observer graph, with the hold small.
 
     Everything between `just orchestrate` and the model is real: the driver, the observer
     graph, `oneagentgraph`, the onejudge conversation and its channel-served judge side.
@@ -688,8 +710,6 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
                 project_from_plan(plan),
                 "--set",
                 f"members.{MONITOR_MEMBER}.schedule.every={PACED_HOLD_SECONDS}",
-                "--set",
-                f"members.{PACEMAKER_MEMBER}.schedule.every={PACED_PACEMAKER_SECONDS}",
             ],
             cwd=REPO_ROOT,
             env=environment,
@@ -759,11 +779,9 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
     * the run is watched through the hold: the graph does not settle, the member's own
       heartbeat lands inside every hold long enough to contain one, and `just status`
       read inside one reports neither `OBSERVER DEAD` nor `OBSERVER NOT RESTARTED`;
-    * the pacemaker fires inside a hold and the graph survives it, taking another monitor
-      turn afterwards;
-    * reading a planner surface restarts the pacemaker's clock and no other member's,
-      because the pacemaker is the one member the launched document declares
-      `resettable`;
+    * reading a planner surface restarts the progress-report note's clock, the one clock
+      the launched document gives a `reset_on`, and no other — the monitor's hold among
+      them;
     * the observer ends when the run settles rather than when the hold would have: the
       driver asks the graph to stop and its process is gone by the time the launch
       returns, with the monitor's schedule never firing after a hold that opened once
@@ -773,8 +791,9 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
     Reverting the document's `schedule` fails before any of it: `--set
     members.monitor.schedule.every` on a member with no schedule is refused by the reader
     (`this graph has no schedule`), the launch attaches no observer, and the graph records
-    nothing for the run. Reverting `background: false` fails at the reader too, because
-    the pacemaker's deferred first turn then has nothing to hold the run open for it.
+    nothing for the run. Reverting `background: false` makes the monitor a background
+    conversation that ends at quiescence after the wave's turn, so the turns counted
+    below never come.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -879,31 +898,22 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
             f"what a paced watch must never look like from outside:\n{reading.said}"
         )
 
-    fired = _of(events, "cron-fired", PACEMAKER_MEMBER)
-    fired_inside = [firing for firing in fired if any(hold.covers(firing.at) for hold in holds)]
-    assert fired_inside, (
-        f"the `{PACEMAKER_MEMBER}` member never fired inside a monitor hold "
-        f"({[firing.at.isoformat() for firing in fired]} against {holds}), so nothing here "
-        f"shows a background member firing while a foreground one holds the run open:\n"
-        f"{paced.printed}"
-    )
-    assert any(turn.at > fired_inside[0].at for turn in turns), (
-        f"the monitor took no turn after the pacemaker fired at {fired_inside[0].at}, so "
-        f"the firing may have ended the graph:\n{paced.printed}"
-    )
-
-    # The pacemaker is the graph's one resettable member, read back off this launch: the
-    # surface read during it restarted the pacemaker's clock and nobody else's.
-    assert _of(events, "cron-reset", PACEMAKER_MEMBER), (
-        f"reading a surface restarted no clock of the `{PACEMAKER_MEMBER}` member, so the "
-        f"launched document did not declare it resettable:\n{paced.printed}"
+    # The progress-report note's clock is the graph's one clock a read restarts, read back
+    # off this launch: the surface read during it restarted that clock, naming the read as
+    # its cause, and restarted no other — the monitor's hold included.
+    resets = _note_resets(events)
+    assert resets, (
+        f"reading a surface restarted no `{PROGRESS_REPORT_NOTE}` clock, so the launched "
+        f"document's `reset_on` does not follow the run's journal:\n{paced.printed}"
     )
     reset_others = [
-        event for event in _of(events, "cron-reset") if event.member != PACEMAKER_MEMBER
+        event
+        for event in _of(events, "cron-reset")
+        if event.payload.get("scheduled_note") != PROGRESS_REPORT_NOTE
     ]
     assert not reset_others, (
-        f"reading a surface restarted the clock of {[e.member for e in reset_others]}, "
-        f"which the launched document declares resettable beside the pacemaker"
+        f"reading a surface restarted {[e.payload for e in reset_others]}, a clock the "
+        f"launched document gives no `reset_on` beside the {PROGRESS_REPORT_NOTE} note"
     )
 
     # The driver's closeout is on the run's record: it fired the run-end hook, which it
@@ -1020,3 +1030,464 @@ def test_the_write_up_quotes_the_refusal_the_reader_actually_prints(tmp_path: Pa
     assert quoted in refused.said, (
         f"{FINDING_DOCUMENT} quotes a refusal the pinned reader no longer prints:\n{refused.said}"
     )
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task that moved the
+# progress report onto the monitor's scheduled note requires these journeys to extend this
+# module's launches rather than add a parallel launch suite, and they replace three launches
+# the retired reporting member's journeys spent (its own prompt probe, its channel-access
+# run and its placeholder probe). Which Nx project owns `tests/e2e` is a property of that
+# tree, as the paced journey above records for the same rule, and re-homing the launch
+# journeys into a project of their own is enforcement configuration this change may not
+# move in order to pass.
+#: The run a launch naming no override starts, and what it reads back.
+UNPACED_RUN = "observer-shipped-cadence"
+
+
+def _shipped_note(document: dict[str, object]) -> dict[str, object]:
+    """The `progress-report` note of a graph document's monitor, as that document states it."""
+    members = document.get("members")
+    assert isinstance(members, dict), document
+    monitor = members.get(MONITOR_MEMBER)
+    assert isinstance(monitor, dict), members
+    notes = monitor.get("scheduled_notes")
+    assert isinstance(notes, list), (
+        f"the `{MONITOR_MEMBER}` member declares no `scheduled_notes`, so nothing times the "
+        f"run's progress report: {monitor}"
+    )
+    named = [
+        note for note in notes if isinstance(note, dict) and note.get("id") == PROGRESS_REPORT_NOTE
+    ]
+    assert len(named) == 1, f"the monitor declares no one `{PROGRESS_REPORT_NOTE}` note: {notes}"
+    return named[0]
+
+
+#: A line of the shipped note's own text, which is how the stand-in monitor knows the turn
+#: it is answering carries that note rather than an ordinary instruction.
+NOTE_MARKER = str(
+    _shipped_note(yaml.safe_load((REPO_ROOT / DAG_SCOPE_GRAPH).read_text("utf-8")))["text"]
+).splitlines()[0]
+
+
+@pytest.mark.xdist_group("observer-graph-liveness")
+def test_a_launch_naming_no_override_gives_the_observer_the_shipped_note_cadence(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """What a real launch hands its observer graph is the monitor alone, on the shipped cadence.
+
+    Read off what the run itself recorded rather than off the file in this tree: the
+    engine's launch record names the graph document the observer was started on and the
+    overrides it was given, and the observer's own record names the document it read and
+    the members it declared. With no override recorded, that document's `progress-report`
+    note is exactly the configuration the monitor's clock runs on — so a shipped cadence of
+    anything but thirty minutes fails here even though every compressed journey passes.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    environment = _launched_environment(tmp_path, oneharness_bin)
+    state = tmp_path / "graph-state"
+    environment[GRAPH_STATE_ENV] = str(state)
+    plan = tmp_path / "unpaced.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "name": UNPACED_RUN,
+                "tasks": [_node(id="settles")],
+            }
+        ),
+        encoding="utf-8",
+    )
+    try:
+        launched = subprocess.run(
+            ["just", "orchestrate", project_from_plan(plan)],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(300),
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    finally:
+        subprocess.run(
+            ["just", "stop", UNPACED_RUN],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+
+    # llmlint: ignore-block[tests_mirror_real_usage] No view renders the observer graph's
+    # document or its overrides; the run's launch record and the graph's own run record
+    # are the two places what the observer was given is kept.
+    record = json.loads(
+        (Path(environment["ONEPIPELINE_RUNS_DIR"]) / UNPACED_RUN / "launch.json").read_text("utf-8")
+    )
+    given = Path(str(record.get("graph")))
+    assert given == REPO_ROOT / DAG_SCOPE_GRAPH, (
+        f"the launch handed its observer {given}, not this checkout's {DAG_SCOPE_GRAPH}"
+    )
+    assert not record.get("dag_sets"), (
+        f"a launch naming no override recorded observer overrides {record.get('dag_sets')}"
+    )
+    graphs = sorted(state.glob("dag-scope-*/record.json"))
+    assert len(graphs) == 1, f"expected one observer graph under {state}: {graphs}"
+    observed = json.loads(graphs[0].read_text("utf-8"))
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    assert Path(str(observed.get("graph"))) == given, observed
+    assert observed.get("declared_members") == [MONITOR_MEMBER], (
+        f"the launched observer graph declared {observed.get('declared_members')}; the "
+        f"`{MONITOR_MEMBER}` is its one member and writes the progress report itself"
+    )
+    started = _of(_graph_events(state), "graph-started")
+    assert [Path(str(one.payload.get("graph"))) for one in started] == [given], started
+
+    note = _shipped_note(yaml.safe_load(given.read_text("utf-8")))
+    assert note.get("every") == PROGRESS_REPORT_EVERY_SECONDS, note
+    assert note.get("start_after") == PROGRESS_REPORT_START_AFTER_SECONDS, note
+    assert note.get("addressee") == PROGRESS_REPORT_ADDRESSEE, note
+    reset_on = note.get("reset_on")
+    assert isinstance(reset_on, dict) and PROGRESS_REPORT_RESET_ON in reset_on.get("include", []), (
+        f"the note's clock is not restarted by a planner read: {reset_on}"
+    )
+
+
+#: The note's compressed cadence on the journeys below, overridden on the launch the
+#: published way: short enough that it fires several times inside a minute's run, and
+#: long enough that a stand-in turn answering it ends well inside one span.
+NOTE_SPAN_SECONDS = 8
+
+#: How far past its span a firing may land and still be the span's: the clock counts
+#: whole seconds on a host also running dispatches, so a span is asserted near its value
+#: rather than exactly at it.
+NOTE_SPAN_SLACK_SECONDS = NOTE_SPAN_SECONDS / 2
+
+#: How many notes a run nobody reads has to have been given before its worker is let go.
+NOTES_BEFORE_RELEASE = 2
+
+
+class Noted(NamedTuple):
+    """One launch with the note's cadence compressed, and what it recorded."""
+
+    events: list[Envelope]
+    #: When each progress report reached the run's queue.
+    reports: list[datetime]
+    #: When the journey read a surface through the channel recipe, or `None` if it read none.
+    read_at: datetime | None
+    #: The monitor's agent turns, as the stand-in model was handed them.
+    prompts: list[str]
+    status: int
+    printed: str
+
+
+#: The line the planner's own view renders a queued progress report on: the event's stamp,
+#: the run's column, then the surface's kind and the stand-in's text.
+REPORT_QUEUED_LINE = re.compile(
+    rf"^(?P<at>\S+)\s+graph:-\s+planner-surface-queued "
+    rf'kind="{re.escape(PROGRESS_REPORT_KIND)}" message="{re.escape(PROGRESS_REPORT)}"',
+    re.MULTILINE,
+)
+
+
+def _reports_raised(environment: dict[str, str], run: str) -> list[datetime]:
+    """When each progress report reached the run's queue, off the planner's own view.
+
+    Read through `just monitor`, which renders what was queued and claims nothing — the
+    queue itself keeps only the latest waiting `check-in`, so it cannot count them — and
+    which a manager reads to see the same thing.
+    """
+    rendered = subprocess.run(
+        ["just", "monitor", run],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    if rendered.returncode != 0:
+        return []
+    return [_instant(line.group("at")) for line in REPORT_QUEUED_LINE.finditer(rendered.stdout)]
+
+
+def _noted_evidence(events: list[Envelope], read_at: datetime | None, reports: int) -> bool:
+    """Whether the live record already shows what the run is held open to show.
+
+    Unread, that is the note given `NOTES_BEFORE_RELEASE` times and as many reports
+    raised. Read, it is the clock restarted by the read, its next firing, and a note
+    admitted after it — the whole window the journey asserts on, closed.
+    """
+    admitted = _note_events(events, "note-admitted")
+    if read_at is None:
+        return len(admitted) >= NOTES_BEFORE_RELEASE and reports >= NOTES_BEFORE_RELEASE
+    resets = [reset for reset in _note_resets(events) if reset.at >= read_at]
+    if not resets:
+        return False
+    fired = [one for one in _note_events(events, "cron-fired") if one.at > resets[0].at]
+    return bool(fired) and any(note.at >= fired[0].at for note in admitted)
+
+
+def _noted_launch(tmp_path: Path, oneharness_bin: str, run: str, *, reads: bool) -> Noted:
+    """Launch a one-node run under the shipped observer graph, its note's cadence compressed.
+
+    The worker is held so the run outlasts several spans; the monitor's own words are
+    scripted quiet, and a turn carrying the note raises the progress report through the
+    persona's own verb. `reads` has the journey read one surface through `just
+    channel-next` as soon as the run can be read, as a manager would; otherwise nothing
+    here reads the run's channel at all.
+    """
+    environment = _launched_environment(tmp_path, oneharness_bin)
+    # llmlint: ignore[e2e_not_mocked] Only the paid model's words are scripted.
+    environment[OBSERVER_ANSWER_ENV] = SAID_ON_A_QUIET_TURN
+    environment[OBSERVER_MEMBER_ENV] = MONITOR_MEMBER
+    environment[OBSERVER_REPORTS_ON_ENV] = NOTE_MARKER
+    gate = tmp_path / "turn-gate"
+    gate.mkdir()
+    environment[TURN_GATE_ENV] = str(gate)
+    state = tmp_path / "graph-state"
+    environment[GRAPH_STATE_ENV] = str(state)
+    prompt_log = tmp_path / "prompts.jsonl"
+    environment[PROMPT_LOG_ENV] = str(prompt_log)
+    plan = tmp_path / "noted.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "name": run,
+                "goal": {"text": "prove the progress report is timed by its note"},
+                "tasks": [_node(id=HELD_NODE)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    note = f"members.{MONITOR_MEMBER}.scheduled_notes.{PROGRESS_REPORT_NOTE}"
+    printed = tmp_path / "launch.log"
+    read_at: datetime | None = None
+    with printed.open("w", encoding="utf-8") as streaming:
+        launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+            [
+                "just",
+                "orchestrate",
+                project_from_plan(plan),
+                "--set",
+                f"{note}.every={NOTE_SPAN_SECONDS}",
+                "--set",
+                f"{note}.start_after={NOTE_SPAN_SECONDS}",
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            stdout=streaming,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            # Inside the stand-in's own gate ceiling, so a run that never shows what it is
+            # held for is let go and settles, and fails on the assertion naming what is
+            # missing rather than on a worker the gate gave up on.
+            deadline = time.monotonic() + min(
+                e2e_timeout(RELEASE_CEILING_SECONDS), TURN_GATE_CEILING_SECONDS / 2
+            )
+            while launch.poll() is None and time.monotonic() < deadline:
+                if (
+                    reads
+                    and read_at is None
+                    and _a_surface_raised_and_consumed_on(environment, run)
+                ):
+                    read_at = datetime.now(UTC)
+                reports = len(_reports_raised(environment, run))
+                if _noted_evidence(_graph_events(state, live=True), read_at, reports):
+                    break
+                time.sleep(0.5)
+            (gate / TURN_GATE_RELEASED).touch()
+            status = launch.wait(timeout=e2e_timeout(300))
+            reports = _reports_raised(environment, run)
+        finally:
+            (gate / TURN_GATE_RELEASED).touch()
+            launch.kill()
+            launch.wait(timeout=e2e_timeout(60))
+            subprocess.run(
+                ["just", "stop", run],
+                cwd=REPO_ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                timeout=e2e_timeout(60),
+                check=False,
+            )
+    # llmlint: ignore[tests_mirror_real_usage] No view carries the prompt a turn was handed.
+    recorded = [json.loads(line) for line in prompt_log.read_text("utf-8").splitlines()]
+    return Noted(
+        events=_graph_events(state),
+        reports=reports,
+        read_at=read_at,
+        prompts=[
+            str(turn["prompt"])
+            for turn in recorded
+            if f"/members/{MONITOR_MEMBER}/" in str(turn.get("config") or "")
+        ],
+        status=status,
+        printed=printed.read_text("utf-8"),
+    )
+
+
+def _a_surface_raised_and_consumed_on(environment: dict[str, str], run: str) -> bool:
+    """Raise one surface on `run` and read it through `just channel-next`, as a manager does."""
+    raised = subprocess.run(
+        [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "surface", "--kind", "finding"]
+        + [run],
+        cwd=REPO_ROOT,
+        env=environment,
+        input=CONSUMED_SURFACE,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    if raised.returncode != 0:
+        return False
+    read = subprocess.run(
+        ["just", "channel-next", run],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert read.returncode == 0, read.stderr
+    return True
+
+
+@pytest.mark.xdist_group("observer-graph-liveness")
+def test_a_run_nobody_reads_gets_one_progress_report_per_span(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The note reaches the monitor once per span, and each one raises exactly one report.
+
+    Nothing here reads the run's channel, so nothing restarts the clock: the note is
+    admitted into the monitor's conversation at its first span and once per span after,
+    each copy naming the note, each taken by a turn, and each turn that carried it raising
+    one `check-in` surface — the report a manager who had read nothing would be handed.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    noted = _noted_launch(tmp_path, oneharness_bin, "observer-progress-unread", reads=False)
+    events = noted.events
+
+    assert not _note_events(events, "cron-reset"), (
+        f"the {PROGRESS_REPORT_NOTE} clock restarted in a run nobody read:\n{noted.printed}"
+    )
+    admitted = _note_events(events, "note-admitted")
+    assert len(admitted) >= NOTES_BEFORE_RELEASE, (
+        f"the {PROGRESS_REPORT_NOTE} note was admitted {len(admitted)} time(s) in a run held "
+        f"for {NOTES_BEFORE_RELEASE} spans of {NOTE_SPAN_SECONDS}s:\n{noted.printed}"
+    )
+    assert all(one.member == MONITOR_MEMBER for one in admitted), admitted
+    assert all(one.payload.get("addressee") == PROGRESS_REPORT_ADDRESSEE for one in admitted), (
+        admitted
+    )
+    started = _of(events, "graph-started")[0].at
+    first = (admitted[0].at - started).total_seconds()
+    assert first >= NOTE_SPAN_SECONDS - CLOCK_GRANULARITY_SECONDS, (
+        f"the first note was admitted {first:.2f}s after the graph started, inside its "
+        f"{NOTE_SPAN_SECONDS}s `start_after`"
+    )
+    spans = [
+        (later.at - earlier.at).total_seconds()
+        for earlier, later in zip(admitted, admitted[1:], strict=False)
+    ]
+    assert all(
+        NOTE_SPAN_SECONDS - CLOCK_GRANULARITY_SECONDS
+        <= span
+        <= NOTE_SPAN_SECONDS + NOTE_SPAN_SLACK_SECONDS
+        for span in spans
+    ), f"consecutive notes were admitted {spans}s apart against a {NOTE_SPAN_SECONDS}s span"
+
+    # Every admitted copy reached a turn. The delivery is the `turn-interrupted` naming the
+    # offer its `note-admitted` named — the offer is what ties a delivery to the note,
+    # because the delivery itself names no note on the adopted release — taken `queued`
+    # into the monitor's next turn. Only the last copy may still be untaken, admitted as
+    # the run was ending.
+    deliveries = {
+        str(event.payload.get("offer")): event
+        for event in _of(events, "turn-interrupted", MONITOR_MEMBER)
+    }
+    taken = [one for one in admitted if str(one.payload.get("offer")) in deliveries]
+    assert [one.payload.get("offer") for one in taken] == [
+        one.payload.get("offer") for one in admitted[: len(taken)]
+    ] and len(taken) >= len(admitted) - 1, (
+        f"of the copies {[one.payload.get('offer') for one in admitted]} only "
+        f"{[one.payload.get('offer') for one in taken]} reached a turn"
+    )
+    for one in taken:
+        delivery = deliveries[str(one.payload.get("offer"))]
+        assert delivery.at >= one.at, (one, delivery)
+        assert delivery.payload.get("delivered") is True, delivery
+        assert delivery.payload.get("accepted") == "queued", delivery
+        assert (
+            delivery.payload.get("scheduled_note", PROGRESS_REPORT_NOTE) == PROGRESS_REPORT_NOTE
+        ), delivery
+    carried = [prompt for prompt in noted.prompts if NOTE_MARKER in prompt]
+    assert len(carried) == len(taken), (
+        f"{len(taken)} note(s) reached the monitor and {len(carried)} of its turns carried "
+        "the note's text"
+    )
+    assert len(noted.reports) == len(carried), (
+        f"{len(carried)} turn(s) carried the note and {len(noted.reports)} progress "
+        f"report(s) reached the run's queue; each note is one report:\n{noted.printed}"
+    )
+    assert noted.status == 0, noted.printed
+
+
+@pytest.mark.xdist_group("observer-graph-liveness")
+def test_reading_a_surface_restarts_the_progress_report_clock(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A surface the manager reads restarts the note's clock, and no note comes before it fires.
+
+    The read goes through `just channel-next`, which journals `planner-surfaced`; the
+    observer graph follows the run's journal, and the note's `reset_on` names that kind.
+    So the graph's stream carries the restart with the read as its cause, and from the
+    read to the clock's next firing — a whole span later — the monitor is offered no
+    note, which is a manager who has just read an update hearing nothing more until a
+    span has passed with nothing read.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    noted = _noted_launch(tmp_path, oneharness_bin, "observer-progress-read", reads=True)
+    assert noted.read_at is not None, f"the journey never read a surface:\n{noted.printed}"
+    events = noted.events
+
+    resets = _note_resets(events)
+    after = [reset for reset in resets if reset.at >= noted.read_at - timedelta(seconds=1)]
+    assert after, (
+        f"no `cron-reset` of the {PROGRESS_REPORT_NOTE} clock names `planner-surfaced` as its "
+        f"cause after the read at {noted.read_at.isoformat()}: "
+        f"{[(one.at.isoformat(), one.payload) for one in _note_events(events, 'cron-reset')]}"
+    )
+    reset = after[0]
+    fired = [one for one in _note_events(events, "cron-fired") if one.at > reset.at]
+    assert fired, f"the {PROGRESS_REPORT_NOTE} clock never fired after the read:\n{noted.printed}"
+    span = (fired[0].at - reset.at).total_seconds()
+    assert span >= NOTE_SPAN_SECONDS - CLOCK_GRANULARITY_SECONDS, (
+        f"the clock fired {span:.2f}s after the read restarted it, inside its "
+        f"{NOTE_SPAN_SECONDS}s span"
+    )
+    admitted = _note_events(events, "note-admitted")
+    early = [one.at.isoformat() for one in admitted if reset.at < one.at < fired[0].at]
+    assert not early, (
+        f"the {PROGRESS_REPORT_NOTE} note was admitted at {early}, between the read's restart "
+        f"at {reset.at.isoformat()} and the clock's next firing at {fired[0].at.isoformat()}"
+    )
+    assert any(one.at >= fired[0].at for one in admitted), (
+        f"no note was admitted once the clock fired again, so nothing here shows the clock "
+        f"still runs after a read:\n{noted.printed}"
+    )
+    assert noted.status == 0, noted.printed
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

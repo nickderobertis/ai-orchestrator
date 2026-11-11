@@ -200,7 +200,7 @@ def live_run(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     ever waiting, and a watch that returns on its first pass is never silent long enough
     to write a heartbeat. So this launches one.
 
-    `--dag-graph off` deliberately: with no monitor and no pacemaker the only surface
+    `--dag-graph off` deliberately: with no monitor the only surface
     this run can raise is the worker's own question, which is what lets the journeys
     below read the unread count as a number rather than as whatever a supervisory member
     happened to say. The question is put through the real `scripts/ask-manager.sh` from

@@ -339,8 +339,9 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   every change to a remote or a base goes through it. `config/onevcs.version` governs
   the CLI the manager verbs run; a dispatch publishes through the copy the engine
   links. `onevcs --help`; https://github.com/nickderobertis/onevcs.
-- **`oneagentgraph`** — agent graphs: the observer graph's monitor and pacemaker
-  members, the drafting and design-document graphs under `graphs/`, and the built-in
+- **`oneagentgraph`** — agent graphs: the observer graph's monitor member and the
+  scheduled note that times its progress report, the drafting and design-document graphs
+  under `graphs/`, and the built-in
   roles a bare `persona` resolves to. `config/oneagentgraph.version` governs the CLI that
   `just validate-personas` and a manager note's live delivery run. `oneagentgraph
   --help`; https://github.com/nickderobertis/oneagentgraph.
@@ -1149,8 +1150,8 @@ integration of finished work, and publication closeout. The monitor owns noticin
 applying a fix inside the allowlist its edit author is bounded to — `retry`, `requeue`,
 `cancel`, `finding` and `add`, the grants this host declares for the monitor's author in
 `config/onemessagebus.yaml` beside the reason each other op is refused; neither the bus
-nor the engine builds the monitor in. A finding it or the
-pacemaker calls a rule violation names the file and line the rule comes from, and its
+nor the engine builds the monitor in. A finding it calls a rule violation names the file
+and line the rule comes from, and its
 own supervisor sends an observation back until it is one. None of these roles authors
 target-project content.
 
@@ -1480,9 +1481,10 @@ turn that launched it, and with nothing watching, the user is in the dark. `just
 is the command — the engine's own `onepipeline watch` — and these properties are what
 watching means and what that verb is held to:
 
-The observer graph's `check-in` member in `graphs/dag-scope.yaml` raises a planner
-surface about every 30 minutes, on `start`'s `--heartbeat-interval`. Any planner surface
-ends a watch: the normal wake is the run's own observer update. This host sets
+The observer graph's `monitor` in `graphs/dag-scope.yaml` raises a plain-language progress
+report, a `check-in` surface, when its scheduled `progress-report` note arrives: after 30
+minutes in which no update from the run was read, each read restarting that clock. Any
+planner surface ends a watch: the normal wake is the run's own observer update. This host sets
 `ONEPIPELINE_WAKE_BUDGET=2100`, with `--wake-budget 2100` on its Stop guard: the
 35-minute deadline is the fallback. An elapsed deadline whose summary says no planner
 surface arrived during the wait means the observer is missing or dead. Repair it;
@@ -1641,17 +1643,18 @@ read with `just channel-next --flow <ID>` and answered with `just channel-reply 
   default `live` note already interrupts the addressed party's turn, so a correction
   that cannot wait needs nothing more than the note.
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The 89/50/39 settlement count and the named journey are required content of the bullet below: they are the evidence a manager reads a hold against, and the adoption that paced the monitor holds this paragraph to carrying both. The block runs to the end of that bullet. -->
-- **A quiet monitor is a working monitor.** It reports through the `finding` op and
-  nothing else; the observer's `check-in` supplies the regular update even without a
-  finding. No planner surface during a 35-minute wait means the observer needs repair. Read the
+- **A quiet monitor is a working monitor.** It reports a finding through the `finding`
+  op and nothing else; its scheduled note supplies the regular progress report, a
+  `check-in` surface, even without a finding, and it does not restate what the engine
+  surfaces itself. No planner surface during a 35-minute wait means the observer needs repair. Read the
   run's own state for whether anything is watching: `OBSERVER DEAD` is the window
   before the driver relaunches the observer and may clear on its own; `OBSERVER NOT
   RESTARTED` is the driver having given up, and is yours to act on. The monitor is a
   **scheduled foreground conversation**: `graphs/dag-scope.yaml` holds it between
-  turns and declares it the member that keeps the observer graph alive, the pacemaker
-  firing inside those holds — a declaration now, where this host's 89 recorded
-  pacemaker settlements (50 beside a live conversation, 39 each taking a one-member
-  graph down) once stood behind the inference. A hold is not a death: the heartbeat
+  turns and declares it the member that keeps the observer graph alive, its scheduled
+  note ending a hold when it arrives — a declaration now, where this host's 89 recorded
+  settlements of a scheduled reporting member (50 beside a live conversation, 39 each
+  taking a one-member graph down) once stood behind the inference. A hold is not a death: the heartbeat
   continues through it, `just status` reports neither verdict above during one, and a
   `note` to the monitor ends the hold rather than waiting it out.
   `tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py` holds it.
@@ -1659,9 +1662,10 @@ read with `just channel-next --flow <ID>` and answered with `just channel-reply 
 - **A surface's text reaches the engine as bytes**, never as a command-line word,
   because bash substitutes backticks and `$(...)` inside double quotes and a finding
   that quotes a command then runs it.
-- **The pacemaker interval is set at launch only**, so relaunch rather than expect to
-  retune a live run; live edits belong to the `monitor` member and to you. The
-  monitor's hold is the same kind of setting: `--set
+- **The progress report's cadence is set at launch only** — `--set
+  members.monitor.scheduled_notes.progress-report.every=<seconds>` (and `.start_after`)
+  — so relaunch rather than expect to retune a live run; live edits belong to the
+  `monitor` member and to you. The monitor's hold is the same kind of setting: `--set
   members.monitor.schedule.every=<seconds>` on the launch, never an edit to the
   shipped document.
 
@@ -1740,7 +1744,7 @@ its intended order. **Every identity in every chain is spelled as a variant**, t
 `env_file` are declarable on a variant only, so a bare harness id in a chain is one
 candidate no per-identity environment rule reaches — the credential masks and the
 `XDG_RUNTIME_DIR` repoint, each explained beside its rule. `codex:primary`'s
-plan-store credential mask is the one no parent may hold, so each of the eleven roles that
+plan-store credential mask is the one no parent may hold, so each of the ten roles that
 masks either declares it. That variant deliberately declares no `unset_env` for `CODEX_HOME`,
 which is ambient configuration a developer may export and this is the identity that
 honours it; `tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` reads what a turn is handed
@@ -1758,10 +1762,6 @@ decision:
   per-turn deadline (`timeout = 0`), because it watches for the life of the run. Its
   judge side is the live manager, over `onemessagebus serve surfaces --codec monitor`, the
   binding this host declares in `config/onemessagebus.yaml`.
-- **Pacemaker side** — `oneharness.check-in.toml`: the monitor's routing verbatim with a
-  finite deadline, a separate file for that one reason — an unbounded deadline reaching
-  a scheduled member leaves a wedged turn alive forever, silently. Re-merging the two
-  is a regression.
 - **Drafting side** — `oneharness.pr-author.toml`: no judge side (the review is a JSON
   schema), a finite deadline because it sits between a finished branch and its
   publication, and `stream = false`, forced because a structured answer is validated

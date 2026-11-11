@@ -32,7 +32,6 @@
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/.gitignore",
       "{workspaceRoot}/onetaskgraph.yaml",
-      "{workspaceRoot}/oneharness.check-in.toml",
       "{workspaceRoot}/oneharness.pr-author.toml",
       "{workspaceRoot}/oneharness.review-reply.toml",
       "{workspaceRoot}/config/oneagentgraph.version",

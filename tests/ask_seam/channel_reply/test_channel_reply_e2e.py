@@ -248,7 +248,7 @@ def _launched(
     """Launch `tasks` as run `run` through the real `just orchestrate`, and hand it back.
 
     `--dag-graph off` deliberately: with this host's observer graph attached, the monitor
-    and the pacemaker raise surfaces of their own on the same channel, and what is pending
+    raises surfaces of its own on the same channel, and what is pending
     and what the journal records are part of the subject here.
     """
     plan = tmp_path / f"{run}.plan.json"
@@ -885,8 +885,8 @@ def test_an_author_the_configuration_does_not_declare_or_grant_is_refused(
 ) -> None:
     """Who may speak, and what each may ask for, is the recorded configuration's to say.
 
-    The pacemaker is declared nowhere in `config/onemessagebus.yaml`, so an envelope under
-    its name is refused for the author. The monitor is declared and is not granted
+    A `stranger` is declared nowhere in `config/onemessagebus.yaml`, so an envelope under
+    that name is refused for the author. The monitor is declared and is not granted
     `complete` or `withdraw-note`, so an envelope of its asking for either is refused for
     the op — the withdrawal with the reason the configuration declares for it. None appends
     anything or leaves a record in the run's journal.
@@ -898,7 +898,7 @@ def test_an_author_the_configuration_does_not_declare_or_grant_is_refused(
     undeclared = _refused(
         _send(
             replying,
-            {"version": 3, "author": "pacemaker", "commands": [_note(WORK_NODE, "hello")]},
+            {"version": 3, "author": "stranger", "commands": [_note(WORK_NODE, "hello")]},
         )
     )
     ungranted = _refused(
@@ -925,7 +925,7 @@ def test_an_author_the_configuration_does_not_declare_or_grant_is_refused(
         )
     )
 
-    assert "`pacemaker` is not declared" in undeclared, undeclared
+    assert "`stranger` is not declared" in undeclared, undeclared
     assert "'complete' is not an op the monitor may issue" in ungranted, ungranted
     declared = _monitor_refusal("withdraw-note")
     assert f"'withdraw-note' is not an op the monitor may issue: {declared}" in withdrawing, (

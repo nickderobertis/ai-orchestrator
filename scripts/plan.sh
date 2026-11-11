@@ -112,9 +112,9 @@
 # The journal, the ownership row, the planner surfaces, and the run's place in the DAG
 # UI are `onepipeline start`'s own — the ledger it writes and the channel it serves —
 # so this launch gets every one of them exactly as any other launch does, and an agent
-# graph produces none of them. What a dag-scope graph adds is the two observer members
-# and nothing else: the monitor that compares a run against its plan, and the
-# `check-in` pacemaker.
+# graph produces none of them. What a dag-scope graph adds is the observer member and
+# nothing else: the monitor that compares a run against its plan and reports its
+# progress.
 #
 # So this recipe launches on `--dag-graph off`, which is also `onepipeline start`'s
 # own shipped default and is named here to state the intent rather than to inherit

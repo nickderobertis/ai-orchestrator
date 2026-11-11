@@ -12,8 +12,7 @@ the role-specific parts live here.
 | Persona | Use it for |
 | --- | --- |
 | `planner` | Decomposing work into a dependency-ordered plan cut at contract seams, asking the manager at every fork and recording its exceptions, under a judge that holds the plan to the original goals (no implementation). |
-| `orchestrator` | Actively monitoring an executing tracked graph: judging observed activity against the plan, surfacing what it finds, and applying only unambiguous in-allowlist fixes. |
-| `check-in` | Synthesizing a read-only, durable-state-derived planner status update. |
+| `orchestrator` | Actively monitoring an executing tracked graph: judging observed activity against the plan, surfacing what it finds, applying only unambiguous in-allowlist fixes, and writing the run's plain-language progress report when its scheduled note asks. |
 | `docs-writer` | READMEs, reference docs, durable AGENTS.md notes. |
 | `researcher` | Answering questions with evidence cited from the actual source. |
 | `reviewer` | Reviewing and integrating several agents' independently produced work in a complex DAG. |
@@ -47,8 +46,8 @@ is for multi-agent integration, not ordinary review of one change.
 ### Which of these files a dispatch actually reads
 
 Only the ones a graph names **by path**. `graphs/dag-scope.yaml` points its
-`orchestrator` and `check-in` members at `../personas/orchestrator.yaml` and
-`../personas/check-in.yaml`, and those are the personas those members get.
+`monitor` member at `../personas/orchestrator.yaml`, and that is the persona that
+member gets.
 
 A plan node is different. Its `persona` is a **name**, and `onepipeline` hands that
 name to `oneagentgraph` as the node-scope worker's persona override, where a
@@ -56,10 +55,10 @@ built-in role of that name wins. `oneagentgraph` 0.4.2 ships exactly five:
 `docs-writer`, `engineer`, `planner`, `researcher`, and `reviewer`. This directory
 is not on the search path, so **any other name is taken as a path relative to
 `graphs/`** — which is why `crozier/crozier-corpus` fails a dispatch with `cannot
-read graphs/crozier/crozier-corpus`, and equally why `orchestrator` and `check-in`
-do. Those two are not built in and never were; `graphs/dag-scope.yaml` names them
-`../personas/orchestrator.yaml` and `../personas/check-in.yaml` for that reason, and
-naming either as a plan node's `persona` fails the same way `crozier/…` does.
+read graphs/crozier/crozier-corpus`, and equally why `orchestrator` does. It is not
+built in and never was; `graphs/dag-scope.yaml` names it
+`../personas/orchestrator.yaml` for that reason, and naming it as a plan node's
+`persona` fails the same way `crozier/…` does.
 `pr-author` and `review-reply` are refused earlier still and by name: `onepipeline`
 dispatches change request drafting and reply drafting under them, so a plan node's own
 worker may not run as either.
@@ -73,7 +72,7 @@ runs each:
 - A graph carrying its own `personas` catalog is refused when one of its files
   collides with a shipped name (`persona "engineer" names both …/engineer.yaml in
   this graph's catalog and one this crate ships`). Only those five collide;
-  `orchestrator`, `check-in`, `pr-author` and `review-reply` are accepted alongside the catalog
+  `orchestrator`, `pr-author` and `review-reply` are accepted alongside the catalog
   exactly as an invented name is, because nothing ships under them.
 - A plan node naming `persona: orchestrator` settles `failed
   (infrastructure-failure)` with `oneagentgraph: invalid config: cannot read
@@ -85,7 +84,7 @@ Three consequences. The first two were read by launching a plan whose two nodes 
 `engineer` and `reviewer` and reading the completion criterion each dispatch's supervisor
 was handed, on an earlier engine; that hand launch has not been repeated, so the
 `reviewer` quotation below is its reading. On the adopted release they are re-measured
-against onepipeline 0.105.0 and the oneagentgraph it links by the two journeys named
+against onepipeline 0.106.3 and the oneagentgraph it links by the two journeys named
 below, on the suite's real launch of an `engineer` node: the shipped set, and the
 shared bar in the criterion that node's supervisor was handed. Do **not** argue one of them forward from a source file that stayed
 byte-identical: the accounts that did named `src/agentgraph.rs` and `src/graph.rs`,
@@ -196,7 +195,7 @@ authoritative spec for all of it.
 Two different ones, and what they have to agree on is the persona **shape**.
 `just validate-personas` runs the oneagentgraph **CLI** that
 `config/oneagentgraph.version` pins; what reads a persona at **dispatch** is the
-oneagentgraph `onepipeline` links, which is `0.11.0` at onepipeline v0.105.0. Read that
+oneagentgraph `onepipeline` links, which is `0.11.4` at onepipeline v0.106.3. Read that
 from what the release *resolved*, never from its `Cargo.toml` requirement — that
 requirement is a caret one and permits versions the build did not resolve, so it is
 not evidence of what a dispatch reads. The installed binary is the source and
@@ -205,7 +204,7 @@ not evidence of what a dispatch reads. The installed binary is the source and
 its `sboms/` declaring one version per linked crate,
 and that gate reconciles this sentence against it on every gate run. So the two
 numbers agree today and do not have to: the pin names the same release, and the linked reader is
-0.11.0. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
+0.11.4. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
 separated them is how long a cancelled process tree is left before Windows ends its
 job, that a member whose tree cannot be found is not a member proven idle, and — in
 0.3.3 — the conversation label and the oneharness-session pointer a member's turns
@@ -242,7 +241,7 @@ does. That pair has been confused once already.
 That agreement is why the shape here moved in one change rather than two. The
 previous spelling put the role in a top-level `agent:` block, and 0.2.18 refused
 today's shape exactly as hard as the reverse: there is no alias, no flag, and no
-deprecation period in either direction. The pinned oneagentgraph 0.11.0 refuses the
+deprecation period in either direction. The pinned oneagentgraph 0.11.4 refuses the
 previous shape outright, naming the field to write instead:
 
 ```
@@ -254,11 +253,11 @@ as the top-level `system_prompt`, which is onejudge's own field for it. …
 
 So a split *across that break* — the CLI on one shape and the linked reader on the
 other — would certify files that produce no member at all, and `graphs/dag-scope.yaml` names
-`../personas/orchestrator.yaml` and `../personas/check-in.yaml` **by path**, so the
-monitor and the pacemaker are what a split would silently cost.
+`../personas/orchestrator.yaml` **by path**, so the monitor is what a split would
+silently cost.
 `tests/e2e/launch_monitor_observer/test_path_dispatched_personas_e2e.py` is what keeps that from being an
 argument: it runs each path-named persona through a real `oneagentgraph run` and
-fails if either stops loading.
+fails if one stops loading.
 
 ### The monitor's cadence
 
@@ -270,8 +269,10 @@ reads the detailed stream from the `-- cursor` resume line its previous turn's r
 with, rather than from a tail, because a fixed tail either misses most of what lands
 between paced turns or re-reads what the previous turn judged; it writes no file, since
 its working directory may be a checkout — and its `max_turns`
-derivation is restated at the paced rate where the value is declared. `check-in` keeps
-its resettable schedule and, being a scheduled member that declares nothing, is
-background: it fires inside the monitor's holds. `tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py`
-holds the arrangement, and the graph document says beside each member why it is
-foreground or not.
+derivation is restated at the paced rate where the value is declared. The progress
+report is timed by the same document rather than by a second member: a scheduled note,
+`progress-report`, is offered into this conversation after thirty minutes in which the
+planner read no update, and its clock restarts on every `planner-surfaced` in the run's
+journal; the persona says what the report is. `tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py`
+holds the arrangement, and the graph document says beside the member why it is
+foreground.

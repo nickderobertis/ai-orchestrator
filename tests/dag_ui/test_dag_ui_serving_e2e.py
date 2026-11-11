@@ -86,7 +86,10 @@ TIMELINE_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
 #: graph declarations name and from nothing built in, so a recorded run served without
 #: them has no lanes at all — and the runs above predate this host keeping those records
 #: beside them. So the journey writes each record `oneagentgraph` would have kept, its
-#: members read out of the document named here rather than restated: an observer graph
+#: members read out of the recorded runs rather than restated — what that graph run's own
+#: events name, else what the recorded runs of the same document name, else the document
+#: named here, since a document can since have moved on from the members it was recorded
+#: under: an observer graph
 #: under the id its launch record names as `graph_run`, a node graph under the stream its
 #: records were relayed on, and the derived monitor slice's observer under both, since the
 #: slice took its one turn from a run whose launch it did not keep.
@@ -115,7 +118,8 @@ RECORDED_RUN = RunId("orchestrator-gate-fix-findings-2")
 #: `pr-author` spans, and it settled, so it carries a `finished` phase and drops out
 #: of the listing. Several runs rather than one because none exhibits every kind.
 SETTLED_RUN = RunId("relink-race")
-#: A third, for the supervisory tier: its pacemaker completed a turn and settled, which
+#: A third, for the supervisory tier: its observer graph's single-sided reporting member,
+#: since retired from this host's graph, completed a turn and settled, which
 #: is what makes a `dispatch` span exist at all. Neither run above has one — a run whose
 #: observer never finished a turn records the members and no conversation.
 #:
@@ -453,8 +457,40 @@ def _declared_members(graph: str) -> list[str]:
 # fails each lane assertion below by name, so a drift in the shape fails here.
 # llmlint: ignore-block[tests_mirror_real_usage] Same site, same reason: there is no producer
 # interface that records a declaration for a graph run that already happened.
+def _recorded_members() -> dict[str, list[str]]:
+    """The members each recorded graph run's own events name, in the order first named."""
+    named: dict[str, list[str]] = {}
+    for journal in sorted(TIMELINE_RUNS.glob("*/events.jsonl")):
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            event = json.loads(line)
+            member = (event.get("labels") or {}).get("member")
+            stream = event.get("stream")
+            if isinstance(member, str) and isinstance(stream, str):
+                members = named.setdefault(stream, [])
+                if member not in members:
+                    members.append(member)
+    return named
+
+
+def _members_recorded_for(graph_run: str, recorded: dict[str, list[str]]) -> list[str]:
+    """What `graph_run` was recorded declaring, by the most specific record there is."""
+    if recorded.get(graph_run):
+        return sorted(recorded[graph_run])
+    graph = GRAPH_RUNS[graph_run]
+    siblings = sorted(
+        {
+            member
+            for other, document in GRAPH_RUNS.items()
+            if document == graph
+            for member in recorded.get(other, [])
+        }
+    )
+    return siblings or _declared_members(graph)
+
+
 def _graph_records(root: Path) -> Path:
     """One `record.json` per graph run in `GRAPH_RUNS`, as `oneagentgraph` keeps them."""
+    recorded = _recorded_members()
     for graph_run, graph in GRAPH_RUNS.items():
         (root / graph_run).mkdir(parents=True)
         record = {
@@ -464,7 +500,7 @@ def _graph_records(root: Path) -> Path:
             "name": graph_run.rsplit("-", 2)[0],
             "started_ms": 0,
             "members": {},
-            "declared_members": _declared_members(graph),
+            "declared_members": _members_recorded_for(graph_run, recorded),
             "refs": [],
             "events_path": str(root / graph_run / "events.jsonl"),
         }
@@ -702,9 +738,9 @@ def test_the_monitors_dispatch_is_labelled_by_its_own_member_name(served_recorde
     0.5.0 served this dispatch with a null `agent_role`, and 0.5.x through 0.8.x renamed it
     `orchestrator` out of a vocabulary the reader built in. From 0.9.0 the lane is the
     member's own name, read off the observer graph's declaration — so this host's
-    `monitor` is served as `monitor`. The pacemaker above proves the field is populated;
-    only this proves it is populated *per member*, which a reader distinguishing the
-    monitor from the pacemaker depends on.
+    `monitor` is served as `monitor`. The recorded reporting member above proves the field
+    is populated; only this proves it is populated *per member*, which a reader
+    distinguishing the monitor from another observer member depends on.
     """
     status, body, _ = served_recorded.get(f"/api/v2/runs/{SUPERVISING_RUN}/timeline?scope=run")
 

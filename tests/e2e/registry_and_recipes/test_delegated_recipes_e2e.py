@@ -2041,7 +2041,7 @@ def test_a_surface_with_no_text_is_read_from_stdin(
 
 
 def test_a_surface_with_nothing_to_say_is_refused(tmp_path: Path) -> None:
-    """An empty update would reset the planner's pacemaker while saying nothing."""
+    """An empty update would restart the progress report's clock while saying nothing."""
     checkout, trace = _checkout(tmp_path)
 
     result = _run(checkout, trace, "channel-surface", "run-1", stdin="   \n")

@@ -30,7 +30,6 @@
       "{workspaceRoot}/oneharness.identities.toml",
       "{workspaceRoot}/oneharness.dispatch.toml",
       "{workspaceRoot}/oneharness.judge.toml",
-      "{workspaceRoot}/oneharness.check-in.toml",
       "{workspaceRoot}/oneharness.pr-author.toml",
       "{workspaceRoot}/config/oneharness.version",
       "{workspaceRoot}/config/onejudge.base.yaml",

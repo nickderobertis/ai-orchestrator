@@ -91,8 +91,8 @@ def test_a_draft_renders_to_a_record_that_parses_back_to_it() -> None:
             'onepipeline monitor run-a --filter \'{"include":[{"member":"monitor"}]}\'',
         ),
         (
-            Author("pacemaker", None, "check-in"),
-            'onepipeline monitor run-a --filter \'{"include":[{"member":"check-in"}]}\'',
+            Author("pacemaker", None, "pacer"),
+            'onepipeline monitor run-a --filter \'{"include":[{"member":"pacer"}]}\'',
         ),
         (Author("manager", None, None), None),
     ],
@@ -513,6 +513,7 @@ def test_a_manager_draft_names_no_node_and_no_transcript(drafting: Path) -> None
     ("arguments", "prepare", "refusal"),
     [
         (["--as", "monitor"], None, "--as monitor needs --member"),
+        (["--as", "pacemaker", "--member", "pacer"], None, "--as monitor --member monitor"),
         ([], lambda m: m.delenv(drafts.RUN_ID_ENV), "no run can be named"),
         (["--title", " "], None, "the title is empty"),
         (["--repository", "nope"], None, "not a normalized origin"),
@@ -529,6 +530,7 @@ def test_a_manager_draft_names_no_node_and_no_transcript(drafting: Path) -> None
     ],
     ids=[
         "member",
+        "retired-kind",
         "run",
         "title",
         "repository",

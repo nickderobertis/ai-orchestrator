@@ -105,8 +105,8 @@ INHERITED_ENVIRONMENT = (
     "CODEX_SESSION_ID",
 )
 
-#: Launched settling and unwatched: no observer graph, because its monitor and pacemaker
-#: would raise surfaces of their own on the same channel, and no run-end hooks, because a
+#: Launched settling and unwatched: no observer graph, because its monitor
+#: would raise surfaces of its own on the same channel, and no run-end hooks, because a
 #: follow-up launch is not this journey's subject.
 SETTLES_UNWATCHED = ("--dag-graph", "off", "--success-hook=", "--failure-hook=")
 

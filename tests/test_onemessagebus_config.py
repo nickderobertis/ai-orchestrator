@@ -182,12 +182,12 @@ def test_the_monitor_is_refused_every_other_op_for_the_reason_the_bus_once_gave(
     passed = _bus("validate", "replies", config=CONFIG, channel=tmp_path, stdin=json.dumps(granted))
     assert passed.returncode == 0, passed.stderr
 
-    stranger = {**granted, "author": "pacemaker"}
+    stranger = {**granted, "author": "stranger"}
     unknown = _bus(
         "validate", "replies", config=CONFIG, channel=tmp_path, stdin=json.dumps(stranger)
     )
     assert unknown.returncode == 1, unknown.stdout
-    assert "the envelope's author `pacemaker` is not declared" in unknown.stderr, unknown.stderr
+    assert "the envelope's author `stranger` is not declared" in unknown.stderr, unknown.stderr
 
 
 #: The review loop's ops: what starts work on a reviewer's comment, answers it with a

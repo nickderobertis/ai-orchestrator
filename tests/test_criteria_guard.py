@@ -326,7 +326,7 @@ def test_a_bar_that_resolved_to_nothing_is_refused_rather_than_passing_everythin
         resolve_bar(None)
 
 
-@pytest.mark.parametrize("unshipped", ("orchestrator", "check-in", "pr-author", "no-such-role"))
+@pytest.mark.parametrize("unshipped", ("orchestrator", "pr-author", "no-such-role"))
 def test_a_name_that_is_neither_shipped_nor_a_path_is_refused(unshipped: str) -> None:
     """The refusal a dispatch would make, made before the dispatch is spent.
 

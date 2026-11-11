@@ -131,7 +131,7 @@ WORKER_MEMBER = "worker"
 MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 
 #: A sentence of the node's own task, so the dispatched prompt can be told from every
-#: other turn of the run — the monitor's, the pacemaker's, and each supervisor's.
+#: other turn of the run — the monitor's and each supervisor's.
 TASK_MARKER = "Report which scheduler picks the next runnable node."
 
 

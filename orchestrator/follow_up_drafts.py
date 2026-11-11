@@ -1,13 +1,13 @@
 """The one source of a drafted follow-up's shape: rendered, parsed, and validated here.
 
-A **draft** is an unverified follow-up — something a worker, the monitor, the pacemaker or
-the manager noticed and deliberately left out of scope — recorded as a `local-md` task in
+A **draft** is an unverified follow-up — something a worker, the monitor or the manager
+noticed and deliberately left out of scope — recorded as a `local-md` task in
 the `drafts` source, under a project of its own per run, so it outlives the worktree the
 noticing happened in. Nothing about a draft is verified: that is the follow-up agent's job
 after the run, and it reads every draft back through this module.
 
-**Three callers, one shape.** `scripts/follow-up-draft.sh` is what every dispatch, the
-monitor and the pacemaker run through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`; `just follow-up` is
+**Three callers, one shape.** `scripts/follow-up-draft.sh` is what every dispatch and the
+monitor run through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`; `just follow-up` is
 the manager's spelling of the same script; and the follow-up agent's recipe parses what
 they wrote with :func:`parse` or :func:`from_store_item`. So what a draft *is* — its path,
 its frontmatter, its body headings, the pointer back to the turns it came from — is decided
@@ -33,7 +33,7 @@ a node draft from it says `unresolved` and is still written.
   unresolved points at `onepipeline transcript <run>`, which reads every node that
   dispatched;
 - a dag-scope member records no transcript of its own — `transcript` refuses a member name
-  as a node the run has no records for — so a monitor or pacemaker draft points at the run's
+  as a node the run has no records for — so a member's draft points at the run's
   event stream narrowed to that member's `member` label, which the engine's filter grammar
   matches by exact equality: `onepipeline monitor <run> --filter
   '{"include":[{"member":"<member>"}]}'`.
@@ -112,13 +112,18 @@ EMPTY_SLUG = "follow-up"
 #: The level-2 headings a draft's body carries, in this order, each with content.
 HEADINGS = ("What happened", "Where", "Why it is out of scope", "Evidence")
 
-#: Who may write a draft. `node` is a dispatched worker; `monitor` and `pacemaker` are the
-#: dag-scope members that watch a run; `manager` is the session supervising it.
+#: Who wrote a draft. `node` is a dispatched worker; `monitor` is the dag-scope member that
+#: watches a run; `manager` is the session supervising it. `pacemaker` was a second dag-scope
+#: member, since retired: a draft it wrote is a stored shape a later follow-up run still
+#: reads and verifies, so it stays a kind, and only writing a new one is refused.
 Kind = Literal["node", "monitor", "pacemaker", "manager"]
 KINDS: tuple[Kind, ...] = get_args(Kind)
 
 #: The kinds that are a dag-scope member, and so name one.
 MEMBER_KINDS = ("monitor", "pacemaker")
+
+#: The kinds that are read and never written: their author no longer exists.
+RETIRED_KINDS = ("pacemaker",)
 
 #: What a node draft names when its process carries no node id from the engine.
 UNRESOLVED = "unresolved"
@@ -197,7 +202,7 @@ class Author:
     kind: Kind
     #: The node id for a `node` draft — or :data:`UNRESOLVED` — and `None` for every other.
     node: str | None
-    #: The dag-scope member for a `monitor` or `pacemaker` draft, and `None` for every other.
+    #: The dag-scope member for a member kind's draft, and `None` for every other.
     member: str | None
 
 
@@ -455,9 +460,7 @@ def _is_kind(kind: str) -> TypeGuard[Kind]:
 def checked_author(kind: str, node: str | None, member: str | None) -> Author:
     """``kind`` with the node and member that kind names, and nothing it does not."""
     if not _is_kind(kind):
-        raise Refused(
-            f"{kind!r} names no author kind; pass --as node, monitor, pacemaker or manager"
-        )
+        raise Refused(f"{kind!r} names no author kind; pass --as node, monitor or manager")
     checked_member(kind, member)
     # llmlint: ignore[boundary_inputs_validated] A node id's grammar is the engine's, and it
     # accepts `/` in lifecycle ids, so a character set spelled here would refuse real ids.
@@ -474,7 +477,7 @@ def checked_member(kind: Kind, member: str | None) -> None:
         if member is None:
             raise Refused(
                 f"--as {kind} needs --member naming the dag-scope member drafting it: "
-                "`monitor` for the monitor, `check-in` for the pacemaker"
+                "`monitor` for the monitor"
             )
         if not MEMBER_NAME.fullmatch(member):
             raise Refused(
@@ -484,7 +487,7 @@ def checked_member(kind: Kind, member: str | None) -> None:
     elif member is not None:
         raise Refused(
             f"--member names a dag-scope member, and --as {kind} is not one; drop --member, "
-            "or pass --as monitor or --as pacemaker"
+            "or pass --as monitor"
         )
 
 
@@ -896,8 +899,7 @@ project, and outlives the worktree you are in.
 Only a follow-up that can wait belongs here. Anything blocking — a decision fork, a
 constraint that cannot be met, a finding the manager should act on now — goes over the
 channel immediately instead, and is never drafted in its place: a worker asks through
-"$ORCHESTRATOR_ASK_MANAGER", the monitor raises a `finding`, and the pacemaker says it in
-its check-in update.
+"$ORCHESTRATOR_ASK_MANAGER", and the monitor raises a `finding`.
 
 The body is read from stdin, never from an argument, and carries these level-2 headings in
 this order, each with content:
@@ -915,7 +917,7 @@ rest from where it runs:
   author.kind         --as (default: node)
   author.node         for --as node, {NODE_ID_ENV}, the node the engine dispatched this
                       process as; `{UNRESOLVED}` when none
-  author.member       --member, for --as monitor and --as pacemaker
+  author.member       --member, for --as monitor
   dispatch.scratch    {NODE_SCRATCH_ENV}
   dispatch.session    {SESSION_ENV}
   dispatch.cwd        this process's working directory
@@ -928,7 +930,9 @@ On success it prints one line naming the draft's qualified id and its path, and 
 It refuses with exit {REFUSED}, writing nothing and naming what to do next, when no run can be
 named, the draft root is unset or unwritable, the title is empty or longer than
 {TITLE_LIMIT} characters, the repository is not a normalized origin, a heading is missing or
-empty, or --member does not agree with --as.
+empty, --member does not agree with --as, or --as names a retired author kind: --as
+pacemaker is read on drafts already written and never written again, and the monitor
+drafts with --as monitor --member monitor.
 """
 
 
@@ -956,12 +960,12 @@ def _parser() -> _Parser:
         dest="kind",
         choices=KINDS,
         default="node",
-        help="who is drafting: a dispatched node, the monitor, the pacemaker, or the manager",
+        help="who is drafting: a dispatched node, the monitor, or the manager",
     )
     parser.add_argument(
         "--member",
         metavar="NAME",
-        help="the dag-scope member drafting it; required for --as monitor and --as pacemaker",
+        help="the dag-scope member drafting it; required for --as monitor",
     )
     parser.add_argument(
         "--run", metavar="RUN-ID", help=f"the run it came from; default {RUN_ID_ENV}"
@@ -977,6 +981,12 @@ def prepare(arguments: argparse.Namespace, root_env: str) -> tuple[Draft, Path]:
     """
     kind: Kind = arguments.kind
     member: str | None = arguments.member
+    if kind in RETIRED_KINDS:
+        raise Refused(
+            f"--as {kind} is no longer written: the dag-scope member that drafted as it was "
+            "retired, and drafts it wrote are still read; the run's monitor drafts with "
+            "--as monitor --member monitor"
+        )
     checked_member(kind, member)
     run = arguments.run or os.environ.get(RUN_ID_ENV) or ""
     if not run:

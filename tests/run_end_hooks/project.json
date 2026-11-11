@@ -32,7 +32,6 @@
       "{workspaceRoot}/oneharness.toml",
       "{workspaceRoot}/oneharness.judge.toml",
       "{workspaceRoot}/oneharness.follow-up.toml",
-      "{workspaceRoot}/oneharness.check-in.toml",
       "{workspaceRoot}/oneharness.pr-author.toml",
       "{workspaceRoot}/oneharness.review-reply.toml",
       "{workspaceRoot}/config/oneagentgraph.version",

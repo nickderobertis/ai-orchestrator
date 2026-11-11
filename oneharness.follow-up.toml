@@ -38,9 +38,8 @@ extends = "oneharness.dispatch.toml"
 mode = "bypass"
 
 # A bounded job — read the drafts, verify each against the trees, write and copy the
-# tickets — whose size grows with the run's drafts, so two hours rather than the
-# pacemaker's four minutes: one verifying command may itself take the hour the command
-# ceiling below allows, and the turn needs room past it to set up and report.
+# tickets — whose size grows with the run's drafts, so two hours: one verifying command
+# may itself take the hour the command ceiling below allows, and the turn needs room past it to set up and report.
 timeout = 7200
 
 # Streamed, so the tool transcript reaches the views as it happens rather than after a

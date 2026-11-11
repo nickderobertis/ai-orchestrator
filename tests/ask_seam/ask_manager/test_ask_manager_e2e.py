@@ -177,7 +177,7 @@ def asked(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Asked]:
     """A launched run whose frontier is a human gate, so its channel outlives the launch.
 
     `--dag-graph off` deliberately: with this host's observer graph attached, the monitor
-    and the pacemaker raise surfaces of their own on the same channel, and a journey
+    raises surfaces of its own on the same channel, and a journey
     counting the questions one ask raised would be counting theirs too.
 
     The launch returns as soon as the gate is reached, which is what makes this cheap: the

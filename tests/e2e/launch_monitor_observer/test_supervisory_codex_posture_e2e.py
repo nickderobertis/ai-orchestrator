@@ -57,7 +57,6 @@ READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "WebFetch", "WebSearch"]
 CONNECTOR_ROLES = (
     "oneharness.judge.toml",
     "oneharness.orchestrator.toml",
-    "oneharness.check-in.toml",
     "oneharness.plan-review.toml",
     "oneharness.plan-review-whole.toml",
     "oneharness.pr-author.toml",

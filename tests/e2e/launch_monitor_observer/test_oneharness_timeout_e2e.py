@@ -3,11 +3,11 @@
 Two things are proven here against the real CLI. The first is oneharness's own
 process-tree termination, which only a real harness process can show. The second is
 this repository's per-member deadline seam: the monitor's agent side watches for as
-long as the run lasts inside one turn and must have NO deadline, while the
-`check-in` pacemaker beside it must keep one. Both are read from the effective
-configuration oneharness itself reports for the file `graphs/dag-scope.yaml` names,
-so a re-shared config or a dropped setting fails here rather than silently killing
-a watch at the pacemaker's deadline again.
+long as the run lasts inside one turn and must have NO deadline, while every
+single-sided member — the change-request drafter among them — must keep one. Each is
+read from the effective configuration oneharness itself reports for the file its graph
+names, so a re-shared config or a dropped setting fails here rather than silently
+killing a watch at another member's deadline again.
 
 The same read covers each side's **identity chain**, for the sides whose chain is the
 reason they have a config at all. `graphs/design-doc.yaml`'s two are that case: this
@@ -61,26 +61,18 @@ NODE_SCOPE_GRAPH = REPO_ROOT / "graphs" / "node-scope.yaml"
 #: that — so what it needs from its config is room to keep watching.
 MONITOR_MEMBER = "monitor"
 
-#: The pacemaker's per-turn deadline, asserted as the exact number
-#: `oneharness.check-in.toml` states. A real value rather than a range: the point of
-#: the seam is that this member has a *finite* deadline the monitor does not, and
-#: a bound that only had to be "some number" would pass just as well at the release
-#: default nobody chose. It is a wedged-turn backstop set clear of an honest survey,
-#: not a work budget — the file says why, and what it is not.
-PACEMAKER_DEADLINE_SECONDS = 240
-
-#: The drafting graph and its one member, whose config is the third copy of the
-#: supervisory routing. It is separate for the same reason the pacemaker's is: a
-#: drafter sits between a passed gate and a publication, so an unbounded turn would
-#: hold a verified branch unpublished for the life of the run.
+#: The drafting graph and its one member, whose config is a second copy of the
+#: supervisory routing. It is separate from the monitor's because a drafter sits between
+#: a passed gate and a publication, so an unbounded turn would hold a verified branch
+#: unpublished for the life of the run.
 PR_AUTHOR_GRAPH = REPO_ROOT / "graphs" / "pr-author.yaml"
 PR_AUTHOR_MEMBER = "pr-author"
 
-#: The drafter's per-turn deadline, as `oneharness.pr-author.toml` states it. Exact
-#: for the same reason the pacemaker's is: what matters is that it is *finite* and
-#: chosen, not that it is some number. Doubled when the drafter started from the
-#: worker's description and the worker's transcript rather than the diff alone; the
-#: measurement behind the number is beside it in that file.
+#: The drafter's per-turn deadline, as `oneharness.pr-author.toml` states it. A real value
+#: rather than a range: what matters is that it is *finite* and chosen, not that it is
+#: some number a release default nobody chose would also pass. Doubled when the drafter
+#: started from the worker's description and the worker's transcript rather than the
+#: diff alone; the measurement behind the number is beside it in that file.
 DRAFTER_DEADLINE_SECONDS = 600
 
 #: The reply-drafting graph and its one member, whose config is one more copy of the
@@ -170,9 +162,9 @@ SPIKE_BRIEF_MEMBER = "worker"
 SPIKE_BRIEF_DEADLINE_SECONDS = 300
 SPIKE_BRIEF_CHAIN = ["codex:primary", "codex:alternate"]
 
-#: The identity order every side resolves. Two orders cover thirteen of the fourteen configs:
+#: The identity order every side resolves. Two orders cover twelve of the thirteen configs:
 #: the worker, its board-live copy and the design-doc reviewer lead with the Claude
-#: subscriptions, every other side with Codex, and all thirteen name the same seven identities
+#: subscriptions, every other side with Codex, and all twelve name the same seven identities
 #: with the primary-backup Claude subscription immediately before the primary one, which is
 #: last everywhere. The spike brief is the one Codex-only chain, as its constant says.
 INTENDED_CHAINS = {
@@ -181,7 +173,6 @@ INTENDED_CHAINS = {
     "judge": DESIGN_DOC_WRITER_CHAIN,
     "llmlint": DESIGN_DOC_WRITER_CHAIN,
     "monitor": DESIGN_DOC_WRITER_CHAIN,
-    "pacemaker": DESIGN_DOC_WRITER_CHAIN,
     "drafter": DESIGN_DOC_WRITER_CHAIN,
     "reply drafter": DESIGN_DOC_WRITER_CHAIN,
     "reviewer": DESIGN_DOC_WRITER_CHAIN,
@@ -500,9 +491,8 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
 def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove all fourteen turn configs together from oneharness's effective values."""
+    """Prove all thirteen turn configs together from oneharness's effective values."""
     monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
-    pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
     drafter = _named_config(PR_AUTHOR_GRAPH, PR_AUTHOR_MEMBER, "oneharness_config")
     reply_drafter = _named_config(REVIEW_REPLY_GRAPH, REVIEW_REPLY_MEMBER, "oneharness_config")
     writer = _named_config(DESIGN_DOC_GRAPH, DESIGN_DOC_MEMBER, "agent.oneharness_config")
@@ -512,7 +502,6 @@ def test_every_side_resolves_its_intended_effective_deadline(
     follow_up = _named_config(FOLLOW_UP_GRAPH, FOLLOW_UP_MEMBER, "oneharness_config")
     own = {
         monitor,
-        pacemaker,
         drafter,
         reply_drafter,
         PLAN_REVIEW_CONFIG,
@@ -521,8 +510,8 @@ def test_every_side_resolves_its_intended_effective_deadline(
         design_doc_reviewer,
         follow_up,
     }
-    assert len(own) == 9, (
-        f"the monitor ({monitor}), the check-in pacemaker ({pacemaker}), the "
+    assert len(own) == 8, (
+        f"the monitor ({monitor}), the "
         f"pr-author drafter ({drafter}), the review-reply drafter ({reply_drafter}), the "
         f"plan reviewer ({PLAN_REVIEW_CONFIG}), the "
         f"whole-plan reviewer ({PLAN_REVIEW_WHOLE_CONFIG}), the "
@@ -538,7 +527,6 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "judge": _named_config(NODE_SCOPE_GRAPH, "worker", "judge.oneharness_config"),
         "llmlint": REPO_ROOT / "oneharness.llmlint.toml",
         "monitor": monitor,
-        "pacemaker": pacemaker,
         "drafter": drafter,
         "reply drafter": reply_drafter,
         "reviewer": PLAN_REVIEW_CONFIG,
@@ -623,13 +611,6 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "value": 0,
         "source": str(monitor),
     }, "the monitor's explicit timeout = 0 must continue to mean no deadline"
-    assert effective["pacemaker"]["timeout"] == {
-        "value": PACEMAKER_DEADLINE_SECONDS,
-        "source": str(pacemaker),
-    }, (
-        f"the check-in pacemaker must retain its explicit finite "
-        f"{PACEMAKER_DEADLINE_SECONDS}-second deadline"
-    )
     assert effective["drafter"]["timeout"] == {
         "value": DRAFTER_DEADLINE_SECONDS,
         "source": str(drafter),
@@ -848,21 +829,6 @@ def test_every_side_resolves_its_intended_effective_deadline(
             f"oneharness.board-live.toml's {identity} no longer masks the production Linear "
             "key, which only the board token was meant to be released from"
         )
-
-    # The split duplicated a routing, so hold the copy to one intended difference.
-    # Anything else that drifts here is a pacemaker quietly authenticating, billing,
-    # or reporting differently from the process it reports on.
-    differing = {
-        field
-        for field in _without_sources(effective["monitor"])
-        if field != "config_files"
-        and _without_sources(effective["monitor"])[field]
-        != _without_sources(effective["pacemaker"])[field]
-    }
-    assert differing == {"timeout"}, (
-        f"oneharness.check-in.toml must be oneharness.orchestrator.toml's routing with "
-        f"only the deadline changed; these also differ: {sorted(differing - {'timeout'})}"
-    )
 
 
 def test_only_a_plan_node_naming_it_reaches_the_board_live_config() -> None:

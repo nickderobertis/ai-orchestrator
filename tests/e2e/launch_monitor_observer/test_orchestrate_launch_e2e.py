@@ -156,20 +156,12 @@ DRAFTING_TASK_WITH_A_WORKER_START = (
     "ONEPIPELINE_RUNS_DIR in this dispatch's environment are what it reads.\n"
 )
 
-#: How often the launch tells the pacemaker to come due. Short enough that it comes
-#: due while this run is still going, which is the only state in which what it does
-#: with a turn can be observed at all.
-PACEMAKER_INTERVAL_SECONDS = 1
-
 #: The `graphs/dag-scope.yaml` member each recorded turn belongs to. `oneagentgraph`
 #: gives every member a scratch directory named after it and pins that member's
 #: harness configs inside it, so the `--config` the backend records is the attribution.
 #: Since onepipeline 0.3.1 both sides of a member carry one, so this names the member
 #: for either; which SIDE a turn is depends on the config's basename, not on having one.
 MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
-
-#: The pacemaker member, whose turn reports and never edits.
-PACEMAKER_MEMBER = "check-in"
 
 #: The probe that stands exactly where this host's monitor binding stands — as an observer
 #: member's `judge.command` — and writes out the environment it was started with, so the
@@ -195,58 +187,6 @@ THE_PLANNERS_RULING_WINS = "Where the two disagree the planner's wins"
 
 #: The run's active monitor, and the member whose judgment this graph exists for.
 MONITOR_MEMBER = "monitor"
-
-#: The one mutation the pacemaker's own `task` forbids by name. Live edits belong to
-#: the monitor, which stays for the run; this member takes one finitely deadlined turn
-#: and exits, so an edit it issued would be answered after it stopped watching.
-FORBIDDEN_OF_THE_PACEMAKER = "onepipeline reply"
-
-#: The bounded sequence the pacemaker's `task` prescribes, in the order it prescribes
-#: it: the one run's status, the run's drafts, one surface raised over stdin, exit. Under
-#: `oneharness.check-in.toml`'s finite deadline two recorded turns spent the whole budget
-#: discovering commands and searching the host instead, and were killed having raised
-#: nothing — so the order is the instruction, and it is held in order.
-PACEMAKER_SEQUENCE = (
-    "`onepipeline status <run-id>`",
-    "`onetaskgraph task list --source drafts --project <run-id> --json`",
-    "`onepipeline surface --kind check-in`",
-    "4. Exit.",
-)
-
-#: What that turn forbids by name, one entry per thing a recorded turn spent its
-#: deadline on: command discovery, a host-wide run listing, a recursive search.
-FORBIDDEN_OF_THE_PACEMAKER_TURN = (
-    ("command discovery", "Never discover commands: no `--help` walk, no `just --list`"),
-    (
-        "host-wide run listings",
-        "Never list runs host-wide: no bare `just runs`, no `onepipeline runs`",
-    ),
-    (
-        "recursive filesystem searches",
-        "Never search the filesystem recursively: no `rg`, no `grep -r`, no `find`",
-    ),
-)
-
-#: What the pacemaker does with a question the two readings leave open, so the bound
-#: above cannot be read as a licence to investigate once the readings run out.
-UNANSWERED_IS_REPORTED = "reported in the update as unanswered"
-
-
-def out_of_sequence(prose: str, sequence: tuple[str, ...]) -> str | None:
-    """The first step of ``sequence`` that ``prose`` omits or states out of order.
-
-    Each step is located at its first mention, because a step may be restated later
-    — the surface verb is, in the heredoc that shows its form — and the order under
-    test is the order the steps are first prescribed in.
-    """
-    reached = -1
-    for step in sequence:
-        found = prose.find(step)
-        if found <= reached:
-            return step
-        reached = found
-    return None
-
 
 #: The monitor's role, as `personas/orchestrator.yaml` states it. The composed task says
 #: only what the run is, so this is the only thing that says what the member is for.
@@ -426,19 +366,18 @@ def _environment(
 ) -> dict[str, str]:
     """The environment one launched run and its planner views share.
 
-    Three journeys here reach a **real** `oneharness`, and they are the three whose
-    member is single-sided `kind: oneharness`: the `graphs/pr-author.yaml` drafter both
-    `_drafted` journeys run, and the `oneharness.check-in.toml` probe
-    `test_the_graphs_declared_version_is_one_that_expands_the_task_placeholder` builds.
+    Two journeys here reach a **real** `oneharness`, and they are the two whose member is
+    single-sided `kind: oneharness`: the `graphs/pr-author.yaml` drafter both `_drafted`
+    journeys run.
     Since oneagentgraph 0.2.18 such a member runs its turn through the oneharness
     *library* on a thread of the graph process, so `ONEAGENTGRAPH_ONEHARNESS_BIN` never
     intercepts it and the real oneharness resolves each variant's indirection from this
     environment. Every other member here is two-party `kind: onejudge`, whose spawned
     CLI the fake backend replaces before any variant resolves — which is why the control
     case at `test_node_graph_uses_the_generic_base_when_no_persona_is_overridden` stayed
-    green while those three failed on a missing indirection.
+    green while the single-sided ones failed on a missing indirection.
 
-    So establishing the indirections makes those three pass by letting a real oneharness
+    So establishing the indirections makes those pass by letting a real oneharness
     run, which is the opposite of doubling it. Do not read the fake backend as covering
     every path; the two seams below are what cover this one.
     """
@@ -523,21 +462,8 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         environment.update(examples.environment)
         prompt_log = tmp_path / "prompts.jsonl"
         environment[PROMPT_LOG_ENV] = str(prompt_log)
-        # The pacemaker's shipped period is half an hour and this run settles in seconds,
-        # so at the default it would never come due and every claim about what it does
-        # with its turn would be vacuous. `--heartbeat-interval` is the published way to
-        # say when it comes due, so the journey says it rather than editing the graph.
         try:
-            launch = attached(
-                [
-                    "just",
-                    "orchestrate",
-                    SHIPPED_PROJECT,
-                    "--heartbeat-interval",
-                    str(PACEMAKER_INTERVAL_SECONDS),
-                ],
-                environment,
-            )
+            launch = attached(["just", "orchestrate", SHIPPED_PROJECT], environment)
             # The newer graph/pipeline pair can have its already-running orchestrator begin
             # one final reconciliation round just after the attached launcher observes the
             # first complete boundary. Hand tests a quiescent run, as this fixture promises.
@@ -830,14 +756,13 @@ def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
 def test_every_dag_scope_member_starts_with_the_graph(
     launched: Launched, dag_scope_members: int
 ) -> None:
-    """The pacemaker member launches alongside the orchestrator, not only after its interval.
+    """Every observer member launches alongside the run, not only after its first interval.
 
-    `graphs/dag-scope.yaml`'s second member is the easy one to ship broken: its
-    schedule is half an hour, so a persona ref, an oneharness config, or a schedule
-    shape this graph got wrong would first be heard from thirty minutes into a real
-    run. `oneagentgraph` starts a scheduled member with the graph rather than at its
-    first tick, so `just monitor` — the stream a planner watches a run through —
-    reports every one of them within seconds of the launch.
+    A scheduled member is the easy one to ship broken: a persona ref, an oneharness
+    config, or a schedule shape this graph got wrong would otherwise first be heard from
+    an interval into a real run. `oneagentgraph` starts a scheduled member with the graph
+    rather than at its first tick, so `just monitor` — the stream a planner watches a run
+    through — reports every one of them within seconds of the launch.
 
     How many to expect is the graph's own declaration rather than a number written
     here, so a member added to `graphs/dag-scope.yaml` has to start too.
@@ -975,8 +900,8 @@ def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> 
     # is that member and no other turn of the run may be.
     watching = [turn for turn in turns if WATCH_ROLE in _system(turn)]
     assert watching, "nothing in this run was told to watch it"
-    # And the member carrying it is the one the graph declares, read the same way the
-    # pacemaker's turns are: a renamed member with the persona still attached would
+    # And the member carrying it is the one the graph declares, read off the config each
+    # turn was pinned to: a renamed member with the persona still attached would
     # otherwise satisfy every assertion below while the docs named something absent.
     assert _turns_of(turns, MONITOR_MEMBER), (
         f"no turn of this run belonged to a `{MONITOR_MEMBER}` member of "
@@ -1659,8 +1584,8 @@ def test_the_planner_profile_is_the_default_and_the_detailed_one_is_reachable(
     published ways to widen it, and that is what fails here if it starts pinning one.
 
     Read through `just monitor` rather than `just channel-next`, because rendering a
-    surface is not consuming it: a journey that consumed this run's queued pacemaker
-    update would take it from the assertions that follow it in this group.
+    surface is not consuming it: a journey that consumed this run's queued monitor
+    surfaces would take them from the assertions that follow it in this group.
     """
     default = _just("monitor", SHIPPED_RUN, environment=launched.environment, seconds=60)
     assert default.returncode == 0, default.stderr
@@ -1803,18 +1728,16 @@ def _refusal_reason(op: str) -> str:
 def test_an_author_the_configuration_does_not_declare_is_refused(launched: Launched) -> None:
     """Who may speak on the channel is this host's declaration, and nobody else speaks.
 
-    The pacemaker is the author a manager would most expect to find here — it is a member
-    of the same observer graph — and it is deliberately undeclared: its task scopes it to
-    reporting, so an edit arriving under its name is refused for the author before any op
-    in it is read.
+    The monitor is the one observer author `config/onemessagebus.yaml` declares, so an
+    envelope under any other name is refused for the author before any op in it is read.
     """
     refused = _monitor_reply(
         launched,
-        {"version": 2, "author": "pacemaker", "commands": [{"op": "requeue", "id": "research"}]},
+        {"version": 2, "author": "stranger", "commands": [{"op": "requeue", "id": "research"}]},
     )
 
     assert refused.returncode != 0, refused.stdout
-    assert "the envelope's author `pacemaker` is not declared" in refused.stderr + refused.stdout, (
+    assert "the envelope's author `stranger` is not declared" in refused.stderr + refused.stdout, (
         refused.stderr + refused.stdout
     )
 
@@ -2611,25 +2534,6 @@ def _settling_project(tmp_path: Path, run: str) -> str:
     return project_from_plan(plan)
 
 
-def _dag_scope_document() -> tuple[int, str]:
-    """The shipped graph's declared version and its `check-in` task, from the file.
-
-    Read with a reader written for these two fields rather than with a YAML library:
-    the workspace installs none, and `oneagentgraph validate` — which the deterministic
-    gate runs over this file — is what holds the document well-formed.
-    """
-    lines = (REPO_ROOT / DAG_SCOPE_GRAPH).read_text(encoding="utf-8").splitlines()
-    declared = next(line for line in lines if line.startswith("version:"))
-    opened = next(index for index, line in enumerate(lines) if line.strip() == "task: |")
-    indent = len(lines[opened]) - len(lines[opened].lstrip())
-    body = []
-    for line in lines[opened + 1 :]:
-        if line.strip() and len(line) - len(line.lstrip()) <= indent:
-            break
-        body.append(line.strip())
-    return int(declared.split(":", 1)[1]), " ".join(body)
-
-
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] Placed beside the bus-configuration read it mirrors, on the one `launched` fixture this module already spends a real launch on; a project of its own would spend a second launch to read one key off the same record.  # noqa: E501
 def test_the_launch_hands_the_engine_this_hosts_maintenance_schedule(
     launched: Launched,
@@ -2799,58 +2703,6 @@ def test_a_callers_own_flag_beats_the_launch_config_through_the_recipe(
         assert not recorded.get(key), f"the caller blanked {key}, yet it was recorded: {recorded}"
     assert _spawned(recorded, "dispatch_env_hook") == REPO_ROOT / "scripts" / "dispatch-env-hook.sh"
     assert _spawned(recorded, "envelope_reviewer") == REPO_ROOT / "scripts" / "envelope-review.sh"
-
-
-def test_the_pacemaker_is_told_which_run_to_report_on_and_not_to_edit() -> None:
-    """The pacemaker's own task names its run through `{task}`, and forbids editing.
-
-    Its live turn is no longer observable in a short journey, and that is the design
-    working rather than a gap: the schedule is resettable, so every planner-visible
-    surface restarts its clock — and a monitor whose judge side is the planner raises
-    one on every turn. A pacemaker exists to speak when nobody else has, so a
-    supervised run is exactly the run where it should stay quiet. What still has to
-    hold is the content of the task it would be given, which is this file's to state.
-
-    `{task}` is the load-bearing part, and it is what this graph is written against
-    rather than the only thing available: `onepipeline` does export
-    `ONEPIPELINE_RUN_ID` to an observer member, which the journey below measures. The
-    composed task is preferred because it is this graph's own contract rather than a
-    per-release export, and because it carries the run's goal as well as its id — so
-    a pacemaker reaching for the variable instead is a member written against
-    something no document here promises.
-    """
-    # llmlint: ignore[tests_mirror_real_usage] A 30-minute schedule outlasts a journey.
-    _, task = _dag_scope_document()
-
-    assert "{task}" in task, (
-        "the pacemaker no longer interpolates the composed task, so nothing tells it "
-        f"which run to report on: {task}"
-    )
-    assert "$ONEPIPELINE_RUN_ID" not in task, (
-        "the pacemaker reads its run from a per-release export rather than from the "
-        f"composed task this graph is written against: {task}"
-    )
-    assert f"Never send `{FORBIDDEN_OF_THE_PACEMAKER}`" in task, (
-        f"the pacemaker's task no longer forbids the edit verb by name: {task}"
-    )
-    # The bounded sequence, held in the document beside the live-prompt read
-    # `tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py` makes of
-    # the same member.
-    missing = out_of_sequence(task, PACEMAKER_SEQUENCE)
-    assert missing is None, (
-        f"the pacemaker's task no longer prescribes {missing} in its bounded sequence "
-        f"{PACEMAKER_SEQUENCE}, so a turn under its finite deadline is back to deciding "
-        f"what to read: {task}"
-    )
-    for named, prohibition in FORBIDDEN_OF_THE_PACEMAKER_TURN:
-        assert prohibition in task, (
-            f"the pacemaker's task no longer forbids {named} by name; a recorded turn "
-            f"spent its whole deadline on exactly that and raised nothing: {task}"
-        )
-    assert UNANSWERED_IS_REPORTED in task, (
-        "the pacemaker's task no longer says a question its two readings cannot answer "
-        f"is reported as unanswered rather than investigated: {task}"
-    )
 
 
 #: The run id `onepipeline` mints from the probing plan's `name`, and what the export
@@ -3112,9 +2964,7 @@ def test_a_launch_names_its_run_to_the_graph_watching_it(
     change as this one.
 
     It is also what the monitor's judge side runs on: `graphs/dag-scope.yaml` composes
-    the channel directory `onemessagebus serve` is spawned over from this variable. The
-    `check-in` pacemaker takes its run from the composed task instead, which is this
-    graph's own contract.
+    the channel directory `onemessagebus serve` is spawned over from this variable.
     """
     environment = observed_launch.environment
     assert environment.get(RUN_ID_ENV) == OBSERVED_RUN, (
@@ -3269,66 +3119,6 @@ def test_an_attached_launch_hands_back_once_its_observer_graph_has_died(
     )
 
 
-def test_the_graphs_declared_version_is_one_that_expands_the_task_placeholder(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """`{task}` is a per-version behaviour, so the version the graph declares is checked.
-
-    `oneagentgraph` passes the token through literally below schema 4 — a member would
-    be handed the six characters instead of its run. Measured here against the real CLI
-    at the version `graphs/dag-scope.yaml` actually declares, so lowering that version
-    fails here rather than in a pacemaker update naming no run.
-
-    The probe is the pacemaker's own shape — single-sided, on the pacemaker's config —
-    and since oneagentgraph 0.2.18 that means oneharness runs **in process**: no
-    oneharness binary is spawned, so `ONEAGENTGRAPH_ONEHARNESS_BIN` never sees this
-    turn and there is no fake-backend prompt log to read. What is read instead is the
-    member's own report, which is where a library run records the prompt it composed —
-    a better witness than a log, since it is the producing library's own record, and
-    the same one the drafting journeys above read. `_environment` keeps the turn off
-    the paid provider at the layer that still covers it.
-    """
-    declared, _ = _dag_scope_document()
-    environment = _environment(tmp_path, oneharness_bin)
-    graph = tmp_path / "placeholder.yaml"
-    graph.write_text(
-        f"version: {declared}\n"
-        "name: placeholder\n"
-        "members:\n"
-        "  probe:\n"
-        "    kind: oneharness\n"
-        f"    oneharness_config: {REPO_ROOT / 'oneharness.check-in.toml'}\n"
-        "    task: |\n"
-        "      opened with {task}\n",
-        encoding="utf-8",
-    )
-    composed = "onepipeline run `placeholder-run`."
-
-    ran = subprocess.run(
-        ["oneagentgraph", "run", str(graph), "--task", composed, "--dir", str(tmp_path)],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(120),
-        check=False,
-    )
-
-    assert ran.returncode == 0, ran.stdout + ran.stderr
-    settled = [
-        json.loads(line)
-        for line in ran.stdout.splitlines()
-        if line.startswith("{") and json.loads(line)["kind"] == "member-settled"
-    ]
-    assert settled, f"the probe member never settled:\n{ran.stdout}\n{ran.stderr}"
-    report = json.loads(Path(settled[0]["payload"]["report_path"]).read_text(encoding="utf-8"))
-
-    assert composed in report["prompt"], (
-        f"schema {declared} did not expand `{{task}}`, so a member that claims its own "
-        f"task cannot learn its run; it was given:\n{report['prompt']}"
-    )
-
-
 #: Which provider binary each harness family's identities resolve to, so an identity is
 #: checked against the stand-in its own family would reach rather than against `claude`
 #: for both. Two families rather than one, because covering only Claude is what left
@@ -3346,7 +3136,7 @@ SCRIPTED_PROVIDER_ENV = {
 #: says the stand-in really took a turn rather than the guard having refused quietly.
 CODEX_PROMPT_LOG = "FAKE_CODEX_PROMPT_LOG"
 
-#: Every identity of the pacemaker's chain that `ONEHARNESS_BIN_*` cannot reach, read
+#: Every identity of the monitor's chain that `ONEHARNESS_BIN_*` cannot reach, read
 #: from that chain. The seam keys on a harness **id**, so it covers a bare one and no
 #: variant of it — which is exactly the set that would otherwise resolve to a real
 #: provider, and why an identity added to the config has to be covered here rather than
@@ -3354,7 +3144,7 @@ CODEX_PROMPT_LOG = "FAKE_CODEX_PROMPT_LOG"
 #: alone left `codex:alternate` resolving the real binary.
 UNINTENDED_PAID_IDENTITIES = tuple(
     identity
-    for identity in harness_routing(REPO_ROOT / "oneharness.check-in.toml")["harnesses"]
+    for identity in harness_routing(REPO_ROOT / "oneharness.orchestrator.toml")["harnesses"]
     if ":" in identity and identity.partition(":")[0] in PROVIDER_BINARIES
 )
 
@@ -3395,7 +3185,7 @@ def test_a_turn_routed_to_a_paid_identity_fails_naming_the_provider_it_reached(
             oneharness_bin,
             "run",
             "--config",
-            str(REPO_ROOT / "oneharness.check-in.toml"),
+            str(REPO_ROOT / "oneharness.orchestrator.toml"),
             "--prompt",
             "a turn no journey here means to spend",
             # The report below is read as JSON, which the adopted CLI prints only when
@@ -4137,8 +3927,8 @@ class LiveRun(NamedTuple):
 def live_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     """Launch a run whose only node is held open, and hand it over while it runs.
 
-    `--dag-graph off` deliberately: this run has no monitor and no pacemaker, so
-    nothing supervising it raises a planner surface and there is no boundary of any
+    `--dag-graph off` deliberately: this run has no monitor, so nothing supervising it
+    raises a planner surface and there is no boundary of any
     kind for an edit to be waiting on. That is the point — an edit accepted here was
     accepted mid-run or not at all. What the run may still raise is a complaint about
     its own settlement projection, which is nobody's boundary; the journey reads past
@@ -4611,7 +4401,7 @@ def test_the_guard_hands_a_variant_on_to_the_stand_in_its_journey_already_declar
             oneharness_bin,
             "run",
             "--config",
-            str(REPO_ROOT / "oneharness.check-in.toml"),
+            str(REPO_ROOT / "oneharness.orchestrator.toml"),
             "--prompt",
             "a turn this journey scripted",
             "--format",

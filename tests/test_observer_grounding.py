@@ -3,14 +3,14 @@
 An observer reports what it sees, and a report that calls something a **rule
 violation** has to quote the file and line that rule comes from; what it cannot point
 at is an observation. That rule is not enforced by any engine — it is prose given to a
-model — so the only thing keeping it in force is that all four sides of the two
-observer members still carry it and that an operator can still read what it means.
+model — so the only thing keeping it in force is that both sides of the observer
+member still carry it and that an operator can still read what it means.
 
-Four sides, because each member is a conversation: the agent side is told to ground a
+Both sides, because the member is a conversation: the agent side is told to ground a
 violation, and the supervisor side is told to reject one that is not grounded. Dropping
-either half silently un-enforces the rule for that member — an agent told nothing keeps
-inventing rules, and a supervisor told nothing accepts whatever it is handed — while the
-other member goes on obeying it, which is the drift this gate exists to refuse.
+either half silently un-enforces the rule — an agent told nothing keeps inventing rules,
+and a supervisor told nothing accepts whatever it is handed — which is the drift this
+gate exists to refuse.
 """
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ import pytest
 
 from orchestrator.root import REPO_ROOT
 
-#: The two observer members of `graphs/dag-scope.yaml`: the monitor that watches every
-#: turn, and the pacemaker that reports when its schedule comes due. Neither authors
-#: target-project content and both raise planner surfaces, so both can allege a breach.
-OBSERVER_PERSONAS = ("orchestrator.yaml", "check-in.yaml")
+#: The observer member of `graphs/dag-scope.yaml`: the monitor that watches every turn and
+#: reports the run's progress when its scheduled note comes due. It authors no
+#: target-project content and raises planner surfaces, so it can allege a breach.
+OBSERVER_PERSONAS = ("orchestrator.yaml",)
 
 #: The section an operator reads to learn what the rule means, and the one place it is
 #: explained rather than instructed. Each persona is prose handed to one model; a reader

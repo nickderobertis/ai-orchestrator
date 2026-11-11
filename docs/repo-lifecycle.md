@@ -13,7 +13,7 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.105.0**
+that source on every `just check` rather than restated: **`onepipeline` v0.106.3**
 (`config/onepipeline.version`) and **`onevcs` 0.63.0**, read from the SBOM the installed engine's npm platform package ships. That is the copy a dispatched lifecycle node publishes through
 and the copy `just publish-branch`, `just repo-recover` and `just integrate` land
 through, since all three run the engine's own landing verbs, each supervised as its
@@ -163,6 +163,16 @@ to 0.10.0 and, rebuilt on it, onevcs to 0.63.0, oneagentgraph to 0.11.0 and onej
 hooks, and the criteria bar on a reply is declared as one; a question item offers
 choices, an answer names a choice, the person's own words or both, and several answers go
 as one batch that a manager's watch receives as one delivery.
+The adoption after that moves the engine to 0.106.0, the read API to 0.77.0 and
+oneagentgraph to 0.11.2, the release that engine links, which links onejudge 0.22.5 and so
+ends the onejudge divergence: the observer graph follows its run's journal, so a
+scheduled note's `reset_on` can restart on a `planner-surfaced`, and `start` no longer
+takes `--heartbeat-interval`.
+The adoption after that moves the engine to 0.106.3, the read API to 0.78.0 and
+oneagentgraph to 0.11.4, the release that engine links, so a reset scheduled note waits a
+whole interval after the read that reset it; that engine links onejudge 0.23.0, which
+PyPI never published, so `config/onejudge.version` stays at 0.22.5 under a declared
+divergence.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole
@@ -293,6 +303,8 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `failed` | `pushed-unverified` | The publishing push **reached the remote** and the merge path could not then be read, and the budget is spent. The one failure word whose work is already on the origin: its reason names both the commit it landed at and what stopped the read, and a further attempt re-reads that path rather than re-pushing. |
 | `failed` | `merged-during-rework` | A person merged the change request while its rework ran, so the rework published nothing and kept its work on its branch; its surface names how to go on — `add`, the node that absorbed it, or the question about an unknown merge. |
 | `failed` | `task-failed` | The dispatch failed its own judge. |
+| `failed` | `command-failed` | A `kind: command` node exited non-zero or could not be started; its detail is the exit status and the tail of its stderr. |
+| `failed` | `command-timed-out` | A `kind: command` node outlived its `timeout_seconds`, and its process tree was stopped. |
 | `failed` | `task-failed-change-open` | It failed its judge having already opened a change request — the URL is on the settlement. |
 | `failed` | `dispatch-died` | The dispatch started and the agent worked, but the dispatch process then ended without an agent verdict; unlike a pre-work infrastructure refusal, it is not retried. Its `died:` line in `just results`, and its line in `just status`, say where the work stands in one of three forms (https://github.com/nickderobertis/onepipeline/pull/726): **landed on its base** at the landed commit, where the run recorded the node's landing; **retired** as holding no work beyond its base, where an idle pass of the driver deleted the branch; and otherwise the branch that may carry finished work, at its head where one is recorded. Read the landed form before recovering anything: that work is already on the base. |
 | `failed` | `provider-failed` | The same death, where what killed the dispatch was the **provider** — a narrowing of `dispatch-died` and not a second word for it. A node whose provider went is a node with nothing wrong with its work, so read it as the quota, auth, or outage question `just status`'s health block answers rather than looking for what the work got wrong. A node that failed its own task still settles `task-failed`, and a dispatch that died to anything else still settles `dispatch-died`. |
@@ -906,7 +918,7 @@ the merge left in progress**, and reports it as the session's `conflict` (`paths
 the refusal at open that used to be the only answer, and nothing on this host asks for
 it. A publication over a merge nobody concluded is refused as a
 sync conflict before anything is committed or pushed, and a session's teardown aborts
-the merge and keeps every commit. onepipeline 0.105.0 dispatches the worker into that
+the merge and keeps every commit. onepipeline 0.106.3 dispatches the worker into that
 session — a node's first step, a pinned continuation, or the re-dispatch after a
 `sync-conflict` — with the conflict under `## Planner context` and one engine-written
 criterion under `### Merge resolution` at the end of `## Acceptance criteria`, so the
@@ -969,7 +981,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.105.0 and is refused **by its own name**, at every schema version and on a live
+v0.106.3 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -1680,8 +1692,11 @@ checkouts to that order. The `Node` schema is
 `context`, `classification`, `parked`, `executor`, `agent_graph`, `repo`, `repo_type`, `workflow`,
 `merge_policy`, `base_branch`, `branch`, `title`, `body`, `draft`, `publish`,
 `execution_checkout`, `steps`, `resume`, `adoption`, `consumes`, `delivers`, `pool`,
-`overflow`, `task_record`, `assets_from`, `human_item` — and
-anything else is refused while the plan loads. `human_item`, from onepipeline 0.96.0, is a
+`overflow`, `task_record`, `assets_from`, `human_item`, `command`, `timeout_seconds` — and
+anything else is refused while the plan loads. `command` and `timeout_seconds`, from
+onepipeline 0.106.2, belong to a `kind: command` node alone: a program and its arguments
+run with no shell from the launch directory, settled on its exit status, and refused on
+any other kind (onepipeline's `docs/contract.md`, *Command steps*); no plan here writes one. `human_item`, from onepipeline 0.96.0, is a
 node's optional human-item description, and a node without one schedules exactly as before. `assets_from`, from onepipeline 0.86.0, is the
 qualified task an `add` or a `retry` replacement takes its held images from, and a node a
 plan loads never states it, as it never states `task_record`. `pool` and `overflow` arrived with
@@ -2028,7 +2043,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.105.0.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.106.3.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -2105,7 +2120,7 @@ goes when the session does.
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
 `onevcs` 0.63.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.105.0 settles the node that
+… which cannot land while it is one"*, and `onepipeline` v0.106.3 settles the node that
 made one `complete-but-draft` where a release is awaited — so "no notion of one" is no
 longer why. A draft is a **publication** outcome, reached once the last step has settled and
 the publication starts, because a release the node adopted early has not happened yet,
@@ -2860,7 +2875,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.105.0 — so every number in it was a
+journey it named are absent from `onepipeline` v0.106.3 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

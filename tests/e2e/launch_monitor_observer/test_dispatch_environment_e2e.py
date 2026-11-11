@@ -225,7 +225,7 @@ WORKER_CONFIGS = (
 )
 WORKER_CANDIDATES = _candidates(WORKER_CONFIGS)
 
-#: Every other role — the judge, monitor, pacemaker, drafter, plan reviewer, design-doc
+#: Every other role — the judge, monitor, drafter, plan reviewer, design-doc
 #: pair and lint tier — which keeps its provider's own command limits.
 UNRAISED_CANDIDATES = _candidates(
     tuple(name for name in ROLE_CONFIGS if name not in WORKER_CONFIGS)
