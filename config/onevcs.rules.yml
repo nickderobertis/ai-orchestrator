@@ -204,7 +204,7 @@ rules:
   - match: {host: github.com, owner: nickderobertis, name: onepipeline}
     publication: change-auto
     approvals: none
-    checks: {wait_seconds: 9600}  # recorded max 7482 s (run 39459848573) + 25% margin
+    checks: {wait_seconds: 14700}  # recorded max 11709 s (run 42823350718) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: onepipeline-ui}
     publication: change-auto
