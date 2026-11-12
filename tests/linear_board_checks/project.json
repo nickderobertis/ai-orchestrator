@@ -8,10 +8,12 @@
   ],
   "implicitDependencies": [
     "support-conftest",
+    "support-github-board",
     "support-linear-board",
     "support-onetaskgraph-user-layer",
     "support-plan-root-variable",
-    "support-published-tools"
+    "support-published-tools",
+    "support-waits"
   ],
   "namedInputs": {
     "linearBoardWorkspace": [

@@ -1706,12 +1706,18 @@ class _Board:
         return {"data": answer}
 
     def whole_answer(
-        self, root: str, write: Callable[[dict[str, object]], dict[str, object]]
+        self,
+        root: str,
+        write: Callable[[dict[str, object]], dict[str, object]],
+        *,
+        comments: bool = True,
     ) -> Callable[[dict[str, object]], dict[str, object]]:
         """``write``, answered as its whole twin answers: with the issue it left behind.
 
         Applied first and rendered after, so the issue answered carries the change token its
-        write moved — the version the store advances its cache entry to.
+        write moved — the version the store advances its cache entry to. Without
+        ``comments`` it is answered as a token twin answers: the same issue, with no page of
+        its comments, which a token twin does not select.
         """
 
         def answered(variables: dict[str, object]) -> dict[str, object]:
@@ -1723,22 +1729,22 @@ class _Board:
                 case "addComment":
                     subject = payload["subject"]
                     assert isinstance(subject, dict)
-                    payload["subject"] = self._detail(subject["id"], comments=True)
+                    payload["subject"] = self._detail(subject["id"], comments=comments)
                 case "updateIssue":
                     issue = payload["issue"]
                     assert isinstance(issue, dict)
-                    payload["issue"] = self._detail(issue["id"], comments=True)
+                    payload["issue"] = self._detail(issue["id"], comments=comments)
                 case "updateIssueComment":
                     comment = payload["issueComment"]
                     assert isinstance(comment, dict)
                     comment["issue"] = self._detail(
-                        self._commented(comment["id"])[0].content_id, comments=True
+                        self._commented(comment["id"])[0].content_id, comments=comments
                     )
                 case _:
                     item = payload["projectV2Item"]
                     assert isinstance(item, dict)
                     content = self._row(item["id"]).content_id
-                    item["content"] = self._detail(content, comments=True)
+                    item["content"] = self._detail(content, comments=comments)
             return {"data": {root: payload}}
 
         return answered
@@ -2164,6 +2170,20 @@ class _GraphQLRequest:
         return self.query.lstrip().startswith("mutation")
 
     @property
+    def selects_token(self) -> bool:
+        """Whether this mutation is a token twin, selecting inline what a read of the issue does.
+
+        The adopted store sends `updateIssue` and a board field's write or clear as their token
+        twin on a targeted update (its `graphql::token_twin`), so the version it answers is the
+        one this answer spells; a plain answer leaves it reading the issue once more after.
+        """
+        return (
+            self.is_mutation
+            and TOKEN_ISSUE_SELECTION in self.query
+            and WHOLE_ISSUE_SELECTION not in self.query
+        )
+
+    @property
     def operation(self) -> _Operation:
         # A whole twin carries the comment page its answer selects, whose marker is tried
         # before any mutation's, so it is told by its own mutation's marker first.
@@ -2354,6 +2374,10 @@ _OPERATIONS: dict[str, _Operation] = {
 #: store's cache expects runs (its `graphql::whole_twin`). A twin applies exactly what its
 #: plain document does; only its answer is wider.
 WHOLE_ISSUE_SELECTION = "__typename ...BoardIssue ... on Issue{comments(first:$first){nodes{"
+#: What the adopted store's token twins select inline under their mutation, and no other
+#: mutation does: a read of the issue's change-token parts (its `board_issue_fields!`). A token
+#: twin is the same operation as its plain document, at its price; only its answer is wider.
+TOKEN_ISSUE_SELECTION = "commentCount:comments{totalCount}"
 _WHOLE_TWINS: dict[_Operation, _Operation] = {
     _Operation.ADD_COMMENT: _Operation.ADD_COMMENT_WHOLE,
     _Operation.UPDATE_COMMENT: _Operation.UPDATE_COMMENT_WHOLE,
@@ -2802,6 +2826,10 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.whole_answer("updateIssueComment", self.board.update_comment)(
                     request.variables
                 )
+            case _Operation.CLEAR_FIELD if request.selects_token:
+                return self.board.whole_answer(
+                    "clearProjectV2ItemFieldValue", self.board.clear_field, comments=False
+                )(request.variables)
             case _Operation.CLEAR_FIELD:
                 return self.board.clear_field(request.variables)
             case _Operation.REPOSITORY:
@@ -2819,8 +2847,16 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return answer
             case _Operation.ADD_TO_BOARD:
                 return self.board.add_to_board(request.variables)
+            case _Operation.UPDATE_ISSUE if request.selects_token:
+                return self.board.whole_answer(
+                    "updateIssue", self.board.update_issue, comments=False
+                )(request.variables)
             case _Operation.UPDATE_ISSUE:
                 return self.board.update_issue(request.variables)
+            case _Operation.UPDATE_FIELD if request.selects_token:
+                return self.board.whole_answer(
+                    "updateProjectV2ItemFieldValue", self.board.set_field, comments=False
+                )(request.variables)
             case _Operation.UPDATE_FIELD:
                 return self.board.set_field(request.variables)
             case _Operation.UPDATE_FIELDS:

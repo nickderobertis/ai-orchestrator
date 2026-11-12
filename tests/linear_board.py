@@ -291,6 +291,11 @@ class Request:
     one it created or updated, and ``rewritten`` whether a long form that write sent was
     stored other than as sent. ``client`` is the process that sent it, where the host
     names one, so a journey can tell one command's requests from the next command's.
+
+    An aliased batch is logged as one entry per alias, in order, each naming its ``alias``
+    (``a0`` onward) and carrying that alias's own variables and what it alone read and
+    wrote; ``alias`` is ``None`` on a request that was not batched. So the requests sent on
+    the wire are the entries whose ``alias`` is ``None`` or ``a0``.
     """
 
     operation: str
@@ -299,6 +304,7 @@ class Request:
     read: list[str] = field(default_factory=list)
     written: str | None = None
     rewritten: bool = False
+    alias: str | None = None
 
 
 def _now() -> str:
@@ -358,6 +364,18 @@ def _text(fields: dict[str, Any], key: str) -> str:
 
 def _reference(native_id: NativeId | None) -> dict[str, str] | None:
     return {"id": native_id} if native_id else None
+
+
+@dataclass(frozen=True)
+class _Held:
+    """What every collection a mutation can change held before an aliased mutation batch."""
+
+    issues: dict[NativeId, Issue]
+    projects: dict[NativeId, Project]
+    documents: dict[NativeId, Document]
+    comments: dict[NativeId, Comment]
+    issue_relations: dict[NativeId, Relation]
+    project_relations: dict[NativeId, Relation]
 
 
 class LinearBoard:
@@ -701,6 +719,7 @@ class LinearBoard:
         item.updatedAt = _now()
         return item
 
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear applying an aliased mutation document whole or not at all, naming the refused alias in the error's `path`, is a measurement of the live service that onetaskgraph's Linear source owns and records (`crates/onetaskgraph-linear/src/batch.rs`, measured against a sandbox team), and that source's own suite holds; this wire reproduces it for journeys that write to no real workspace, so no gate here can reach the service it describes.  # noqa: E501 - a directive is one line
     def dispatch(
         self,
         query: str,
@@ -708,24 +727,100 @@ class LinearBoard:
         operation_name: str | None,
         client: int | None = None,
     ) -> dict[str, Any]:
-        """Resolve exactly one supported root operation; unknown roots are errors."""
+        """Resolve one supported root operation, or one aliased batch of them.
+
+        From onetaskgraph 0.14.12 the Linear source batches many reads, or many writes, into
+        one document: the ``i``th root field aliased ``a<i>``, each of its variables
+        ``$<name>`` sent as ``$<name>_<i>``. Each alias is answered as its document alone
+        would be, under its alias, and logged as its own entry (:class:`Request`). A batch of
+        mutations is applied whole or not at all, as that source's documentation records
+        Linear applying one: an alias refused undoes every alias of the document, and the
+        refusal names the alias in its ``path``. Unknown roots are errors.
+        """
+        # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
         match = re.search(r"\{\s*(\w+)", query)
         if match is None:
             raise ValueError("unsupported operation " + str(operation_name))
-        operation = match[1]
-        declaration = re.match(r"\s*(?:query|mutation)\s+([A-Za-z_]\w*)", query)
-        named = operation_name or (declaration[1] if declaration else operation)
+        declaration = re.match(r"\s*(?:query|mutation)\s*([A-Za-z_]\w*)?", query)
+        named = operation_name or (declaration[1] if declaration and declaration[1] else None)
+        aliased = _aliases(query)
         with self._lock:
-            logged = Request(named, copy.deepcopy(variables), client=client)
-            self._requests.append(logged)
-            self._answering = logged
+            if aliased:
+                mutation = query.lstrip().startswith("mutation")
+                return self._resolve_aliased(aliased, named, variables, mutation, client)
+            return self._answered(match[1], named or match[1], variables, client, None)
+
+    def _answered(
+        self,
+        operation: str,
+        named: str,
+        variables: dict[str, Any],
+        client: int | None,
+        alias: str | None,
+    ) -> dict[str, Any]:
+        """Answer one root ``operation`` and log it, under the lock `dispatch` holds."""
+        logged = Request(named, copy.deepcopy(variables), client=client, alias=alias)
+        self._requests.append(logged)
+        self._answering = logged
+        try:
+            answer = self._resolve(operation, named, variables)
+        finally:
+            self._answering = None
+        written = {logged.written} if logged.written else set()
+        logged.read = sorted(_carried(answer) - written)
+        return answer
+
+    def _resolve_aliased(
+        self,
+        aliased: list[str],
+        named: str | None,
+        variables: dict[str, Any],
+        mutation: bool,
+        client: int | None,
+    ) -> dict[str, Any]:
+        """Answer each alias of a batch under its alias, applying a mutation batch whole."""
+        held = self._held() if mutation else None
+        first = len(self._requests)
+        answer: dict[str, Any] = {}
+        for at, root in enumerate(aliased):
+            suffix = f"_{at}"
+            own = {
+                name.removesuffix(suffix): value
+                for name, value in variables.items()
+                if name.endswith(suffix)
+            }
             try:
-                answer = self._resolve(operation, named, variables)
-            finally:
-                self._answering = None
-            written = {logged.written} if logged.written else set()
-            logged.read = sorted(_carried(answer) - written)
-            return answer
+                answer[f"a{at}"] = self._answered(root, named or root, own, client, f"a{at}")[root]
+            except (IdConflict, ValueError, KeyError, StopIteration) as refused:
+                if held is not None:
+                    # Nothing of a refused mutation document landed, its earlier aliases included.
+                    self._restore(held)
+                    for undone in self._requests[first:]:
+                        undone.written = None
+                        undone.rewritten = False
+                refused.add_note(f"a{at}")
+                raise
+        return answer
+
+    def _held(self) -> _Held:
+        """Every collection a mutation can change, copied, for a batch refused part way."""
+        return _Held(
+            issues=copy.deepcopy(self._issues),
+            projects=copy.deepcopy(self._projects),
+            documents=copy.deepcopy(self._documents),
+            comments=copy.deepcopy(self._comments),
+            issue_relations=copy.deepcopy(self._issue_relations),
+            project_relations=copy.deepcopy(self._project_relations),
+        )
+
+    def _restore(self, held: _Held) -> None:
+        """Put back every collection :meth:`_held` copied, undoing what a batch wrote."""
+        self._issues = held.issues
+        self._projects = held.projects
+        self._documents = held.documents
+        self._comments = held.comments
+        self._issue_relations = held.issue_relations
+        self._project_relations = held.project_relations
 
     def _resolve(self, operation: str, named: str, variables: dict[str, Any]) -> dict[str, Any]:
         """Answer one root ``operation``, under the lock `dispatch` holds."""
@@ -837,6 +932,22 @@ class LinearBoard:
                         }
                     }
         raise ValueError("unsupported operation " + named)
+
+
+def _aliases(query: str) -> list[str]:
+    """The root field of each ``a<i>`` alias of a batched document, in order; empty for one
+    that is not batched. Counted as the source composing it counts them: ``a0`` onward, while
+    the next is present."""
+    roots: list[str] = []
+    while found := re.search(rf"[{{\s]a{len(roots)}:\s*(\w+)", query):
+        roots.append(found[1])
+    return roots
+
+
+def _alias_path(refused: BaseException) -> dict[str, list[str]]:
+    """The ``path`` of a refusal naming the alias of a batch it came from, when it did."""
+    notes = [note for note in getattr(refused, "__notes__", []) if re.fullmatch(r"a\d+", note)]
+    return {"path": [notes[-1]]} if notes else {}
 
 
 def _client(port: int, served: int) -> int | None:
@@ -993,10 +1104,16 @@ def linear_board(*, rewrites: Sequence[Rewrite] = MEASURED_REWRITES) -> Iterator
                 }
             except IdConflict as refused_id:
                 answer = {
-                    "errors": [{"message": str(refused_id), "extensions": refused_id.extensions}]
+                    "errors": [
+                        {
+                            "message": str(refused_id),
+                            "extensions": refused_id.extensions,
+                            **_alias_path(refused_id),
+                        }
+                    ]
                 }
             except (ValueError, KeyError, StopIteration) as exc:
-                answer = {"errors": [{"message": str(exc)}]}
+                answer = {"errors": [{"message": str(exc), **_alias_path(exc)}]}
             body = json.dumps(answer).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

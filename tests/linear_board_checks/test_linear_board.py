@@ -120,6 +120,69 @@ def test_the_wire_logs_what_each_request_read_wrote_and_rewrote() -> None:
     ]
 
 
+def test_an_aliased_batch_is_answered_per_alias_and_a_refused_one_lands_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The batched documents onetaskgraph 0.14.12 sends Linear, as the wire answers them.
+
+    The `i`th root field is aliased `a<i>` and its variables suffixed `_<i>`. Each alias is
+    answered under its alias and logged as its own entry. A mutation document with one alias
+    refused answers no data and an error whose `path` is that alias, and lands no alias of it.
+    """
+    created = (
+        "mutation IssueCreate($input_0: IssueCreateInput!,$input_1: IssueCreateInput!)"
+        "{ a0: issueCreate(input: $input_0) { success } a1: issueCreate(input: $input_1)"
+        " { success } }"
+    )
+    monkeypatch.setenv(
+        "XDG_CONFIG_HOME", str(onetaskgraph_user_layer.installed(tmp_path / "config"))
+    )
+    with linear_board() as board:
+        board.environment(onetaskgraph_user_layer.ORGANIZATION_PLANS)
+
+        def ask(query: str, variables: dict[str, object]) -> dict[str, Any]:
+            request = urllib.request.Request(
+                board.endpoint,
+                data=json.dumps({"query": query, "variables": variables}).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 - loopback
+                answered: dict[str, Any] = json.load(response)
+                return answered
+
+        held = "5f2c7a10-0000-5000-8000-0000000000aa"
+        landed = ask(
+            created,
+            {
+                "input_0": {"id": held, "title": "first", "description": "- one"},
+                "input_1": {"title": "second", "description": "Plain prose."},
+            },
+        )["data"]
+        assert [landed["a0"]["issue"]["title"], landed["a1"]["issue"]["title"]] == [
+            "first",
+            "second",
+        ]
+        entries = board.requests()
+        assert [(entry["alias"], entry["written"], entry["rewritten"]) for entry in entries] == [
+            ("a0", held, True),
+            ("a1", landed["a1"]["issue"]["id"], False),
+        ]
+        assert entries[0]["variables"] == {
+            "input": {"id": held, "title": "first", "description": "- one"}
+        }
+
+        refused = ask(
+            created,
+            {"input_0": {"title": "third"}, "input_1": {"id": held, "title": "conflicting"}},
+        )
+        assert "data" not in refused
+        (error,) = refused["errors"]
+        assert error["path"] == ["a1"]
+        assert error["message"] == "conflict on insert of Issue"
+        assert sorted(issue["title"] for issue in board.issues()) == ["first", "second"]
+        assert [entry["written"] for entry in board.requests()[len(entries) :]] == [None, None]
+
+
 @pytest.mark.parametrize(
     "kind,field", [("issue", "title"), ("project", "name"), ("document", "title")]
 )

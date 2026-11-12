@@ -27,7 +27,7 @@
 # second member that starts with none of that context. None of it is remembered:
 # tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py reads the paced
 # fields and the note back off a real launch, and the range is re-read off the pinned
-# binary at each adoption, which refuses 0 and 12 by naming it. oneagentgraph 0.12.0
+# binary at each adoption, which refuses 0 and 12 by naming it. oneagentgraph 0.13.0
 # reads 1 through 11.
 version: 11
 name: dag-scope
@@ -59,7 +59,7 @@ members:
     # The channel directory is the run's own, and an argv cannot name a run it is not
     # told: the engine exports `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID` to both
     # sides of an observer member —
-    # measured against onepipeline 0.107.0 on both of that member's sides, by dumping
+    # measured against onepipeline 0.109.0 on both of that member's sides, by dumping
     # each one's whole environment on the suite's real launches with their paid model
     # doubled (tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py re-takes
     # it every gate run) — so the command composes the directory from those and nothing

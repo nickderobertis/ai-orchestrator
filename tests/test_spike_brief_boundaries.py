@@ -100,6 +100,24 @@ def test_a_skipped_copy_item_records_no_board_project() -> None:
     assert spike_brief_flow.recorded_project(beside, source, "plans:board") == "plans:board"
 
 
+def test_an_oversize_copy_item_records_no_board_project() -> None:
+    """A project too large for the destination was not written, so nothing is recorded."""
+    raw = json.loads((FIXTURES / "copy-report.json").read_text())
+    oversize = {
+        "source": "authoring:preview",
+        "action": "oversize",
+        "size": 70_000,
+        "limit": 65_536,
+    }
+    source = plan_store.QualifiedProjectId("authoring:preview")
+    with pytest.raises(ValueError, match=r"SDK returned \[\]"):
+        spike_brief_flow.recorded_project(
+            CopyReport.model_validate({"items": [oversize]}), source, "plans:board"
+        )
+    beside = CopyReport.model_validate({"items": [oversize, *raw["items"]]})
+    assert spike_brief_flow.recorded_project(beside, source, "plans:board") == "plans:board"
+
+
 def test_a_copy_item_of_another_source_records_no_board_project() -> None:
     """Only the item copied from the plan's own source names the board project it reached."""
     raw = json.loads((FIXTURES / "copy-report.json").read_text())

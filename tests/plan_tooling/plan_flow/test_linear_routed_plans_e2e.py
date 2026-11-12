@@ -994,7 +994,8 @@ def test_a_budgeted_plan_copied_twice_to_linear_creates_its_records_once(
     The incident on a real team: Linear's listings missed records written moments before, the
     repeat's source recorded no link to them, and it created the project, its tasks and its
     documents over again. Here the source's links are gone and the stand-in's listings answer
-    nothing for the whole of the second copy, so only a read by the origin-derived id finds them.
+    nothing for the whole of the second copy, so only the origin-derived id finds them: a read
+    by it, or a create under it that Linear refuses because the record already holds it.
     """
     from project_fixtures import owning
 
@@ -1032,10 +1033,13 @@ def test_a_budgeted_plan_copied_twice_to_linear_creates_its_records_once(
         assert second.returncode == 0, second.stdout + second.stderr
         requests = bench.linear.requests()[already_answered:]
         assert requests, "the second copy asked Linear nothing"
+        # From onetaskgraph 0.14.12 a copy may send a task's create under its origin-derived id
+        # first, and a create Linear refuses because a record already holds that id is what
+        # finds the record: it writes nothing. A create that wrote a record is the duplicate.
         created = [
             request["operation"]
             for request in requests
-            if RECORD_CREATE.fullmatch(request["operation"])
+            if RECORD_CREATE.fullmatch(request["operation"]) and request["written"]
         ]
         assert created == [], created
         assert _record_ids(bench.linear) == held

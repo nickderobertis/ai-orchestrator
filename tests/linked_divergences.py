@@ -32,5 +32,5 @@ class Divergence(NamedTuple):
 #: installable from PyPI at all, or where this host's own verbs must run a later release
 #: than any engine links — never as a convenience, and never as "not yet looked at",
 #: because both read identically from here a release cycle later. None is declared on
-#: the adopted engine 0.107.0: every crate it links has a published release its pin names.
+#: the adopted engine 0.109.0: every crate it links has a published release its pin names.
 DECLARED_DIVERGENCES: dict[str, Divergence] = {}

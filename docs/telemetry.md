@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.107.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.109.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -323,7 +323,7 @@ It moved again to 0.19.5 with the engine 0.75.0, to 0.20.0 with the engine 0.80.
 0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0 and to 0.22.1 with the engine 0.96.1 and to 0.22.2 with the engine 0.101.2 and to 0.22.4 with the engine 0.105.0 and to 0.22.5 with the engine 0.106.0 and to 0.23.0 with the engine 0.106.3 and to 0.23.1 with the engine 0.107.0, and both files are unchanged between `onejudge-v0.19.0` and
 `onejudge-v0.22.2` too; from there to `onejudge-v0.22.5` only
 doc comments in `report.rs` moved, and neither file moved from there to `onejudge-v0.23.1`, the CLI this host pins. The
-engine links `oneharness-core` 0.29.1 for itself, onejudge 0.23.1 and oneagentgraph 0.12.0, read off the
+engine links `oneharness-core` 0.29.1 for itself, onejudge 0.23.1 and oneagentgraph 0.13.0, read off the
 SBOM its npm platform package ships. Between `oneharness-core-v0.24.2` and `oneharness-core-v0.28.2`, `domain/usage.rs`
 gains the reset-credit report above and a millisecond RFC 3339 reader
 ([oneharness#1464](https://github.com/nickderobertis/oneharness/pull/1464)), touching
@@ -468,7 +468,7 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.79.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.80.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 28 on the envelope, where
    0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
