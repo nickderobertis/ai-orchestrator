@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -346,6 +347,102 @@ def test_a_design_document_its_picture_carries_past_the_limit_is_refused_as_serv
     assert task_body.DOCUMENT_UNMEASURED in refused.stderr, refused.stderr
     assert refused.stdout == "", refused.stdout
     assert _records(destination) == [], "a plan whose served document is oversized was copied"
+
+
+def _measure_command(project: str) -> subprocess.CompletedProcess[str]:
+    """The command a design document's writer runs to measure its document, as it runs it."""
+    return subprocess.run(
+        ["uv", "run", "--no-sync", "python", "-m", "orchestrator.task_body", project],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+
+def _printed_figure(project: str, printed: str) -> int:
+    """The one figure the command printed for ``project``'s design document, in its own line."""
+    (line,) = printed.splitlines()
+    prefix = f"{project}-design: "
+    suffix = f" characters (target {task_body.WARN_FROM:,}, limit {task_body.BODY_LIMIT:,})"
+    assert line.startswith(prefix) and line.endswith(suffix), line
+    return int(line.removeprefix(prefix).removesuffix(suffix))
+
+
+def _copy_figure(project: str, copied: subprocess.CompletedProcess[str]) -> int | None:
+    """The figure `just copy-plan` printed for ``project``'s design document, if it printed one."""
+    found = re.search(
+        rf"{re.escape(project)}-design: its composed issue body measures ([\d,]+) characters",
+        copied.stderr,
+    )
+    return int(found[1].replace(",", "")) if found else None
+
+
+def test_the_writer_s_measure_prints_the_figure_the_copy_measures_and_exits_on_the_worst(
+    destination: Path, tmp_path: Path
+) -> None:
+    """Under the target exits 0, from the target 1, over the limit 2, and an unreadable store 3.
+
+    Each figure is the one `just copy-plan` measures for the same document: read off the
+    recipe's own warning and refusal, and for a document it says nothing about, the measure
+    its pre-flight takes, after which it copies without a word about size.
+    """
+    within = _cleared("measured-within", 0, tmp_path)
+    warned = _cleared("measured-warned", task_body.WARN_FROM + 2_000, tmp_path, pictured=True)
+    refused = _cleared("measured-refused", task_body.BODY_LIMIT + 2_000, tmp_path)
+
+    for project, status in ((within, 0), (warned, 1), (refused, 2)):
+        measured = _measure_command(project)
+        assert measured.returncode == status, (project, measured.stdout, measured.stderr)
+        figure = _printed_figure(project, measured.stdout)
+        # Read before the copy, which records its counterpart on the source document.
+        preflight = _measured(project)
+        copied = _just("copy-plan", project, "--to", DESTINATION)
+        if status == 0:
+            assert copied.returncode == 0, copied.stdout + copied.stderr
+            assert _copy_figure(project, copied) is None, copied.stderr
+            assert figure == preflight < task_body.WARN_FROM, (figure, preflight)
+        else:
+            assert copied.returncode == (0 if status == 1 else 4), copied.stderr
+            assert _copy_figure(project, copied) == figure, (figure, copied.stderr)
+
+    # A project holding a second, short document beside its warned design document: one line
+    # per document, each the copy's figure, and the exit status of the worse of the two.
+    mixed = _cleared("measured-mixed", task_body.WARN_FROM + 2_000, tmp_path)
+    notes = tmp_path / "notes.md"
+    notes.write_text("## Notes\n\nA short note beside the design.\n", encoding="utf-8")
+    _, _, mixed_native = mixed.partition(":")
+    filed = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "document", "create", DRAFTED_IN, "--project", mixed_native]
+        + ["--id", f"{mixed_native}-notes", "--title", "Notes", "--body-file", str(notes)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert filed.returncode == 0, filed.stderr
+    expected = {
+        str(body.document): body.size
+        for body in task_body.document_bodies(plan_store.read_documents(mixed))
+    }
+    assert len(expected) == 2, expected
+    measured = _measure_command(mixed)
+    assert measured.returncode == 1, measured.stdout + measured.stderr
+    limits = f" characters (target {task_body.WARN_FROM:,}, limit {task_body.BODY_LIMIT:,})"
+    assert sorted(measured.stdout.splitlines()) == sorted(
+        f"{document}: {size}{limits}" for document, size in expected.items()
+    ), measured.stdout
+    copied = _just("copy-plan", mixed, "--to", DESTINATION)
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    assert _copy_figure(mixed, copied) == expected[f"{mixed}-design"], copied.stderr
+    assert f"{mixed}-notes" not in copied.stderr, copied.stderr
+
+    unreadable = _measure_command(f"{DESTINATION}-unconfigured:{os.getpid()}")
+    assert unreadable.returncode == 3, unreadable.stdout + unreadable.stderr
+    assert unreadable.stdout == "", unreadable.stdout
+    assert "task-body: cannot read the documents of" in unreadable.stderr, unreadable.stderr
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

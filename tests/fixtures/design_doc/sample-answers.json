@@ -10,11 +10,11 @@
       "summary": "The ledger keeps each run's permanent record, which gains its tags.",
       "reversible": [
         {
-          "title": "Older runs",
+          "title": "Reads a record written before tags as a run with none",
           "text": "A record written before this change reads as a run with no tags."
         },
         {
-          "title": "Tags are fixed",
+          "title": "Keeps a run's tags fixed after launch",
           "text": "Nothing changes a run's tags after launch, including resuming a stopped run, called adopting it."
         }
       ],
@@ -34,7 +34,7 @@
       "summary": "The command line starts and lists runs.",
       "reversible": [
         {
-          "title": "Bad tags are refused early",
+          "title": "Refuses a malformed tag before storing anything",
           "text": "A malformed tag is refused, naming it, before anything is stored."
         }
       ],
@@ -42,8 +42,28 @@
         {
           "name": "Tag format",
           "justification": "tightening it would invalidate tags stored on other people's machines.",
-          "summary": "A tag is 1 to 32 lowercase letters, digits or hyphens, starting with a letter; a run has at most eight.",
-          "artifact": "```text\ntag   := [a-z][a-z0-9-]{0,31}\ntags  := at most 8 distinct tags per run\n```"
+          "content": [
+            {
+              "type": "prose",
+              "text": "A tag is 1 to 32 lowercase letters, digits or hyphens, starting with a letter; a run has at most eight."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "text": "tag   := [a-z][a-z0-9-]{0,31}\ntags  := at most 8 distinct tags per run"
+            }
+          ],
+          "examples": [
+            {
+              "type": "prose",
+              "text": "`nightly` and `crozier-2` are tags; `Nightly`, `2nd-pass` and a nine-tag list are refused:"
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "text": "$ onepipeline start plans:crozier --tag Nightly\nerror: tag `Nightly` is not 1 to 32 lowercase letters, digits or hyphens starting with a letter"
+            }
+          ]
         },
         {
           "name": "`start --tag` and `runs --tag`",
@@ -60,11 +80,11 @@
       "summary": "The read API is the server behind the browser view.",
       "reversible": [
         {
-          "title": "Tags in the run list",
+          "title": "Adds `tags` to each run `GET /runs` returns",
           "text": "`GET /runs` returns each run's `tags`, an empty list when it has none."
         },
         {
-          "title": "Tag filter",
+          "title": "Adds a repeatable `tag` filter to `GET /runs`",
           "text": "`GET /runs` takes a repeatable `tag` parameter, and a run must carry every tag given."
         }
       ],
@@ -77,11 +97,11 @@
       "summary": "The browser view is the web page listing runs.",
       "reversible": [
         {
-          "title": "Tag chips",
+          "title": "Shows each run's tags in the run list",
           "text": "Each run in the list shows its tags."
         },
         {
-          "title": "Shareable filter",
+          "title": "Keeps the tag filter in the page address",
           "text": "A tag filter above the list is kept in the page address, so a filtered list can be shared as a link."
         }
       ],
@@ -94,7 +114,7 @@
       "summary": "The launch recipe is how this repository starts runs.",
       "reversible": [
         {
-          "title": "Pass-through",
+          "title": "Passes `just orchestrate --tag` through to `onepipeline start`",
           "text": "`just orchestrate --tag` hands each tag to `onepipeline start` unchanged."
         }
       ],

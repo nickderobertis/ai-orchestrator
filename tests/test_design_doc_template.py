@@ -32,7 +32,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 import yaml
@@ -51,11 +51,12 @@ WRAPPER = REPO_ROOT / "scripts" / "onepipeline.sh"
 #: byte for byte as the candidate the user signed off rendered it.
 SAMPLE = REPO_ROOT / "tests" / "fixtures" / "design_doc"
 
-#: The sha256 of each signed-off sample file as the user signed it off in round three, so a
-#: fixture that drifted from what was signed off fails here rather than passing as itself.
+#: The sha256 of each signed-off sample file, as signed off in round three and re-rendered in
+#: the expandable-block layout with one decision carrying `examples`, so a fixture that
+#: drifted from what was signed off fails here rather than passing as itself.
 SIGNED_OFF = {
-    "sample-answers.json": "2a799ade3eed692eeb995d5f384ee86173118a5188231066f361b1efb2f3cc98",
-    "sample-body.txt": "71f0caffb18e2c9e48caa6e9d040ad380270baaafe856116411bffc0d5c466b1",
+    "sample-answers.json": "219969e70c478eb9c1038497999944b964ccde9e25db3a21a24a11dfbc9967dc",
+    "sample-body.txt": "40661839123aa653f5ac02d82baf2b4899fbebd88a844066e5803da671adab2d",
 }
 
 #: The five sections, in the order the document carries them, each as the block that renders
@@ -120,7 +121,14 @@ VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
             "part": None,
             "summary": None,
             "reversible": {"title": None, "text": None},
-            "decisions": {"name": None, "justification": None, "summary": None, "artifact": None},
+            "decisions": {
+                "name": None,
+                "justification": None,
+                "content": None,
+                "examples": None,
+                "summary": None,
+                "artifact": None,
+            },
         },
     ),
     "acceptance_criteria": ("list", "string", None),
@@ -202,7 +210,14 @@ RULES = {
     "one subsection per unit": "Every unit that changes gets one subsection",
     "high-cost decisions": "per high-cost decision the unit owns",
     "the literal artifact": "The template owns every language label",
-    "reversible bullets": "one bullet per trivial or low-cost decision",
+    "reversible blocks": "one expandable block per trivial or low-cost decision",
+    "reversible titles": "A title says what the decision changes in that area, not only the area",
+    "examples are optional": "Examples are given only where the abstract contract is hard to",
+    "examples length": "Keep them to about 800 characters per decision",
+    "decision length": "A high-cost decision's content is about 1,200 characters or less,",
+    "document target": "is under 45,000 characters, reached through terser writing",
+    "hard limit": "stays under GitHub's 65,536-character refusal",
+    "the template writes every block": "No answer writes a `<details>` block of its own",
     "no links between sections": "no links between sections",
     "reversibility levels": "defined by who would have to act to undo the decision",
     "the stricter level": "When in doubt, the stricter level",
@@ -299,9 +314,20 @@ A page never says how many nodes exist.
 
 **Reversible:**
 
-- **Page size.** At most fifty nodes.
-  Never configurable.
-- **Older callers.** A call with no cursor reads page one.
+<details>
+<summary>Page size</summary>
+
+At most fifty nodes.
+Never configurable.
+
+</details>
+
+<details>
+<summary>Older callers</summary>
+
+A call with no cursor reads page one.
+
+</details>
 
 ### View — `onepipeline-ui`
 
@@ -334,6 +360,12 @@ def _render(loader_document: str, answers: object, tmp_path: Path) -> str:
     )
     assert rendered.returncode == 0, rendered.stderr
     return rendered.stdout
+
+
+def _table_rows(body: str) -> list[str]:
+    """The Planned tasks table's lines, wherever in the section the template puts them."""
+    section = body.split("## Planned tasks\n", 1)[1]
+    return [line for line in section.splitlines() if line.startswith("|")]
 
 
 # llmlint: ignore-block[suppressions_justified] The front matter is onetaskgraph's open template
@@ -472,12 +504,17 @@ def test_rendering_sample_answers_gives_the_sections_the_units_and_the_table(
     assert units.strip() == UNITS_RENDERED.strip(), units
     table = body.split("## Planned tasks\n", 1)[1].strip().splitlines()
     assert table == [
+        "<details>",
+        "<summary>All 2 planned tasks</summary>",
+        "",
         "| Task | Unit | What it delivers | Depends on | Where it lives |",
         "| --- | --- | --- | --- | --- |",
         "| feat: page the listing | Listing route | the route | none "
         "| https://example.invalid/issues/1 |",
         "| feat: follow the cursor | View | the view | feat: page the listing "
         "| /plans/tasks/view.md |",
+        "",
+        "</details>",
     ], table
 
 
@@ -530,7 +567,7 @@ def test_a_planned_task_answer_holding_a_delimiter_or_a_line_break_stays_in_its_
         },
         tmp_path,
     )
-    table = body.split("## Planned tasks\n", 1)[1].strip().splitlines()
+    table = _table_rows(body)
     assert table[2:] == [
         "| feat: read a \\| b | View | the route and its view | none | /plans/tasks/pipe.md |"
     ], table
@@ -557,7 +594,7 @@ def test_a_planned_task_answer_ending_lines_another_way_stays_on_one_row(
         },
         tmp_path,
     )
-    table = body.split("## Planned tasks\n", 1)[1].strip().splitlines()
+    table = _table_rows(body)
     assert table[2:] == [
         "| feat: page | View | the route and its view | none | /plans/tasks/page.md |"
     ], table
@@ -904,7 +941,7 @@ def test_modern_architecture_description_restates_the_reader_models() -> None:
         "description"
     ]
     for model in (
-        design_approval.ModernDecision,
+        design_approval.ExampledDecision,
         design_approval.ProsePart,
         design_approval.CodePart,
     ):
@@ -1235,3 +1272,237 @@ def test_the_goals_guidance_merges_the_tasks_goals_and_points_at_their_definitio
     assert "inventing none" in guidance, guidance
     assert "`goals` variable of this host's `plan-task` template" in guidance, guidance
     assert "checkable outcome" not in guidance, "the guidance restates what a goal is"
+
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The authored expandable block is the form onetaskgraph's README states under "Expandable blocks"; this reader holds the template to it, and `tests/linear_board_checks/test_design_doc_block_drift_e2e.py` is the drift gate that goes red when the installed store stops recognising what the template writes.  # noqa: E501 - a directive is one line
+#: A summary the authored form admits: text with `&`, `<` and `>` as entities and no backtick
+#: or `*`, and HTML `<code>` or `<strong>` spans whose text holds no tag, backtick or `*`.
+SUMMARY_TEXT = r"(?:[^<>&`*\n]|&(?:amp|lt|gt);)"
+SUMMARY_LINE = re.compile(
+    rf"<summary>((?:{SUMMARY_TEXT}|<(code|strong)>{SUMMARY_TEXT}+</\2>)+)</summary>"
+)
+#: A fenced code block's opening or closing line, with its fence characters.
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
+class Block(NamedTuple):
+    """One expandable block a rendering holds: its summary as written, and its body lines."""
+
+    summary: str
+    body: list[str]
+
+
+def _blocks(body: str) -> list[Block]:
+    """Every expandable block in ``body``, each held to the authored form it must take.
+
+    The only shape the design-doc template writes: `<details>` alone, not indented and not
+    inside fenced code, then a `<summary>` line in the contract's HTML, a blank line, a body,
+    a blank line and `</details>` alone, with no block inside another.
+    """
+    lines = body.split("\n")
+    blocks: list[Block] = []
+    fence: str | None = None
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        opened = FENCE.match(line)
+        if fence is not None:
+            assert "<details" not in line, f"a `<details>` line inside fenced code:\n{body}"
+            if opened and opened[1][0] == fence[0] and len(opened[1]) >= len(fence):
+                fence = None
+            index += 1
+            continue
+        if opened:
+            fence = opened[1]
+            index += 1
+            continue
+        if "<details" not in line and "</details>" not in line:
+            index += 1
+            continue
+        assert line == "<details>", f"a block opens other than as `<details>` alone: {line!r}"
+        summary = SUMMARY_LINE.fullmatch(lines[index + 1])
+        assert summary is not None, f"a summary outside the authored form: {lines[index + 1]!r}"
+        assert lines[index + 2] == "", f"no blank line after the summary:\n{body}"
+        close = lines.index("</details>", index + 3)
+        inner = lines[index + 3 : close]
+        assert inner and inner[-1] == "" and any(inner), f"no body or blank line:\n{body}"
+        assert not any("<details" in one for one in inner), f"a block inside a block:\n{body}"
+        blocks.append(Block(summary[1], inner[:-1]))
+        index = close + 1
+    return blocks
+
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+
+#: One unit whose reversible titles carry backtick code and characters a summary escapes,
+#: and whose decisions are a content-shape one with examples, one without, and a legacy one.
+BLOCK_UNIT: dict[str, object] = {
+    "name": "Copy planner",
+    "repository": "onetaskgraph",
+    "part": "",
+    "summary": "A preview stops after the plan and prints it.",
+    "reversible": [
+        {"title": "Adds a `--dry-run` flag to `copy`", "text": "The flag is `--dry-run`."},
+        {"title": "Exits `4` when A < B & C > D", "text": "Two lines.\nOf text."},
+    ],
+    "decisions": [
+        {
+            "name": "The preview report",
+            "justification": "other tools parse the report.",
+            "content": [
+                {"type": "prose", "text": "A preview prints the copy report."},
+                {"type": "code", "language": "json", "text": '{"items": []}'},
+            ],
+            "examples": [
+                {"type": "prose", "text": "Two tasks, one already on the board:"},
+                {"type": "code", "language": "md", "text": "Run ``` here and `` there."},
+            ],
+        },
+        {
+            "name": "No examples",
+            "justification": "outside readers depend on it.",
+            "content": [{"type": "prose", "text": "Only prose."}],
+        },
+        {
+            "name": "Legacy",
+            "justification": "stored data outlives it.",
+            "summary": "A legacy summary.",
+            "artifact": "```text\nlegacy\n```",
+        },
+    ],
+}
+
+
+def _unit_section(body: str) -> str:
+    """The rendered subsection of :data:`BLOCK_UNIT`, from its heading to the next section."""
+    return "### " + body.split("\n### ", 1)[1].split("\n## ", 1)[0]
+
+
+def test_each_reversible_item_renders_as_one_block_with_its_title_as_the_summary(
+    tmp_path: Path, loader: str
+) -> None:
+    """A title's backtick code becomes `<code>`, `&`, `<` and `>` entities, no bullet stays."""
+    body = _render(loader, {**ANSWERS, "units": [BLOCK_UNIT]}, tmp_path)
+    reversible = _unit_section(body).split("**Reversible:**\n", 1)[1]
+    assert reversible.splitlines() == [
+        "",
+        "<details>",
+        "<summary>Adds a <code>--dry-run</code> flag to <code>copy</code></summary>",
+        "",
+        "The flag is `--dry-run`.",
+        "",
+        "</details>",
+        "",
+        "<details>",
+        "<summary>Exits <code>4</code> when A &lt; B &amp; C &gt; D</summary>",
+        "",
+        "Two lines.",
+        "Of text.",
+        "",
+        "</details>",
+    ], reversible
+    assert not re.search(r"^- \*\*", body, re.MULTILINE), body
+    assert [block.summary for block in _blocks(body)][1:3] == [
+        "Adds a <code>--dry-run</code> flag to <code>copy</code>",
+        "Exits <code>4</code> when A &lt; B &amp; C &gt; D",
+    ]
+
+
+def test_a_title_s_unmatched_backtick_is_kept_as_written_rather_than_opening_code(
+    tmp_path: Path, loader: str
+) -> None:
+    """Only a closed pair of backticks becomes `<code>`; a lone one stays literal text."""
+    unit = {
+        **BLOCK_UNIT,
+        "reversible": [{"title": "Keeps `a pair` and a lone ` here", "text": "T."}],
+    }
+    body = _render(loader, {**ANSWERS, "units": [unit]}, tmp_path)
+    assert "<summary>Keeps <code>a pair</code> and a lone ` here</summary>" in body, body
+
+
+def test_a_decision_s_examples_render_after_its_content_as_one_block(
+    tmp_path: Path, loader: str
+) -> None:
+    """Content, then one `Examples` block holding each part in order, fenced as content is."""
+    body = _render(loader, {**ANSWERS, "units": [BLOCK_UNIT]}, tmp_path)
+    decision = _unit_section(body).split("#### The preview report\n", 1)[1].split("\n#### ", 1)[0]
+    assert decision.splitlines() == [
+        "",
+        "**Reversibility: high cost** — other tools parse the report.",
+        "",
+        "A preview prints the copy report.",
+        "",
+        "```json",
+        '{"items": []}',
+        "```",
+        "",
+        "<details>",
+        "<summary>Examples</summary>",
+        "",
+        "Two tasks, one already on the board:",
+        "",
+        "````````md",
+        "Run ``` here and `` there.",
+        "````````",
+        "",
+        "</details>",
+    ], decision
+    longest = max(len(run) for run in re.findall(r"`+", "Run ``` here and `` there."))
+    assert len("````````") > longest
+    without = _unit_section(body).split("#### No examples\n", 1)[1].split("\n#### ", 1)[0]
+    assert "<details>" not in without, without
+    assert [block.summary for block in _blocks(body)].count("Examples") == 1, body
+
+
+def test_a_legacy_decision_renders_byte_for_byte_as_before(tmp_path: Path, loader: str) -> None:
+    """A `summary`/`artifact` decision is the historical rendering, with no examples block."""
+    body = _render(loader, {**ANSWERS, "units": [BLOCK_UNIT]}, tmp_path)
+    legacy = _unit_section(body).split("#### Legacy\n", 1)[1].split("**Reversible:**", 1)[0]
+    assert legacy == (
+        "\n**Reversibility: high cost** — stored data outlives it.\n\n"
+        "A legacy summary.\n\n```text\nlegacy\n```\n\n"
+    ), legacy
+
+
+def test_the_planned_tasks_table_is_one_block_under_the_graph_image(
+    tmp_path: Path, loader: str
+) -> None:
+    """The image stays visible directly under the heading; the whole table is collapsed."""
+    pictured = _render(loader, {**ANSWERS, "dag_image": "plan-dag.png"}, tmp_path)
+    plain = _render(loader, ANSWERS, tmp_path)
+    table = [
+        "| Task | Unit | What it delivers | Depends on | Where it lives |",
+        "| --- | --- | --- | --- | --- |",
+        "| feat: page the listing | Listing route | the route | none "
+        "| https://example.invalid/issues/1 |",
+        "| feat: follow the cursor | View | the view | feat: page the listing "
+        "| /plans/tasks/view.md |",
+    ]
+    block = ["<details>", "<summary>All 2 planned tasks</summary>", "", *table, "", "</details>"]
+    assert pictured.split("## Planned tasks\n", 1)[1].split("\n") == [
+        "",
+        GRAPH_IMAGE,
+        "",
+        *block,
+        "",
+    ]
+    assert plain.split("## Planned tasks\n", 1)[1].split("\n") == ["", *block, ""]
+    assert _blocks(pictured)[-1] == Block("All 2 planned tasks", table)
+
+
+@pytest.mark.parametrize("pictured", [False, True], ids=["no-image", "image"])
+def test_every_block_the_template_emits_is_in_the_authored_form(
+    tmp_path: Path, loader: str, pictured: bool
+) -> None:
+    """Each `<details>` the template writes, in every layout here, is the contract's form."""
+    sample = json.loads((SAMPLE / "sample-answers.json").read_text(encoding="utf-8"))
+    image = {"dag_image": "plan-dag.png"} if pictured else {}
+    renderings = [
+        _render(loader, {**ANSWERS, "units": [BLOCK_UNIT], **image}, tmp_path),
+        _render(loader, {**sample, **image}, tmp_path),
+    ]
+    for body in renderings:
+        found = _blocks(body)
+        assert len(found) == body.count("<details"), body
+        assert found, body

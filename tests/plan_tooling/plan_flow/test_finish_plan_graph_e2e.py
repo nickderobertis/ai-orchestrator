@@ -52,6 +52,7 @@ from typing import Any, NamedTuple, TypedDict
 import github_board
 import plan_root_variable
 import pytest
+from github_board import BOARD, _serving_board
 from nx_workspace import (
     REAL_ENGINE,
     answering_this_checkouts_origin,
@@ -533,6 +534,100 @@ def test_an_edged_plans_document_opens_with_the_graph_the_flow_read_and_rendered
     assert approved.returncode == 0, approved.stdout + approved.stderr
 
 
+#: A writer's change giving the first unit two reversible decisions, one titled with backtick
+#: code, and a high-cost decision carrying examples, so the stored document holds every kind
+#: of expandable block the design-doc template writes.
+COLLAPSED = (
+    "a['units'][0]['reversible'] = ["
+    "{'title': 'Adds a `--group-by` flag to `project graph`', 'text': 'It names the key.'},"
+    "{'title': 'Keeps ungrouped reads as they are', 'text': 'No flag, no subgraph.'}]"
+    "; a['units'][0]['decisions'] = [{'name': 'Grouped graph JSON',"
+    " 'justification': 'other tools parse it.',"
+    " 'content': [{'type': 'prose', 'text': 'Each node names its group.'}],"
+    " 'examples': [{'type': 'code', 'language': 'json', 'text': '{\"group\": \"Plan store\"}'}]}]"
+)
+
+#: The blocks the stored document holds for :data:`COLLAPSED` and the four-task table, as
+#: their `<details>` and `<summary>` lines open them.
+COLLAPSED_SUMMARIES = [
+    "<summary>Examples</summary>",
+    "<summary>Adds a <code>--group-by</code> flag to <code>project graph</code></summary>",
+    "<summary>Keeps ungrouped reads as they are</summary>",
+    f"<summary>All {len(FOUR)} planned tasks</summary>",
+]
+
+
+def _expandable_blocks(content: str) -> list[str]:
+    """Every expandable block ``content`` holds, from its `<details>` to its `</details>`."""
+    return re.findall(r"^<details>\n<summary>.*?^</details>$", content, re.M | re.S)
+
+
+@pytest.mark.xdist_group("finish-plan-graph-accepted")
+def test_a_document_in_the_collapsed_layout_is_checked_approved_and_copied_to_the_board(
+    checkout: Copy, tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The flow's graph check, the approval and the copy each read the collapsed layout.
+
+    The tail's own `planned_tasks --check-design-document` passes on a document whose table
+    sits inside its block under the graph image; `just copy-plan` then lands it on the
+    loopback `plans` board with every block as authored, and `just approve-design` records
+    the approval of that board copy.
+    """
+    finished = _finish(checkout, tmp_path, oneharness_bin, FOUR, change=COLLAPSED)
+    assert finished.finish.returncode == OK, finished.finish.stderr
+    content, _, _ = _document(finished)
+    section = content.split("## Planned tasks\n", 1)[1].split("\n")
+    assert section[:5] == ["", GRAPH_IMAGE, "", "<details>", COLLAPSED_SUMMARIES[-1]], section
+    blocks = _expandable_blocks(content)
+    assert [block.split("\n")[1] for block in blocks] == COLLAPSED_SUMMARIES, content
+    assert all(block.split("\n")[2] == "" and block.endswith("\n\n</details>") for block in blocks)
+
+    native = finished.project.partition(":")[2]
+    # tests/github_board.py stands in for GitHub's API alone; the recipe, the store's copy
+    # and the approval that reads the board copy back are the real ones.
+    with _serving_board() as remote:
+        hosted = {**finished.environment, **remote}
+        copied = subprocess.run(
+            ["just", "copy-plan", finished.project, "--to", "plans"],
+            cwd=checkout.root,
+            env=hosted,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(300),
+            check=False,
+        )
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        (issue,) = [one for one in BOARD.issues if one.title.endswith(f"Design: {native}")]
+        # The copy points each Where-it-lives cell at its task's board counterpart, so the
+        # table's block is held to its shape and every other block to its bytes.
+        *authored, table = blocks
+        for block in authored:
+            assert block in issue.body, (
+                f"the board stores a block other than as authored:\n{issue.body}"
+            )
+        (boarded_table,) = [one for one in _expandable_blocks(issue.body) if one not in blocks]
+        assert boarded_table.split("\n")[:3] == table.split("\n")[:3], boarded_table
+        assert boarded_table.endswith("|\n\n</details>"), boarded_table
+        assert boarded_table.count("\n|") == table.count("\n|"), boarded_table
+        # The board is served fresh for this journey: the plan is the one project on it
+        # beside the one somebody wrote there by hand.
+        (board_project,) = [
+            one
+            for one in _store(hosted, "project", "list", "--source", "plans")["items"]
+            if one["item"]["title"] != github_board.BOARD_PROJECT_TITLE
+        ]
+        approved = subprocess.run(
+            ["just", "approve-design", str(board_project["id"])],
+            cwd=checkout.root,
+            env=hosted,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(300),
+            check=False,
+        )
+        assert approved.returncode == 0, approved.stdout + approved.stderr
+
+
 @pytest.mark.xdist_group("finish-plan-graph-accepted")
 def test_two_tasks_sharing_a_title_are_two_rows_and_a_swapped_location_is_refused(
     checkout: Copy, tmp_path: Path, oneharness_bin: str
@@ -580,7 +675,15 @@ def test_a_plan_whose_graph_only_repeats_its_table_shows_none(
     assert finished.graph is not None and not (finished.graph / "plan-dag.png").exists()
 
     content, answers, assets = _document(finished)
-    assert _opening(content).startswith("| Task |"), content
+    # With no picture, the collapsed table's block is directly under the heading.
+    section = content.split("## Planned tasks\n", 1)[1].split("\n")
+    assert section[:5] == [
+        "",
+        "<details>",
+        f"<summary>All {len(tasks)} planned tasks</summary>",
+        "",
+        "| Task | Unit | What it delivers | Depends on | Where it lives |",
+    ], content
     assert "plan-dag.png" not in assets and answers.get("dag_image", "") == ""
     assert _columns(answers["planned_tasks"]) == _canonical(finished)["rows"]
     assert {row["task"]: row["unit"] for row in answers["planned_tasks"]} == {
@@ -654,6 +757,10 @@ def test_a_table_or_units_that_part_from_the_graph_are_refused_and_nothing_is_co
     assert finished.finish.returncode == DOCUMENT_REFUSED, finished.finish.stderr
     assert f"planned-tasks: {finished.project}-design: {said}" in finished.finish.stderr
     assert "parts from its plan's graph" in finished.finish.stderr
+    # The table refused is the collapsed one: inside its block, under the graph image.
+    content, _, _ = _document(finished)
+    (table,) = [one for one in _expandable_blocks(content) if "planned tasks</summary>" in one]
+    assert "| Task | Unit | What it delivers | Depends on | Where it lives |" in table, content
     _nothing_copied(finished)
 
 

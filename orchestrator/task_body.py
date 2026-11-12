@@ -44,16 +44,28 @@ always precedes the write to the board. :func:`document_refusals` and
 **So does a plan's own description**, the project issue, whose metadata carries its
 `orchestrator.plan-budgets` record beside the rendering of it: `just check-plan` measures it
 with :func:`measure`, through `orchestrator/plan_budgets.py`, under the same limit.
+
+**A design document's writer measures its own document while it can still shorten it.**
+`python -m orchestrator.task_body <source:project>` prints, for each document of the
+project — the set `just copy-plan` measures, the design document among them — one line,
+``<qualified document id>: <n> characters (target 45,000, limit 65,536)``, where ``<n>`` is
+:func:`document_bodies`' figure, the one the copy's pre-flight measures. It exits
+:data:`MEASURED_WITHIN` when no document is warned about or refused, :data:`MEASURED_WARNED`
+when one is warned about and none refused, :data:`MEASURED_REFUSED` when one is refused,
+and :data:`MEASURED_UNREADABLE` when the store cannot be read.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import re
-from collections.abc import Callable, Iterable, Iterator, Mapping
+import sys
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import NamedTuple
 
+from orchestrator import plan_store
 from orchestrator.plan_store import NodeId, QualifiedDocumentId, StoreDocument, StoreTask
 from orchestrator.publication_guard import Refusal
 
@@ -406,3 +418,47 @@ def document_warnings(documents: Iterable[StoreDocument]) -> list[str]:
         for body in document_bodies(documents)
         if WARN_FROM <= body.size <= BODY_LIMIT
     ]
+
+
+#: The measuring command's exit statuses: every document within :data:`WARN_FROM`, one warned
+#: about and none refused, one refused, and a store that could not be read.
+MEASURED_WITHIN = 0
+MEASURED_WARNED = 1
+MEASURED_REFUSED = 2
+MEASURED_UNREADABLE = 3
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Print each document of a project's composed issue body, and exit on the worst of them.
+
+    The figure is :func:`document_bodies`' over the documents the store lists for the
+    project, the same read and the same measure `just copy-plan`'s pre-flight makes, so a
+    writer reading it under :data:`WARN_FROM` knows the copy will neither warn nor refuse.
+    """
+    parser = argparse.ArgumentParser(
+        prog="task-body",
+        description=(
+            "Print the composed issue body each document of a project measures, against the "
+            f"{WARN_FROM:,}-character target and GitHub's {BODY_LIMIT:,}-character limit."
+        ),
+    )
+    parser.add_argument("project", metavar="SOURCE:PROJECT")
+    args = parser.parse_args(argv)
+    try:
+        documents = plan_store.read_documents(args.project)
+    except (OSError, ValueError) as exc:
+        print(f"task-body: cannot read the documents of {args.project}: {exc}", file=sys.stderr)
+        return MEASURED_UNREADABLE
+    for body in document_bodies(documents):
+        print(
+            f"{body.document}: {body.size} characters (target {WARN_FROM:,}, limit {BODY_LIMIT:,})"
+        )
+    if document_refusals(documents):
+        return MEASURED_REFUSED
+    if document_warnings(documents):
+        return MEASURED_WARNED
+    return MEASURED_WITHIN
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

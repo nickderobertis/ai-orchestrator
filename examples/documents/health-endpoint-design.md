@@ -3,8 +3,8 @@ title: 'Design: health-endpoint'
 project: health-endpoint
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:5697e51426246121fbc2486ca79881d3fbc11590f7b984c7514a0c1b5100a474
-  "onetaskgraph.template": {"answers_digest":"sha256:2466f6073d153ad1e4ce12ace0146492f50de28a19c8a4a02546e5aa58d847a7","body_digest":"sha256:3a8cc62024f6747da81eeef4946da6a5e41cfba2df725e6d897b4b8303059cc3","digest":"sha256:b3081e2663074adf631864ea2a51e4148e6a82407f8fc9b893f85a2c6aef6634","template":"onepipeline:design-doc"}
-  "orchestrator.design-approval": {"approved_at":"2026-10-09T00:49:53.037302+00:00","key":"1ba45f44a6ab2ce494e51f92270fbb2425055b1caf272403a836639ca276c553"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:d7c061839dd8d5659215ef60ad74ad5496221fd1e1264cf5bdc63ae32e05e9a6","body_digest":"sha256:b780bb10838c4f5d4a075d8a6ed37b7ba8e1a785dc3594be370c026ac978207f","answers_digest":"sha256:d45d355ba7bb685096eaceb1d4d4874b6fe0bd90d0bd41e2154a8d71a749ef8c"}
+  "orchestrator.design-approval": {"key":"39ec6b2617d72e2a44ff03fceb1c1fb2a0106bb81e74790b9a8eda073b160cff","approved_at":"2026-11-12T12:07:24.122539+00:00"}
 ---
 ## What
 
@@ -37,7 +37,12 @@ The service gains one route that answers whether it is running.
 
 **Reversible:**
 
-- **Answered in process.** The route is served by the service itself, with no new process or store.
+<details>
+<summary>Answered in process</summary>
+
+The route is served by the service itself, with no new process or store.
+
+</details>
 
 ## Budgets
 
@@ -58,15 +63,21 @@ The service gains one route that answers whether it is running.
 
 ## Planned tasks
 
+<details>
+<summary>All 1 planned tasks</summary>
+
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 | feat(api): add /health endpoint | Service | the endpoint and its tests | none | examples/tasks/health-endpoint/health.md |
+
+</details>
 
 
 <!-- onetaskgraph:template-answers
 acceptance_criteria:
 - Polling the endpoint says whether the service is up.
 - Tests drive real requests rather than asserting on internal state.
+accepted_opaque: []
 architecture: |-
   One route on the existing service, answered from the service itself. No new process, no
   new store, nothing else to deploy or watch.
@@ -90,6 +101,8 @@ budgets:
   threshold: 50
   unit: ms
   workload: 200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes.
+dag_image: ''
+goals: []
 plan_budgets:
   checklist:
   - budget: health-endpoint-p95-latency
@@ -149,6 +162,7 @@ units:
   - text: The route is served by the service itself, with no new process or store.
     title: Answered in process
   summary: The service gains one route that answers whether it is running.
+visual_changes: []
 what: |-
   A health endpoint on the service, so an operator can ask whether it is up without
   reading logs.

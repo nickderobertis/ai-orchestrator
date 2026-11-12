@@ -369,6 +369,51 @@ def test_a_document_over_the_limit_is_refused_and_one_from_the_threshold_warned_
     assert task_body.document_warnings([below]) == []
 
 
+# llmlint: ignore-block[e2e_not_mocked] The store read is substituted so each of the command's four exits is reached in-process; `tests/plan_tooling/check_and_review/test_design_document_body_limit_e2e.py` drives the same command over a real store and holds each figure to `just copy-plan`'s.  # noqa: E501 - a directive is one line
+@pytest.mark.parametrize(
+    ("sizes", "status"),
+    [
+        ((task_body.WARN_FROM - 1,), task_body.MEASURED_WITHIN),
+        ((task_body.WARN_FROM - 1, task_body.WARN_FROM), task_body.MEASURED_WARNED),
+        ((task_body.WARN_FROM, task_body.BODY_LIMIT + 1), task_body.MEASURED_REFUSED),
+    ],
+    ids=["within", "warned", "refused"],
+)
+def test_the_measuring_command_prints_each_document_and_exits_on_the_worst(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    sizes: tuple[int, ...],
+    status: int,
+) -> None:
+    """One line per document, its figure the copy's, and the status of the worst of them."""
+    documents = [_document(f"d{index}", _sized(size)) for index, size in enumerate(sizes)]
+    monkeypatch.setattr(plan_store, "read_documents", lambda project: documents)
+
+    assert task_body.main(["authoring:probe"]) == status
+
+    assert capsys.readouterr().out.splitlines() == [
+        f"authoring:d{index}: {size} characters (target 45,000, limit 65,536)"
+        for index, size in enumerate(sizes)
+    ]
+
+
+def test_the_measuring_command_exits_3_when_the_store_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def unreadable(project: str) -> list[plan_store.StoreDocument]:
+        raise OSError(f"no source answers {project}")
+
+    monkeypatch.setattr(plan_store, "read_documents", unreadable)
+
+    assert task_body.main(["authoring:probe"]) == task_body.MEASURED_UNREADABLE
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "cannot read the documents of authoring:probe: no source answers" in captured.err
+
+
+# llmlint: ignore-end[e2e_not_mocked]
+
+
 class PluginSource(NamedTuple):
     """One file of the plugin's source, and where it was read."""
 

@@ -1241,7 +1241,10 @@ def planned_rows(content: str) -> list[PlannedRow]:
     """The rows of the Planned tasks table ``content`` holds, each as its cells' text.
 
     Read from the document itself — the table its stored `planned_tasks` answer rendered —
-    rather than from the plan, so a copy on a board is read the same as its draft. A table
+    rather than from the plan, so a copy on a board is read the same as its draft. Its rows
+    are the section's `|` lines wherever they sit, so the table reads alike inside the
+    expandable block the template collapses it into and in a document rendered before it
+    did. A table
     whose header or rows are not the template's shape is refused rather than read, because a
     row missing its Depends on cell would otherwise read as a task depending on nothing, and
     a second row that is not a separator would otherwise be dropped as one with its task.
@@ -1510,6 +1513,12 @@ class ModernDecision(TypedDict):
     content: list[ProsePart | CodePart]
 
 
+class ExampledDecision(ModernDecision):
+    """A content-shape decision with the optional examples rendered collapsed after it."""
+
+    examples: list[ProsePart | CodePart]
+
+
 class LegacyDecision(TypedDict):
     """Historical text rendered without interpreting its artifact."""
 
@@ -1520,6 +1529,7 @@ class LegacyDecision(TypedDict):
 
 
 DECISION_KEYS = frozenset(ModernDecision.__annotations__)
+EXAMPLED_DECISION_KEYS = frozenset(ExampledDecision.__annotations__)
 LEGACY_DECISION_KEYS = frozenset(LegacyDecision.__annotations__)
 PART_KEYS = {
     "prose": frozenset(ProsePart.__annotations__),
@@ -1570,11 +1580,12 @@ def validate_content(answers: object) -> None:
             field = f"units[{index}].decisions[{position}]"
             if not isinstance(decision, dict) or set(decision) not in (
                 DECISION_KEYS,
+                EXAMPLED_DECISION_KEYS,
                 LEGACY_DECISION_KEYS,
             ):
                 raise Unrendered(
-                    f"{field} must hold exactly name, justification, content or the exact legacy "
-                    "name, justification, summary, artifact"
+                    f"{field} must hold exactly name, justification, content and optionally "
+                    "examples, or the exact legacy name, justification, summary, artifact"
                 )
             if set(decision) == LEGACY_DECISION_KEYS:
                 if not all(isinstance(value, str) for value in decision.values()):
@@ -1582,35 +1593,39 @@ def validate_content(answers: object) -> None:
                 continue
             if not all(isinstance(decision[key], str) for key in ("name", "justification")):
                 raise Unrendered(f"{field} name and justification must be strings")
-            parts = decision["content"]
-            if not isinstance(parts, list) or not parts:
-                raise Unrendered(f"{field}.content must be a nonempty ordered list")
-            for number, part in enumerate(parts, 1):
-                named = f"{field}.content[{number}]"
-                match part:
-                    case {"type": "prose", "text": str() as text} if (
-                        set(part) == PART_KEYS["prose"]
-                    ):
-                        if has_prose_fence(text):
-                            raise Unrendered(
-                                f"{named}.text contains a fenced-code block; "
-                                "supply literal code in a code part"
-                            )
-                    case {"type": "code", "language": str() as language, "text": str() as text} if (
-                        set(part) == PART_KEYS["code"]
-                    ):
-                        if not LANGUAGE.fullmatch(language):
-                            raise Unrendered(
-                                f"{named}.language must be a nonempty "
-                                "letters/digits/underscore/plus/hyphen fence info token"
-                            )
-                    case _:
-                        raise Unrendered(
-                            f"{named} must be exactly a prose {{type, text}} or code "
-                            "{type, language, text} part with string text/language"
-                        )
-                if not text.strip():
-                    raise Unrendered(f"{named}.text must be nonblank text")
+            for key in ("content", "examples"):
+                if key in decision:
+                    validate_parts(f"{field}.{key}", decision[key])
+
+
+def validate_parts(field: str, parts: object) -> None:
+    """Refuse a decision's `content` or `examples` unless each part is exactly one shape."""
+    if not isinstance(parts, list) or not parts:
+        raise Unrendered(f"{field} must be a nonempty ordered list")
+    for number, part in enumerate(parts, 1):
+        named = f"{field}[{number}]"
+        match part:
+            case {"type": "prose", "text": str() as text} if set(part) == PART_KEYS["prose"]:
+                if has_prose_fence(text):
+                    raise Unrendered(
+                        f"{named}.text contains a fenced-code block; "
+                        "supply literal code in a code part"
+                    )
+            case {"type": "code", "language": str() as language, "text": str() as text} if (
+                set(part) == PART_KEYS["code"]
+            ):
+                if not LANGUAGE.fullmatch(language):
+                    raise Unrendered(
+                        f"{named}.language must be a nonempty "
+                        "letters/digits/underscore/plus/hyphen fence info token"
+                    )
+            case _:
+                raise Unrendered(
+                    f"{named} must be exactly a prose {{type, text}} or code "
+                    "{type, language, text} part with string text/language"
+                )
+        if not text.strip():
+            raise Unrendered(f"{named}.text must be nonblank text")
 
 
 def validate_document_content(

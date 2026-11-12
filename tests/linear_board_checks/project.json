@@ -25,7 +25,10 @@
       "{workspaceRoot}/orchestrator/follow_up_drafts.py",
       "{workspaceRoot}/orchestrator/follow_up_tickets.py",
       "{workspaceRoot}/orchestrator/human_items.py",
-      "{workspaceRoot}/orchestrator/run_reading.py"
+      "{workspaceRoot}/orchestrator/run_reading.py",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/config/onepipeline.version",
+      "{workspaceRoot}/templates/**/*"
     ]
   },
   "targets": {

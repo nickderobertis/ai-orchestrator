@@ -893,6 +893,30 @@ def test_the_engine_accepts_the_task_the_tail_created_as_its_template_rendering(
     assert ": ok" in checked.stdout, checked.stdout
 
 
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This reads the module-scoped `finished` fixture every journey above shares and spends no tool run of its own, so it adds nothing behind `plan-tooling-plan-flow`'s edge that the writer-task journeys beside it do not already run there.  # noqa: E501 - a directive is one line
+@pytest.mark.xdist_group("finish-plan")
+def test_the_writer_is_held_to_the_length_the_copy_measures_with_the_command_it_names(
+    finished: Finished,
+) -> None:
+    """The criteria bound the composed body with the plan's own measuring command.
+
+    The task's What names the same command, so the writer measures its document while it
+    can still shorten it rather than meeting the board's refusal after every paid step.
+    """
+    command = f"`uv run --no-sync python -m orchestrator.task_body {finished.drafted.qualified}`"
+    content = finished.design_task["content"]
+    flat = " ".join(_criteria(content).split())
+    assert (
+        f"The document\u2019s composed body, as {command} reports it, is under 45,000 "
+        "characters. Where the plan cannot be documented under 45,000 characters without "
+        "dropping content its approver needs, the body is under 65,536 characters, and the "
+        "dispatch\u2019s report states the measured figure and which sections hold it above "
+        "45,000."
+    ) in flat, flat
+    what = content.split("## What", 1)[1].split("\n## ", 1)[0]
+    assert f"measure it with {command}" in " ".join(what.split()), what
+
+
 @pytest.mark.xdist_group("finish-plan")
 def test_the_design_document_nodes_task_is_a_plan_task_rendering_owing_each_obligation(
     finished: Finished,

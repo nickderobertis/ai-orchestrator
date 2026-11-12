@@ -228,6 +228,20 @@ budget_criterion = (
     f"The document\u2019s {budget_answers} answers are exactly the values `{budget_command}` "
     f"prints for them."
 )
+# The length the copy measures, held while the writer can still shorten the document.
+length_command = f"uv run --no-sync python -m orchestrator.task_body {plan}"
+length_task = (
+    f"Once the document is stored, measure it with `{length_command}`, which prints the "
+    f"characters of its composed issue body exactly as the copy to the board measures them, "
+    f"and shorten it while it is over the template\u2019s length target."
+)
+length_criterion = (
+    f"The document\u2019s composed body, as `{length_command}` reports it, is under 45,000 "
+    f"characters. Where the plan cannot be documented under 45,000 characters without "
+    f"dropping content its approver needs, the body is under 65,536 characters, and the "
+    f"dispatch\u2019s report states the measured figure and which sections hold it above "
+    f"45,000."
+)
 # The visual answer is quoted rather than composed, like the budget answers: a plan whose
 # project holds its visual spike\u2019s report has that report\u2019s `visual_changes` and the path of
 # each image it holds quoted here, and every other plan has the one criterion that it is `[]`.
@@ -314,6 +328,7 @@ answers = {
         f"guidance comments in that chain say how to write it, and `{variables}` lists the "
         f"answers it takes.\n\n"
         f"{budget_task}\n\n"
+        f"{length_task}\n\n"
         f"{planned_task}"
         f"{visual_task}"
         f"What the planner was asked to plan, in the brief\u2019s words, for the document\u2019s What:"
@@ -344,6 +359,7 @@ answers = {
         rows_criterion,
         graph_criterion,
         budget_criterion,
+        length_criterion,
         visual_criterion,
         "Every image the document references is held as an asset of the document.",
         "This dispatch reports where the store put the document, in the form the store reports "

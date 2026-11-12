@@ -40,18 +40,21 @@ variables:
       (text, the unit's one paragraph, which may show a diagram as an image reference
       `![<alt text>](./<name>.png)` to an asset of this document); `reversible` (a list of objects, the unit's trivial and
       low-cost decisions in reading order, or `[]` when it has none), each with the string
-      keys `title` (its short bold title) and `text` (its one sentence); and `decisions` (a
+      keys `title` (its one-line summary) and `text` (its one sentence); and `decisions` (a
       list of objects, the unit's high-cost decisions, or `[]` when it has none). Each decision has the keys `name`
       (string, its heading), `justification` (string, naming who would have to act to undo
-      it) and `content` (a nonempty ordered list). Each part is exactly either
+      it), `content` (a nonempty ordered list of parts) and, only when it has examples,
+      `examples` (a nonempty ordered list of parts of the same shape, omitted otherwise).
+      Each part is exactly either
       {type: "prose", text: string} or {type: "code", language: string, text: string}.
       Prose is nonblank Markdown explanation without fenced-code blocks; inline code and
       an image reference `![<alt text>](./<name>.png)` to an asset of this document are
       allowed. Code is nonblank literal text, never a pre-fenced block. Language is a
       nonempty single-line fence info token: letters, digits, underscore, plus or hyphen;
-      use `text` for untyped output. No extra keys, mixed shapes or unknown tags.
-      Exact legacy decisions instead retain `name`, `justification`, `summary` and
-      `artifact`, all strings, rendered historically without classification. Decisions
+      use `text` for untyped output. No extra keys beyond `examples`, no mixed shapes and
+      no unknown tags. Exact legacy decisions instead retain `name`, `justification`,
+      `summary` and `artifact`, all strings, rendered historically without classification,
+      and take no `examples`. Decisions
       may use either exact shape while deliberately regenerating a document.
     type: list
     items: object
@@ -138,6 +141,24 @@ variables:
 ---
 {#- A table cell is one line holding no bare column delimiter, whatever an answer says. -#}
 {% macro cell(value) %}{{ value | replace("|", "\\|") | replace("\r\n", " ") | replace("\n", " ") | replace("\r", " ") }}{% endmacro %}
+{#- An expandable block's summary is HTML: `&`, `<` and `>` as entities, each backtick span as `<code>`. -#}
+{% macro summary(title) %}{% for piece in title | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") | split("`") %}{% if loop.index0 is odd and not loop.last %}<code>{{ piece }}</code>{% elif loop.index0 is odd %}`{{ piece }}{% else %}{{ piece }}{% endif %}{% endfor %}{% endmacro %}
+{#- One prose or code part of a decision, a code part fenced longer than any backtick run it holds. -#}
+{% macro part(one) %}
+{% if one.type == "prose" %}
+{{ one.text }}
+
+{% else %}
+{% set fence = namespace(value="```") %}
+{% for unused in range((one.text | length) - (one.text | replace("`", "") | length)) %}
+{% set fence.value = fence.value + "`" %}
+{% endfor %}
+{{ fence.value }}{{ one.language }}
+{{ one.text }}
+{{ fence.value }}
+
+{% endif %}
+{% endmacro %}
 {% block document_guidance %}
 {#
   THE READER. A technical product manager with no depth in this domain. They read this
@@ -149,7 +170,13 @@ variables:
 
   LENGTH. A document is about as long as the design document this template replaces would
   be for the same plan. Exactness is spent on what is hard to undo, and everything else is
-  said in a sentence.
+  said in a sentence. A high-cost decision's content is about 1,200 characters or less,
+  examples excluded. The whole document's composed issue body, as `python -m
+  orchestrator.task_body <source:project>` measures it, is under 45,000 characters, reached
+  through terser writing and never by dropping what the approver needs. A plan that cannot
+  be documented under 45,000 characters without losing needed content stays under GitHub's
+  65,536-character refusal, and its writer reports the measured figure rather than
+  truncating.
 
   SECTIONS. In this order: What, Why, Goals, Visual changes, Architecture, Budgets,
   Acceptance criteria and Planned tasks. Goals appears only for a plan whose tasks state
@@ -166,6 +193,11 @@ variables:
 
   HIGHLIGHTING. No GitHub alert blocks (`> [!CAUTION]` and the like) anywhere. The bold
   reversibility line is the whole of the highlighting.
+
+  EXPANDABLE BLOCKS. What is only sometimes needed — a reversible decision's sentence, a
+  decision's examples, the planned-tasks table — is collapsed, and the template alone writes
+  each block, in the authored form onetaskgraph's README states under "Expandable blocks".
+  No answer writes a `<details>` block of its own.
 
   THIS TEMPLATE. Each section renders inside its own block: `what`, `why`, `goals`,
   `visual_changes`, `architecture`, `budgets`, `acceptance_criteria` and `planned_tasks`. Each section's guidance is a Jinja comment in a
@@ -285,12 +317,20 @@ variables:
       A prose-only behavioural decision is valid. For literal artifacts use: a `diff` block for
       a changed shape, the full shape for a new one, a `--help` diff for a CLI, a text
       sketch for a UI. A behavioural decision with no artifact says so in one sentence.
+    - Optionally, `examples` after a decision's content, rendered collapsed under the
+      summary Examples. Examples are given only where the abstract contract is hard to
+      follow without them: a concrete, illustrative call, record, input and output, or
+      before and after. Keep them to about 800 characters per decision.
     - Then, after the high-cost subsections, a `**Reversible:**` line followed by one
-      bullet per trivial or low-cost decision the unit makes: an interface, a stored shape,
-      a flag, a behaviour. Each bullet is `- **<short title>.** <one sentence>`, and the
-      sentence names the thing exactly (the flag, key, field, route or command). A bullet
-      carries no level label, no artifact and no justification, because trivial and low
-      cost read the same here. A unit with no such decision has no `**Reversible:**` line.
+      expandable block per trivial or low-cost decision the unit makes: an interface, a
+      stored shape, a flag, a behaviour. Its `title` is the block's summary and its `text`
+      the body. A title says what the decision changes in that area, not only the area:
+      "Adds a `--dry-run` flag to `copy`", not "Flag name". It fits on one line of about 90
+      characters and ends with no period; the template writes its backtick code as the
+      summary's HTML. The text stays one sentence naming the thing exactly (the flag, key,
+      field, route or command). An item carries no level label, no artifact and no
+      justification, because trivial and low cost read the same here. A unit with no such
+      decision has no `**Reversible:**` line.
     - Nothing else: no Kind, Owner or Status line, no Owes or May-assume bullets, and no
       links between sections.
 
@@ -332,21 +372,19 @@ variables:
 **Reversibility: high cost** — {{ decision.justification }}
 
 {% if decision.content is defined %}
-{% for part in decision.content %}
-{% if part.type == "prose" %}
-{{ part.text }}
-
-{% else %}
-{% set fence = namespace(value="```") %}
-{% for unused in range((part.text | length) - (part.text | replace("`", "") | length)) %}
-{% set fence.value = fence.value + "`" %}
+{% for one in decision.content %}
+{{ part(one) -}}
 {% endfor %}
-{{ fence.value }}{{ part.language }}
-{{ part.text }}
-{{ fence.value }}
+{% if decision.examples is defined %}
+<details>
+<summary>Examples</summary>
+
+{% for one in decision.examples %}
+{{ part(one) -}}
+{% endfor %}
+</details>
 
 {% endif %}
-{% endfor %}
 {% else %}
 {{ decision.summary }}
 
@@ -360,9 +398,14 @@ variables:
 **Reversible:**
 
 {% for item in unit.reversible %}
-- **{{ item.title }}.** {{ item.text | replace("\n", "\n  ") }}
-{% endfor %}
+<details>
+<summary>{{ summary(item.title) }}</summary>
 
+{{ item.text }}
+
+</details>
+
+{% endfor %}
 {% endif %}
 {% endfor %}
 {% endblock %}
@@ -469,7 +512,8 @@ The export may carry files these patterns match although their contents cannot b
 {% block planned_tasks_guidance %}
 {#
   PLANNED TASKS. A table with the columns Task, Unit, What it delivers, Depends on, Where it
-  lives: one row per task, every cell one line, and "What it delivers" a short phrase. The
+  lives, collapsed in one expandable block under the graph image when there is one: one row
+  per task, every cell one line, and "What it delivers" a short phrase. The
   Unit column names the unit the task changes. Where it lives is the location the plan store
   reports for the task, never one composed by hand.
 
@@ -490,9 +534,14 @@ The export may carry files these patterns match although their contents cannot b
 ![Dependency graph of the plan's tasks](./{{ dag_image }})
 
 {% endif %}
+<details>
+<summary>All {{ planned_tasks | length }} planned tasks</summary>
+
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 {% for row in planned_tasks %}
 | {{ cell(row.task) }} | {{ cell(row.unit) }} | {{ cell(row.delivers) }} | {{ cell(row.depends_on or "none") }} | {{ cell(row.location) }} |
 {% endfor %}
+
+</details>
 {% endblock %}

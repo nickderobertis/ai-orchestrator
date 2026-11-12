@@ -1809,6 +1809,25 @@ def test_an_approval_write_the_store_refuses_otherwise_is_reported_as_the_store_
         {"name": "n", "justification": "j", "content": [{"type": "prose", "text": False}]},
         {"name": "n", "justification": "j", "summary": "x", "artifact": "", "content": []},
         {"name": "n", "justification": "j", "summary": "x", "artifact": False},
+        {"name": "n", "justification": "j", "summary": "x", "artifact": "", "examples": []},
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "prose", "text": "x"}],
+            "examples": [],
+        },
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "prose", "text": "x"}],
+            "examples": [{"type": "code", "text": "x"}],
+        },
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "prose", "text": "x"}],
+            "examples": [{"type": "prose", "text": "```json\nx\n```"}],
+        },
     ],
 )
 def test_ordered_decisions_are_validated_at_the_approval_reader(decision: object) -> None:
@@ -1828,6 +1847,14 @@ def test_modern_and_legacy_decisions_coexist_at_the_reader() -> None:
     }
     legacy = {"name": "old", "justification": "j", "summary": "Historical.", "artifact": ""}
     assert design_approval.validate_content({"units": [{"decisions": [modern, legacy]}]}) is None
+    exampled = {
+        **modern,
+        "examples": [
+            {"type": "prose", "text": "A call:"},
+            {"type": "code", "language": "sh", "text": "copy --dry-run"},
+        ],
+    }
+    assert design_approval.validate_content({"units": [{"decisions": [exampled]}]}) is None
 
 
 @pytest.mark.parametrize("answers", [None, [], "not an object"])
@@ -2329,6 +2356,47 @@ def test_an_edged_plans_document_opening_with_no_held_graph_is_not_approved(
         design_approval.ungraphed("graphed:demo", unheld)
 
     assert design_approval.ungraphed("graphed:demo", shown) is None
+
+
+def _collapsed(table: str, opening: str = "") -> str:
+    """``table``'s section in the layout the design-doc template writes now: the table inside
+    one expandable block, under ``opening`` when the section opens with the graph image."""
+    heading, rows = table.split("\n\n", 1)
+    shown = f"{opening}\n\n" if opening else ""
+    return (
+        f"{heading}\n\n{shown}<details>\n<summary>All 2 planned tasks</summary>\n\n"
+        f"{rows}\n</details>\n"
+    )
+
+
+def test_the_table_is_read_inside_its_block_and_in_the_layout_before_it() -> None:
+    """A collapsed table, and one a tracker stored with its own separator, read as the bare one.
+
+    A document rendered before the table was collapsed is read exactly as it always was.
+    """
+    expected = design_approval.planned_rows(EDGED_TABLE)
+    assert len(expected) == 2, expected
+    for layout in (
+        _collapsed(EDGED_TABLE),
+        _collapsed(EDGED_TABLE, GRAPH_IMAGE),
+        _collapsed(
+            EDGED_TABLE.replace("| --- | --- | --- | --- | --- |", "| -- | -- | -- | -- | -- |")
+        ),
+    ):
+        assert design_approval.planned_rows(layout) == expected, layout
+    with pytest.raises(OSError, match="table is not the design-doc template's"):
+        design_approval.planned_rows(_collapsed(SEPARATORLESS_TABLE))
+
+
+def test_a_collapsed_edged_table_still_needs_the_graph_image_above_its_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The block holds the table; the picture above it is still what a person sees first."""
+    shown = _graphed_locally(tmp_path, monkeypatch, _collapsed(EDGED_TABLE, GRAPH_IMAGE))
+    assert design_approval.ungraphed("graphed:demo", shown) is None
+    bare = _document(qualified_id="graphed:demo-design", content=_collapsed(EDGED_TABLE))
+    with pytest.raises(OSError, match="lists 2 planned tasks with a dependency between them"):
+        design_approval.ungraphed("graphed:demo", bare)
 
 
 def test_an_edged_table_written_without_its_separator_row_is_refused_rather_than_approved() -> None:
