@@ -57,217 +57,54 @@ checkout**, which is what keeps concurrent orchestrators from racing one worktre
 registry; and let the repository's **own merge path** verify the change before it
 lands.
 
-**Routing lives in the rules file.** `config/onevcs.rules.yml` matches an identity by
-pattern to its `workflow` and `repo_type` and names the publication policy and approvals
-that follow; with the checkout list `config/onevcs.checkouts` it is installed by `just
-repos-apply`, idempotently, so re-run it after an edit. `onevcs rules check <repo>`
-shows the resolved policy. `just repos` only lists identities and checkouts: the
-`workflow`, `repo_type`, and `gate` columns it prints are the registration's derivation,
-not the routing. The four published `merge_policy` names are `local-direct`,
-`change-open`, `change-auto`, and `change-direct`
-(`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` holds this list to the launcher's own); team
-identities cannot use local workflow or direct integration, and `change-open` forces
-remote open-PR publication for one run without changing stored workflow.
+**Routing lives in the rules file.** `config/onevcs.rules.yml` matches an identity to its
+`workflow`, `repo_type`, publication policy and approvals; `just repos-apply` installs it
+with `config/onevcs.checkouts`, idempotently, so re-run it after an edit, and `onevcs rules
+check <repo>` shows the resolved policy. The four `merge_policy` names are `local-direct`,
+`change-open`, `change-auto` and `change-direct`; `change-open` forces open-PR publication
+for one run without changing stored workflow.
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse, contracts_have_one_source_or_a_drift_gate] The task that adopted the draft lifecycle requires this document to state each of these policies, exceptions and levers once, and this is that one statement, deferring the mechanics to onevcs's `docs/contract.md`; the `onevcs change ready <session>` line it restates is reconciled against the pinned CLI's own `--help` by `tests/test_cli_surface_drift.py`, which refuses a verb or flag that release lacks. -->
-**Every change request a remote lifecycle publication opens starts as a draft** while its
-required checks run, and what a green draft becomes is derived from the identity's policy:
-lifted to ready under `change-auto`, `change-direct` and `change-open` with `approvals:
-none`, and kept as a draft for the user's own review under `change-open` with `approvals:
-required` — the team case, settled `done` as `change-review-draft` and lifted by that user
-on the host or with `onevcs change ready <session>`. `change-open` watches its checks, so
-red there arrives as `checks-failed` and is retried onto the same branch. Lifting is
-one-way: later commits never re-draft a lifted change. A draft somebody asked for —
-`onepipeline.draft: true`, a release-awaiting pin, a worker's own `--draft` while it holds
-it — is never lifted by green checks. A repository whose CI skips drafts is lifted before
-green, with a warning, only after the grace window and when nothing on its head
-commit is still running, so its checks run. Workflows that run on drafts need no
-`ready_for_review` trigger. The rules file's two per-identity levers are
-`drafts: {disabled: true}`, opening change requests ready as before, and `drafts:
-{warn_on_early_lift: false}`, silencing that warning; onevcs's `docs/contract.md` is the
-authority, and `onevcs rules check <repo>` shows the resolved behaviour.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse, contracts_have_one_source_or_a_drift_gate] -->
+**No host-run gate exists, and that is deliberate.** What verifies a change is the
+repository's own merge path — the host's required checks for a remote identity, the
+`pre-push` hook for a local one — and `onevcs` detects which. `just repos
+--audit-gate-coverage` names the checks each remote identity requires, read from the host
+when you ask: read it before relying on a merge path, and treat an identity it cannot
+classify as uncovered.
 
-**No host-run gate exists, and that is deliberate.** A verifier run beside the real one
-throws its answer away, and where it ran less than the merge path it read as
-verification while a branch sat blocked on a required check it never ran. What verifies
-a change is the repository's own merge path — the host's required checks for a remote
-identity, the `pre-push` hook for a local one — and `onevcs` detects which. The tools a
-local one's hook needs are put in place ahead of the dispatch by `just repos-bootstrap` —
-each registered checkout's own `just bootstrap`, started last in every session start of
-this repository as a job detached from the hook's budget, memoized on that checkout's
-`HEAD` and the files its recipe names, held to one caller per checkout, and never run on
-a checkout of this repository — so a sibling's gate is not discovered one
-publication attempt at a time. Every check a remote identity
-requires is one only its merge path runs, and `just repos --audit-gate-coverage` names
-them per identity, read off that repository's own branch protection and rulesets by
-`onevcs` at the moment you ask. There is no tracked copy of
-that list, so a new identity needs a rule and nothing else. Read the audit before
-relying on a merge path, and keep an identity it cannot classify visible rather than
-reading it as covered.
+**Nothing that changes what a remote or a base branch sees bypasses `onevcs`**: pushing,
+merging into a base and opening a change request go through its verbs, while local commits
+and every read are your own git. A lifecycle worker may do exactly two things to a remote on
+its own — open its own draft, and a throwaway demonstration change request stacked on it,
+each only when its task grants it — and `templates/dispatch-appendix.md` is the one
+statement of both. Every branch state has one verb, decided by what the branch *is*
+([the table](docs/repo-lifecycle.md#which-verb-lands-which-branch-state)), and improvising
+past a missing one lands a change its merge path never ruled on: `just recoverable` names a
+branch's verb, `just unpublished` counts every branch owed — land each or acknowledge it
+with a reason — and `just work-status <change-url|session|branch|commit>` reports
+everything `onevcs` knows about one piece of work.
 
-**Nothing that changes what a remote or a base branch sees bypasses `onevcs`.**
-Pushing, merging into a base, and opening a change request go through
-`publish-branch` / `repo-recover` / `integrate` / `preserve`; local commits, merges into your own
-working branch, and every read are the agent's own git, because local authoring *is*
-git and a rule everyone breaks routes nothing. A lifecycle worker may do exactly two
-things to a remote on its own — open its own draft, and a throwaway demonstration change
-request stacked on it, each only when its task grants it — and
-`templates/dispatch-appendix.md` is the one statement of both, because every dispatch reads
-that text and `tests/test_shared_dispatch_bar.py` refuses a second. Every branch state has a verb, decided
-by what the branch *is*: `just publish-branch` verifies and publishes a complete
-unpublished branch no session holds, under its identity's resolved policy; `just
-repo-recover` is for a branch carrying unattested incomplete provenance and is the only
-verb that can attest that marker — never bypass it with a normal commit; `just
-integrate` is the local merge train, merging finished branches into their base and
-opening no change request; `onevcs preserve` keeps a branch on its origin rather than
-landing it. Improvising past a missing verb is what puts a change on a
-base without its merge path ruling on it, the failure this routing exists to prevent;
-the table is in [the lifecycle
-doc](docs/repo-lifecycle.md#which-verb-lands-which-branch-state). Three verbs answer
-the questions those raise. `just recoverable` names which verb a branch needs, with
-each resume command in its `just` form. `--repo <checkout>` scopes it to that one
-identity from any directory; without it, run inside a registered checkout it answers for
-that identity **alone** and elsewhere for every identity, so read its first line for
-the scope before reading a short result as nothing to recover. It omits a branch that
-already landed — unconditionally for a `local-direct` identity, and for a remote one
-only while this host's record of the landing survives, a `may have landed` row being
-the verb reporting no record rather than an unpublished branch. For every identity from
-anywhere, or for the sessions your own runs opened, read `just unpublished` instead — the
-engine's own `onepipeline unpublished`, which decides what is owed — and land or
-acknowledge with a reason each branch it counts.
-**A branch that provably holds no work beyond its base retires itself** — at session
-close, in `just sweep`, and on the engine's idle maintenance — and a pool slot is never
-removed, only returned. A superseded branch that still differs from its base is your
-call, printed with its evidence and answered with `just reclaim-branch <branch> --repo
-<checkout>`; `just unpublished --acknowledge` is for work deliberately kept. For a run
-that settled before this host's engine recorded supersessions,
-`node_modules/.bin/onepipeline supersessions <run-id> --record`, run once by hand,
-records its retries' superseded branches. `just work-status
-<change-url|session|branch|commit>` reports everything `onevcs` knows about one piece
-of work. `just import-branch <branch> --repo <checkout>` makes a branch finished in a
-session worktree or a run clone reachable from an identity's registered checkouts,
-which is where the landing verbs read a branch from and nowhere else.
+**Read a change request's title against its net diff versus the base before anything
+merges it**, never against its commits: a plan node's `title` becomes the permanent squash
+subject, republication never updates it, and only the net diff shows a later commit
+reverting an earlier one.
 
-A remote lifecycle change request's body is drafted by an agent graph,
-`graphs/pr-author.yaml`, one drafter the engine runs on both roads a branch takes to a
-change request: a run's publication closeout, because `config/onepipeline.launch.yaml`
-names it for `just orchestrate`'s launches, and the engine's own `onepipeline publish-branch` and `repo-recover`, which `just
-publish-branch` and `just repo-recover` run naming the same graph. The drafter runs
-after verification and **finishes the description the worker left**, reading the
-worker's transcript for evidence — so a worker starts that description with what only it
-knows — and a node whose task metadata carries `onepipeline.draft: true` is left as a
-draft for a person to lift, settling `done` as `change-draft` with its dependents
-proceeding. A landing verb spends its turn before the push; a caller's own `--body` /
-`--body-file` is forwarded untouched, `--no-draft` skips the turn, and a `local-direct`
-identity is never drafted for. Drafting never blocks publication: a draft that cannot
-run opens the change request with no body, or keeps the description the worker left.
-The raw `onevcs publish-branch …` line `onevcs recoverable` prints reaches the verb
-below the drafter and opens an empty description, which is why `just recoverable`
-re-renders it in `just` form.
+**Read every settled state before acting on it.** `no-changes` from a node that declared
+no `expects_no_diff` means the base already carries the work, and `empty-branch` that
+nothing was produced; look for the work before concluding there was none. A `failed` node
+may still have published (`task-failed-change-open` carries the URL), so read its
+settlement and change request before any retry. A retryable failure such as
+`checks-failed` arrives already retried onto the same branch, so never `retry` it blind:
+a retry of a branch a merge path refused always names that branch, since one naming none
+cuts a fresh one beside committed work. `pushed-unverified` is work on the origin with its
+verdict outstanding: read it on the host and never publish it again. `change-draft` and
+`change-review-draft` are `done` by design, a draft waiting for a person.
+`infrastructure-failure` is a host missing a tool or credential: repair the host, then
+`retry` the node onto the branch its settlement names.
 
-**The body is re-derived at every publication and the subject is derived once, which
-is backwards, because the subject is the one that becomes permanent.** A plan node's
-`title` is the subject `onevcs` publishes under, republication updates nothing but the
-branch, and the squash headline composed from it lands on a base whose history is never
-rewritten and is what release tooling reads. So read a change request's title against
-its net diff versus the base before anything merges it, never against its commits:
-every commit can be accurate while a later one reverts an earlier, and only the net
-diff says the pair cancels.
-
-**Read every settled state before acting on it.** A lifecycle node asked for a change
-whose branch ends level with its base settles `failed` as `empty-branch` unless it
-declared `expects_no_diff` or the base already carries the branch — so `no-changes`
-from an undeclared node means the base carries the work, and `empty-branch` is the
-word that says nothing was produced. Either way, look for the work before concluding
-there was none — that checkout's branches, its `main` against `origin/main`, the
-repository's open change requests — because a worker dispatched without a worktree
-works wherever it can see. A node that settled
-`failed` may still have published: `task-failed-change-open` carries the URL, and
-re-running that work duplicates a change already waiting to be read; a `dispatch-died`
-or `provider-failed` node whose work landed says *landed on its base* with the commit. A node settled
-`done` can be unlanded by design, its dependents proceeding: `change-draft` is a draft
-the plan asked for, and `change-review-draft` is a change whose required checks are green,
-on a `change-open` identity whose approvals are required, kept as a draft for its user's
-review until that person lifts it on the host or with `onevcs change ready <session>`.
-`change-review-draft-unchecked` is that same draft republished — by a rework, a restack or a
-readjustment — whose check verdict was deferred at the push, and the next review trigger's
-read settles it green or re-dispatches it red. `merged-during-rework` is a failure that is
-no refusal: a person merged the change request while its rework ran, so the rework kept its
-work on its branch and published nothing, and its surface names how to go on. A node
-declaring `publish: "preserve"` settles `done` as `preserved`: a branch kept on its origin
-at the head the settlement names and never landed, which `just unpublished` counts until
-it is acknowledged; `just reclaim-branch <branch> --repo <checkout> --discard` deletes it
-once nothing needs it. The retryable
-failure words — `checks-failed` and its siblings in the outcome vocabulary
-`tests/test_engine_contracts.py` holds to the engine — say the publication reached the
-merge path and got no verdict it could act on, and they arrive already retried, the
-engine having re-dispatched onto the *same* branch with the reason, `onevcs`'s
-evidence and where the branch stands on its remote, to be grown with new commits on top,
-until its budget was spent. Read a refusal among them as a branch that exists,
-carries a tree the merge path would not pass, and has been worked several times — never
-as a node to `retry` blind, since a retry naming no branch cuts a fresh one beside
-committed work with the refusal still standing. A continued branch on a change-request
-identity merges its moved base only on
-conflict or when the host requires up-to-date branches (always on a `local-direct`
-one). **The conflict is the dispatched worker's to resolve, under its judge**: the session
-opens with the merge in progress and the task hands it over — a `change-auto` change
-request the host reports conflicting included, which returns at once as `sync-conflict`. A blocking
-`session-conflict` finding means the worker was dispatched into it until the node's
-publication budget was spent and did not converge, so decide how the node goes on — a
-`retry` with an amended task, say — and never merge it by hand. A `push-rejected` whose merge path
-wrote nothing says so and names how the push itself ended — its exit status, or the
-signal that terminated it — so read that line before re-running any gate to learn what
-failed. `checks-unsettled` is not a verdict on the tree: a required check with no
-verdict ends there, whether it was still pending when the watch's bound elapsed or
-completed `cancelled` or `stale`, which the linked `onevcs` reads as no verdict rather
-than as red. The required set is the one the host declares, and a declared context with
-no run yet is pending, so `checks-settled` is never recorded `passed` before every
-declared context has reported, and the reason names each one that had not started. A check concluded `skipped` is its own state, never read as passed: a
-publication a skipped required check let through records `checks-settled` with the
-verdict `passed-with-skipped`, naming that check, and its settlement says so. A
-`checks-unsettled` whose wait onevcs left armed is re-read toward landing under the
-engine's merge-path read budget, with its merge armed on the host rather than a
-stranded draft. A change request the host merged after that watch stopped is reconciled on
-the next `status`, `release status` or publication that meets it — `onevcs` asks the
-host once and records the merge as the landing — so read `just work-status` before
-anything else; only a change still open or closed unmerged there is one whose check to
-re-run on the host before reading the branch as refused. `pushed-unverified` is the one
-that is not a refusal: the push reached the remote and the merge path could not then be
-read, so the work is on the origin with its verdict outstanding — read the change
-request on the host, never publish again. A run clone git will not read no longer
-answers for its whole identity: an identity-wide read reports it as a finding naming the
-clone and goes on across the rest, a release answer it leaves undecided reads *not
-answered* naming it, and a landed session over it closes from its landing record.
-
-<!-- llmlint: ignore-block[changed_behavior_has_e2e] The onevcs half — a hook's marker line read as the `host-prerequisite` kind, with the remediation as its reason — is driven here through `just publish-branch` in `tests/e2e/publish_and_landing/test_publish_branch_e2e.py`. The engine half — settling a lifecycle node on that kind once, as `infrastructure-failure`, with no re-dispatch — is a lifecycle publication's routing, which onepipeline drives through its real binary and a rejecting hook in its own `tests/e2e/lifecycle.rs` (PR 394); here `tests/test_adopted_engine_carries_this_plan.py` holds that the adopted release contains that landing and `tests/test_engine_contracts.py` holds the settlement pairing and the marker's name to the linked crates. A journey here would need a lifecycle dispatch against a registered identity whose hook prints the marker — a worker dispatch this suite does not double below the paid model — to re-prove what the producer's journey already does. -->
-**A merge path refused because this host lacks a tool or a credential one of its hooks
-needs** — said by the hook itself, on the one line beginning with `onevcs`'s
-host-prerequisite marker — is not retried onto the branch at all, since no edit to the
-tree installs anything: the engine settles it once as `infrastructure-failure`, the
-word the dispatch layer already uses for a host that could not launch, carrying the
-preserved branch, the commit it stands at and the hook's own remediation. Repair the
-host, then `retry` the node onto the branch that settlement names.
-<!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
-
-**How a landing is read.** A node's landing is read fresh when a view renders, and a
-landing the run recorded is never overturned. `just work-status` is where the evidence
-is read (`tests/e2e/publish_and_landing/test_work_status_and_import_e2e.py` drives it before and after a
-landing): read its `decided by:` line before its `landed:` line, because every tier but
-`content comparison` is a record and answers `yes`, while `content comparison` alone
-answers `no` or `unknown`, and `no` is the dangerous one, since it closes the question
-and invites re-dispatching work that already merged. Which tiers a branch can reach is
-its workflow's: a `local-direct` publication writes the base's squash commit itself and
-stamps an `Orchestrator-Landed-Commit` trailer under the `trailer_prefix`
-`config/onevcs.rules.yml` sets, a record the repository's own history keeps; a remote
-publication's records are this host's state, and with that lost the branch has nothing
-but content comparison — so read a remote `no` by comparison as what a lost record looks
-like, and confirm against the change request before acting. `in part` names a real
-landing with commits above it, which is what publishing now would land. A stale sibling
-checkout defeats the trailer tier, so a `local-direct` answer that is not `yes` is first
-a question about which registered checkouts hold the branch — `just sync` the stale one
-before believing it. `git diff main...branch` cannot answer what landed: publication
-squashes, so a landed branch still reports its full insertion count.
+**Read `just work-status`'s `decided by:` line before its `landed:` line**: every tier
+but `content comparison` is a record and answers `yes`, while a `no` by content comparison
+is what a lost record looks like, so confirm against the change request, or `just sync` a
+stale checkout, before re-dispatching work that may already have merged.
 
 **A lifecycle worker starts in its session worktree**, so a task says nothing about
 where to commit: never a base branch by name, and never a phrase readable as an
@@ -282,42 +119,6 @@ believing the event stream. Session close refuses to reap a worktree holding com
 branch does not carry, which catches only a worker that committed, so the brief rule
 stands regardless.
 
-**What a cut branch is called.** Its prefix is this host's, set in
-`$ONEVCS_HOME/branches.yml` — host state outside every checkout, which no tracked file
-here writes — and the rest is the name `onepipeline` renders from its branch-name
-template. This host configures no template because it takes the default, which
-`tests/e2e/publish_and_landing/test_human_readable_branch_e2e.py` drives for a plan whose tasks carry no key:
-the plan's name, then the node's id.
-
-**Where a session is placed, and what a close returns.** A session worktree is cut on a
-**pooled slot** — a warm worktree that survives its session's close — or on a
-disposable run root, and the workspaces file `just repos-apply` installs beside the
-rules and releases files decides which per identity: the tracked
-`config/onevcs.workspaces.yml` is the shared default — one slot per identity, every
-session past it admitted — overlaid by the host's own
-`${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/workspaces.yml`, which is where a
-host sizes its pool and never the tracked file. A close on a slot
-[**returns**](docs/repo-lifecycle.md#where-a-session-is-placed-and-what-a-close-returns)
-it — reset and cleaned, ignored paths such as a build output left intact — rather than
-removing it, which is the whole point. A slot is bound to the execution checkout it was
-cut from, so an identity with several execution checkouts spends its pool one slot per
-lender: size `pool` per lender you alternate. Slots are outside every reclamation and
-both sweeps; `onevcs pool status <repo>` reads them and `onevcs pool prune <repo>`
-empties the idle ones. A node the engine cannot place is **held**, not failed:
-`workspace-wait` is a non-blocking surface re-read until the identity admits the node,
-never a stall and never a settlement. An idle driver maintains idle slots on the
-cadence `config/onepipeline.maintenance.yaml` names, which the launch config every `start`
-names hands the engine, running the command each repository declares in its own tracked
-`onevcs.toml` — this host declares none for any repository, so one declaring nothing is
-not maintained — and a sweep that ran something is the `pool-maintenance` record
-`just results` names. A dispatched session is placed by the `onevcs` the engine links,
-so `config/onepipeline.version` governs where a node works while `config/onevcs.version`
-governs the pool verbs you run.
-
-**A draft is stacked on the unlanded drafts it depends on**: its change request targets
-that work and carries the Stack block the engine writes, so each draft's diff is its own and
-a reviewer reads the stack as it was built.
-
 A version bump is adopted **between** runs — a live driver keeps the binary it launched
 with, so no retry inside a run picks one up. A plan is one live graph accepting edits at
 any moment; preserved stacked branches record their base, so recovery targets the stack
@@ -325,82 +126,27 @@ rather than the root.
 
 ## The tools this harness configures
 
-What each tool is *for here*. How to use it is the tool's own to say — in
-`<tool> --help` and its repository — and is not restated in this document.
+What each tool is *for here*; how to use one is its own `--help` and repository. Each is
+governed by its `config/<tool>.version` pin, `llmlint` excepted.
 
 - **`onepipeline`** — the engine: scheduling, dispatch, reconciliation, publication
-  closeout, and the planner channel. Every launch, channel and view recipe wraps it,
-  and the crates it links are what a dispatched node runs — the plan store a run reads
-  its plan from and projects its settlements onto among them, linked rather than
-  spawned. Governed by
-  `config/onepipeline.version`. `onepipeline --help`;
-  https://github.com/nickderobertis/onepipeline.
-- **`onevcs`** — repository identity, sessions and worktrees, publication, and landing:
-  every change to a remote or a base goes through it. `config/onevcs.version` governs
-  the CLI the manager verbs run; a dispatch publishes through the copy the engine
-  links. `onevcs --help`; https://github.com/nickderobertis/onevcs.
-- **`oneagentgraph`** — agent graphs: the observer graph's monitor member and the
-  scheduled note that times its progress report, the drafting and design-document graphs
-  under `graphs/`, and the built-in
-  roles a bare `persona` resolves to. `config/oneagentgraph.version` governs the CLI that
-  `just validate-personas` and a manager note's live delivery run. `oneagentgraph
-  --help`; https://github.com/nickderobertis/oneagentgraph.
-- **`onejudge`** — the two-party conversation every worker runs in: an agent side that
-  does the work and a simulated-user side that reviews it against the task's
-  criteria, driven through its typed SDK. Governed by `config/onejudge.version`.
-  `onejudge --help`; https://github.com/nickderobertis/onejudge.
-- **`oneharness`** — harness and identity routing per side: which subscriptions each
-  side tries, in what order, on what model and deadline (the `oneharness*.toml`
-  files). `config/oneharness.version` governs the CLI the wrapper scripts and `just
-  smoke` spawn; a dispatch's turn goes through the core library the engine links.
-  `oneharness --help`; https://github.com/nickderobertis/oneharness.
-<!-- llmlint: ignore-block[instruction_layer_localized] Which `onetaskgraph` answers is a host-wide fact rather than an `orchestrator/` implementation constraint: every board command a manager runs — `just plans`, `just check-plan`, `just approve-design`, `just follow-ups` — reads through that resolution, and the reader diagnosing a read about the wrong release is the manager, whose document this is. It sits in the roster beside the pin that governs the release, and `orchestrator/AGENTS.md` owns no statement of tool selection; `tests/plan_guidance/test_plan_store_guidance.py` holds this one copy to the code. The block runs to the end of this bullet. -->
-- **`onetaskgraph`** — the plan store, installed with its SDK from the project lock: the `authoring` source a plan is drafted in and
-  the `plans` board it is approved and launched from, as `onetaskgraph.yaml`
-  configures them. `config/onetaskgraph.version` governs the standalone CLI this host's
-  own reads spawn, and is held to the release of the `onetaskgraph-*` crates the engine
-  links, so the store a run reads through — which `config/onepipeline.version`
-  governs — and the one a manager reads are one release. Every
-  plan-store read in `orchestrator/` runs the locked install beside the interpreter —
-  `.venv/bin/onetaskgraph` — never a `onetaskgraph` a shell's `PATH` offers or
-  `ONETASKGRAPH_SDK_BINARY` names, and `orchestrator/plan_store.py` says why.
-  `onetaskgraph --help`; https://github.com/nickderobertis/onetaskgraph.
+  closeout and the planner channel.
+- **`onevcs`** — repository identity, sessions, worktrees, publication and landing.
+- **`oneagentgraph`** — agent graphs: the observer's monitor, `graphs/`, and the built-in
+  roles a bare `persona` resolves to.
+- **`onejudge`** — the worker / simulated-user conversation every dispatch runs in.
+- **`oneharness`** — each side's harness, identity, model and deadline (`oneharness*.toml`).
+<!-- llmlint: ignore-block[instruction_layer_localized] Which `onetaskgraph` answers is a host-wide fact rather than an `orchestrator/` implementation constraint: every board command a manager runs reads through that resolution, and the reader diagnosing a read about the wrong release is the manager; `tests/plan_guidance/test_plan_store_guidance.py` holds this one copy to `orchestrator/plan_store.py`. The block runs to the end of this bullet. -->
+- **`onetaskgraph`** — the plan store `onetaskgraph.yaml` configures. Every plan-store read
+  in `orchestrator/` runs the locked install, `.venv/bin/onetaskgraph`, never one `PATH` or
+  `ONETASKGRAPH_SDK_BINARY` offers; `orchestrator/plan_store.py` says why.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
-- **`onepipeline-ui`** — the DAG API and browser view behind `just dag-ui`, which is
-  `onepipeline-api serve --ui`: one binary answering the view built into it and the
-  read API it reads on one origin, so nothing here serves or proxies a bundle (`just
-  telemetry-server` is the same command without the view). A live and historical view
-  of orchestrated DAG execution that
-  also **supervises** it — stopping, replying to and attesting on runs and shutting down
-  the host, each behind the engine's own authority and the acting session the server runs
-  as — by wrapping those post-launch verbs as routes, and carrying its own copy of the
-  engine. It drives no run, so **this pin governs no dispatch**; the two pins are held to
-  linking one engine for read compatibility — the reader parses the records the pinned
-  engine writes — by `tests/test_linked_libraries.py` rather than by anyone remembering
-  to read `/healthz`.
-  Governed by
-  `config/onepipeline-ui.version`. Its CLI is
-  `onepipeline-api`: `onepipeline-api --help`;
-  https://github.com/nickderobertis/onepipeline-ui and [`docs/dag-ui.md`](docs/dag-ui.md).
-- **`onemessagebus`** — the typed message bus the stack's channel, events and notes run
-  on, and the observer's judge side: `serve --codec monitor`, the bus's generic binding
-  interpreter running the binding this host declares in `config/onemessagebus.yaml`.
-  Governed by `config/onemessagebus.version`, which governs the CLI the host runs; a
-  dispatch reaches the bus through the crates the engine links. `onemessagebus --help`;
-  https://github.com/nickderobertis/onemessagebus.
-- **`onebudgetspec`** — budgets registered in `budgets.yaml` files, each naming the
-  command that measures it, and the check that gates on them. `config/onebudgetspec.version` governs the CLI the hook
-  and `just check` run; it governs no dispatch. `onebudgetspec --help`;
-  https://github.com/nickderobertis/onebudgetspec.
-- **`llmlint`** — the judged lint tier (`llmlint.yml`; `just lint-llm`, `just
-  lint-llm-diff`), the blocking pre-push check beside the deterministic `just check`.
-  No `config/` pin: `scripts/setup-llmlint.sh` installs it, holding the release to the
-  one `config/oneharness.version` admits — the highest `llmlint-cli` whose declared
-  `oneharness-cli` requirement that pin satisfies — which
-  `tests/test_llmlint_release_pin.py` holds on the installed distribution's own
-  metadata. Its row in `orchestrator/host_installs.py` names that script in place of a
-  pin, so a node here awaits its `cli` release like any other producer's. `llmlint
-  --help`; https://github.com/nickderobertis/llmlint.
+- **`onepipeline-ui`** — `just dag-ui`'s DAG API and view, which supervises runs and drives
+  none.
+- **`onemessagebus`** — the bus the channel, events and notes run on
+  (`config/onemessagebus.yaml`).
+- **`onebudgetspec`** — the `budgets.yaml` budgets and the check that gates on them.
+- **`llmlint`** — the judged lint tier, installed by `scripts/setup-llmlint.sh`.
 
 ## Which pin governs a dispatch
 
@@ -417,170 +163,21 @@ moving any other one moves nothing a dispatch does — reading the wrong pin has
 a wrong diagnosis here twice, both times with every pin looking current while a real
 run came out empty.
 
-**Execution uses the installed npm commands.** Engine and read API callers run
-`node_modules/.bin/onepipeline` and `node_modules/.bin/onepipeline-api`; on Linux these
-become the native binary's own process. Platform package paths are for reading binary
-bytes and the SBOM only.
-
-**The installed binary decides, and measuring it is the answer.** The npm platform
-package `onepipeline-cli` installs through `bun.lock` ships a CycloneDX SBOM under its
-`sboms/` declaring one version per linked crate, and
-`tests/test_linked_libraries.py` reconciles the CLI pins to it on every gate run, so a
-bump that left a sibling pin behind fails there rather than diverging silently. A
-release's `Cargo.lock` at the installed tag is corroboration only: a lock says what a
-release *would* link, a host runs what it *installed*, and `origin/main`'s lock answers
-what the *next* release links, and is evidence about this host only by coincidence.
-**Never pick a release for being the newest tag**: a release can ship an unrefreshed
-lock against a fix its own requirement already accepted, so pick by what the lock
-resolved and confirm against the binary — and **widening a `Cargo.toml` requirement
-is a lever connected to nothing**, because the resolution is the whole of the fix.
-
-**A pin names a tag, and the drift gate reads it from a registered checkout.**
-`tests/test_engine_contracts.py` reads each engine's source at `v<pin>` from the checkout
-`config/onevcs.checkouts` registers for it, and nothing here fetches that checkout, so a
-pin bump is publishable only once its tag is there; read that tier's `invalid object
-name 'v<pin>'` as the checkout sitting behind its origin, never as a release the engine
-did not publish.
-
-One pin sits outside that reconciliation because of what it names.
-`config/oneharness.version` is the `oneharness` **CLI**, a different artifact from the
-`oneharness-core` library the engine links on its own account; both are published from
-one repository on their own cadences, so comparing the pin's number with the linked
-core's proves nothing in either direction, and the check gates which dependent brings
-which core instead. The one order between them is the CLI's flags: the `onejudge` a
-dispatch runs spawns whatever `oneharness` is on its PATH, which the CLI pin installs,
-so the engine may adopt an onejudge release that sends `--format json` only once the
-CLI pin is at or past the release that accepts `--format` — the CLI pin is past it, and
-the order holds as long as `config/onepipeline.version` is not moved first onto such an
-engine over an older CLI pin. `config/onetaskgraph.version` is reconciled as a family:
-the engine links the `onetaskgraph-*` crates one workspace version releases beside the
-CLI, so the pin must name the one release they resolve. The read API
-(`config/onepipeline-ui.version`) statically links its own engine and governs no
-dispatch, because it drives no run; `tests/test_linked_libraries.py` holds the two pins to
-one engine for read compatibility, so the reader parses the records the dispatching
-engine wrote. And
-a fix that lands as CI configuration, scripts, or a dev-only crate is in force by
-merging, in that repository's build graph, with no pin here to move: `git tag
---contains` says the release carries the commit while the archive carries nothing of
-it, and `tests/plan_guidance/test_plan_store_guidance.py` re-takes that on the installed plan-store
-CLI.
-
 **The `onevcs` pin moves for the whole host at once, never for one checkout.** `onevcs`
-keeps one registry under `$ONEVCS_HOME` for every checkout and every manager on the
-host, migrates it to its own schema on the first contact of any verb — a read included
-— and the release before it then fails on every verb, the copy a live dispatch of an
-older engine links included. Session setup is such a contact, and it runs on the
-`SessionStart` hook of every session that starts *or resumes* in a checkout carrying
-the new tool, the pin-moving dispatch's own worktree included. So move the pin only
-against the runs still live under an engine linking the older release, and
-re-provision every checkout onto it — session setup, or `just bootstrap`, there — because
-that is the remedy; restoring the older schema by hand is the stop-gap for a live run
-you cannot yet re-provision, and holds only until the next contact. The suite reads a
-per-process copy (`tests/conftest.py` exports `ONEVCS_HOME`), so a test that sandboxes
-`HOME` names `ONEVCS_HOME` beside it; `tests/e2e/publish_and_landing/test_onevcs_state_snapshot_e2e.py`
-re-takes the migration.
+keeps one registry under `$ONEVCS_HOME` for every checkout and migrates it on first
+contact, after which the older release fails on every verb, a live dispatch's linked copy
+included: move the pin only against the runs still live on an older engine, and
+re-provision every checkout with `just bootstrap`.
 
 ## Sequencing a node behind a release
 
-A **release target** is one artifact a repository publishes — a crate, a wheel, an npm
-package — and a consumer says which one it consumes, because "the crate is out" and
-"the wheel is out" are different waits. A repository declares its targets in a
-`release-targets.toml` at its own root; the host's override, `$ONEVCS_HOME/releases.yml`,
-sits outside the registry and the rules file so an older `onevcs` sharing the host reads
-a byte-identical registry. **This host's override is tracked as
-`config/onevcs.releases.yml` and installed by `just repos-apply`** beside the rules file;
-it names each producer's `default_target` — the one a consumer naming no `consumes`
-waits for, since this host's plan check refuses a `consumes` on a `local-direct`
-identity — and gives this
-repository alone the `published` rung, leaving every other repository on the global
-`fast`. A default is one of two kinds: for a producer this host installs, the package it
-installs — a wheel, or the npm package for the engine and the read API; for one it installs nothing of, such as `printobserver`'s `github-release`, the
-artifact a consumer outside this repository waits on. `orchestrator/host_installs.py`
-says which each producer is and is the table those defaults are held to. So a
-plan of this repository awaits a release by
-**depending on the producer's node and naming no `consumes`**: the node resolves
-`published` from the override and waits for the release carrying that producer's
-default target, and no task states any of it. That rung holds the node before it
-works rather than after: under `fast` a node behind an unreleased producer works against
-the pin it launched with, and a `local-direct` publication of it is held unlanded on its
-origin as `complete-but-held` until that release exists.
-`ai-orchestrator` itself declares no target, and a repository declaring none releases
-nothing, so a plan of this repository earns no reference row and no hold as a producer.
-Discovery: `onevcs release --help`, onevcs's own `docs/contract.md`, and onepipeline's
-`docs/contract-divergences.md` for the two plan-node fields, `adoption` and `consumes`.
-
-An automated target carries a **probe**; a human-step target is answered only by an
-acknowledgement somebody records afterwards. Nothing here is the second kind, so
-`human-step` is a member of the vocabulary nothing here uses, and the first one somebody
-configures is a wait on a colleague. A node adopts a dependency `fast` (against the
-branch) or `published` (once the release carrying the work exists), decided by the
-node's own `adoption`, then the repository rung, then the global rung, then `fast`.
-There is no fifth rung, no plan-level tier, and no run-only override. **The adoption
-instruction a worker follows is the producer's**, rendered from the producing
-repository's declaration into the node's references block; a task writes no pinning
-instruction of its own, because a second answer in the task is the one the worker
-follows — change the producer's declaration or the host's override, never the task.
-
-Under `published` a held node never launches, never fails, never degrades, and has no
-timeout; it re-surfaces what it awaits on a slowing cadence, and the decision — keep
-waiting, flip it to `fast` by live edit, stop the run — is yours. A wait surface whose
-hold has since ended — the node unheld, adopted or dispatched at or after the surface was
-queued — is withheld when the queue is read, and stderr names the record that ended it,
-so a wait you are handed is about a hold still on.
-<!-- llmlint: ignore-block[changed_behavior_has_e2e] Both readings need a producer repository declaring a release target with a probe and a consumer held on it, which onepipeline's own `tests/e2e/adoption.rs` builds and drives through the real binary — `status_names_the_release_a_held_node_awaits_rather_than_calling_it_queued` for the first (PR 390), and the unreadable-, renamed- and same-pass-dependency journeys for the second (PR 386). Nothing on this host declares a release target a journey here could hold a node on without rebuilding that world; `tests/test_adopted_engine_carries_this_plan.py` holds that the adopted release contains both landings, and `tests/e2e/publish_and_landing/test_release_adoption_in_force_e2e.py` holds that the installed artifacts resolve the `published` rung at all. -->
-`just status` reads such a node as `held — awaiting the published release of
-<dependency>, waited <duration>`, off the `node-held` the driver journalled, and never as
-`ready — queued for dispatch`. A `published` node whose dependency the driver could not
-resolve this pass — a read that failed, a dependency renamed by a retry, a landing the
-pass had not yet seen — stays held, its recurring wait naming each unresolved
-dependency and why, rather than launching against work no release carried; a
-dependency readied mid-pass is checked before dispatch for the same reason.
-<!-- llmlint: ignore-end[changed_behavior_has_e2e] --> A human-step wait is a
-wait on a person nothing here performs, prompts for, or acknowledges, so the manager
-reading that surface is the person who has to act, or find who will. **A probe is not a
-gate**: it answers what version is out and never refuses a publication; "not answered"
-is not "not released", and a held node stays held on it; a human step awaited is a
-third answer, folded into neither.
-<!-- llmlint: ignore-block[changed_behavior_has_e2e] The reconciliation is `onevcs release status`'s over a `change-auto` landing the host performed after the publishing process ended, which onevcs drives in its own `tests/e2e/releases.rs` and `lifecycle.rs` (PR 163) and onepipeline's `tests/e2e/adoption.rs` drives through to a waiting consumer's release (PR 394). A journey here would need a host double that merges after the publication has returned and a producer declaring a probed target; `tests/test_linked_libraries.py` holds the linked onevcs at the release carrying it, and the acknowledgement half is driven here in `tests/e2e/launch_monitor_observer/test_adopted_cli_fixes_e2e.py`. -->
-**A landing `onevcs` did not witness is reconciled where it is next read, and a hold on
-one it cannot reconcile never releases on its own.** A `change-auto` publication captures its baselines in the call that watches for
-the merge, so a merge the host performs after that process died — or a `change-open`
-change a person merges later — was never seen by it; the adopted `onevcs` has the first
-`release status` that decides such a landing from the change request's number in the
-base do what the publication would have: fast-forward the publication checkout,
-capture each automated target's baseline **at the landing commit**, and record the
-landing, after which the hold reads it as a recorded one. That reading stands only
-while nothing has been released from the landing since, so where a tag already contains
-the landing commit — or that cannot be asked — each target is recorded `unestablished`
-with that reason instead, and the hold answers "not answered": no later probe answer
-can say which release carries the work. Confirm the release on the registry, then
-answer such a hold with `onevcs release acknowledge <REFERENCE> --target <NAME>
---version <VERSION>` on its automated target, which the hold reads as released; a
-landing whose probed baseline was established refuses the acknowledgement and names its
-probe.
-<!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
-**Whether a release exists is read from the registry
-and nothing else**, because a verification badge folds several jobs into one verdict and
-a tag-against-registry comparison reads every publication still in flight as a failure.
-A producer declaration is read at the publication checkout's base, so a checkout left
-off it answers unreadable and probes nothing: `onevcs sync` puts it back.
-
-## What phase a change's events belong to
-
-Every `onevcs` event carries a phase, stamped by the producer, and a filter names the
-phase rather than the kinds in it, so a kind added later arrives in the read that
-already wanted it. A session's supported phases derive from its repository — a
-`local-direct` identity has no Review phase, a repository declaring no release target no
-Release phase — and an answer the derivation cannot reach **widens** the set to every
-phase, because a read that quietly left events out would be indistinguishable from a
-session that wrote none. Naming an unsupported phase in a filter is refused when the
-stream is opened, while an event merely falling into one under a default read is
-dropped silently: the asymmetry is the design, since a filter for the wrong phase and a
-session that did nothing look alike as nothing. That rule lives at the library seam the
-engine opens sessions through, not at `onevcs events --filter`, so a command-line read
-is not a test of what a run would relay. Release events are recorded outside any
-session and reach a run correlated by landing commit through the retry chain, so a
-retried branch's release is attributed to the session the work went on in.
+A plan of this repository awaits a producer's release by **depending on the producer's
+node and naming no `consumes`**: the node resolves the `published` rung from
+`config/onevcs.releases.yml`, which `just repos-apply` installs, and waits for the release
+carrying that producer's default target; no task states any of it. A held node never
+launches, fails or times out — `just status` reads it as `held — awaiting the published
+release of <dependency>` — so the decision is yours: keep waiting, flip it to `fast` by
+live edit, or stop the run.
 
 ## What "agent" means here
 
@@ -606,135 +203,32 @@ run's settlements are projected back to the project it was launched from
 source, the board every session's verified follow-up tickets accumulate on, are never
 repointed either, because a later run comments on an earlier run's issue there.
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] This node's acceptance criteria require the manager's own document to state where a plan's home and members land and what each Linear state means for a plan task, because a manager reads a routed plan's Linear items from here; docs/orchestration.md keeps the fuller table, and tests/plan_guidance/test_plan_store_guidance.py holds this paragraph's state names to the mapping `config/onetaskgraph.user-layer.example.yaml` declares. -->
-**An organization's work lands by repositories and classification through a route the
-host declares, never by choice** — in onetaskgraph's user layer, outside every checkout,
-so no tracked file names the organization or where its work goes (`docs/orchestration.md`,
-*Host-local sources and routes*). A follow-up ticket whose repositories all match such a
-route is filed there. A combined private route on `plans` sends an owner's private work
-to a declared-private store while public work stays on the board.
-`just plans sources route <source> --repository <origin>` answers for a public item;
-`just plans task locate <id> --to <source>` answers where a given item lands.
-**The store's public boundary is on**: every write to a source not declared private
-is screened, plans are drafted in the private `authoring` source, and **a host doing an
-organization's work declares that organization's sources `visibility: private` in its user
-layer before it adopts this change**, since an undeclared tracker refuses every task routed
-to it.
+**Private work never reaches a public board.** A host's onetaskgraph user layer, outside
+every checkout, declares where private work lands and declares those sources `visibility:
+private`. A plan naming any private repository is one private coordinating plan, homed with
+every task in the private source; launch the home id `just finish-plan` reports. `just
+plans sources route <source> --repository <origin>` answers where an item lands.
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This task requires the manager to read the declaration levels and sweep here. The linked onevcs contract and private-terms specification are the authorities; this passage states only the rules the manager acts on. -->
-**An exact public phrase that carries a private repository's term** — a machine name a
-follow-up ticket records, say — goes in `phrases` at the declaration levels, as
-[onevcs’s contract](https://github.com/nickderobertis/onevcs/blob/main/docs/contract.md)
-specifies: repository root, ancestor directories up to home, then `$ONEVCS_HOME` fallback.
-The [private-terms specification](https://github.com/nickderobertis/privateterms/blob/main/spec/private-terms.md)
-owns precedence: nearest wins per term and none removes one. Host declarations stay outside
-this checkout; `public-phrases.yml` is deprecated. Never list the term itself in a public
-file. Preview and run a sweep with `just plans sources sanitize <source> --dry-run`, then
-without `--dry-run`.
-<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+**A board field is set up through the plan-store verb, never by a hand-written
+`updateProjectV2Field` mutation**, which clears every item's status: read the plan with
+`just plans sources fields <source>`, then write it with `just plans sources fields <source>
+--apply`.
 
-Where a plan's home lands is the
-store's to decide from the repositories and classification of its tasks and its project (`docs/orchestration.md`, *The public write boundary*), never yours. A plan
-naming any private repository is one private coordinating plan: its home holds every task, its
-documents and its export edge in the private source the host declares — a Linear team or a
-private GitHub Projects board — each task keeps its own visibility with nothing set on the plan,
-and a public-repository task reaches `plans` only as a neutral view the store mirrors its status
-to, either way; a task naming no repository never decides the home, and a copy that would
-put a private plan's content on a public destination is refused with nothing written, so a
-plan meant to keep its home on `plans` names a public repository. Approve and launch the home
-id `just finish-plan` reports, wherever it landed — for a private home `just approve-design
-<source>:<project>` and `just orchestrate <source>:<project>`, its settlements written back to
-its own private items. A `plans` copy or public follow-up ticket never spells a private
-repository's name, which the rules `just repos-apply` installs say, and names a run of a
-privately named plan by its public id, the `public_id` `onepipeline status <run> --json`
-reports. On a routed Linear tracker a plan
-task reads Todo once copied, Queued once a run claims it, In Progress while its node works, Needs Attention when that node
-failed, parked or was skipped, and Done once it settled; Proposed, Backlog and Canceled are
-proposed, deferred and withdrawn. The member project reads Planned once copied,
-Accepted once claimed, In Progress while working, Blocked when attention is needed, and
-Completed once done; Proposal, Idea and Canceled mean proposed, deferred and withdrawn.
-A plan's own home card reads `Done`, its issue closed as completed, once its run settles with
-every node done, written by the engine through the store; a run that ended any other way, or
-was stopped, leaves the home as it was. A home whose issue is closed some other way follows
-that closure like a task card — moved by the landing that closes it, or, closed by hand, by
-`just plans task status reconcile --source plans` on demand — and a home on a routed Linear
-tracker reads its done project status, Completed, the same way.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
-
-**A board field — a `Status` option, the `Priority` field a source's
-`priority_mapping` names, or a text field its `metadata_fields` names, such as the
-`followups` board's `Host` — is set up through the plan-store verb, never by a
-hand-written mutation.** Read the plan with `just plans sources fields <source>`, which
-writes nothing, then add only what it names with `just plans sources fields <source>
---apply`. A hand-written `updateProjectV2Field` mutation re-mints every option id, which
-clears every item's status.
-
-<!-- llmlint: ignore-block[instruction_layer_localized] `.github/CODEOWNERS` routes ownership, but a diff-scoped run never shows it to this rule; lift once it does. -->
-**It is not authored there.** A plan is drafted in the `authoring` source — the
-gitignored `.plans/` root every planner is briefed to write into — reviewed there,
-documented by a second launch, copied onto the board with its documents, approved
-there, and launched from it; `just plan` runs that sequence after the planner and `just
-finish-plan <brief>` is its tail for a plan edited after it was authored. The order is
-the point: the review precedes the document because a document written before anything
-reviewed the plan describes content nobody read; the approval is recorded on the
-**board** copy because that is the artifact the user judged; and the board is a
-destination rather than a drafting surface because a review record is an entry in the
-task's own Markdown document and a board is not a directory, so a plan nothing reviewed
-is refused before it reaches a dispatch. The authoring root is resolved **once by the
-launch** and exported (`scripts/plan-root-env.sh`), because the adopted store resolves
-`onetaskgraph.yaml`'s relative root against the directory of the document that supplied
-it, and a dispatch reads the copy in its own worktree — a planner in a worktree of its
-own wrote plans nothing outside it read, and would still. A planning launch is stamped
-as the planning project it is, which exempts it from design approval, and the exemption
-is bounded to the launch — exactly the nodes the stamp claims and no design document —
-because an unbounded one once left a plan's own nodes launchable with nobody having
-approved the document.
-<!-- llmlint: ignore-end[instruction_layer_localized] -->
+**It is not authored there.** A plan is drafted in the gitignored `authoring` source,
+`.plans/`, reviewed there, documented, copied onto the board with its documents, approved
+there and launched from it; `just plan` runs that sequence after the planner, and `just
+finish-plan <brief>` is its tail for a plan edited later. The approval is recorded on the
+board copy because that is what the user judged, and a plan nothing reviewed is refused
+before it reaches a dispatch.
 
 <!-- llmlint: ignore[agents_md_durable_and_terse] This adoption's acceptance criteria require the withdrawn-task launch rule in both AGENTS.md and docs/orchestration.md; this is the required manager statement, while the detailed guide owns the copy-status policy. -->
 A launch omits withdrawn board tasks (closed as not planned) and refuses any
 dependency on one.
 
-**A green run proves nothing about the board.** The settlement write-back is best-effort
-and off the reconcile loop: a projection that never landed settles the run exactly like
-one that did, with one line on the driver's stderr. `just results`, `just status`, and
-the run journal are the record, and what each projection attempt carried and cost is one
-line of the run's `writeback-projections.jsonl`.
-<!-- llmlint: ignore-block[agents_md_durable_and_terse, no_redundant_instruction_pointers] One sentence, required of this paragraph by the plan that adopted the engine reusing a node's board item: a manager deciding from the board whether work was retried has to know the card is reused rather than minted, and the rule itself stays in docs/orchestration.md — only that it exists, and where, is said here. -->
-A node's board item is reused across its retries, under the rule
-`docs/orchestration.md`'s *One board item per lineage* states.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse, no_redundant_instruction_pointers] -->
-A `just copy-plan` refused for a rate limit is GitHub's
-**secondary** limiter — a burst limiter over content-creating requests that `gh api
-rate_limit` does not report and every retry extends — answered by leaving the board
-alone and by the source's pacing setting, never by a wider token.
-<!-- llmlint: ignore-block[agents_md_durable_and_terse, determinism_vs_judgment] The dated discrepancy, the two commands whose outputs disagreed and both figures are content this paragraph is required to carry as the reason for the rule before them; the command is named as which endpoint answers, not as a measurement procedure a recipe would own. -->
-**Read the GraphQL allowance through GraphQL's own `rateLimit` field**, never through the
-`graphql` figure `gh api rate_limit` prints: on 2026-09-13, on this host's board token,
-`gh api rate_limit` reported `graphql.used: 0` while `gh api graphql -f query='{
-rateLimit { used } }'` reported 251.
-<!-- dated-claim: incident what two commands answered for one token on one day, kept as the reason the allowance is read through GraphQL rather than as a claim about what GitHub's REST figure reports now -->
-<!-- llmlint: ignore-end[agents_md_durable_and_terse, determinism_vs_judgment] -->
-Record the plan-store CLI's version beside any board measurement, because a board read
-that does not name the release it was taken on is a read about whichever binary answered.
-<!-- llmlint: ignore-block[agents_md_durable_and_terse, contracts_have_one_source_or_a_drift_gate] The task that turned the cache on requires this paragraph to say, per board reader on this host, whether its reads are pinned, and where the cache lives and how it is cleared: it is the one statement of where the savings land and that no reader is exposed to stale data, which neither the configuration nor the code says. The store's rules it restates, and that no read in this host's own code passes a pin, are held by the test it names; the engine's write-back is the one reader with no source here to read, so it stands on the adopted engine's own contract. -->
-**The store caches the four board sources** (`cache.enabled` in `onetaskgraph.yaml`), for
-every board reader on this host, the engine included. It serves only a read pinned to a
-change token the store already received, at zero quota when the item is unchanged, and
-freshness comes only from such tokens, so the cache cannot make a reader see stale data; an
-unpinned read costs what it did. Pinned: a plan copy's member loads
-(`just copy-plan`, `just finish-plan`), by its own listing; and, once `comment-snapshot`
-lands, the follow-ups comment pass's gathering copy, every later read of which goes to its
-per-snapshot local copy instead. Unpinned: settlement write-backs, and
-`orchestrator/plan_store.py`'s single-item reads, `board-status` among them. A Linear task,
-project or document read pinned to a `lin1` token is served from it too, that token covering
-the item's `updatedAt` and a digest of its facets as the adopted onetaskgraph's README states
-under *A local cache of a remote source*. It lives at
-`${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<source identity digest>`, shared per host,
-and `onetaskgraph cache clear` empties it.
-`tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py` holds the store's rules
-and this host's own reads to it.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse, contracts_have_one_source_or_a_drift_gate] -->
+**A green run proves nothing about the board**: the settlement write-back is
+best-effort, so `just results`, `just status` and the run journal are the record. A `just
+copy-plan` refused for a rate limit is GitHub's secondary limiter, answered by leaving the
+board alone, never by a wider token.
 
 ## Your loop as manager
 
@@ -856,19 +350,12 @@ them reach you; `manager` names the session role and is never a command.
    <source:project>` has read it, and `just check-plan` refuses it by name until then;
    a planner-written plan you did not touch is already recorded.
 
-   <!-- llmlint: ignore-block[agents_md_durable_and_terse, determinism_vs_judgment] The one statement of how a manager changes a planned task, which `personas/planner.yaml` states for the planner: the order across the authoring copy, its review and the board copy is judgment the pipe cannot carry, and the pipe is two published verbs with no recipe over them to point at instead, because this repository is their canonical example rather than a wrapper layer. -->
-   **A task is changed by
-   regenerating it, never by editing its body**, in the `authoring` copy: `onetaskgraph
-   task answers <id>` prints what it was answered, and `onepipeline template resolve
-   plan-task --json | onetaskgraph task render <qualified id> --template-loader - --var
-   NAME=VALUE --no-interactive` (or `--answers FILE`) regenerates it in place, keeping its
-   id, dependencies and metadata. Then `just review-plan`, `just finish-plan` — whose
-   re-copy updates the same issue and board item — and the launch. A board item
-   regenerated directly needs every required answer, since a copy carries none, and the
-   store prompts by default, a person's default, so a render by hand names
-   `--no-interactive`. A criteria-less, hand-edited or stale body is refused on
-   onepipeline's side, at `just check-plan` (`onepipeline template check plan-task --item
-   <id>` for one task) and at launch, naming that pipe.
+   <!-- llmlint: ignore-block[agents_md_durable_and_terse, determinism_vs_judgment] The one statement of how a manager changes a planned task, which the approved cut keeps with its pipe: the pipe is two published verbs, `onetaskgraph task render` fed `onepipeline template resolve`, with no recipe over them to point at, because this repository is their canonical example rather than a wrapper layer, and the order across the authoring copy, its review and the board copy is the judgment the pipe cannot carry. -->
+   **A task is changed by regenerating it, never by editing its body**, in the
+   `authoring` copy: `onetaskgraph task answers <id>` prints what it was answered, and
+   `onepipeline template resolve plan-task --json | onetaskgraph task render <qualified
+   id> --template-loader - --var NAME=VALUE --no-interactive` (or `--answers FILE`)
+   regenerates it in place; then `just review-plan`, `just finish-plan` and the launch.
    <!-- llmlint: ignore-end[agents_md_durable_and_terse, determinism_vs_judgment] -->
 5. **Pick or create personas.** Prefer precise task prose over encoding subtask detail
    in a new persona; there is no test-only persona, so a node closing a coverage gap
@@ -897,64 +384,22 @@ them reach you; `manager` names the session role and is never a command.
    full](docs/orchestration.md#the-concurrency-interlock-and-when-to-depend-instead)).
    <!-- llmlint: ignore-end[agents_md_durable_and_terse, no_redundant_instruction_pointers] -->
 
-**A node whose record is wrong is corrected rather than re-run.** `settle` moves a
-node's recorded state to what you can see it reached, from evidence the run never
-observed — a change that merged while the node read `failed`, which a publication
-settling before a required check turns green leaves often — and mutates no edge. Give
-it the `landing` (the commit or change request the change reached its base at), because
-release correlation joins a release to work through the landing, and a settlement
-naming none is work that never landed to a dependent held on that release, with no
-timeout. A `retry` instead cuts a fresh branch beside work that already landed. `cancel`
-takes a `reason`, because a park carrying only a node id is indistinguishable downstream
-from a node idle for no reason and observers have requeued deliberate decisions. **A
-superseded `kind: human` node is retired with `drop`, `"dependents": "detach"` and a
-`reason`** — never settled to an outcome it did not reach, and never `cancel`led, which
-the engine refuses on a waiting node. An
-accepted edit needs no carrying forward, because the graph of record is the live
-graph, projected from the run's own journal.
+**A node whose record is wrong is corrected rather than re-run**: `settle` it, giving
+the `landing` its change reached, because release correlation joins through it, while a
+`retry` cuts a fresh branch beside work that already landed. `cancel` takes a `reason`, and
+a superseded `kind: human` node is retired with `drop`, `"dependents": "detach"` and a
+`reason`.
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] ai-orchestrator#1904's adoption requires this paragraph itself to state when a note interrupts, when it waits, its `turn`, its deadline, `withdraw-note`, per-receiver holds, the status words and when `cancel`/`requeue` are reserved, because a manager acts on this file and fell back on destructive levers while it said a live note waits; each is one clause, the detail is docs/orchestration.md's, and the journeys named below hold each claim to the pinned engine. -->
-**Two levers, and what each binds.** A `note` binds the conversation it lands in: it
-reaches the running dispatch, to whichever party is speaking, and a `criterion` it
-carries enters the acceptance criteria that conversation's judge decides against. Its
-`addressee` is never guessed. Under `deliver: live`, the default, it **interrupts** the
-addressed party's live turn, worker or supervisor, and redirects it, the work already
-done standing (`turn: interrupted`); it waits for the turn's end (`turn: turn-end`) only
-where that turn cannot be interrupted, or under `deliver: "turn-end"`, for a note that
-does not affect the current work, while `next` waits for the node's next dispatch.
-`delivery_timeout_seconds` bounds an untaken note's wait, after which `persist` (`true`
-unless you say otherwise) decides between carrying it and refusing it. A carried note is
-rendered under `## Planner context` above the engine's own sentence
-*This reports observed state and adds no acceptance criteria.* — **a carried note is
-its text only**; its criterion is not carried, so read `carried` as "the judge has not
-seen this".
-`withdraw-note` takes back a live note no turn has taken or a carried one not yet
-composed into a dispatch; one already taken, answered or composed cannot be withdrawn.
-A reply is answered as soon as its notes are queued in their receivers' inboxes — each
-note `queued`, an answer what a turn later makes of it never rewrites — and only a later
-note to the same receiver waits behind one; `just status` names each note still in an
-inbox, and an envelope left with no outcome is the run's next driver's to answer.
-`tests/e2e/launch_monitor_observer/test_live_note_interrupts_a_controlled_turn_e2e.py`,
-`tests/e2e/launch_monitor_observer/test_turn_end_note_leaves_the_run_journalling_e2e.py` and
-`tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drive all of it.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
-`amend` binds the stored bar: it replaces the node's binding amendment for its
-next and later dispatches without interrupting the running one. So amend whenever the
-correction has to hold however many times the node is dispatched again; send a note for
-a correction the judge should have no opinion about, or one that must reach the live
-turn now; `cancel` or `retry` with an amended task only when the running worker must be
-judged against the new bar — never to get a correction delivered sooner, which a live
-note already does. A ruling that reaches the worker alone leaves its judge reviewing
-against a task that never heard it. **An amendment is criteria** and is held to what
-criteria are held to — a property the finished tree must have, never the mechanism you
-prefer, since a judge cannot tell the two apart. Write only the clauses: the engine
-renders an amendment into the task's own `## Acceptance criteria`, at its end under
-`### Amendment`, one bullet per clause, opening with the sentence that each clause
-takes precedence over the **whole task** — the criteria above it, the task elsewhere and
-the operational notes below (onepipeline's `docs/contract-divergences.md` states it) —
-so a heading or a precedence sentence of your own adds nothing. A task you rewrite for
-a `retry` or `requeue` is not rendered that way: put the correction in its own
-`## Acceptance criteria`, above the operational notes (they open at `## Additional info`).
+**Two levers, and what each binds.** A `note` binds the conversation it lands in, its
+`criterion` entering what that judge decides against: `deliver: live`, the default,
+interrupts the addressed party's turn, `"turn-end"` waits for its end, and `next` for the
+node's next dispatch. A carried note is rendered under `## Planner context` above the
+engine's sentence *This reports observed state and adds no acceptance criteria.* — **a
+carried note is its text only**, its criterion dropped. `amend` binds the stored bar for
+the node's next and later dispatches, as criteria — a property of the finished tree, in
+clauses only — without interrupting the running one; `cancel` or `retry` with an amended
+task only when the running worker must be judged against the new bar. A `retry`'s
+replacement does not inherit the amendment of the node it replaces.
 
 **A supervisory finding earns a check, never an action**, and being grounded is what
 makes one worth checking rather than what makes it right: a finding that quotes a diff
@@ -1056,56 +501,28 @@ input; question titles ask at high level, task titles say what to do.
 Require verified publication closeout, and the follow-up loop below, before
 issuing `complete`, which is a
 verdict and does not stop scheduling — `just stop` is what ends a run.
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that adopted the engine reading a run's ending requires this document to state each run-state word and what it means, because a manager decides from the word alone whether to adopt, attest, answer, stop or follow up a run, and before it this document told managers an ended run read `DRIVER DEAD`; the words are the engine's, and `orchestrator/run_reading.py`, which `tests/test_run_reading.py` holds to the pinned engine's published schema, is where they are reconciled. -->
-**The word a view
-prints for a run says whether it ended**, and `just status <run> --json` is that reading
-as one document: `SETTLED` is every node `done`; `ENDED failed` (a node failed or
-skipped), `ENDED unfinished` (a node not `done` and nothing left to decide) and `ENDED
-stopped` (a recorded stop, waiting human nodes and all) are a run that ended; `PAUSED`
-is an undriven run waiting on a decision — a human action to `attest` or retire, or a
-blocking surface to answer; `DRIVER DEAD` is now only a driver gone with work that can
-still move and no stop. `ACTIVE` and `PARKED` are driven: `PARKED` is a live driver
-whose journal has gone quiet, never adopted — `just stop` it if you judge it wedged,
-which is unrelated to a node you parked with `cancel`.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+**The word a view prints for a run says whether it ended**, and `just status <run>
+--json` is that reading: `SETTLED` — every node `done`; `ENDED failed` — a node failed or
+was skipped; `ENDED unfinished` — a node not `done` and nothing left to decide; `ENDED
+stopped` — a recorded stop; `PAUSED` — undriven, waiting on a human action to `attest` or
+retire, or on a blocking surface to answer; `DRIVER DEAD` — a driver gone with work that
+can still move; `ACTIVE` — driven; `PARKED` — a live driver whose journal has gone quiet,
+never adopted, which you `just stop` if you judge it wedged, and
+unrelated to a node you parked with `cancel`.
 A run whose driver is dead over
 an intact ledger is adopted with `just orchestrate --adopt <run-id>`, never relaunched
 under a new id.
 
-<!-- llmlint: ignore[agents_md_durable_and_terse] This adoption's acceptance criteria require both the adopt-time write-back budget and live-add assets_from in AGENTS.md and docs/orchestration.md. This is that required manager statement; the detailed guide owns their full interface. -->
-`just orchestrate --adopt <run> --writeback-item-budget <SECONDS>` revises that run's
-per-item write-back budget. A live `add`'s node may name `assets_from` to carry the task's
-image assets onto the board.
+A stopped run is adopted the same way, and is judged by the driver driving it now.
+**Runs are owned**: act only on runs you launched — `just runs` shows `[mine]`, the owning
+session, or `[unknown]`, and `unknown` is never yours — and never signal a process found
+with `ps`. `just stop` refuses another manager's run and is approved on its own.
 
-A stopped run is adopted the same way:
-a recorded stop is evidence about the
-driver it ended, cleared at `driver-adopted`, so a stopped-then-adopted run is judged
-by the driver driving it now — `ACTIVE` in `just status`, a watch that stays armed, a
-run `just unwatched` names (`tests/e2e/launch_monitor_observer/test_adopted_engine_reads_an_adopted_run_e2e.py` drives all
-three). **Runs are owned**: act only on runs you launched — `just runs` shows `[mine]`, the
-owning session, or `[unknown]`, and `unknown` is never yours — and never derive a
-process list from `ps` and signal it, which has interrupted another manager
-mid-supervision here. `just stop` refuses another manager's run and is deliberately
-outside the manager's allowlist, so each one is approved on its own; `just
-shutdown` is outside it for the same reason and more so, because at `--host` it acts on
-runs this session does not own.
-
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] This node's acceptance criteria require the manager's own document to state each of these points beside the stop guidance — the scopes and ownership, the default grace and `--force`, preservation rather than publication, adoptability, the journal kinds, and how to read the report and exit status — because this is the document a manager decides a host shutdown from; the paragraph was already cut to that list once, and every number and engine word in it is held to the engine by `tests/test_engine_contracts.py`, so it is a gated copy, with the walk-through left to docs/orchestration.md. -->
-**`just shutdown` is for a host going away with work on it, and it is not a stop.** A
-run id or `--mine` is held to ownership as `just stop` is; `--host` takes every run and
-names each owner instead, because shutting a host down is a decision about the host.
-Each live dispatch is asked to commit and given a grace of **600** seconds, ten minutes,
-before it is stopped as `just stop` stops one — `--force` or `--grace 0` skips both.
-Every branch the runs name is then preserved on its origin: **a preservation, not a
-publication** — no change request, no merge path, no base, no force-push — so `just
-recoverable` still names its landing verb. Nothing is parked or settled and no run-end
-hook fires: `just orchestrate --adopt` resumes the run, pinning an in-flight node to its
-branch; `just status` reads it as `HOST SHUTDOWN`; it journals `host-shutdown` and
-`dispatch-stopped`, never `run-stopped`. Read the report, not just the status: non-zero
-means something was killed at the deadline, survived, or could not be pushed — a branch
-already on its origin or with no origin is not a failure — and its last section names
-every other unpublished branch here.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+**`just shutdown` is for a host going away with work on it, and it is not a stop**: it
+asks each live dispatch to commit, preserves every branch its runs name on the origin —
+a preservation, not a publication — and parks or settles nothing, so `just orchestrate
+--adopt` resumes the run. A run id or `--mine` is held to ownership; `--host` takes every
+run. Read its report: non-zero means something was killed, survived or could not be pushed.
 
 After `just orchestrate`, use **only** `just channel-next`, `just channel-reply`, `just
 stop`, `just shutdown`, `just watch`, `just review-comments`, `just readjust-stack`, and the
@@ -1121,18 +538,10 @@ driving it; Ctrl-C detaches without stopping; `--detach` is for several runs sup
 at once, and `just monitor <run-id>` re-attaches. Never background a launch by hand to
 watch it, and never rebuild run state from `events.jsonl`, `ps`, or a clone's `git log`.
 
-A `check-failed` surface names one failing check on a change the run published,
-labelled `required — blocks the merge` or `not required — does not block`, with its
-log address. A not-required failure blocks nothing: report it to the user, never
-`retry`, `cancel`, `requeue` or hold a node for it. A required failure remains the
-publication's own outcome and is read as above. A `checks-unfollowed` surface names
-checks still running when onevcs's checks timeout ended their following; their later
-result is not shown, so read it on the host. `just results` lists checks still running
-when a run ends and those no longer followed. A `release-wait` surface's "held by"
-line names the release's own change request and its failing checks, which are the
-producing repository's to fix. A `provisioning-failed` surface says a node's worktree
-may lack its toolchain because the `post-checkout` provisioning failed at open; it
-carries the re-run command to run in that worktree.
+A `check-failed` surface labelled `not required — does not block` blocks nothing: report
+it to the user, and never act on a node for it. A `provisioning-failed` surface says a
+node's worktree may lack its toolchain because the `post-checkout` provisioning failed at
+open; it carries the re-run command to run in that worktree.
 
 Require each worker to prove its change with the checks that exercise it — never `just
 gate`, which this host stopped asking a dispatch to run — and review the evidence it
@@ -1157,33 +566,10 @@ target-project content.
 
 ### Review feedback on a run's drafts
 
-**Comments are found only when you ask.** `just review-comments <run-id>` pulls a run's
-review feedback in, surfacing each pending comment once per revision as a non-blocking
-`review-comment` against the node owning its change request; nothing schedules it and no
-driver polls for comments, by the user's decision. **Nothing starts work on a comment
-until you send `rework` or `decline`.** A rework continues the same draft and change
-request and restacks every draft above it; a decline posts its replies and changes
-nothing else; the reply drafter, `graphs/review-reply.yaml`, writes one terse reply per
-comment and never resolves a thread. A rework whose title nothing verified raises
-`title-unverified`, answered by `retitle`. No author but the planner is granted `rework`,
-`decline` or `retitle`.
-
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that adopted readjustment requires the manager's document to state what is done for each out-of-order merge, because a manager decides from that outcome — absorbed, landed with it, reopened, or a blocking question — before reading the lifecycle doc, which holds the full rule. -->
-**A person's merge is read where it is next looked for.** The next `just review-comments`,
-`just readjust-stack <run-id>`, rework, restack, continuing launch or adoption detects a
-draft merged on the host before anything else, and moves every draft above it onto its
-nearest unlanded ancestors or the base; nothing polls for landings. Out of order, a draft
-merged into another's branch is recorded absorbed into it, an unlanded parent's work
-riding a merge into the base is recorded landed with it, a draft the host closed because
-its landed parent's branch was deleted is reopened and retargeted, and a merge into a
-branch the run does not know is a blocking question.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
-
-**A project is carried on from the board on any host.** `just orchestrate plans:<project>`
-continues what the store recorded — the same drafts, never a second set — and `--fresh`,
-refused while a draft is unlanded, starts over. A launch is refused while another run
-claims the project, until `--take-over` passes the claim; the claim is best-effort, and two
-launches on different hosts at the same moment are not prevented.
+**Review comments arrive only when you ask**: `just review-comments <run-id>` surfaces
+each pending comment once as a non-blocking `review-comment`, and nothing starts work on
+one until you send `rework`, which continues the same draft and restacks every draft above
+it, or `decline`, which posts its replies and changes nothing else.
 
 ### Follow-ups: drafted while a run works, verified once it ends
 
@@ -1213,262 +599,12 @@ different one, starts a new epoch, so a recovered run fires the hook for its lat
 too — and a failed node you `settle` `done` because its work landed another way fires the
 success hook, launching the follow-up run.
 
-**Feedback is a tweak or a re-dispatch.** A small change to this run's own ticket or
-comment is a direct tweak; anything more goes back with `just follow-ups <run-id>
---feedback FILE`. On the `followups` board a run owns only the issues it created and the
-comments its marker names (`orchestrator/follow_up_tickets.py`). Retry a pass a rate limit
-cut short with `just follow-ups <run-id> --unanswered`, never with hand-written feedback
-narrowing it (`docs/orchestration.md`, *A retry never repeats settled work*).
-
-<!-- llmlint: ignore-block[agents_md_durable_and_terse, instruction_layer_localized] The plan that added the command requires this section to name it, its dry run, what it reads and how a comment is routed and answered, because those decide whether a manager runs it and what its cost scales with, and the plan that made it read the board once requires the snapshot, `--from`, settle's one read and writes, pending writes, the residual race and the watermark stated here as one statement with the module's; the rules themselves are stated once, in the module this points to. It is the manager's own loop rather than an `orchestrator/` implementation constraint: the manager runs this recipe, launches a dry run with `--from` or not, and acts on its needs-attention ending, and no nested instruction file is one the manager reads. -->
-People's board comments are answered by `just follow-ups-answer-comments`, which reads the
-board **once**: one plan-store copy into a snapshot under `<drafts root>/feedback/.snapshots/`,
-from which everything after it reads. `--issue <source>:<id>` copies that one item by id and
-`--run <run-id>` the items that run's tickets are bound to, each listing nothing; unscoped, the
-store narrows its query to this host's items commented on since the board's watermark. It
-routes each comment to the run owning its issue and refuses an `--issue` no run here owns.
-`--dry-run` writes that snapshot and nothing else — no feedback file, no watermark, nothing on
-the board — and prints the `just follow-ups-answer-comments --from <snapshot>` that launches
-exactly what it showed, with no board request before the launches, while the snapshot is
-younger than the module's `SNAPSHOT_LAUNCHABLE_FOR`; a snapshot already launched, or launched
-past by a later overlapping one, is refused naming the fresh dry run, and never because the
-board moved since. The dispatched agent reads only the
-snapshot and posts each reply with `--expect`. Settle then makes the pass's one batched board read,
-verifies every reply, and writes the tickets the agent changed, their re-estimates and
-any withdrawal as field-scoped `--expect` writes checked from their own responses — but for
-the one named `repositories` exception: a ticket whose `repositories` changed goes as one whole
-`--expect` copy, the one field `task update` cannot set, and the store's unreported read after
-such a copy is refused is named and counted as a fallback, until onetaskgraph ships a
-field-scoped repositories update (the follow-up "task update cannot set an item's
-repositories"); a person's edit since the snapshot withholds a ticket's
-write, and a person's edit in the seconds between that read and a write to the field it sets
-is overwritten, the accepted residual race. A write
-that did not certainly land goes to `feedback/pending.json`, the pass ends saying **needs
-attention**, and the next pass clears, retries or surfaces it. The watermark moves only for an
-unscoped snapshot whose every reply was verified, and a reply answers the version of a comment
-its gathering quoted. `orchestrator/follow_up_comments.py` states every rule.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse, instruction_layer_localized] -->
-
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] Which recipe selects which mode is
-a decision the manager makes before running either, and neither recipe's own help states
-it: `just follow-ups` and `just follow-ups-answer-comments` differ in what the dispatch
-they launch will and will not do, and a manager who picks the wrong one pays a provider
-turn to find out. The disposition words are named because the manager reads the account,
-and each validator is named because the manager runs it when a detached run's own report is
-all there is. `tests/plan_guidance/test_follow_up_ticket_docs.py` reads both vocabularies out of
-`orchestrator/follow_up_tickets.py` and fails when this prose stops matching them, so this
-is one statement held to the code rather than a second one. The block runs to the end of
-the paragraph naming where each validator binds. -->
-<!-- llmlint: ignore-block[instruction_layer_localized] This is the manager's own
-operating knowledge — which of its recipes selects which mode, and what each dispatch it
-launches owes — rather than an `orchestrator/` implementation constraint, and
-`orchestrator/AGENTS.md` owns no statement of a recipe's behaviour. It sits inside the
-follow-ups section this document already carries, which `tests/plan_guidance/test_follow_up_ticket_docs.py`
-reads from `AGENTS.md` by name and holds to the module's own vocabularies. The block runs to
-the end of the paragraph naming the two places each validator binds. -->
-**A follow-up dispatch's task is rendered from this host's `follow-up-task` template,
-`templates/follow-up-task.md.j2`, in one of two modes, and each owes one checked
-account.** Which mode is the **caller's** to state and is never inferred from a feedback
-file's contents: `just follow-ups-answer-comments` passes `--comments` through, and a bare
-`--feedback` of your own stays the full re-dispatch above, so a manager's feedback that
-happens to quote a board comment does not narrow the dispatch silently.
-
-- **Initial mode**, every launch but a comment gathering, verifies the run's drafts and
-  puts what stands on the board. It accounts for **every input draft with exactly one
-  disposition** — `filed`, linked to the ticket or open issue its evidence reached and
-  naming the root causes it supports; `not-reproducible`; `already-fixed`; or
-  `too-low-impact`. The input set is the drafts the recipe recorded **before** the
-  dispatch, because the agent deletes each draft a ticket consumed, and it only ever grows,
-  so a re-dispatch keeps the first pass's answers. `python -m
-  orchestrator.follow_up_tickets check-dispositions` is what holds an account to that, and
-  its diagnostics name each draft it will not answer for. With `--board`, it also checks
-  that each filed ticket reached its bound item or this run's evidence comment there, and
-  refuses that comment carrying a ticket section heading: an evidence comment carries only
-  the new occurrence.
-- **Feedback mode**, what a comment gathering composes, answers **only the comments that
-  gathering quoted**, in the order it quoted them, each with one reply under the run's
-  marker, and changes only the ticket of an issue a quoted comment sits on — whenever the
-  comment, or what investigating it found, makes a change right, not only on an explicit
-  request — bringing one of an older record schema forward by the rule the re-dispatch states. It never inventories
-  the drafts, lists the board, reads an accepted item, or touches a ticket, issue or
-  comment no quoted comment names. Where a comment asks what only an investigation answers,
-  it investigates that one ticket, read-only but for targeted tests and builds, and says
-  what would settle a question it cannot. It never changes a board item's status except
-  by one withdrawal: this run's own item at `Proposal` (`Proposed` on Linear), when its
-  ticket is no longer relevant. The template's feedback mode states both bounds. It reads
-  every quoted issue from the snapshot, writes nothing to the board but its replies, and
-  leaves each ticket it changed, its estimate and a withdrawal to the pass's settle.
-  `python -m orchestrator.follow_up_tickets check-responses` is what holds an account to
-  that, reading the account and the snapshot alone; settle's one batched read holds each
-  reply it names to the board. The pre-launch `check-gathering` holds the file to its
-  snapshot and also refuses an issue the run neither owns nor marked, and a comment whose
-  marker says a run wrote it.
-
-Initial dispatches correct their accounts with the local, board-less validator. An attached
-`just follow-ups` runs the sole board disposition check after settlement, holding every card
-the run wrote and every evidence comment and re-estimate to the run's receipts of those writes,
-reading nothing of the board. Feedback dispatches require their reply validator
-green, and the recipe's settle re-runs it and verifies every reply on the board.
-<!-- llmlint: ignore-end[instruction_layer_localized] -->
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
-
-<!-- llmlint: ignore-block[instruction_layer_localized] These three paragraphs are the manager's own loop rather than an `orchestrator/` implementation constraint: the manager session reads them when it briefs and supervises follow-up runs and reads the board, and no nested instruction file is one the manager reads; `tests/plan_guidance/test_follow_up_ticket_docs.py` holds the keys and commands they name to `orchestrator/follow_up_tickets.py`. The block runs to the end of the paragraph on which board item a ticket is copied onto. -->
-**Every proposal is written against the board's accepted fixes.** The follow-up agent
-reads the accepted tickets its searches for a ticket returned for other root causes — `Todo`,
-`Queued`, `In Progress`, and `Done` where the fix has not reached the basis the ticket was
-verified at — and writes each ticket it stands up as if their fixes were already in: a ticket an accepted fix removes is not filed, one it
-narrows is written to what remains, and one it displaces states the fix that remains right
-with the displaced one under its rejected fixes. Such a ticket depends on the accepted one
-as the store's own `depends_on` edge — outside the ticket's record, which the board
-carries natively and `onetaskgraph task deps` walks it from either end — and its text says
-at each changed place which accepted ticket changed it, by URL, listing it as a `dependency`
-entry of its `## Related tickets`. A `Proposal` or `Deferred` item's fix is never assumed;
-it is at most a `related` entry there. **A root cause is the invariant that is missing or
-broken**, in words independent of the file a run saw, written for a reader who does not know
-the implementation and naming no code, with every location contributing to it listed in its
-suggested fix: one root cause when a single change to the rule removes every instance, even
-across several places, and two when each needs a fix that stands alone. So a run groups its
-drafts by invariant, and a ticket's sections a person decides from come first, its
-optional `## Related tickets` directly before the last `## Evidence`. Related entries
-clearly address a similar root cause, suggest a similar fix, or supply a dependency this
-ticket needs; mere shared area or a broader problem is insufficient. Omit an empty related
-section and never mention rejected irrelevant candidates or search logs anywhere in the body. The same-root-cause path is unchanged: an
-accepted item for a ticket's own root cause takes the run's evidence as a comment, never a
-dependency — and an open item at any status whose stated root cause meets that bar is the
-ticket's own root cause whatever its location and slug, whose slug the run's ticket then
-takes.
-
-**The board is searched, never listed: every query of it is `python -m
-orchestrator.follow_up_tickets board-items`.** Reading every item of the board spends a share
-of GitHub's hourly allowance that grows with the board and that every session here shares,
-so a ticket whose record already names its card makes no duplicate or origin search,
-including on re-dispatch. A ticket with no card yet is looked up by origin only by the store's
-own copy, and the agent asks with `--ticket <its path>`, which searches the destination the
-store's `task locate --no-counterpart` answers for that record — so an owner's private ticket
-is searched on the private board it lands on — first by text in the invariant's words, then
-once per further distinct text question, the failing file last, and by root-cause slug only
-for a budget overrun, whose slug is derived. Each query names one of the store's native
-narrowing questions — by root cause, by origin, or GitHub's own token-matched issue search,
-which may not yet list an item written seconds ago — and one naming none is refused; nothing
-in the task lists the board. A bare `task list` answers one page and a cursor, so a search
-over it reads the board as smaller than it is.
-
-**A ticket's card is the one its record names, written by one guarded store copy.** Where it
-lands and where its issue is created are the store's placement-only `task locate` answers,
-which read nothing at the board; its card is the store's own link on its record — on a
-destination declared private, which keeps no link, the card its run's last copy receipt names,
-taken only while it carries the ticket's origin. Every copy goes through `python -m
-orchestrator.follow_up_tickets copy`: one `task copy` naming that card, whose status guard
-refuses a withdrawal over a card a person accepted or deferred, whose priority guard keeps a
-priority a person set, and whose answer is receipted; a bare `task copy` carries none of it.
-**A record from before schema 13 may still carry `board_item`**: leave it as it stands, since
-its next `copy` names that card and brings the record forward without it; a later record
-carrying it is refused.
-<!-- llmlint: ignore-end[instruction_layer_localized] -->
-
-<!-- llmlint: ignore-block[instruction_layer_localized] This paragraph is the manager's own loop rather than an `orchestrator/` implementation constraint: the manager reads it to know which board and repository a follow-up run files each ticket in, and so which links to relay and who accepts each item, and no nested instruction file is one the manager reads; `tests/plan_guidance/test_follow_up_ticket_docs.py` holds the commands it names to `orchestrator/follow_up_tickets.py`. -->
-**The `followups` board is the user's decision.** A ticket lists every repository its fix
-changes, and the store places it by them, their visibility included: routes the host declares
-in its user layer file an organization's root cause in that organization's own tracker, where
-its team triages it under the same contract, and an owner's private work on a board declared
-private. Its issue is created where the store's `task locate` answers it creates one — the
-one repository it lists, or for several the destination's configured repository — which its
-record's `repository` names; the store creates it only for the owners the destination
-declares in `creation_owners`, and a ticket whose issue would be created outside them is
-refused by the store and reported, never filed. A ticket's record's `host` names the
-machine its verification ran on, and its evidence states the same host. The `followups`
-source projects it onto the board's `Host` text field, which filters like a ticket's origin.
-That field is created through the plan-store verb, like every board field (see where a plan
-of this repository lives). A copy onto a board lacking it is refused by name. A new ticket
-reaches the board in `Proposal`; the user moving it to `Todo` is what accepts it, and a
-later copy keeps whatever status the board holds, so a re-dispatch never moves an item
-back. Withdrawal closes a proposal as not planned, and a run never withdraws a ticket the
-board shows as accepted — only a person moves an accepted item, with one exception, which is
-the user's decision: the engine moves a card to `Done`, accepted ones included, when a
-landing it performs, relays or adopts closes the card's issue. An `integrate` landing
-moves the card only when the integrated repository carries the store configuration.
-**The accepted lag**: a closure not projected to the card reads as done or cancelled at
-once; run `just plans task status reconcile --source followups` on demand to update its
-old option. Linear's workflow state is already its closure. A person may instead move a
-ticket to `Deferred`: not accepted and picked up by no agent, it still takes a later run's
-evidence, and no run withdraws it either. **A dispatch briefed to pick up accepted follow-up
-tickets selects `Todo` items only.** `python -m orchestrator.follow_up_tickets statuses`
-prints the vocabulary every agent reads, copied here:
-<!-- llmlint: ignore-end[instruction_layer_localized] -->
-
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that added the `Deferred` status requires this section to carry the module's rendered vocabulary, so a manager briefing a dispatch to pick up accepted tickets reads what `Todo` means without running a command; `tests/plan_guidance/test_follow_up_ticket_docs.py` fails when this copy differs from `status_vocabulary()`, so it cannot drift from its one source. -->
-<!-- llmlint: ignore-block[instruction_layer_localized] `.github/CODEOWNERS` routes ownership, but a diff-scoped run never shows it to this rule; lift once it does. -->
-- **Board status `Proposal`**, Linear state `Proposed`, written `backlog`: a proposal
-  awaiting the user's decision. Who moves an item there: a follow-up run's first copy of a
-  new ticket. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `Todo`**, Linear state `Todo`, written `todo`: accepted, and not yet
-  taken up. Who moves an item there: only a person, which is what accepting a ticket is.
-  **Selected** by an agent sent to pick up accepted tickets, the only status that is.
-- **Board status `Deferred`**, Linear state `Backlog`, written `draft`: deferred for later
-  by a person: not accepted, picked up by no agent, and still taking new evidence. Who
-  moves an item there: only a person. Not selected by an agent sent to pick up accepted
-  tickets.
-- **Board status `Queued`**, Linear state `Queued`, written `queued`: accepted, and
-  claimed by a launched DAG whose node has not started, so it returns to `Todo` if that
-  work does not happen. Who moves an item there: no person — a launched run's first
-  projection, over the store's `delivers` relation. Not selected by an agent sent to pick
-  up accepted tickets.
-- **Board status `In Progress`**, Linear state `In Progress`, written `in-progress`:
-  accepted and taken up. Who moves an item there: a person, or a dispatch whose own task
-  says to. Not selected by an agent sent to pick up accepted tickets.
-- **Closed as completed at Status `Done`**, Linear state `Done`, written `done`: accepted
-  and finished. Who moves an item there: a person, a dispatch whose own task says to, or
-  the engine, when a landing it performs or relays — a run's landing, or one of its own
-  `publish-branch`, `repo-recover` and `integrate` — closes the ticket's issue, or when a
-  run it adopts carries a landing whose closure it had not yet written, whatever status
-  the card held, accepted ones included; an `integrate` landing moves the card only when
-  the integrated repository's own tree carries the store configuration, and is otherwise
-  in the accepted lag the on-demand reconcile clears, until the follow-up "just integrate
-  in another repository's checkout closes no follow-up card" is fixed. Not selected by an
-  agent sent to pick up accepted tickets.
-- **Closed as not planned at Status `Cancelled`**, Linear state `Canceled`, written
-  `cancelled`: withdrawn. Who moves an item there: a follow-up run withdrawing its own
-  ticket that nobody accepted or deferred, or a person. Not selected by an agent sent to
-  pick up accepted tickets.
-
-A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing
-else, on either destination: never an item at `Proposal`, `Deferred`, `Queued` or
-`In Progress` — on Linear `Proposed`, `Backlog`, `Queued` or `In Progress` — and never a
-closed one, which on Linear is one at `Done` or `Canceled`. No follow-up run writes
-Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Reviewed`,
-`Ready To Merge`, `Blocked`, `Duplicate` or `Cannot Reproduce`: those belong to people.
-<!-- llmlint: ignore-end[instruction_layer_localized] -->
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
-
-<!-- llmlint: ignore-block[instruction_layer_localized] The node that added the priority estimate requires this section to state it tersely, because the manager is who briefs follow-up runs and reads the board, and has to tell a person's priority from the estimate's without reading the module; no nested instruction file is one the manager reads, and `tests/plan_guidance/test_follow_up_ticket_docs.py` holds every record key named here to `orchestrator/follow_up_tickets.py`. -->
-**A ticket's priority is estimated from its facts, and a person's override stands.** A
-follow-up agent records facts and never a priority: the `## Impact` severity with the
-workaround, and whether the root cause fires consistently as the record's `frequency`. Both
-severities are judged by the rubric `orchestrator/follow_up_tickets.py` states — the product
-owner's view across users, development and resources, users first — and an acceptable
-workaround always lowers a severity above low. The estimate is that severity one level for
-one level, raised one level, capped at high, when it fires consistently or has 3 or more
-occurrences — the ticket's own evidence, plus each other run's evidence comment and each
-reply marked as confirming, recounted off the issue's comments every time and stored
-nowhere — so only a severity still critical with the workaround estimates urgent.
-`board-status` writes it before every copy, as the record's `priority_estimate`, the
-`## Impact` estimate line and the ticket's priority; a run that comments on another run's
-issue, or replies confirming one, runs `re-estimate` on it. The card's priority follows the
-estimate only while it holds the estimate the card last received — the record's
-`board_estimate`, or none for a record without one — which the store's priority guard decides
-at the write, so a person's priority is never rewritten, and setting it back to that estimate
-hands it back. `check-dispositions` and `check-budgets` hold the account to the run's receipts
-of its writes and read nothing of the board; `check-responses` holds replies to the board.
-<!-- llmlint: ignore-end[instruction_layer_localized] -->
-
-**A brief for a run that works accepted tickets has each node's task record name its
-ticket** in the store's `delivers` field, as a qualified `followups:<native-id>` — or
-`<routed source>:<native-id>` for a ticket a host route filed elsewhere — one
-ticket per node of a plan. Name a ticket only once it is at `Todo`, on either destination:
-one at `Proposal` or `Deferred` (Linear's `Proposed` or `Backlog`) is left alone. The ticket's status follows its node by the store's rule over
-every task delivering it, which onetaskgraph's documentation states. A failed first
-projection lets the run dispatch before `Queued` reaches the board, and says so on the
-planner channel.
+**A dispatch briefed to pick up accepted follow-up tickets selects `Todo` items only**, on
+either destination — `python -m orchestrator.follow_up_tickets statuses` prints the
+vocabulary — and each node working one names it in the store's `delivers` field, one
+ticket per node. Feedback on a follow-up run goes back with `just follow-ups <run-id>
+--feedback FILE`, and people's board comments are answered by `just
+follow-ups-answer-comments`.
 
 **`complete` waits for the follow-up run's settlement and the links you relayed**, or for
 the user's recorded answer to that question item. Hooks come with an engine adopted between runs, so a run
@@ -1566,23 +702,6 @@ read with `just channel-next --flow <ID>` and answered with `just channel-reply 
 
 ### Answering on the channel
 
-- **The channel is `onemessagebus` over `config/onemessagebus.yaml`**, the one place
-  this host's messaging policy lives: change the policy there, never in a wrapper.
-  `just channel-reply` — the engine's `onepipeline reply`, which opens a run's channel
-  under the bus configuration that run's launch recorded — the engine's `onepipeline
-  ask` `ORCHESTRATOR_ASK_MANAGER` names and the observer's judge side all run on that
-  bus, so the rules below are the bus's, as they stood when the run was launched.
-- **The observer's judge side is a binding this host declares**: `onemessagebus serve
-  surfaces --codec monitor` runs `codecs.monitor` — what a taken turn is told, the
-  `monitor-failed` and `monitor-completion` kinds it raises, what a lost turn is called
-  — as data, under the grammar onemessagebus's `codecs.md` states. **Who may speak is
-  declared there too**: the planner is the one author the engine's planner-channel layout
-  — linked from that file as the document the engine publishes — grants every op, and the monitor's
-  author — its grants and the reason each other op is refused, in the channel's words —
-  is this host's `authors.monitor`, so an author the file does not declare is refused
-  before anything is appended.
-- **Held waits re-surface on a slowing cadence**, while their hold remains. Read
-  each as an unresolved wait, rather than a new failure.
 - **Read the queue before replying**, and confirm the `pending` surface is the one
   being answered: a reply binds by correlation, never by arrival. A question carries
   the correlation the bus stamped on it, and `just channel-reply
@@ -1597,76 +716,22 @@ read with `just channel-next --flow <ID>` and answered with `just channel-reply 
 - **`abandoned` marks a blocking surface nobody is waiting on *now***, never that the
   asker has gone — its next session takes its surfaces back — so read one as a finding
   to look at rather than a question to answer.
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The manager's approval of the engine's receipt as this recipe's output was conditioned on this document stating, beside the receipt, how long an edit to a driven run waits and where that bound comes from, and what an applied, queued or refused receipt tells a manager while the journal stays the record; `tests/test_engine_contracts.py` holds the quoted variable and default to the pinned engine. The block runs to the end of this bullet. -->
-- **Read the receipt's `state`, then the journal.** The recipe prints the engine's
-  one-line receipt at exit 0 and exits 2 on every refusal, with nothing appended.
-  `applied` means the edit is committed; `queued` means the driver holding the run had
-  not reconciled it within `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` — 30 seconds by the
-  engine's default — so the recipe returned rather than hung, and the edit is durable:
-  never send it again, not even after `just orchestrate --adopt`, because the adopting
-  driver replays each envelope a dead one had claimed exactly once. The run's
-  `edit-committed` and `edit-rejected` records stay the record, each naming the
-  `envelope` it came in, and are where a `queued` edit's fate is read. `dropped` means a
-  bus hook discarded the whole envelope: exit 0, `reply` 0, and nothing queued, applied
-  or delivered. `hooked: changed` means a hook rewrote or rerouted part of the envelope
-  before it was queued, so what was applied is not what you sent. The asker's answer is the reply
-  echoing its correlation and nothing else:
-  a wait that elapses answers `timeout` at exit 1, never a ruling, so no token goes in
-  your prose.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
-- **Task prose in an envelope is criteria, and is held to the criteria bar before any
-  of it is applied** — the engine's envelope reviewer, `scripts/envelope-review.sh`, which
-  `config/onepipeline.launch.yaml` names, reads an `amend`'s correction, and the whole task
-  an `add`, `retry` or `requeue` leaves, off the document the engine hands it: the run's
-  goal, the nodes the envelope changes and the plan they land in. It judges the whole offer
-  before any of it is applied, so a refusal refuses the whole envelope, and the escape it
-  names is a `note`'s `text`, which touches no criterion and is never read. A note's
-  `criterion` is not among what the pinned engine offers its reviewer, so it is held to no
-  bar until the engine offers it. A novel whole task also spends one judged
-  turn under the reviewer `just review-plan` uses, because nothing holds a pass for it;
-  a correction to a node a review already cleared is deterministic only, because a
-  model call there would make every mid-run correction wait and give you a reason to
-  route around the guard. A turn that answers nothing is unjudged — `could not be
-  judged`, never sent — and re-sent unchanged once the harness answers, never
-  corrected. Only a pass is recorded, by the engine under the run's `validator-passes/`,
-  keyed on the document it judged and the bar's fingerprint
-  (`scripts/envelope-review-bar.sh`), so moving either tier of the bar invalidates every
-  recorded pass.
-  An edit to a run nothing drives is **applied by the reply itself**, as the run's
-  single writer, with no adopt between; and a completion verdict or a `complete`, each
-  with a reason, closes a settled run whose driver has exited — the close `just
-  unfinished` and the Stop hook ask for.
+- **Read the receipt's `state`, then the journal.** `applied` means the edit is committed;
+  `queued` means the driver holding the run had not reconciled it within
+  `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` — 30 seconds by the engine's default — and the edit is
+  durable, so never send it again; `dropped` means a bus hook discarded the whole envelope:
+  exit 0, `reply` 0, and nothing queued, applied or delivered. A refusal exits 2 with
+  nothing appended. Task prose in an envelope is criteria, reviewed before any of it is
+  applied, so a refusal refuses the whole envelope; a `note`'s `text` is never reviewed.
 - **Steer a running dispatch with a `note`, never with `oneagentgraph interrupt` by
   hand.** A note is journalled against the node; a raw interrupt reaches the worker's
   turn alone and leaves the run unable to explain why a worker changed direction. The
   default `live` note already interrupts the addressed party's turn, so a correction
   that cannot wait needs nothing more than the note.
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The 89/50/39 settlement count and the named journey are required content of the bullet below: they are the evidence a manager reads a hold against, and the adoption that paced the monitor holds this paragraph to carrying both. The block runs to the end of that bullet. -->
-- **A quiet monitor is a working monitor.** It reports a finding through the `finding`
-  op and nothing else; its scheduled note supplies the regular progress report, a
-  `check-in` surface, even without a finding, and it does not restate what the engine
-  surfaces itself. No planner surface during a 35-minute wait means the observer needs repair. Read the
-  run's own state for whether anything is watching: `OBSERVER DEAD` is the window
-  before the driver relaunches the observer and may clear on its own; `OBSERVER NOT
-  RESTARTED` is the driver having given up, and is yours to act on. The monitor is a
-  **scheduled foreground conversation**: `graphs/dag-scope.yaml` holds it between
-  turns and declares it the member that keeps the observer graph alive, its scheduled
-  note ending a hold when it arrives — a declaration now, where this host's 89 recorded
-  settlements of a scheduled reporting member (50 beside a live conversation, 39 each
-  taking a one-member graph down) once stood behind the inference. A hold is not a death: the heartbeat
-  continues through it, `just status` reports neither verdict above during one, and a
-  `note` to the monitor ends the hold rather than waiting it out.
-  `tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py` holds it.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
-- **A surface's text reaches the engine as bytes**, never as a command-line word,
-  because bash substitutes backticks and `$(...)` inside double quotes and a finding
-  that quotes a command then runs it.
-- **The progress report's cadence is set at launch only** — `--set
-  members.monitor.scheduled_notes.progress-report.every=<seconds>` (and `.start_after`)
-  — so relaunch rather than expect to retune a live run; live edits belong to the
-  `monitor` member and to you. The monitor's hold is the same kind of setting: `--set
-  members.monitor.schedule.every=<seconds>` on the launch, never an edit to the
-  shipped document.
+- **A quiet monitor is a working monitor**: it raises findings and its scheduled
+  progress report and nothing else. `OBSERVER DEAD` is the window before the driver
+  relaunches the observer and may clear on its own; `OBSERVER NOT RESTARTED` is the driver
+  having given up, and is yours to act on.
 
 ## Personas and the base config
 
@@ -1704,120 +769,9 @@ command against the node.
 
 ## The two sides of the conversation
 
-onejudge drives a two-party conversation, and harness and model selection for each
-side lives in the oneharness configs, not in onejudge; `config/onejudge.version` names
-the exact release session setup installs and verifies, and dispatch drives the real CLI
-through its typed SDK. Discovery: `onejudge --help`, `oneharness --help`, and
-[`docs/onejudge-integration.md`](docs/onejudge-integration.md).
-
-**A role file may name a parent, and every reader here resolves it.** `extends =
-"<path>"` resolves against the directory the declaring file sits in: the CLI pin reads it
-in the four configs it loads, the engine pin links the core that resolves a dispatched
-member's config, and the read API, which adopts no run, dispatches none. A parent that
-cannot be read settles the node
-`infrastructure-failure` naming both files, before anything is dispatched.
-`tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py` drives a chain down the dispatch road
-and the CLI's own, holds that refusal down the dispatch road, and holds that the read API adopts nothing.
-
-**So the identities are stated once and a role file is short.** Two shared parents at
-the root carry them and nothing runs against either: `oneharness.identities.toml` holds
-the seven identities, and `oneharness.dispatch.toml` extends it to add the
-`XDG_RUNTIME_DIR` repoint the three dispatched sides need. Each `oneharness.<role>.toml`
-names one of the two and states what is a decision about that role — its chain order,
-deadline, labels, tier. Neither parent is named `oneharness.toml`, so discovery cannot
-find one; keep it that way. **Each role's identity order stays its own**: no parent
-declares a chain.
-
-**A parent may hold no `harnesses`, `stream`, `schema_file`, or path-valued key**, and
-that is correctness rather than taste: a parent holding one resolves correctly and
-produces a member that will not start. **A resolved configuration is not evidence about
-a turn**, so audit a credential mask from a real turn rather than from `oneharness
-config`.
-
-**Every role names the same seven identities**, differing only in order, because a role
-that omitted one would lose that quota once everything ahead of it was exhausted; the
-primary Claude identity is last everywhere with `claude-code:primary-backup` immediately
-before it, and `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` holds every config's chain to
-its intended order. **Every identity in every chain is spelled as a variant**, the first Codex one as
-`codex:primary` rather than a bare `codex`, because `unset_env`, `env_from` and
-`env_file` are declarable on a variant only, so a bare harness id in a chain is one
-candidate no per-identity environment rule reaches — the credential masks and the
-`XDG_RUNTIME_DIR` repoint, each explained beside its rule. `codex:primary`'s
-plan-store credential mask is the one no parent may hold, so each of the ten roles that
-masks either declares it. That variant deliberately declares no `unset_env` for `CODEX_HOME`,
-which is ambient configuration a developer may export and this is the identity that
-honours it; `tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` reads what a turn is handed
-off the turn's own provider rather than off the configs. Each side's order is a
-decision:
-
-- **Agent side** — `oneharness.toml`: the three alternate Claude subscriptions first, because
-  the personas are tuned against that model tier, then codex. The linked engine
-  carries each turn's tool events to the views as they happen, through oneagentgraph's
-  `turn-activity`, rather than after a turn that runs for many minutes.
-- **Judge / simulated-user side** — `oneharness.judge.toml`: codex first, then the
-  alternate Claude subscriptions on the cheaper supervisor model.
-- **Monitor side** — `oneharness.orchestrator.toml`: both codex identities first, so
-  this long-lived process does not queue ahead of the workers, and the one side with no
-  per-turn deadline (`timeout = 0`), because it watches for the life of the run. Its
-  judge side is the live manager, over `onemessagebus serve surfaces --codec monitor`, the
-  binding this host declares in `config/onemessagebus.yaml`.
-- **Drafting side** — `oneharness.pr-author.toml`: no judge side (the review is a JSON
-  schema), a finite deadline because it sits between a finished branch and its
-  publication, and `stream = false`, forced because a structured answer is validated
-  against the complete response.
-- **Reply-drafting side** — `oneharness.review-reply.toml`: the judge's sol-first chain
-  with both Codex identities on Sol, no judge side (the review is the reply schema and the
-  engine's rules on it), a finite deadline because a review pass or a `decline` waits on
-  it, and `stream = false` for the drafter's reason.
-- **Design-doc writing side** — `oneharness.design-doc.toml`: the reverse pairing.
-  Codex writes, because this host prefers its Claude subscriptions on the side that
-  judges whether the prose reads plainly to a non-specialist, and its judge —
-  `oneharness.design-doc-judge.toml` — is the one supervisory side off the cheaper
-  tier, because this review *is* the deliverable's quality bar.
-- **LLM lint side** — `oneharness.llmlint.toml`, which `llmlint.yml` and the plan
-  checklist name under `oneharness.config`.
-
-Supervisory tiers reaching the workers' subscriptions is the operator's deliberate
-trade — a tier that can still run beats one isolated from the quota that is left — so
-do not reorder them back to isolation. **Streaming and turn control are independent**,
-and a control failure is never a reason to set a member's `stream` off: that trades
-away the per-turn visibility a manager supervises with and fixes nothing. Every
-codex-first supervisory side here is a controlled turn, and it runs under the
-`[harness.codex].model` its side's config names, refusing a thread the server would run
-under another model as a classified failure the chain falls through at no cost; the
-host-level `model` default in `~/.codex/config.toml` that stood in while the per-harness
-model did not reach the server is host state to remove, because it cannot express the
-per-side choice that key exists for. `tests/e2e/launch_monitor_observer/test_controlled_turn_model_e2e.py`
-drives that turn through the pinned CLI, and `tests/test_linked_libraries.py` holds the
-linked core at or past the release that carries it.
-
-Pair the sides differently for **one** run with `--node-set
-members.worker.agent.oneharness_config=REF` and the corresponding
-`members.worker.judge.oneharness_config=REF` on `just orchestrate` (`--set` for a
-dag-scope member), where each config declares the intended identity; never edit a config
-concurrent runs also read. Choosing the identity chooses neither the **tier** — every
-file pins a `model` per harness, which beats `ONEHARNESS_MODEL`, so override
-`members.worker.agent.model` and `members.worker.judge.model` — nor the **deadline**,
-which has no graph-native field: never point two members at one config to save a copy,
-and never set `ONEHARNESS_TIMEOUT`, which is process-wide and moves every member at
-once. `scripts/claude-alt-config-dir.sh` and `scripts/codex-alt-home.sh` are the one
-source of the identities' directories, sourced by every wrapper and hook so no two drift.
-The claude one exports all five Claude indirections — `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`
-(`$HOME/.claude-alt`), `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` (`$HOME/.claude-alt2`),
-`ORCHESTRATOR_CLAUDE_ALT3_CONFIG_DIR` (`$HOME/.claude-alt3`, for `claude-code:alternate3`),
-`ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR` (`$HOME/.claude-primary-backup`) and
-`ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` (`$HOME/.claude`) — taking each from the
-environment, then from the host's `ai-orchestrator/claude-identities.env` under its XDG
-config home, outside every checkout, then from that default, so a host
-whose `~/.claude` holds another account says so without editing a config every host
-shares. The codex helper creates its directory because an empty codex home falls through
-as `auth` while an absent one hard-fails, and the claude one creates nothing because
-claude-code classifies an absent directory as it classifies an empty one.
-
-Dispatch runs in **`bypass`** mode — no approvals, no inner sandbox — because the whole
-environment is a container, and codex's own sandbox needs unprivileged user namespaces
-this host disables; the `repo-write` allowlister hook stays wired by
-`scripts/session-setup.sh` as a second line.
+Which harness, identity, model and deadline each side of each role uses is the
+`oneharness*.toml` files', and [`docs/onejudge-integration.md`](docs/onejudge-integration.md)
+states it.
 
 ## Command surface
 
@@ -1854,84 +808,10 @@ no straightforward way to capture them, its planner asks the manager, and a one-
 landing a reusable capture command there runs first, the flow resuming with `just plan
 --resume spikes`.
 
-Its decisions rather than its defaults: the persona is the **path**
-`../personas/planner.yaml`, because a bare name resolves to a built-in role; the run id
-it prints is guaranteed the run's own, so a detached planner's questions reach its own
-channel; it names `--dag-graph off`, because a planning run's plan is its own output;
-every planner node of the flow — the draft, the finalize and the design document — is a
-**direct** node in the launching checkout — the one flag
-that changes the dispatched task — because no lifecycle shape fits a dispatched node
-that commits nothing (`scripts/plan.sh`'s header holds the placement note and the
-incident behind it); and it names `--require-rendered false`, the one launch here that
-does, because its one node is the manager's hand-written brief, which no template
-renders. `templates/dispatch-appendix.md` is the operational notes every dispatched task
-carries — `templates/plan-task.md.j2` includes it, so a task carries it by being that
-template's rendering — and the one statement of what a worker may suppress; this document
-states none of it. It sits in `templates/`, this host's template root.
-
-`just check-plan` reads a project against the bar each node will be judged against —
-the engine's loader first, then `scripts/plan-check.sh`, each refusal naming its source.
-The loader runs under `require_rendered`, which the launch config states for a `start` and
-`scripts/onepipeline.sh` names for `plan check`: a task that is not its template's rendering is
-refused, naming the regenerate the manager loop states — a hand-written one is rendered by
-it from an `--answers FILE` — and so is one naming a repository with no checkout registered
-here, and a lifecycle `title` the destination's own `commit-msg` hook refuses. Exporting
-`ONEPIPELINE_REQUIRE_RENDERED`, like naming the flag, opts a launch out, so
-nothing but the test suite exports it.
-The registered check then refuses the shapes that have each
-failed correct work on procedure: a criterion
-naming a procedure instead of a property or resting on something outside the dispatch,
-a task carrying no review record, a `consumes` on a `local-direct`
-identity. It also refuses the release-adoption shapes a matcher can see will never
-complete — a `consumes` naming a target its producer does not resolve, a `published`
-node with no target to wait on, a `fast` node behind a release publishing where no change
-request opens, a node of this repository waiting on an artifact nothing here installs, a
-node elsewhere taking the `default_target` of a producer this host installs, which is this
-host's own wheel — while whether an adoption is
-the *right* one, the goal needing it and the task naming the pin that governs the fix,
-is `just review-plan`'s judged question and never this tier's. And it refuses a task
-whose issue body, as `orchestrator/task_body.py` composes and measures it, would exceed
-the limit GitHub puts on one, warning on stderr from the threshold that module declares,
-because `just copy-plan` onto the `plans` board is otherwise the first thing to say so
-and the last step of the flow. It is written to **miss** rather than to over-refuse, so a
-sound node it refuses — a read-only research criterion
-naming a path with a reading verb — is launched precise rather than softened; a node's
-criteria are the one block its `## Acceptance criteria` heading opens.
-
-`just review-plan` spends the judged turn that clears a plan's authored content against
-`personas/planner.yaml`'s bar, and `just approve-design` records the user's approval of
-the document a plan is read as — a rendering of this host's `design-doc` template
-(`templates/design-doc.md.j2`), changed only by regenerating it, held to being that
-template's current rendering by the engine's `onepipeline template check design-doc
---item`, and keyed on its title,
-the template's chain digest resolved now, the body digest its provenance records and every
-image's bytes; any change to that template moves the chain, which leaves every unlaunched
-plan's approval to be recorded again. Both keep the same four properties: only a pass is
-recorded, a record is authoritative, there is no escape hatch, and the key covers the
-bar and every step's content as well as the prose, so moving any of those invalidates
-the record while a settlement write-back does not, and neither does a re-copy of the
-unchanged plan, which keeps an approval recorded on the board copy. Three questions are the review's
-rather than a matcher's: whether a number is the right number, whether the criteria
-answer a demand their bar or their `## Additional info` makes, judged by meaning, and
-whether a lifecycle node whose criteria change no repository file declares
-`expects_no_diff` — never asked of a direct node, which names no repository and commits
-nothing.
-It also spends one plan-level turn on release adoption — whether a plan whose goal needs
-a producer's change in force on this host carries a node of this repository adopting the
-release, on the right pin, naming no version — once every task carries a record, and
-records that pass on the project rather than on any task. That turn reads a compact view —
-each node's fields, its task record, its task file's path and a bounded summary — and
-opens what it needs read-only under `oneharness.plan-review-whole.toml`; a prompt past
-`PLAN_PROMPT_LIMIT` exits 2 before any turn is spent.
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] This document states what a manager's review holds a plan to, so it names the plan checklist and the planner's panel; these four lines are the least that does. -->
-Before that turn it holds the plan to the **plan checklist**
-(`config/plan-checklist.llmlint.yml`), so a rule its code would first meet on the merge
-path refuses it before approval; a deliberate departure is the user's to approve in the
-design document. `graphs/planner.yaml` pairs that checklist with the planner's reviewer.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
-`just plan`'s own closeout records what its planner authored, so a planner-written plan
-you did not touch costs nothing; the approval is not a second opinion on the plan, and
-every launch is refused without it save the bounded planning exemption above.
+`just check-plan` reads a project against the bar each node will be judged against, `just
+review-plan` spends the judged turn that clears it, and `just approve-design` records the
+user's approval of its design document. `templates/dispatch-appendix.md` is the operational
+notes every dispatched task carries, and the one statement of what a worker may suppress.
 
 **First decide whether work adds/changes a task budget before analysis**;
 [`docs/budgets.md`](docs/budgets.md) is the convention, and `config/budgets-migration.yaml`
@@ -1943,48 +823,10 @@ flag is never a reason for the manager to dispatch.
 
 ### What every launch exports
 
-Every launch names the engine's launch config, `config/onepipeline.launch.yaml` — the one
-document stating its bus configuration, dispatch-env hook, maintenance schedule, template
-root, rendered-only check, run-end hooks, drafting graph and envelope reviewer, each of
-which a caller's own flag still beats; every launcher but `just orchestrate` blanks the
-hooks and the drafting graph — and exports `ORCHESTRATOR_ASK_MANAGER`, with the run id it asks on: `scripts/ask-manager.sh`, the
-one supported way a dispatched agent asks its manager a blocking question. The verb is
-the engine's `onepipeline ask`, which raises the question on that run's channel under
-the bus policy the run was launched with; the script only execs it from this checkout's
-locked install, so every argument, stdin, stdout and exit status are the verb's. Its
-output is the bus's one-line answer, `reply` alone at exit 0, so an elapsed wait reads as
-`timeout` and never as a ruling. The same verbs load this checkout's credentials from the gitignored
-root `.env` through `scripts/credentials-env.sh`, never overriding a name the
-environment already defines; so do the board recipes — `just plans`, `just check-plan`,
-`just copy-plan`, `just approve-design` — through `scripts/plan-store.sh`, which names
-that file when the store refuses for a credential this process does not hold, because
-a board read needs the board's token where a run view needs nothing and loads nothing.
-A dispatch is handed none of it: every `oneharness.*.toml` masks the plan store's two
-credentials, `GH_PROJECTS_TOKEN` and an organization's production Linear key
-(named in the masks themselves), from its chain except the design-document pair and the
-follow-up role, which read and write the store, and `oneharness.board-live.toml`, which
-releases the board token alone to a plan node that names it, while the board nomination travels so a lane handed it and no token
-skips and says why. That file wins over onetaskgraph's machine-wide `secrets.env` by
-intent, and nothing detects the two drifting apart, so a value changed only in the
-machine-wide file reads as lost. Its `GH_PROJECTS_*` names nominate the board
-**onetaskgraph's own live test lane** writes to — that lane's concern, checked by
-nothing here — while this host's board is `onetaskgraph.yaml`'s `plans` source.
-
-That launch config names the engine's **dispatch environment hook**,
-`scripts/dispatch-env-hook.sh`, which the engine spawns in the launch directory — this
-checkout's root, which `scripts/onepipeline.sh` makes it for every `start`. The engine runs
-the hook immediately before every node-scope dispatch
-— never for the observer graph — and `adopt` replays it from the launch record. It exists
-because a live driver re-reads `oneharness.*.toml` at each dispatch but keeps only the
-environment it started with, so an `env_from` indirection a routing change adds reaches
-a live run's next dispatch only through the hook. The hook re-runs the resolvers the
-launch ran at driver start — this checkout's `.env` credentials, every Claude identity's
-config directory, the alternate Codex home — through `scripts/dispatch-env.sh`, the one
-definition of that list for both, and prints them as the document the engine overlays on
-that one dispatch's environment; a source a config names that the refreshed environment
-still lacks settles the node `infrastructure-failure` naming the config, the variant and
-the key, before anything is dispatched. So adding an indirection is a change to the
-resolver that establishes it, never to a running driver.
+Every launch names the engine's launch config, `config/onepipeline.launch.yaml`, and
+exports `ORCHESTRATOR_ASK_MANAGER`, `scripts/ask-manager.sh` over the engine's `onepipeline
+ask`: the one way a dispatch asks its manager a blocking question. Credentials load from
+the gitignored root `.env`; a dispatch is handed none of them.
 
 ### Supervising
 
@@ -2005,95 +847,20 @@ outlives the worktree, and `just transcript` resolves and renders it: reach for 
 settled node's evidence seems missing from its report. These views change no record the
 run keeps of itself; a reader writes only the run's derived checkpoint cache.
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that adopted transcript references requires AGENTS.md to state who may delete history files and to carry this incident whole — the date, the owner's archival, the spike report and the removers it examined, its evidence and scope — because every run journal's transcript reference now depends on that store, and the dated-claim marker below classifies the dates as history. -->
 **Only a person deletes oneharness history files**, by running `oneharness history clear
 --yes`; no recipe, script or hook here does, and
 `tests/tree_scans/test_history_store_never_pruned.py` refuses one that would, because every
-run journal's transcript reference resolves in that store. This host's store holds no
-session file dated before 2026-10-07: the host owner archived those files to off-host
-storage and removed them, and no tool of this stack deleted them. The spike report
-`dag-ui-project-centric-spike-transcript-source-report` examined this stack's removers —
-`oneagentgraph sweep`, `onepipeline scratch discard`, worktree reaping, and oneharness,
-which deletes only on `history clear --yes` and has no retention policy — and none
-reaches the store; on this host's store alone, the 3,111 pointer lines dated 2026-09-23 to
-2026-10-06 all name missing files. A run journal's transcript reference to an archived
-session reads as unavailable on this host.
-<!-- dated-claim: incident the dates bound the sessions this host's owner archived off-host and removed, which records that event and asserts nothing about how any tool behaves now -->
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+run journal's transcript reference resolves in that store.
 
 `just sweep` runs `onevcs sweep` then `oneagentgraph sweep`, which remove only what no
-live process references and own their reports and their families; the recipe passes a
-four-hour age floor when you name none, because a host running several dispatches
-churns workspaces hourly and almost nothing provably dead is ever a day old, and
-lowering it weakens no proof. Read each verb's "Families not examined" section before
-its reclaimed figure, because `0 B reclaimed` beside an unexamined family reads as an
-all-clear.
-<!-- llmlint: ignore-block[no_redundant_instruction_pointers, agents_md_durable_and_terse] Where and how often the sweep runs is explained in docs/host-setup.md; this paragraph is where a manager reads about `just sweep`, so it points there, and nothing else in this document links that file. The one sentence keeps the facts a manager acts on — detached, one at a time, at most hourly, and the hook's own job rather than an engine process the next sentence forbids detaching by hand — because without them that sentence reads as forbidding this job. -->
-Session setup starts it as the hook's own detached job, one at a time and at most
-hourly, and never waits on it
-([`docs/host-setup.md`](docs/host-setup.md#the-host-sweep-detached-one-at-a-time-once-an-hour)).
-<!-- llmlint: ignore-end[no_redundant_instruction_pointers, agents_md_durable_and_terse] -->
-The processes meant to outlive their launcher — the driver and the
-dispatches and publications it forks — are the engines' to keep alive and reap: never
-work around a kill with `nohup` or `setsid` by hand. A run root is pruned by the next
-`onevcs session open`, which skips an open session's root and keeps a closed one only
-while its clone holds an unpublished commit — so commit a stranded branch early — and a
-spawn failure naming a missing `claude` may be a deleted run root: check the run root
-before PATH.
+live process references; read each one's "Families not examined" before its reclaimed
+figure. Never keep an engine's process alive past a kill with `nohup` or `setsid` by hand.
 
 `just smoke` spends one real agent-harness turn and is deliberately outside `just
 gate`; the pre-push hook runs it only when the pushed diff touches the harness routing
 files and scripts (`scripts/pre-push-smoke-needed.sh --print-paths` is the list), so
 ordinary pushes consume no harness quota. A candidate that refused the turn with a
 classified `quota` or `auth` failure is the chain working.
-
-### The manager's allowlist
-
-A manager session is started directly, as Claude Code or as Codex, and each tool reads its
-own project configuration, so the commands a manager runs without asking are stated once,
-in `config/manager-allowlist.toml` in Claude Code's dialect, and `just sync-allowlist`
-renders them with the pinned `oneharness sync --exact` into `.claude/settings.json`'s
-`permissions.allow` and `.codex/rules/oneharness.rules`. Edit the source and re-sync,
-never a rendered copy, which a drift gate refuses; a rule Codex cannot express is kept for
-Claude Code and reported by the sync. What a manager may and may not run is the table
-`tests/manager_invocations.py`, each row quoting the passage here that decides it, and
-`just probe-allowlist` drives both tools through it after the allowlist changes.
-
-**Write an invocation the way a rule can match it.** Claude Code holds each part of a
-compound command to a rule of its own, so an invocation written `cd <this checkout> &&
-<verb>` passes on the verb's grant, while a redirect into a file, a command substitution,
-an unset variable or a `..` in any argument sends the whole line to the classifier. Codex
-holds the `cd` to a rule as well, and none can be bounded to this checkout, so there the
-verb is written alone. So
-name the run id rather than a variable, spell a revision range `HEAD ^<base>` or `diff
---merge-base <base> HEAD`, and write the envelope to `scratch/envelopes/<run-id>.json`
-with your own file-write tool, one file per run as its grant names, before `just
-channel-reply` reads it — never one file shared between runs, because another manager's
-write between yours and your send carries its commands to your run unnoticed; piping the
-envelope on `just channel-reply`'s standard input writes no file at all. A
-`git -C <path>` read is not granted, because Claude Code's `*` spans words: `git -C *
-log*` also passed `git -C <path> merge log-fix`, and neither is a `git log`, `diff` or
-`show` here, whose `--output` writes a file, so those reads go to the classifier. Of `onevcs`'s own verbs, the release reads and
-acknowledgement, `rules check` and `pool status` are granted, and `onevcs session close
-<session>` closes a session you opened. `node_modules/.bin/onepipeline scratch discard
-<run-id>` is granted because it deletes only the regenerable scratch of a run whose
-status word says it ended, never follows a link out of it, and refuses a paused, driven
-or unknown run. The development tier — this repository's own
-recipes, `uv sync` and `uv lock` over its lockfile, `llmlint`, the `onejudge` and
-`oneharness` reads, and `onemessagebus status` over a run's channel — is granted, and so
-is `git clone`: a clone adds a checkout and changes no remote or base.
-
-What stays off it is what this document forbids a manager: a hand `git merge`, `checkout`
-or `commit` in an engine checkout or a worker's worktree, however it is prefixed; a hook
-bypassed with `git -c core.hooksPath=…` or `--no-verify`; a `gh api` write, a
-branch-protection change among them; cancelling a CI run with `gh run cancel`; a signal to
-a process; and a hand edit of a run's own state, its `launch.json` or a channel cursor. So
-do `just stop`, `just shutdown`, `just approve-design`, `just unpublished --acknowledge`
-and `just unwatched --acknowledge`, each approved on its own: the first two act on runs, the
-third records the user's own approval, and the last two write an acknowledgement. The deny list stays empty,
-because bypass mode still honours a deny rule and every dispatch runs in it, and the Codex
-rendering holds allow decisions only, because a dispatched Codex side in a linked worktree
-inherits this checkout's trust and loads it.
 
 ### The checks
 
@@ -2103,43 +870,11 @@ with `just lint-llm-diff <base>` alone rather than paying for the whole gate per
 finding. `llmlint.yml` is a deliverable only when a task names it; otherwise a worker
 fixes the code and reports a rule that looks wrong or misapplied instead of editing it.
 
-The judged tier is nondeterministic, so the run itself is cached and **only a green is
-cached**: `workspace:lint-llm-diff` runs the llmlint CLI itself, keyed on the tracked
-tree, the resolved base commit and `llmlint fingerprint`, llmlint's own judge digest, so
-a pass replays in any worktree of one clone and never for another tree, base or judge;
-`just lint-llm-diff <base> --skip-nx-cache` is the only re-judge lever.
-The comparison base belongs to the **workstream**, not to one dispatch —
-`ONEVCS_COMPARISON_REMOTE` / `ONEVCS_COMPARISON_BASE`, exported to every dispatch and
-every publishing push — so the `pre-push` hook replays what the worker cleared instead
-of re-rolling against findings it never saw; a base its own origin ref has moved past
-is refused rather than judged, because a stale name still yields a valid verdict over
-commits the branch does not carry.
-
-**A memo may stand in for a verdict only when its key covers everything the check
-reads**: each test tier is keyed on what its tests read — an undeclared read of this
-repository's prose fails in `tests/conftest.py` — a tier whose subject lives outside
-the workspace is uncached, and narrowing a key past what a tier reads makes a
-green suite a claim about a tree nobody ran — force one tier with `--skip-nx-cache` on
-that invocation instead. Both Nx caches are origin-keyed under
-`${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/` through `scripts/nx.sh`.
-
-**Session setup — and `just bootstrap`, which runs it — provisions a worktree, and
-nothing else installs**, and the tracked `.githooks/post-checkout` runs its
-`--provision-only` on every branch checkout, so every session worktree is provisioned at
-open and a pooled slot again on reuse, for every harness. `scripts/nx.sh` and every
-recipe that runs `uv run` export `UV_NO_SYNC=1` and, through
-`scripts/require-provisioned.sh`, refuse a checkout whose Python environment holds no
-interpreter, naming `just session-setup`: under `UV_NO_SYNC`
-a missing `.venv` does not fail, uv creates an empty one and runs whatever another
-checkout puts on PATH. A Codex-side dispatch never runs the session-start hook, so
-`post-checkout` is what provisions its worktree. A failed provisioning never fails the
-open: its worker's task carries the failure and the re-run command, and its manager gets
-a `provisioning-failed` surface. A publication's worktree is cut the same way, so
-`.githooks/pre-push` runs setup's `--provision-only` before the gate: that checkout's
-toolchain and none of a session's host steps. No `uv run` this repository spells syncs:
-the `justfile` and each script that runs one export `UV_NO_SYNC=1`, an Nx target runs
-under `scripts/nx.sh`'s, and a command typed by hand spells `uv run --no-sync`, which
-`tests/tree_scans/test_uv_run_never_syncs.py` holds.
+Only a green judged-tier run is cached, keyed on the tracked tree, the resolved base and
+llmlint's judge digest, so `just lint-llm-diff <base> --skip-nx-cache` is the only re-judge
+lever; the comparison base is the workstream's (`ONEVCS_COMPARISON_REMOTE` /
+`ONEVCS_COMPARISON_BASE`). Session setup provisions every worktree and nothing else
+installs, so a command typed by hand spells `uv run --no-sync`.
 
 ## Dogfooding rule
 
@@ -2206,14 +941,6 @@ pre-push because there is no CI.
   both held to this sentence by `tests/tree_scans/test_nx_cache_scope.py` — from
   measurement rather than `auto`: the xdist curve is flat past four on a host also
   running dispatches, and Nx's slots are held to a load ceiling of this host's `nproc`.
-  <!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that tuned the gate's parallelism requires this invariant to state the measurement behind the chosen values, and the ruling that kept them is what a later change to the slot count has to answer. -->
-  On a cold wide-diff `just check` beside other dispatches, Nx `parallel` 5 took
-  1788.8 s against three slots' 3252.7 s at like load (load1 mean 34.3 against 36.3),
-  three slots sitting on their floor of task work / 3; but every run exceeded the
-  ceiling on other dispatches' load alone, and the user chose to keep three slots,
-  leaving the host's CPU to its other managers, and to speed the gate by cutting the
-  work in its slowest test tiers instead.
-  <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **Tests are realistic, not mocked.** The suite drives the real `just` recipes, the
   real wrapper scripts, the real `oneharness` CLI, and real Nx; only the paid model and
   the published CLIs a recipe delegates to are doubled, at that boundary and nothing
@@ -2273,29 +1000,19 @@ and `onevcs reclaim` remove a branch's origin copy with `--no-verify`, because a
 puts no work on the origin for a merge path to rule on. Local-first is not local-only: keep the registered base
 in sync with its origin and push every change that reaches it immediately (`just sync`
 fast-forwards a publication checkout). Never force-push or rewrite history on the
-registered base. Keep [the manager's allowlist](#the-managers-allowlist) current with
-routine commands rather than re-approving them each session.
+registered base. Keep the manager's allowlist, `config/manager-allowlist.toml`, current
+with routine commands rather than re-approving them each session.
 
-`core.hooksPath` activates the whole directory. **`commit-msg`** holds the
-subject to a Conventional Commit of a type this repository releases from (`feat`,
-`fix`, `perf`, or a `!` breaking type) within onevcs's publication limit, because every
-commit here changes the deliverable and a `docs:` change merges green and never cuts a
-release. It reads the subject alone — no index, diff, or branch — because the
-publication path puts its composed subject to the same hook; git's generated subjects,
-autosquash markers, and the `(incomplete step)` marker and its attestation are exempt.
+The root `budgets.yaml` also registers `agents-md-instruction-tokens` and
+`planner-prompt-instruction-tokens`, the tokens every session loads from this file and every
+planner dispatch from its persona's prompt, and over either refuses the push.
 
-Every path that advances the base — publication, `repo-recover`, and the `integrate`
-train — leaves **one** commit on it. The `(incomplete step)` marker and its attestation
-are branch state, recorded on the base only as `Orchestrator-` trailers on the squash
-commit (`config/onevcs.rules.yml`'s `trailer_prefix` is their one source, and a marker
-under another prefix is refused publication rather than read). A `local-direct` squash
-also keeps every issue-closing line the branch's commits carried — each issue once, as
-`<Keyword> <reference>`, between the subject and the trailers — because GitHub closes an
-issue only from the commit that reaches the default branch
-(`tests/e2e/publish_and_landing/test_publish_branch_e2e.py` lands one such branch). So a commit body here
-that merely *mentions* an issue after a closing keyword closes it: name an issue you are
-not closing without one. Provenance commits
-already on `main` stay where they are: base history is never rewritten.
+`core.hooksPath` activates `.githooks/`, whose **`commit-msg`** holds the subject to a
+Conventional Commit of a type this repository releases from (`feat`, `fix`, `perf`, or a
+`!` breaking type), because every commit here changes the deliverable. Every landing leaves
+**one** squash commit on the base, carrying the `(incomplete step)` marker only as
+`Orchestrator-` trailers and every issue-closing line the branch's commits carried, so a
+commit body names an issue it is not closing without a closing keyword.
 
 ## After the main task
 

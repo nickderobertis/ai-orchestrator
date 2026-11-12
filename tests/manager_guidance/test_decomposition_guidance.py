@@ -134,31 +134,27 @@ OWNED_STATEMENTS = (
     # adoption mode and writing its task around the references the framework appends
     # is the planner's, and it travels; what a release target is, how the two styles
     # are answered, and what a held run puts in front of a person is the manager's,
-    # and it stays. A copy of either half in the other document is the drift that
-    # ends with a task instructing a worker to pin what the framework already pinned.
+    # and it stays: since the manager's document was cut to its rules, that half is the
+    # one sentence saying how a node awaits a release. A copy of either half in the other
+    # document is the drift that ends with a task instructing a worker to pin what the
+    # framework already pinned.
     Owned(PLANNER.document, "whenever the default the node's repository resolves to is not"),
     Owned(PLANNER.document, "keyed by the dependency's node id"),
     Owned(PLANNER.document, "says who performs it and why waiting beats building against the work"),
     Owned(PLANNER.document, "Never write pinning instructions into a task that adopts fast"),
     Owned(PLANNER.document, "never a node in your plan"),
-    Owned(MANAGER.document, "is one artifact a repository publishes"),
-    Owned(MANAGER.document, "a member of the vocabulary nothing here uses"),
-    Owned(MANAGER.document, "There is no fifth rung, no plan-level tier, and no run-only override"),
-    Owned(MANAGER.document, "The adoption instruction a worker follows is the producer's"),
-    Owned(MANAGER.document, "A probe is not a gate"),
-    Owned(MANAGER.document, "the person who has to act, or find who will"),
+    Owned(MANAGER.document, "depending on the producer's node and naming no `consumes`"),
     # How a plan puts a producer's change in force on the host that runs this harness.
     # The bar the planner's judge holds a plan to and the shape of the adopting node —
     # a node of the orchestrator's own repository, `published`, no `consumes`, naming the
     # governing pin and no version, the engine's pin for a crate the engine links — are
-    # the planner's and travel; that the review spends a plan-level turn on it and where
-    # the pass is recorded is the manager's and stays.
+    # the planner's and travel. The manager's document no longer describes the review's
+    # plan-level turn, so it owns no half of this one.
     Owned(PLANNER.document, "the plan carries the node that adopts it"),
     Owned(PLANNER.document, "with `adoption: published` stated and no `consumes`"),
     Owned(PLANNER.document, "Which pin governs is decided by what was fixed"),
     Owned(PLANNER.document, "the plan adopts the release that carries it"),
     Owned(PLANNER.document, "A plan that needs no adoption is not refused for lacking one"),
-    Owned(MANAGER.document, "spends one plan-level turn on release adoption"),
     # What a node that changes code owes its judge, now that this host has stopped
     # dispatching a worker to run its repository's whole bar. The split is the same one:
     # writing that criterion is the planner's and it travels, while what a manager then

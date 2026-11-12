@@ -1,6 +1,9 @@
 # The manager's allowlist, in Claude Code's rule dialect: the one statement of what a manager
-# session runs without asking. AGENTS.md's "The manager's allowlist" says how it is
-# rendered, checked and probed; edit it here and run `just sync-allowlist`.
+# session runs without asking. `tests/manager_invocations.py` is the table of what a manager
+# may and may not run, each row with its reason, which `tests/test_agent_allowlist.py` holds
+# these rules to and `just probe-allowlist` drives both tools through; edit it here and run
+# `just sync-allowlist`, which renders it into `.claude/settings.json` and
+# `.codex/rules/oneharness.rules`.
 #
 # Loaded only by `--config`, so no dispatch runs under it. `allowed_tools` and nothing else:
 # a deny rule would still bind a bypass-mode dispatch, and a dispatched Codex side in a

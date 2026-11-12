@@ -39,11 +39,15 @@ from published_tools import ONETASKGRAPH_BIN
 from orchestrator import follow_up_tickets as tickets
 from orchestrator.root import REPO_ROOT
 
-#: Each document describing the follow-up tickets, and the heading of its section.
+#: Each document describing the follow-up tickets in full, and the heading of its section.
 SECTIONS = {
-    "AGENTS.md": "### Follow-ups: drafted while a run works, verified once it ends",
     "docs/orchestration.md": "### Follow-ups are drafted, not surfaced",
 }
+#: The manager's own section, which keeps only the rules a manager acts on — that an
+#: accepted ticket is one at `Todo`, the command printing the vocabulary, and the
+#: `delivers` field — and points at the module, the template and the operator's guide for
+#: the rest; it is held to naming only what those sources hold, and to those rules.
+MANAGER_SECTION = ("AGENTS.md", "### Follow-ups: drafted while a run works, verified once it ends")
 
 NAMED = re.compile(r"`([^`\n]+)`")
 OPTION = re.compile(r"[A-Z][a-z]+(?: [A-Za-z][a-z]+)*")
@@ -118,7 +122,7 @@ def unheld(prose: str, categories: frozenset[str]) -> set[str]:
     return found
 
 
-@pytest.mark.parametrize(("document", "heading"), SECTIONS.items())
+@pytest.mark.parametrize(("document", "heading"), [*SECTIONS.items(), MANAGER_SECTION])
 def test_each_follow_up_section_names_only_what_the_module_and_configuration_hold(
     document: str, heading: str
 ) -> None:
@@ -157,9 +161,7 @@ def test_each_follow_up_section_files_a_tickets_issue_where_the_store_files_its_
         "lists every repository its fix changes",
         "the store places it by them, their visibility included",
         "`task locate`",
-        "the one repository it lists, or for several the destination's configured repository"
-        if document == "AGENTS.md"
-        else "the one it lists, or for several the destination's configured one",
+        "the one it lists, or for several the destination's configured one",
         "only for the owners the destination declares",
         "an owner's private work on a board declared private",
     ):
@@ -331,59 +333,20 @@ def test_the_estimate_is_what_the_stated_rule_says(severity: tickets.Severity) -
     assert tickets.estimate(severity, tickets.Frequency.CONSISTENT, 1) is raised, severity
 
 
-def test_the_manager_document_describes_both_modes_and_their_validators() -> None:
-    """AGENTS.md names the two modes, every disposition word, and the command checking each.
-
-    Both vocabularies are read out of the module rather than restated, so a mode renamed or
-    a disposition added leaves the manager reading a rule nothing enforces and fails here.
-    """
-    flat = " ".join(section("AGENTS.md", SECTIONS["AGENTS.md"]).split())
-
-    for mode in tickets.Mode:
-        assert f"**{mode.value.capitalize()} mode**" in flat, mode
-    for disposition in tickets.Disposition:
-        assert f"`{disposition.value}`" in flat, disposition
-    for command in ("check-dispositions", "check-responses"):
-        assert f"`python -m orchestrator.follow_up_tickets {command}`" in flat, command
-    for said in (
-        "Which mode is the **caller's** to state and is never inferred from a feedback "
-        "file's contents",
-        "every input draft with exactly one disposition",
-        "only the comments that gathering quoted",
-        "Initial dispatches correct their accounts with the local, board-less validator.",
-        "`templates/follow-up-task.md.j2`",
-        "`just follow-ups` runs the sole board disposition check after settlement",
-    ):
-        assert said in flat, said
-
-
 def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -> None:
-    flat = " ".join(section("AGENTS.md", SECTIONS["AGENTS.md"]).split())
+    """The manager's section names `Todo` as the one status picked up, as the module does."""
+    flat = " ".join(section(*MANAGER_SECTION).split())
 
     for said in (
         "A dispatch briefed to pick up accepted follow-up tickets selects `Todo` items only",
         "`python -m orchestrator.follow_up_tickets statuses` prints",
-        "**The board is searched, never listed: every query of it is `python -m "
-        "orchestrator.follow_up_tickets board-items`.**",
-        "Each query names one of the store's native narrowing questions — by root cause, by "
-        "origin, or GitHub's own token-matched issue search, which may not yet list an item "
-        "written seconds ago — and one naming none is refused; nothing in the task lists the "
-        "board",
-        "reads the accepted tickets its searches for a ticket returned for other root causes",
-        "**A ticket's card is the one its record names, written by one guarded store copy.** "
-        "Where it lands and where its issue is created are the store's placement-only `task "
-        "locate` answers, which read nothing at the board",
-        "one `task copy` naming that card, whose status guard refuses a withdrawal over a card "
-        "a person accepted or deferred, whose priority guard keeps a priority a person set, and "
-        "whose answer is receipted; a bare `task copy` carries none of it",
-        f"**A record from before schema {tickets.BINDING_RETIRED_AT} may still carry "
-        f"`{tickets.BINDING_FIELD}`**: leave it as it stands, since its next `copy` names that "
-        "card and brings the record forward without it; a later record carrying it is refused.",
-        "asks with `--ticket <its path>`, which searches the destination the store's `task "
-        "locate --no-counterpart` answers for that record",
-        "Its issue is created where the store's `task locate` answers it creates one",
+        "`delivers` field",
     ):
         assert said in flat, said
+    selected = [
+        entry for entry in tickets.status_vocabulary().split("\n- ") if "**Selected**" in entry
+    ]
+    assert len(selected) == 1 and "`Todo`" in selected[0], selected
     for retired in (
         "`board-items --repository`",
         "ticket_board",

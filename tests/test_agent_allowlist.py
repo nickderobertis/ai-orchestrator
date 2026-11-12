@@ -1,4 +1,4 @@
-"""The manager's allowlist grants what `AGENTS.md` sanctions, and nothing it forbids.
+"""The manager's allowlist grants what its invocation table allows, and nothing it refuses.
 
 `config/manager-allowlist.toml` is the one statement of the allowlist, and
 `tests/manager_invocations.py` is the one table of what a manager is sanctioned to run

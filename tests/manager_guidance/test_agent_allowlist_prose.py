@@ -2,8 +2,8 @@
 
 It sits in the `manager-guidance` project.
 
-These hold each allowlist row and the watch budget to the passage and settings that decide
-them. That project's key names each file they read, and `tests/conftest.py` holds them to
+This holds the watch budget to the settings that decide it and to `AGENTS.md`'s statement
+of it. That project's key names each file they read, and `tests/conftest.py` holds them to
 it; the tests of that module that read no prose stay there, in `orchestrator:test`.
 """
 
@@ -13,19 +13,7 @@ import json
 import re
 import shlex
 
-from manager_invocations import INVOCATIONS
-
 from orchestrator.root import REPO_ROOT
-
-
-def test_every_row_quotes_the_agents_md_passage_that_decides_it() -> None:
-    document = " ".join((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8").split())
-    missing = [
-        (invocation.id, invocation.sanctioned_by)
-        for invocation in INVOCATIONS
-        if " ".join(invocation.sanctioned_by.split()) not in document
-    ]
-    assert not missing, f"rows quote AGENTS.md passages it no longer states: {missing}"
 
 
 def test_the_watch_environment_and_stop_guard_share_the_budget() -> None:

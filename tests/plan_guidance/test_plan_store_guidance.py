@@ -346,9 +346,10 @@ def test_the_packages_plan_store_reads_run_the_locked_install_the_roster_names()
 
 
 #: The documents that tell a reader where a routed plan's tasks land and what each Linear
-#: state means for one: the manager's, the operator's, and the planner's own prompt.
+#: state means for one: the operator's and the planner's own prompt. The manager's own
+#: document states only where private work lands, and names no Linear state.
 PLANNER = "personas/planner.yaml"
-ROUTED_DOCUMENTS = (MANAGER, ORCHESTRATION, PLANNER)
+ROUTED_DOCUMENTS = (ORCHESTRATION, PLANNER)
 #: The organization's plans tracker the example user layer declares: the tracked document
 #: routes nothing, so a host's layer, of the example's shape, is where the mapping lives.
 LINEAR = onetaskgraph_user_layer.ORGANIZATION_PLANS

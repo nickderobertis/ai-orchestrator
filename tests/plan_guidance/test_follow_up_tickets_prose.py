@@ -39,7 +39,6 @@ from test_follow_up_tickets import (
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
-from orchestrator.root import REPO_ROOT
 
 
 @pytest.fixture
@@ -62,11 +61,11 @@ def drafts_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
-def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_agents_md() -> None:
+def test_the_one_status_exception_is_stated_once_in_the_task_and_the_gathering() -> None:
     """Withdrawing this run's own proposal that is no longer relevant, and nothing else.
 
-    The task and the gathering's preamble carry one wording, the module's; AGENTS.md states
-    the same bound for a manager.
+    The task and the gathering's preamble carry one wording, the module's. AGENTS.md no
+    longer restates the bound: its follow-up section points at the template and the module.
     """
     flat = _flat(_feedback_task())
     exception = _flat(tickets.WITHDRAWAL_EXCEPTION)
@@ -98,16 +97,6 @@ def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_a
     )
     preamble = comments.render(RUN, "followups", [], None, Path("/a/snapshot"))
     assert tickets.WITHDRAWAL_EXCEPTION in preamble
-    agents = _flat((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
-    assert (
-        "It never changes a board item's status except by one withdrawal: this run's own item "
-        "at `Proposal` (`Proposed` on Linear), when its ticket is no longer relevant."
-    ) in agents
-    assert (
-        "changes only the ticket of an issue a quoted comment sits on — whenever the comment, or "
-        "what investigating it found, makes a change right, not only on an explicit request —"
-    ) in agents
-    assert "an evidence comment carries only the new occurrence" in agents
     for described in (
         _flat(str(comments.__doc__)),
         _flat(_template_withdrawal_description()),

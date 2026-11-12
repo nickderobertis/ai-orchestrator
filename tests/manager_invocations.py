@@ -5,8 +5,9 @@ One table, read by both of its readers and copied by neither: the deterministic 
 rule, and the live probe (`scripts/allowlist-probe.py`, `just probe-allowlist`) drives a
 real Claude Code and a real Codex through every row against the rendered files. A row is
 the command line as a manager writes it, with `{placeholders}` for what changes between
-uses; the verdict each tool must reach; and the passage of `AGENTS.md` that sanctions or
-forbids it, quoted so the gate can hold the quotation to the document.
+uses; the verdict each tool must reach; and the reason it is allowed or refused, which is
+this table's own and held to no document. `config/manager-allowlist.toml` is held to this
+table, and `just sync-allowlist` renders that file into the two tools' settings.
 
 A row is checked on both tools unless it names one, and then says why the other cannot
 hold it. The reasons are few and each is the tool's own: Codex's execpolicy rules govern
@@ -22,7 +23,7 @@ from typing import Literal, NamedTuple, NewType
 #: A row's name, unique across the table: what the probe's `--row` takes and prints.
 InvocationId = NewType("InvocationId", str)
 Tool = Literal["claude-code", "codex"]
-#: `allow`: a rule lets it through. `refuse`: `AGENTS.md` forbids it, and no rule may.
+#: `allow`: a rule lets it through. `refuse`: a manager may not run it, and no rule may.
 #: `unlisted`: sanctioned, but no rule can grant it without also granting something
 #: forbidden, so it is left to each tool's own judgement — and no rule may cover it.
 Verdict = Literal["allow", "refuse", "unlisted"]
@@ -60,9 +61,8 @@ class Invocation(NamedTuple):
     #: The command line, `{placeholder}`s standing for run ids, paths and names.
     command: str
     verdict: Verdict
-    #: `AGENTS.md`'s own words for why, whitespace-normalized; the gate holds the
-    #: document to containing them.
-    sanctioned_by: str
+    #: Why the row is allowed or refused, in this table's own words.
+    reason: str
     #: The tools this row's verdict is held on.
     tools: tuple[Tool, ...] = BOTH
     #: Why a tool is left out of `tools`; empty exactly when both are held.
@@ -71,23 +71,23 @@ class Invocation(NamedTuple):
 
 
 def _allow(
-    id: str, command: str, sanctioned_by: str, *, codex: str = "", kind: Kind = "shell"
+    id: str, command: str, reason: str, *, codex: str = "", kind: Kind = "shell"
 ) -> Invocation:
     tools = CLAUDE_ONLY if codex else BOTH
-    return Invocation(InvocationId(id), command, "allow", sanctioned_by, tools, codex, kind)
+    return Invocation(InvocationId(id), command, "allow", reason, tools, codex, kind)
 
 
-def _unlisted(id: str, command: str, sanctioned_by: str) -> Invocation:
-    return Invocation(InvocationId(id), command, "unlisted", sanctioned_by)
+def _unlisted(id: str, command: str, reason: str) -> Invocation:
+    return Invocation(InvocationId(id), command, "unlisted", reason)
 
 
-def _refuse(id: str, command: str, sanctioned_by: str, *, kind: Kind = "shell") -> Invocation:
+def _refuse(id: str, command: str, reason: str, *, kind: Kind = "shell") -> Invocation:
     tools = CLAUDE_ONLY if kind == "write" else BOTH
     return Invocation(
         InvocationId(id),
         command,
         "refuse",
-        sanctioned_by,
+        reason,
         tools,
         CODEX_WRITE_TOOL if kind == "write" else "",
         kind,

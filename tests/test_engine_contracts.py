@@ -542,20 +542,6 @@ VOCABULARIES = (
         re.compile(r"`([a-z][a-z-]*)`"),
     ),
     Vocabulary(
-        # The rules file's per-identity draft levers the manager's document names; a key
-        # onevcs adds or renames inside `drafts:` is refused by name where the file is
-        # loaded, so a lever the prose names that the struct lacks would break a rules
-        # file written from it.
-        "onevcs drafts levers",
-        ONEVCS,
-        "rules.rs",
-        re.compile(r"(?:#\[[^\]]*\]\s*)*pub struct Drafts \{.*?\n\}", re.DOTALL),
-        re.compile(r"^\s{4}pub ([a-z_]+):", re.MULTILINE),
-        MANAGER,
-        re.compile(r"two per-identity levers are\s*(.*?); onevcs", re.DOTALL),
-        re.compile(r"`drafts:\s*\{([a-z_]+):"),
-    ),
-    Vocabulary(
         "onepipeline telemetry Usage fields",
         ONEPIPELINE,
         "telemetry.rs",
@@ -642,16 +628,8 @@ CONSTANTS = (
         TELEMETRY,
         "checks-settled records the watch's verdict, {value} where",
     ),
-    # The same word where the manager's document and the lifecycle document say what a
-    # publication past a skipped required check records: each copy is held on its own.
-    Constant(
-        "skipped-check verdict in AGENTS.md",
-        ONEVCS,
-        "gate_run.rs",
-        re.compile(r'Ruling::PassedWithSkipped\s*=>\s*"(passed-with-[a-z]+)"'),
-        MANAGER,
-        "records checks-settled with the verdict {value}, naming that check",
-    ),
+    # The same word where the lifecycle document says what a publication past a skipped
+    # required check records.
     Constant(
         "skipped-check verdict in the lifecycle document",
         ONEVCS,
@@ -783,16 +761,8 @@ CONSTANTS = (
         LIFECYCLE,
         "the newest {value} (merge_path::PRESERVED_LOG_ATTEMPTS)",
     ),
-    # The soft shutdown's default grace, quoted where a manager is told what `just
-    # shutdown` waits for before it stops a dispatch — in both documents that state it.
-    Constant(
-        "shutdown default grace",
-        ONEPIPELINE,
-        "cli.rs",
-        re.compile(r"pub const DEFAULT_SHUTDOWN_GRACE_SECONDS: u64 = (\d+);"),
-        MANAGER,
-        "a grace of {value} seconds",
-    ),
+    # The soft shutdown's default grace, quoted where an operator is told what `just
+    # shutdown` waits for before it stops a dispatch.
     Constant(
         "shutdown default grace",
         ONEPIPELINE,
@@ -874,7 +844,7 @@ SHUTDOWN_SEMANTICS = (
             + r"run — the report names every run's owner instead"
         ),
         (
-            (MANAGER, "--host takes every run and names each owner instead"),
+            (MANAGER, "--host takes every run"),
             (ORCHESTRATION, "names each run's owner in the report instead of refusing"),
         ),
     ),
@@ -885,10 +855,7 @@ SHUTDOWN_SEMANTICS = (
         re.compile(
             r"`0` is the same path as `--force`.*?Skip the interrupt and the wait", re.DOTALL
         ),
-        (
-            (MANAGER, "--force or --grace 0 skips both"),
-            (ORCHESTRATION, "--force, and --grace 0, skip the ask and the wait"),
-        ),
+        ((ORCHESTRATION, "--force, and --grace 0, skip the ask and the wait"),),
     ),
     Semantic(
         "non-zero is a kill at the deadline, a survivor, or a refused push",
@@ -903,11 +870,7 @@ SHUTDOWN_SEMANTICS = (
             re.DOTALL,
         ),
         (
-            (
-                MANAGER,
-                "non-zero means something was killed at the deadline, survived, or could "
-                "not be pushed",
-            ),
+            (MANAGER, "non-zero means something was killed, survived or could not be pushed"),
             (
                 ORCHESTRATION,
                 "Non-zero means a dispatch was killed at the deadline, a process could not "
@@ -923,7 +886,6 @@ SHUTDOWN_SEMANTICS = (
             r'Self::AlreadyOnOrigin => "already-on-origin",\s*Self::NoRemote => "no-remote",'
         ),
         (
-            (MANAGER, "a branch already on its origin or with no origin is not a failure"),
             (
                 ORCHESTRATION,
                 "a branch already on its origin and a branch whose identity has no origin "
@@ -937,7 +899,6 @@ SHUTDOWN_SEMANTICS = (
         "shutdown.rs",
         re.compile(r'"  other unpublished branches on this host, which this shutdown did not push'),
         (
-            (MANAGER, "its last section names every other unpublished branch here"),
             (
                 ORCHESTRATION,
                 "Its last section names every other unpublished branch on this host that "
@@ -955,7 +916,7 @@ SHUTDOWN_SEMANTICS = (
             re.DOTALL,
         ),
         (
-            (MANAGER, "Nothing is parked or settled and no run-end hook fires"),
+            (MANAGER, "parks or settles nothing"),
             (ORCHESTRATION, "No node is parked or settled"),
             (ORCHESTRATION, "no run-end hook fires"),
         ),
@@ -966,10 +927,7 @@ SHUTDOWN_SEMANTICS = (
         "shutdown.rs",
         re.compile(r"`onepipeline adopt \{\}` re-dispatches the node pinned to that \\\s*branch"),
         (
-            (
-                MANAGER,
-                "just orchestrate --adopt resumes the run, pinning an in-flight node to its branch",
-            ),
+            (MANAGER, "so just orchestrate --adopt resumes the run"),
             (
                 ORCHESTRATION,
                 "re-dispatches an in-flight node pinned to the branch it was working on",
@@ -986,7 +944,7 @@ SHUTDOWN_SEMANTICS = (
             + r"nothing is force-pushed"
         ),
         (
-            (MANAGER, "no change request, no merge path, no base, no force-push"),
+            (MANAGER, "a preservation, not a publication"),
             (
                 ORCHESTRATION,
                 "No change request is opened, no merge path runs, no base is touched, "
@@ -1156,9 +1114,6 @@ PRESENT_SYMBOLS: dict[Path, tuple[tuple[Engine, str], ...]] = {
         # the whole pairing rests on that.
         (ONEPIPELINE, "## Planner context"),
         (ONEPIPELINE, "This reports observed state and adds no acceptance criteria."),
-        # What a soft shutdown journals and how `just status` reads it, which is how the
-        # manager is told to tell a host shutdown from a stop: each is the engine's word.
-        *SHUTDOWN_WORDS,
     ),
     ORCHESTRATION: SHUTDOWN_WORDS,
 }
@@ -3644,8 +3599,7 @@ def test_the_node_a_live_edit_states_is_read_with_the_fields_the_engine_declares
     node_struct = _source(ONEPIPELINE, "plan.rs").split("pub struct Node {", 1)[1]
     node_fields = set(STRUCT_FIELD.findall(node_struct.split("\n}\n", 1)[0]))
     assert "assets_from" in node_fields
-    for document in (MANAGER, ORCHESTRATION):
-        assert "`assets_from`" in document.read_text(encoding="utf-8"), document
+    assert "`assets_from`" in ORCHESTRATION.read_text(encoding="utf-8"), ORCHESTRATION
     for name in ("AMENDMENT", "NO_DISPATCH"):
         assert getattr(envelope_review, name) in node_fields, (
             f"onepipeline {ONEPIPELINE.ref}'s `Node` no longer carries the field "
@@ -3764,20 +3718,18 @@ def test_what_this_host_reads_of_the_unpublished_verdict_is_the_engines_declared
 #: (entry 64): each key, whether it is always present, and the words it may answer.
 REPLY_RECEIPT_CONTRACT = re.compile(r'```json\n(\{\n  "reply": .*?\n\})\n```', re.DOTALL)
 
-#: What AGENTS.md's *Answering on the channel* tells a manager the two hook receipt words
-#: mean, as one passage each, read with presentation dropped.
+#: What AGENTS.md's *Answering on the channel* tells a manager the `dropped` hook receipt
+#: word means, read with presentation dropped. It no longer restates `hooked: changed`,
+#: which the engine's own receipt contract states.
 MANAGER_DROPPED_SENTENCE = (
     "dropped means a bus hook discarded the whole envelope: exit 0, reply 0, and nothing "
     "queued, applied or delivered."
 )
-MANAGER_HOOKED_SENTENCE = (
-    "hooked: changed means a hook rewrote or rerouted part of the envelope before it was "
-    "queued, so what was applied is not what you sent."
-)
 
 
 def test_the_hook_receipt_words_the_manager_reads_are_the_engines_own() -> None:
-    """`dropped` and `hooked: changed` mean on the receipt what AGENTS.md says they mean.
+    """`dropped` means on the receipt what AGENTS.md says it means, and `hooked` is still
+    the engine's word for a changed envelope.
 
     Read off the adopted engine's own statement of the reply receipt — its JSON block, which
     the engine's suite holds its `submit` to, and the hooks amendment beneath it — so a
@@ -3805,7 +3757,6 @@ def test_the_hook_receipt_words_the_manager_reads_are_the_engines_own() -> None:
 
     manager = _plain(MANAGER.read_text("utf-8"))
     assert MANAGER_DROPPED_SENTENCE in manager, "AGENTS.md no longer says what `dropped` means"
-    assert MANAGER_HOOKED_SENTENCE in manager, "AGENTS.md no longer says what `hooked` means"
 
 
 def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it() -> None:
@@ -3923,12 +3874,6 @@ LINEAGE_PARAGRAPH = re.compile(
 )
 #: The sentence in the record paragraph that lists what `actions` carries.
 RECORD_ACTIONS_SENTENCE = re.compile(r"`actions` \((.*?)\), and `spent`", re.DOTALL)
-#: The sentence of AGENTS.md that says the item is reused, and where the rule is stated —
-#: matched over `_plain` text, so the code span and emphasis around the two names are gone.
-MANAGER_REUSE_SENTENCE = re.compile(
-    r"A node's board item is reused across its retries.*?under the rule "
-    r"docs/orchestration\.md's One board item per lineage states\."
-)
 #: Entry 80's fenced block, where the engine states the lineage item as data.
 LINEAGE_CONTRACT_BLOCK = re.compile(r"```json\n(\{\s*\"lineage\".*?)\n```", re.DOTALL)
 #: Entry 73's fenced block, where the projection record's fields are stated.
@@ -4012,10 +3957,6 @@ def test_the_lineage_item_keys_the_prose_states_are_the_ones_the_engine_writes()
     written_when = supersedes["written_when"]
     assert isinstance(written_when, str) and written_when in paragraph, (
         f"the paragraph does not say onepipeline.supersedes is written only where {written_when!r}"
-    )
-    assert MANAGER_REUSE_SENTENCE.search(_plain(MANAGER.read_text("utf-8"))) is not None, (
-        "AGENTS.md's board paragraph no longer says the item is reused across retries and "
-        "where the rule is stated"
     )
 
 

@@ -1,10 +1,9 @@
-"""Four passages of `AGENTS.md` a manager acts on mid-run, held to what this checkout has.
+"""Passages of `AGENTS.md` a manager acts on mid-run, held to what this checkout has.
 
 Each is read in the middle of something going wrong — a watch firing, a change request
 minutes from merging, a finding to rule on — so what is reconciled here
 is what such a reader would act on: every `just <recipe>` those passages name is one
-the justfile declares, and the subject passage's contrast rests on a drafting graph this
-repository really has. The watch item's cut is held against `onepipeline`'s own status
+the justfile declares. The watch item's cut is held against `onepipeline`'s own status
 view by `tests/test_engine_contracts.py`
 (`test_the_watch_cuts_the_status_view_where_the_health_report_really_starts`).
 """
@@ -25,14 +24,29 @@ MANAGER = "AGENTS.md"
 #: rather than document-wide: a phrase that survived somewhere else would satisfy a
 #: whole-file search while the passage that has to carry it was gone.
 WATCH_ITEM = "6. **A grep over `just status --providers`"
-SUBJECT = "**The body is re-derived at every publication"
+SUBJECT = "**Read a change request's title against its net diff"
 FINDING = "**A supervisory finding earns a check, never an action**"
 DECLINED = "**A finding you decline on the merits"
+SETTLED = "**Read every settled state before acting on it.**"
+LEVERS = "**Two levers, and what each binds.**"
 
-#: The drafting passage the subject passage is the counterpart of, and the graph that
-#: makes its "the body is re-derived" half true.
-DRAFTING = "A remote lifecycle change request's body is drafted by an agent graph"
-DRAFTING_GRAPH = "graphs/pr-author.yaml"
+#: The decision rules the user approved keeping when the root file was cut, each as the
+#: paragraph that has to carry it. Each is the rule a manager acts on at the moment a
+#: node fails or is corrected, and dropping one is what sent a manager to re-run work that
+#: had already published or to a replacement that never heard its correction.
+KEPT_RULES: tuple[tuple[str, str], ...] = (
+    (SETTLED, "so read its settlement and change request before any retry"),
+    (SETTLED, "a retry of a branch a merge path refused always names that branch"),
+    (SETTLED, "read it on the host and never publish it again"),
+    (LEVERS, "replacement does not inherit the amendment of the node it replaces"),
+)
+
+#: The engine-written outcome table in `docs/repo-lifecycle.md`, which
+#: `tests/test_engine_contracts.py` holds pairing for pairing to the adopted onepipeline.
+LIFECYCLE = "docs/repo-lifecycle.md"
+OUTCOME_ROW = re.compile(r"^\| `[a-z]+` \| `([a-z][a-z-]*)` \|", re.MULTILINE)
+#: An outcome word the settled-state paragraph names, as it spells one.
+NAMED_WORD = re.compile(r"`([a-z]+(?:-[a-z]+)+)`")
 
 #: How the justfile declares a recipe, so a `just <recipe>` these passages name can be
 #: read back against the ones this repository has.
@@ -60,25 +74,6 @@ def _paragraph(opener: str) -> str:
     return opener + document.split(opener, 1)[1].split("\n\n", 1)[0]
 
 
-def test_the_subject_passage_rests_on_a_drafting_graph_this_repository_has() -> None:
-    """ "The body is re-derived" is half the asymmetry, and it has to still be true.
-
-    The passage is an argument from contrast: the body is drafted from the branch's own
-    diff at every publication, and the subject is not. Take the drafting graph away and
-    the contrast is gone — both artifacts would be stale, and the paragraph would be
-    telling a manager to check the one field that is no worse than the other.
-    """
-    drafting = _paragraph(DRAFTING)
-    assert DRAFTING_GRAPH in drafting, (
-        f"{MANAGER}'s drafting passage no longer names {DRAFTING_GRAPH}, which is what "
-        "re-derives a body per publication and so what the subject is contrasted against"
-    )
-    assert (REPO_ROOT / DRAFTING_GRAPH).exists(), (
-        f"{DRAFTING_GRAPH} is gone from this checkout, so no publication drafts a body "
-        f"and {MANAGER}'s claim that the body is re-derived at every publication is false"
-    )
-
-
 def test_every_recipe_these_passages_tell_a_manager_to_run_exists() -> None:
     """A passage may name commands this checkout has, and no others.
 
@@ -94,3 +89,32 @@ def test_every_recipe_these_passages_tell_a_manager_to_run_exists() -> None:
                 f"{MANAGER}'s passage opening {passage!r} tells a manager to run `just "
                 f"{recipe}`, and the justfile declares no such recipe"
             )
+
+
+def test_the_kept_decision_rules_stand_in_their_own_passages() -> None:
+    """Each rule the cut kept is still stated in the paragraph a manager reads it in."""
+    for opener, rule in KEPT_RULES:
+        assert rule in _flat(_paragraph(opener)), (
+            f"{MANAGER}'s passage opening {opener!r} no longer states {rule!r}, a rule the "
+            "user approved keeping when the file was cut"
+        )
+
+
+def test_every_outcome_the_settled_state_passage_names_is_one_the_engine_writes() -> None:
+    """The settled-state rules are about outcome words, so each has to be a real one.
+
+    Read against the lifecycle document's outcome table rather than the engine directly,
+    because that table is what `tests/test_engine_contracts.py` holds to the engine both
+    ways; a word here the table lacks is a settlement no node reports.
+    """
+    written = set(OUTCOME_ROW.findall(_text(LIFECYCLE)))
+    assert written, f"no outcome row parsed out of {LIFECYCLE}, so this gate proves nothing"
+    named = set(NAMED_WORD.findall(_paragraph(SETTLED)))
+    assert "pushed-unverified" in named, (
+        f"{SETTLED!r} no longer names `pushed-unverified`, whose rule it carries: {named}"
+    )
+    unknown = sorted(named - written)
+    assert not unknown, (
+        f"{MANAGER}'s passage opening {SETTLED!r} names {unknown}, which {LIFECYCLE}'s "
+        "outcome table does not pair with any status"
+    )

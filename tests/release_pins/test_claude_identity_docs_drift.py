@@ -1,6 +1,6 @@
 """The documents that list Claude identities, held to the helper and configs they describe.
 
-`AGENTS.md`, `docs/host-setup.md` and `docs/onejudge-integration.md` each restate which
+`docs/host-setup.md` and `docs/onejudge-integration.md` each restate which
 identities a chain names and where each Claude identity's directory comes from. Those
 lists have one source apiece — the variables and defaults in
 `scripts/claude-alt-config-dir.sh`, the chains in the `oneharness*.toml` configs — so both
@@ -20,7 +20,7 @@ import pytest
 from orchestrator.root import REPO_ROOT
 
 HELPER = REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"
-DOCUMENTS = ("AGENTS.md", "docs/host-setup.md", "docs/onejudge-integration.md")
+DOCUMENTS = ("docs/host-setup.md", "docs/onejudge-integration.md")
 IDENTITIES_FILE = "claude-identities.env"
 
 NUMBER_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")

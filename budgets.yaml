@@ -76,3 +76,32 @@ budgets:
     unit: characters
     direction: max
     threshold: 3000
+  # The instruction text every session working in this repository loads before its first
+  # turn and re-sends on every turn, estimated by `orchestrator/instruction_tokens.py` from
+  # its byte count in the pushed tree. Unlabelled, so over either refuses the push.
+  - id: agents-md-instruction-tokens
+    description: >-
+      Estimated tokens of the root AGENTS.md, which CLAUDE.md symlinks and every Claude Code
+      session in a checkout of this repository loads whole before its first turn. It protects
+      every session's quota, latency and context from the file growing back.
+    measure: reported
+    command: [".venv/bin/python", "-m", "orchestrator.instruction_tokens", "AGENTS.md"]
+    unit: tokens
+    direction: max
+    threshold: 24100
+  - id: planner-prompt-instruction-tokens
+    description: >-
+      Estimated tokens of the system_prompt string of personas/planner.yaml, which is
+      appended to the system prompt of every planner dispatch in every repository it plans.
+      It protects every planner dispatch's quota, latency and context from the prompt's growth.
+    measure: reported
+    command:
+      - .venv/bin/python
+      - -m
+      - orchestrator.instruction_tokens
+      - personas/planner.yaml
+      - --yaml-key
+      - system_prompt
+    unit: tokens
+    direction: max
+    threshold: 20800

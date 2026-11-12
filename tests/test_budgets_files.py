@@ -153,6 +153,34 @@ def test_the_root_file_registers_the_design_documents_budget_summary_length() ->
     assert "#1568" in description and "`## Budgets` section" in description
 
 
+@pytest.mark.parametrize(
+    ("budget", "arguments", "threshold"),
+    [
+        ("agents-md-instruction-tokens", ["AGENTS.md"], 24100),
+        (
+            "planner-prompt-instruction-tokens",
+            ["personas/planner.yaml", "--yaml-key", "system_prompt"],
+            20800,
+        ),
+    ],
+)
+def test_the_root_file_holds_each_instruction_token_budget_strictly(
+    budget: str, arguments: list[str], threshold: int
+) -> None:
+    """Unlabelled, so over either refuses the push; measured from the pushed tree's text."""
+    (entry,) = [one for one in _root()["budgets"] if one["id"] == budget]
+    description = entry.pop("description")
+    assert "It protects" in description and "Estimated tokens" in description, description
+    assert entry == {
+        "id": budget,
+        "measure": "reported",
+        "command": [".venv/bin/python", "-m", "orchestrator.instruction_tokens", *arguments],
+        "unit": "tokens",
+        "direction": "max",
+        "threshold": threshold,
+    }
+
+
 @pytest.mark.parametrize("where", ["checkout", "elsewhere"])
 def test_the_library_measures_the_summary_of_the_committed_fixture(
     where: str, tmp_path: Path
