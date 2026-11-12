@@ -463,8 +463,9 @@ channel-next *args:
 # `scripts/onepipeline.sh` so the acting session is named as every other verb names it,
 # and it adds nothing: the engine routes the envelope by its halves. It opens the run's
 # channel under the bus configuration the run's launch recorded — this host's
-# config/onemessagebus.yaml, as it stood at that launch — so the declared authors, their
-# grants and the criteria validator refuse an envelope whole before anything is appended.
+# config/onemessagebus.yaml, as it stood at that launch — so the declared authors and their
+# grants, and the engine's envelope reviewer `config/onepipeline.launch.yaml` names, refuse
+# an envelope whole before anything is appended.
 # A verdict binds to the ask `--correlation` names, or to the one ask pending; a
 # correlation nothing pending holds, and `--correlation` on an envelope carrying no
 # verdict half, are refused. Edits to a run a driver holds are queued and waited on for

@@ -79,7 +79,7 @@ allowed_tools = [
     "Bash(just human-items answer-batch:*)",
     # llmlint: ignore-end[least_privilege_grants]
 
-    # llmlint: ignore-block[least_privilege_grants] `just channel-next` and `just channel-reply`: each suffix is only the run, the envelope file and the correlation, and the bus bounds them — `channel-next` hands out one surface of the named run's own queue, and `channel-reply` appends only an envelope `config/onemessagebus.yaml`'s policy and validator accept whole, refusing a correlation nothing pending holds.
+    # llmlint: ignore-block[least_privilege_grants] `just channel-next` and `just channel-reply`: each suffix is only the run, the envelope file and the correlation, and the bus bounds them — `channel-next` hands out one surface of the named run's own queue, and `channel-reply` appends only an envelope that the authors and grants `config/onemessagebus.yaml` declares and the engine's envelope reviewer `config/onepipeline.launch.yaml` names both accept whole, refusing a correlation nothing pending holds.
     "Bash(just channel-next:*)",
     "Bash(just channel-reply:*)",
     # llmlint: ignore-end[least_privilege_grants]

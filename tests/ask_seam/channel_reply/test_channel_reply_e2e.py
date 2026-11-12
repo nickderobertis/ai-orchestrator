@@ -2,14 +2,14 @@
 
 The recipe is the engine's own submission verb, `onepipeline reply`, and everything it does
 with an envelope — binding a verdict by its correlation, refusing one no pending question
-holds, routing an envelope's halves, running the recorded bus configuration's validator
-before anything is appended, applying an edit to a run nothing drives, waiting on a driver
+holds, routing an envelope's halves, running the engine's envelope reviewer the launch config
+names before anything is appended, applying an edit to a run nothing drives, waiting on a driver
 that holds one — is the installed engine's and bus's, proven by their own suites. What these
 journeys prove is the **wiring**: that the recipe reaches that behaviour over runs `just
 orchestrate` really launched, under the bus configuration `config/onemessagebus.yaml` those
-launches recorded; that the validator the configuration names is this repository's criteria
-bar and its pass cache keys on this repository's bar fingerprint; and that the recipe's
-whole output is the engine's receipt and exit status. The journeys:
+launches recorded; that the envelope reviewer the launch config names is this repository's
+criteria bar and the engine's recorded passes key on this repository's bar fingerprint;
+and that the recipe's whole output is the engine's receipt and exit status. The journeys:
 
 * a `complete` command, and separately a completion verdict, close a settled run whose
   driver has exited: before the reply the real `just unfinished` and the real `Stop` hook
@@ -18,8 +18,8 @@ whole output is the engine's receipt and exit status. The journeys:
 * a ruling bound to a real question by its correlation answers it; the same ruling again,
   one naming a correlation nothing raised, and a commands-only envelope naming a
   correlation are each refused with nothing appended;
-* an envelope whose task prose the validator refuses is refused whole with the validator's
-  reason — with and without a verdict half, on a run nothing drives and on a run a driver
+* an envelope whose task prose the envelope reviewer refuses is refused whole with the
+  reviewer's reason — with and without a verdict half, on a run nothing drives and on a run a driver
   holds — and nothing of it is appended, applied, journalled or remembered as a pass;
 * a valid edit is applied by the driver holding a run, or by the reply itself where nothing
   drives the run, and is recorded as the planner's when it names no author; an envelope
@@ -53,8 +53,8 @@ llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This *is* the e
 journey here spends a real launch and is behind its own — this directory is an Nx project
 of its own, keyed on `askSeamChannelReply` and selected by directory, which
 `tests/ask_seam/AGENTS.md` states as the settled design and `tests/conftest.py` enforces.
-That key names, file by file, what these journeys were measured reading — the validator
-script and its module the engine runs under the recorded bus configuration, the base
+That key names, file by file, what these journeys were measured reading — the reviewer
+script and its module the engine runs as the launch config's envelope reviewer, the base
 config and the planner persona the bar it holds an envelope to is fingerprinted over, the
 graphs and harness configs a launch and its one dispatch read, and the Stop hook and the
 `unfinished` view the completion journeys ask — and nothing wider, so an edit outside it
@@ -97,7 +97,7 @@ FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
 
 #: The guard over the identities `ONEHARNESS_BIN_*` cannot reach. The judged tier the
-#: validator spends a turn of goes through `oneharness.plan-review.toml`'s chain, whose
+#: envelope reviewer spends a turn of goes through `oneharness.plan-review.toml`'s chain, whose
 #: Codex identities are doubled by the stand-in above and whose Claude ones are only
 #: reached by a chain that fell through — and where a billed turn and a free one look
 #: identical from a journey's assertions, this is what makes the difference loud.
@@ -146,7 +146,7 @@ GATE_NODE = "gate"
 HELD_NODE = "held"
 
 #: What `just channel-reply` exits with for every refusal: the engine's `reply` exits 2,
-#: whether the channel, the author's grants, the validator or the graph refused.
+#: whether the channel, the author's grants, the envelope reviewer or the graph refused.
 REPLY_REFUSED = 2
 
 #: The reply window a question is asked under while a journey answers it: long enough that
@@ -185,7 +185,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     # And the identities that seam cannot reach; see `PAID_PROVIDER_GUARD`.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
-    # The judged review turn the validator spends on a novel whole task, scripted to pass;
+    # The judged review turn the envelope reviewer spends on a novel whole task, scripted to pass;
     # `_judged_turns` counts how many the doubled provider was asked for.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider's answer is scripted.
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(PASSING_VERDICT)])
@@ -511,7 +511,7 @@ def _judged_turns(replying: Replying) -> int:
 
 # `Any` in the envelopes and commands below because an envelope is the channel's open JSON
 # contract: its values are whatever JSON each op carries, and the engine, the bus and the
-# validator each read the members they own.
+# envelope reviewer each read the members they own.
 def _send(
     replying: Replying,
     envelope: dict[str, Any],
@@ -521,7 +521,7 @@ def _send(
     """Send one envelope as a manager types it: piped into `just channel-reply <run>`.
 
     `environment` replaces the run's own for this one send, which is how a journey scripts
-    what the doubled reviewer answers the validator's judged turn, or shortens the wait.
+    what the doubled reviewer answers the envelope reviewer's judged turn, or shortens the wait.
     """
     return _just(
         "channel-reply",
@@ -743,7 +743,7 @@ RIDING_VERDICT = {"completion": False, "message": "Amend the bar, then carry on.
 def _refused_whole(replying: Replying, node: str) -> None:
     """Send the unsatisfiable amendment bare and beside a verdict, twice each, and hold all four.
 
-    Each is refused with the validator's own reason and exit 2, and nothing of it reaches
+    Each is refused with the envelope reviewer's own reason and exit 2, and nothing of it reaches
     the run: no record on the command or reply queue, no record in the journal — so no edit
     applied, no verdict delivered, no completion requested — no change to the graph, and no
     judged turn spent on a text the free tier refuses. Nor is any of it remembered as a
@@ -772,20 +772,20 @@ def _refused_whole(replying: Replying, node: str) -> None:
     assert _judged_turns(replying) == turns, "a text the free tier refuses was put to the judge"
 
 
-def test_task_prose_the_validator_refuses_is_refused_whole_where_nothing_drives_the_run(
+def test_task_prose_the_envelope_reviewer_refuses_is_refused_whole_where_nothing_drives_the_run(
     replying: Replying,
 ) -> None:
-    """The validator the recorded configuration names binds the reply that would apply an edit.
+    """The envelope reviewer the launch config names binds the reply that would apply an edit.
 
     With nothing driving the run, an accepted edit is applied by the reply itself, so this
-    is the path on which a validator that ran after the apply would be no validator at all.
+    is the path on which a reviewer that ran after the apply would be no review at all.
     """
     assert _unfinished_and_undriven(replying), "the premise is a run nothing drives"
 
     _refused_whole(replying, WORK_NODE)
 
 
-def test_task_prose_the_validator_refuses_is_refused_whole_on_a_run_a_driver_holds(
+def test_task_prose_the_envelope_reviewer_refuses_is_refused_whole_on_a_run_a_driver_holds(
     driven: Replying,
 ) -> None:
     """The same refusal on the queued path: nothing of it reaches the driver's queue."""
@@ -1319,7 +1319,7 @@ def test_a_novel_task_the_judged_review_refuses_is_refused_whole_with_its_findin
 def test_a_novel_task_whose_judged_turn_answers_nothing_is_never_applied(
     replying: Replying,
 ) -> None:
-    """No verdict is not a pass: the validator exits unjudged, and nothing is applied.
+    """No verdict is not a pass: the envelope reviewer exits unjudged, and nothing is applied.
 
     Every launch of the doubled reviewer dies after it starts, so the review chain ends
     with no verdict at all. `orchestrator.envelope_review` exits unjudged rather than

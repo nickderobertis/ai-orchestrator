@@ -1,15 +1,15 @@
 """A reply stating a node `just check-plan` would refuse is refused where it is sent.
 
-`config/onemessagebus.yaml` names `orchestrator/envelope_review.py` as the validator on the
-planner channel's `replies` queue, and that validator holds every node an envelope states —
-an `add`, a `retry`'s replacement — to the structural rules the plan tier applies, over the
-graph the envelope's own nodes form. Driven here against a live run: a real `just
-orchestrate` launch whose agent nodes wait behind a human gate nobody attests, so nothing is
-ever dispatched; the envelope a manager sends through `just channel-reply`, the engine's
-`onepipeline reply`, which judges it under the run's recorded bus configuration before
-anything of it is appended or applied; and the real `onevcs`
-answering about a scratch registry whose `library` really declares a wheel and whose rules
-really resolve `local-direct` for both identities. Only the paid provider is doubled, as
+`config/onepipeline.launch.yaml` names `scripts/envelope-review.sh`, which runs
+`orchestrator/envelope_review.py`, as the engine's envelope reviewer, and that reviewer
+holds every node an envelope states — an `add`, a `retry`'s replacement — to the structural
+rules the plan tier applies, over the graph the envelope's own nodes form. Driven here
+against a live run: a real `just orchestrate` launch whose agent nodes wait behind a human
+gate nobody attests, so nothing is ever dispatched; the envelope a manager sends through
+`just channel-reply`, the engine's `onepipeline reply`, which has its envelope reviewer
+judge it before anything of it is appended or applied; and the real `onevcs` answering about
+a scratch registry whose `library` really declares a wheel and whose rules really resolve
+`local-direct` for both identities. Only the paid provider is doubled, as
 `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` doubles it, and no turn of it is
 spent: every node here declares `expects_no_diff`, so no prose tier reads it, and the
 structural rules still hold it.
@@ -230,8 +230,8 @@ def test_a_node_behind_a_release_the_same_reply_states_is_refused_until_its_edge
 
     The envelope adds a node landing in the releasing `library` and a node behind it that
     adopts `fast` while publishing `local-direct` — the shape
-    `orchestrator/adoption_guard.py` refuses at the plan tier. The bus's validator refuses
-    it here, naming the node and the field, and nothing reaches the run's `commands` queue
+    `orchestrator/adoption_guard.py` refuses at the plan tier. The engine's envelope reviewer
+    refuses it here, naming the node and the field, and nothing reaches the run's `commands` queue
     and no judged turn is spent. "Drop the edge if the work does not need the release" is
     the refusal's own remedy: the same envelope with a `reparent` of that unstarted node
     onto the gate, or with a detaching `drop` of the producer, leaves a graph no rule

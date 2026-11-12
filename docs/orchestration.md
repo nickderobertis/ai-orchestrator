@@ -2037,10 +2037,14 @@ the one pinned when the measurement was taken.
   parked node — and kept a register of passes under the run root, keyed on the text and
   both tiers' bars. Its structural tier was added after a `requeue` amending `adoption:
   fast` onto a node publishing `local-direct` behind a releasing dependency was accepted
-  and then failed an hour of work at its last step. Its successor is the bus's command
-  validator, which reads no run state, because the bus caches a pass on the envelope's
-  bytes and a verdict folded over the run would make that cache unsound — so that
-  refusal is now the engine's and the merge path's.
+  and then failed an hour of work at its last step. Its first successor was the bus's
+  command validator, which read no run state, because the bus cached a pass on the
+  envelope's bytes and a verdict folded over the run would have made that cache unsound.
+  onemessagebus has since removed validators, and the check is now the engine's
+  `envelope_reviewer`, `scripts/envelope-review.sh`, which `config/onepipeline.launch.yaml`
+  names: the engine hands it the run's goal, the nodes the envelope changes and the plan
+  they land in, records only a pass, keyed on that document and the bar's fingerprint, and
+  the structural refusal above is the reviewer's again.
 
 #### A question that was raised and then dropped
 

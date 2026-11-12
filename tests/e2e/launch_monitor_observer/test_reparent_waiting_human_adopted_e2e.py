@@ -14,7 +14,7 @@ channel-reply` to edit and attest, `just status` to read the run, and `just orch
 The run is an approval with one agent node behind it, launched with `--dag-graph off` so
 nothing but this journey writes to its channel. The launch hands the run back paused at
 the approval. Everything is real — the recipes, the `onepipeline` beneath them, the
-envelope validator `config/onemessagebus.yaml` declares, and the run's own records. Only
+envelope reviewer `config/onepipeline.launch.yaml` names, and the run's own records. Only
 the paid model is doubled, where every launch journey here doubles it: the dispatched
 nodes' turns, and the one judged review turn the validator spends on the added node's
 task, scripted to pass.

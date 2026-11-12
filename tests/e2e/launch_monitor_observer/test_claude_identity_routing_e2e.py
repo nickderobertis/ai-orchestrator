@@ -95,7 +95,7 @@ CLAUDE_ROLE_CONFIGS = tuple(
 DISPATCH_ENVIRONMENT = REPO_ROOT / "scripts" / "dispatch-env.sh"
 LLMLINT_CONFIG = REPO_ROOT / "oneharness.llmlint.toml"
 
-#: An envelope carrying a command, which is what the envelope validator judges.
+#: An envelope carrying a command, which is what the engine's envelope reviewer judges.
 ENVELOPE = json.dumps(
     {"version": 2, "commands": [{"op": "amend", "id": "work", "text": "Report."}]}
 )

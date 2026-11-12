@@ -397,7 +397,7 @@ def test_a_requeue_is_judged_under_the_persona_its_overrides_state_and_no_other(
     is refused under that role's bar, naming the clause, before any turn is spent; the
     same overrides stating no persona are judged under the base config's generic contract,
     which the parked node's own persona is not folded into here. That is the composition
-    this validator gave up so the bus's pass cache stays sound: the same bytes must pass
+    this reviewer gave up so the engine's recorded passes stay sound: the same bytes must pass
     or fail whatever the run holds.
     """
     changes = _task(criteria="- `docs/x.md` gains a row.")
@@ -795,7 +795,7 @@ def test_the_bar_fingerprint_moves_with_either_tier(
     Driven by moving each tier's own fingerprint where this module reads it — the free
     tier's out of `criteria_guard`, the judged tier's out of `plan_review` — and asking
     whether what `--bar-fingerprint` prints moved with it. A digest over one tier alone
-    would let the bus's cached pass stand over a question the other tier stopped asking.
+    would let the engine's recorded pass stand over a question the other tier stopped asking.
     """
     before = bar_in_force()
     assert bar_in_force() == before, "the fingerprint is not a function of the bar alone"
@@ -919,9 +919,9 @@ def test_the_module_is_runnable_as_the_validator_script_spawns_it() -> None:
     """`python -m orchestrator.envelope_review` from the checkout root, as a process.
 
     `scripts/envelope-review.sh` changes to the checkout root and runs exactly this module,
-    and the bus's pass cache runs it again with `--bar-fingerprint`. Driven as the process
+    and the engine's pass record runs it again with `--bar-fingerprint`. Driven as the process
     it is rather than through `main`, because a module that imported only inside this
-    suite's own `sys.path` would refuse nothing when the bus ran it.
+    suite's own `sys.path` would refuse nothing when the engine ran it.
     """
     environment = {"PYTHONPATH": str(REPO_ROOT), "PATH": "/usr/bin:/bin"}
     spawned = subprocess.run(

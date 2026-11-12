@@ -716,6 +716,9 @@ read with `just channel-next --flow <ID>` and answered with `just channel-reply 
 - **`abandoned` marks a blocking surface nobody is waiting on *now***, never that the
   asker has gone — its next session takes its surfaces back — so read one as a finding
   to look at rather than a question to answer.
+- **A run launched with onemessagebus validators refuses every reply**, at exit 2 with
+  nothing appended, because the adopted engine no longer runs them: let it settle, or
+  `just stop` it and relaunch it.
 - **Read the receipt's `state`, then the journal.** `applied` means the edit is committed;
   `queued` means the driver holding the run had not reconciled it within
   `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` — 30 seconds by the engine's default — and the edit is
