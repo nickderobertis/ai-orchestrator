@@ -405,9 +405,11 @@ class CopyOptions(TypedDict, total=False):
 #: state belong to runs and people, while new items take their source status; and `replace`,
 #: `reject` and `sanitize_dry_run`, because a copy rewrites a term under what the host declares
 #: at its declaration levels rather than per invocation, and `just plans sources sanitize
-#: <source> --dry-run` is the preview of an item already carrying one; and `documents`, because
-#: this recipe measures a plan's documents against GitHub's body limit and copies them itself
-#: once the project record has landed (`_documents`), reporting each one it could not carry.
+#: <source> --dry-run` is the preview of an item already carrying one; and `documents`, which
+#: onetaskgraph 0.14.12 added to carry the project's documents in the same copy, because this
+#: recipe measures a plan's documents against GitHub's body limit and copies them itself once
+#: the project record has landed (`_documents`), reporting each one it could not carry, so
+#: leaving it at its default keeps one road.
 #: Named rather than left out of the reconciliation, so a parameter the SDK adds later still
 #: fails it by name.
 UNEXPOSED: frozenset[str] = frozenset(

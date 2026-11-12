@@ -13,6 +13,7 @@ import plan_root_variable
 import pytest
 from github_board import _serving_board
 from linear_board import linear_board
+from onetaskgraph_sdk import CopyReport
 from project_fixtures import FIXTURE_UNIT, budgeted, helper, no_budgets, reviewed
 from scratch_identity import seeded
 
@@ -237,3 +238,41 @@ def test_copy_plan_and_receipt_follow_the_resolved_home(
         with pytest.raises(ValueError, match="board_project disagrees"):
             spike_brief.read(malformed)
         assert spike_brief.saved(path) == receipt
+
+
+def test_a_dry_run_that_finds_the_project_oversize_records_no_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A project the store reports `oversize` reached no destination, so it names no home.
+
+    The report is the real store's, from a dry run of the copy onto the served board, whose
+    source states GitHub's body limit itself: a project description past it is reported
+    `oversize` with no destination, and the spike brief's reading of a copy finds no home in
+    it rather than failing on the destination the item does not carry.
+    """
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    monkeypatch.setenv(plan_root_variable.name(), str(authoring))
+    description = tmp_path / "description.md"
+    description.write_text("An oversized plan description. " * 3_000, encoding="utf-8")
+    with _serving_board() as remote:
+        for key, value in remote.items():
+            monkeypatch.setenv(key, value)
+        client = plan_store.client()
+        plan_store.sdk(
+            client.project_create("authoring", "oversized", "Oversized", body_file=str(description))
+        )
+        report = plan_store.sdk(
+            client.project_copy("authoring:oversized", to="plans", dry_run=True)
+        )
+        # The real copy the flow's entry point makes is refused whole, so it hands no report on.
+        with pytest.raises(OSError, match="oversize|too long|limit"):
+            plan_store.sdk(client.project_copy("authoring:oversized", to="plans"))
+
+    assert isinstance(report, CopyReport), report
+    assert [item.root.action for item in report.items] == ["oversize"], report
+    # llmlint: ignore-block[tests_mirror_real_usage] The flow's entry point runs a real copy, which
+    # the store refuses whole when an item is oversize (asserted above), so only a dry run's report
+    # carries the row and this reader is the one place such a report can be handed.
+    assert spike_brief_flow.arrived_projects(report, "authoring:oversized") == []
+    # llmlint: ignore-end[tests_mirror_real_usage]

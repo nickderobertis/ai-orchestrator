@@ -28,13 +28,8 @@ def arrived_projects(
     if isinstance(payload, CopyReport):
         for item in payload.items:
             outcome = item.root
-            # A failed, skipped or oversize item reached no destination, so it records no
-            # board project. tests/test_spike_brief_boundaries.py holds each of the three
-            # against the SDK's own model of a saved copy report. The oversize one, which the
-            # adopted store added, takes the branch the other two already take; a spike-brief
-            # journey reaching it would have to author a plan too large for the board, which
-            # proves nothing that boundary test does not.
-            # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
+            # A failed, skipped or oversize item reached no destination, so it records no board
+            # project: an oversize one is a dry run's report of a body its destination would refuse.
             if (
                 outcome.action == "failed"
                 or outcome.action == "skipped"

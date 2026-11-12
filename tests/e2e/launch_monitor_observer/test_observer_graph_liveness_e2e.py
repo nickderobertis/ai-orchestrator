@@ -1178,6 +1178,8 @@ class Noted(NamedTuple):
     reports: list[datetime]
     #: When the journey read a surface through the channel recipe, or `None` if it read none.
     read_at: datetime | None
+    #: When the run journalled each read, the `planner-surfaced` the channel recipe appends.
+    reads: list[datetime]
     #: The monitor's agent turns, as the stand-in model was handed them.
     prompts: list[str]
     status: int
@@ -1191,6 +1193,31 @@ REPORT_QUEUED_LINE = re.compile(
     rf'kind="{re.escape(PROGRESS_REPORT_KIND)}" message="{re.escape(PROGRESS_REPORT)}"',
     re.MULTILINE,
 )
+
+
+#: The line `just monitor --filter detailed` renders a read on: the stamp the run's journal
+#: gave the `planner-surfaced` the channel recipe appended, then the run's column.
+READ_JOURNALLED_LINE = re.compile(r"^(?P<at>\S+)\s+graph:-\s+planner-surfaced\b", re.MULTILINE)
+
+
+def _reads_journalled(environment: dict[str, str], run: str) -> list[datetime]:
+    """When the run journalled each surface read, off the planner's own detailed view.
+
+    That stamp is the read itself — the record the note's `reset_on` matches — so a span
+    measured from it is measured from the moment the manager read, not from when the
+    journey's own call returned.
+    """
+    rendered = subprocess.run(
+        ["just", "monitor", run, "--filter", "detailed"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    return [_instant(line.group("at")) for line in READ_JOURNALLED_LINE.finditer(rendered.stdout)]
 
 
 def _reports_raised(environment: dict[str, str], run: str) -> list[datetime]:
@@ -1305,6 +1332,7 @@ def _noted_launch(tmp_path: Path, oneharness_bin: str, run: str, *, reads: bool)
             (gate / TURN_GATE_RELEASED).touch()
             status = launch.wait(timeout=e2e_timeout(300))
             reports = _reports_raised(environment, run)
+            journalled = _reads_journalled(environment, run)
         finally:
             (gate / TURN_GATE_RELEASED).touch()
             launch.kill()
@@ -1324,6 +1352,7 @@ def _noted_launch(tmp_path: Path, oneharness_bin: str, run: str, *, reads: bool)
         events=_graph_events(state),
         reports=reports,
         read_at=read_at,
+        reads=journalled,
         prompts=[
             str(turn["prompt"])
             for turn in recorded
@@ -1486,6 +1515,20 @@ def test_reading_a_surface_restarts_the_progress_report_clock(
     assert any(one.at >= fired[0].at for one in admitted), (
         f"no note was admitted once the clock fired again, so nothing here shows the clock "
         f"still runs after a read:\n{noted.printed}"
+    )
+    # Measured from the read itself, as the run journalled it, rather than from the
+    # graph's restart: the next note a manager who has just read is offered comes no
+    # earlier than one whole span after that read, whoever restarted what.
+    assert len(noted.reads) == 1, (
+        f"the journey read one surface and the run journalled {noted.reads} reads"
+    )
+    read = noted.reads[0]
+    following = [one for one in admitted if one.at > read]
+    assert following, f"no note was admitted after the read at {read.isoformat()}"
+    waited = (following[0].at - read).total_seconds()
+    assert waited >= NOTE_SPAN_SECONDS, (
+        f"the {PROGRESS_REPORT_NOTE} note was admitted {waited:.2f}s after the read at "
+        f"{read.isoformat()}, inside one {NOTE_SPAN_SECONDS}s span"
     )
     assert noted.status == 0, noted.printed
 

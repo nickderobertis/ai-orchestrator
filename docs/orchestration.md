@@ -2203,7 +2203,8 @@ Sending and delivery are recorded as two different facts. Queuing a report appen
 `planner-surface-queued` to `events.jsonl` — carrying the surface kind and message, the
 `source` that sent it, and the `workstream` node when one provoked it — and the bus keeps
 one waiting `check-in` at a time, the latest. Consumption through `channel-next` is what
-appends `planner-surfaced` and restarts the note's clock. A reader of the journal can
+appends `planner-surfaced`; the note's own `reset_on` restarts its clock on that record,
+and the engine restarts no clock itself. A reader of the journal can
 therefore tell "nothing was sent" from "updates were sent and nobody read them". Rendering
 a surface in `just monitor` is not reading it, and restarts nothing.
 

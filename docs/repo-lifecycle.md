@@ -183,7 +183,9 @@ The adoption after that moves the engine to 0.109.0, the read API to 0.80.0, the
 crates and CLI to 0.14.12 and oneagentgraph to 0.13.0, the releases that engine links: a
 copy writes an expandable block in each destination's own form — the authored `<details>`
 block on a folder of Markdown and a GitHub issue, a `+++` collapsible section on Linear —
-and every read gives it back in the authored form.
+and every read gives it back in the authored form; the engine restarts no observer clock
+when a surface is read, and oneagentgraph no longer has `resettable` or `reset-timer`, so a
+graph's own `reset_on` is the only thing that restarts a scheduled clock.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole

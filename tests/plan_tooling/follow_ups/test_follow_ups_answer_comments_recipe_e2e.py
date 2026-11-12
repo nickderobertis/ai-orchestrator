@@ -1229,6 +1229,8 @@ def test_a_pass_over_items_changed_within_the_minute_reads_each_before_its_reply
     )
     operations = life.real.operations()
     head = [_Operation.SEARCH, _Operation.ISSUE_COPY_DETAILS]
+    # No read after `UPDATE_ISSUE`: onetaskgraph 0.14.12's token twin answers the issue's change
+    # token inline, so the store reads no version back.
     tail = [_Operation.ISSUE_DETAILS, _Operation.ISSUE, _Operation.UPDATE_ISSUE]
     assert operations[: len(head)] == head, operations
     assert operations[-len(tail) :] == tail, operations
@@ -1605,6 +1607,8 @@ def test_a_write_landing_fewer_parts_than_it_asked_for_is_partial_and_the_next_p
             "the task it answered does not hold the requested content, record"
         ), entry
         assert entry.parts == (), entry
+        # No read after `UPDATE_FIELD`: onetaskgraph 0.14.12's token twin answers the issue's
+        # change token inline, so the store reads no version back.
         assert operations[replied + 1 :] == [
             _Operation.ISSUE_COPY_DETAILS,
             _Operation.ISSUE,

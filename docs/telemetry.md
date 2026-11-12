@@ -470,8 +470,8 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    view. Measured against real runs on
    **`onepipeline-api` 0.80.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 28 on the envelope, where
-   0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
+   what re-opens this paragraph: `telemetry_schema_version` 28 on the envelope, as 0.79.0
+   served, where 0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
    0.48.1 served 24, 0.44.0 served 21, 0.13.0 served 20 and
    0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15 — 26 reads every
    turn whole from the history file its record points at, through the engine's transcript
@@ -492,7 +492,8 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
-   runs read here.
+   runs read here. On 0.80.0, ten of this host's own recent runs served both schema
+   numbers above.
    On 0.12.1 this was re-read against the recorded runs under
    `tests/fixtures/timeline-runs/`, which serve both schema numbers, every phase above,
    and every span kind but `human-wait`, which none of those runs records.

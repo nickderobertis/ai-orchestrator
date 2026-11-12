@@ -1099,6 +1099,8 @@ def test_from_its_launch_to_settle_the_dispatch_sends_the_board_nothing_but_its_
         _Operation.UPDATE_FIELDS,
         _Operation.UPDATE_ISSUE,
     )
+    # onetaskgraph 0.14.12 sends a targeted write as its token twin, whose answer carries the
+    # issue's change token inline, so it reads no version back after any write here.
     assert answered.operations == (
         [_Operation.ADD_COMMENT_WHOLE] * quoted
         + [_Operation.ISSUE_DETAILS]

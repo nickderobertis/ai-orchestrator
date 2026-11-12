@@ -284,6 +284,18 @@ SCHEDULED_NOTES_ONEAGENTGRAPH_FLOOR = Release(0, 11, 3)
 #: naming `planner-surfaced` restarts its clock when the planner reads a surface; the same
 #: release drops `start`'s `--heartbeat-interval`.
 JOURNAL_FOLLOWING_ENGINE_FLOOR = Release(0, 106, 0)
+#: onepipeline https://github.com/nickderobertis/onepipeline/pull/1521 (`5f577094`), first
+#: cut as 0.108.0 and adopted here as 0.109.0: the engine's built-in clock reset is gone.
+#: `agentgraph::reset_resettable` and `agentgraph::reset_timer` are deleted, so `next`
+#: journals `planner-surfaced` and signals no observer member, and the release links
+#: oneagentgraph 0.13.0 (https://github.com/nickderobertis/oneagentgraph/pull/280,
+#: `047d084a`), which removes `config::Schedule::resettable`, `run::Signal::Reset` and the
+#: `reset-timer` verb, so a graph declaring `resettable` is refused by that library's
+#: schema at launch. Its `docs/contract-divergences.md` records the removal as entry 155.
+#: Below it the engine still restarted the clock of any observer member a graph declared
+#: `resettable` on every surface read; from it on, a graph's own `reset_on` is the only
+#: reset, which for this host is graphs/dag-scope.yaml's `progress-report` note.
+BUILT_IN_RESET_REMOVED_ENGINE_FLOOR = Release(0, 108, 0)
 
 
 #: The three sibling releases carrying https://github.com/nickderobertis/ai-orchestrator/issues/1004's
@@ -1389,6 +1401,11 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
             JOURNAL_FOLLOWING_ENGINE_FLOOR,
             "passes the run's journal to its observer graph",
         ),
+        (
+            "onepipeline",
+            BUILT_IN_RESET_REMOVED_ENGINE_FLOOR,
+            "restarts no observer clock on a surface read, leaving `reset_on` the only reset",
+        ),
     ],
     ids=(
         "onevcs",
@@ -1403,6 +1420,7 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
         "onevcs-removals-pass",
         "oneagentgraph-scheduled-notes",
         "onepipeline-journal-following",
+        "onepipeline-built-in-reset-removed",
     ),
 )
 def test_the_linked_sibling_carries_this_plans_change_to_it(
