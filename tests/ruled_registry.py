@@ -17,7 +17,9 @@ import subprocess
 from pathlib import Path
 
 from registered_checkouts import RepoIdentity
+from sibling_facts import DECLARATION, RELEASES, declaration, override_default_targets
 
+from orchestrator.record_shapes import hosted_origin
 from orchestrator.root import REPO_ROOT
 
 #: The tracked base `just repos-apply` installs: the policy each identity publishes under.
@@ -31,11 +33,49 @@ RULE_MATCH = re.compile(
 )
 
 
-def checkout(directory: Path, origin: str) -> Path:
-    """A real git checkout of `origin`, which is all registration reads of one."""
+#: A committer for the base commit a scratch checkout carries, so no host identity is read.
+COMMITTER = ("-c", "user.email=t@example.com", "-c", "user.name=Test")
+
+
+def override_declaration(origin: str) -> str | None:
+    """The `release-targets.toml` declaring what the tracked override defaults `origin` to.
+
+    ``None`` for an origin the override names no ``default_target`` for. The target is
+    declared under the name the override uses, and nothing a probe runs.
+    """
+    target = override_default_targets(RELEASES.read_text(encoding="utf-8")).get(
+        hosted_origin(origin) or ""
+    )
+    return None if target is None else declaration({target: f"scratch:{target}"})
+
+
+def checkout(directory: Path, origin: str, base: str = "main") -> Path:
+    """A real git checkout of `origin`, with a base `onevcs` can read a declaration at.
+
+    Every checkout a host registers has a commit on `main`, and a producer the tracked
+    override names declares the target the override makes its default; the installed
+    `onevcs rules check` refuses a checkout whose base it cannot read and an override
+    `default_target` its producer does not declare, so a checkout lacking either is one
+    no host has. A journey about such a producer declares more over this base itself.
+    """
     directory.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=directory, check=True)
+    subprocess.run(["git", "init", "-q", "-b", base], cwd=directory, check=True)
     subprocess.run(["git", "remote", "add", "origin", origin], cwd=directory, check=True)
+    if (declared := override_declaration(origin)) is not None:
+        (directory / DECLARATION).write_text(declared, encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=directory, check=True)
+    subprocess.run(
+        ["git", *COMMITTER, "commit", "-q", "--allow-empty", "-m", "chore: base"],
+        cwd=directory,
+        check=True,
+    )
+    # A fetched clone's `origin/HEAD`, so the base is ``base`` and never what the real
+    # remote's network answer would make it.
+    for recorded in (
+        ["update-ref", f"refs/remotes/origin/{base}", "HEAD"],
+        ["symbolic-ref", "refs/remotes/origin/HEAD", f"refs/remotes/origin/{base}"],
+    ):
+        subprocess.run(["git", *recorded], cwd=directory, check=True)
     return directory
 
 

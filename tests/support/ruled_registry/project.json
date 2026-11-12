@@ -6,7 +6,8 @@
     "type:test-support"
   ],
   "implicitDependencies": [
-    "support-registered-checkouts"
+    "support-registered-checkouts",
+    "support-sibling-facts"
   ],
   "namedInputs": {
     "testSupport": [
@@ -17,6 +18,7 @@
       "{workspaceRoot}/config/onevcs.workspaces.yml",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/orchestrator/host_installs.py",
+      "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/orchestrator/workspaces_overlay.py",
       "{workspaceRoot}/scripts/apply-repo-registry.sh",

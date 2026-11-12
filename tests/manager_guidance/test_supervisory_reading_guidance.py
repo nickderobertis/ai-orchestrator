@@ -24,7 +24,7 @@ MANAGER = "AGENTS.md"
 #: The opening phrase of each passage. A claim is matched inside its own paragraph
 #: rather than document-wide: a phrase that survived somewhere else would satisfy a
 #: whole-file search while the passage that has to carry it was gone.
-WATCH_ITEM = "6. **A grep over the whole of `just status`"
+WATCH_ITEM = "6. **A grep over `just status --providers`"
 SUBJECT = "**The body is re-derived at every publication"
 FINDING = "**A supervisory finding earns a check, never an action**"
 DECLINED = "**A finding you decline on the merits"

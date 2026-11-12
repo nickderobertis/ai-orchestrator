@@ -2939,6 +2939,10 @@ ELSEWHERE = "github.com/nickderobertis/service"
 #: waits on, and that artifact as printobserver's own declaration names it.
 PRINTOBSERVER = "github.com/nickderobertis/printobserver"
 PRINTOBSERVER_RELEASE = ("github-release", "release:printobserver")
+#: The other producer with no row whose tracked default is not the crate every stand-in
+#: declares: onetaskgraph-ui's component package, which `onepipeline-ui` installs.
+ONETASKGRAPH_UI = "github.com/nickderobertis/onetaskgraph-ui"
+ONETASKGRAPH_UI_PACKAGE = ("npm", "npm:onetaskgraph-ui")
 
 
 def _hosted_checkout(root: Path, origin: str, declaration: str | None = None) -> Path:
@@ -2946,7 +2950,8 @@ def _hosted_checkout(root: Path, origin: str, declaration: str | None = None) ->
 
     Committed on `main` rather than left in the working tree, because `onevcs` reads a
     producer's declaration at the publication checkout's base and nowhere else; the
-    origin is never fetched, so naming the real one reaches no host.
+    origin is never fetched and its `origin/HEAD` is recorded here, so naming the real
+    one reaches no host.
     """
     directory = root / origin.rpartition("/")[2]
     git("init", "-q", "-b", "main", str(directory))
@@ -2956,6 +2961,10 @@ def _hosted_checkout(root: Path, origin: str, declaration: str | None = None) ->
     git("add", "-A", cwd=directory)
     git(*GIT_IDENTITY, "commit", "-qm", "chore: seed", cwd=directory)
     git("remote", "add", "origin", f"https://{origin}.git", cwd=directory)
+    # A fetched clone's `origin/HEAD`, so `onevcs` reads the base here rather than asking
+    # the real host for its default branch through git's credential helper.
+    git("update-ref", "refs/remotes/origin/main", "HEAD", cwd=directory)
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main", cwd=directory)
     return directory
 
 
@@ -3026,7 +3035,9 @@ def _stand_in(producer: str) -> str:
     """``producer``'s declaration as the table has it: its row's target, and a crate.
 
     printobserver has no row, and declares the release its own declaration names
-    `github-release` — the target the tracked override gives it as its default.
+    `github-release` — the target the tracked override gives it as its default; nor has
+    onetaskgraph-ui, which declares the `npm` package the override gives it, because the
+    installed `onevcs` refuses to resolve a producer that does not declare its default.
     """
     name = producer.rpartition("/")[2]
     row = host_installs.by_producer(producer)
@@ -3035,6 +3046,8 @@ def _stand_in(producer: str) -> str:
         declared.append((row.target, row.artifact))
     if producer == PRINTOBSERVER:
         declared.append(PRINTOBSERVER_RELEASE)
+    if producer == ONETASKGRAPH_UI:
+        declared.append(ONETASKGRAPH_UI_PACKAGE)
     return _declaring(*declared)
 
 

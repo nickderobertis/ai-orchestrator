@@ -67,11 +67,19 @@ class Session(NamedTuple):
 # The keys of `recoverable --json` and `session holders --json` this journey reads, and
 # only those: both documents are `onevcs`'s contract, and restating the whole of either
 # here would be a second schema nothing reconciles.
+class Landed(TypedDict):
+    """Whether a preserved branch's work reached its base, as `recoverable` decided it."""
+
+    state: str
+
+
 class RecoverableRow(TypedDict):
     """One preserved branch, as `recoverable --json` reports it."""
 
     session: SessionToken
     labels: dict[str, str]
+    stopped_because: str
+    landed: Landed
 
 
 class Holder(TypedDict):
@@ -213,13 +221,14 @@ def test_session_holders_carries_each_holders_labels_as_given(preserved: Preserv
 def test_a_filtered_read_answers_over_an_excluded_branch_git_cannot_read(
     preserved: Preserved,
 ) -> None:
-    """The filter narrows what is read, so an excluded branch cannot fail the read.
+    """An excluded branch git cannot read leaves the filtered read's answer decided.
 
     The excluded session's branch is left with a tip commit whose tree is gone, so any
-    read that decides that branch fails naming the tree. A filter applied only to the
-    printed rows would still decide it and fail the same way; one that never reads the
-    branch answers the matching row. The unfiltered read and a filter selecting the
-    broken branch are the controls that the corruption is reachable at all.
+    read that decides that branch cannot decide whether it landed, and the pinned
+    `onevcs` says so in that branch's own row — its landing `unknown`, naming the tree —
+    rather than refusing the whole listing. The unfiltered read and a filter selecting
+    the broken branch are the controls that the corruption is reachable at all; the
+    filter selecting the other session answers that session's row alone, decided.
     """
     execution = preserved.identity.execution
     excluded_branch = f"onevcs/{preserved.second.token}"
@@ -235,10 +244,13 @@ def test_a_filtered_read_answers_over_an_excluded_branch_git_cannot_read(
     # llmlint: ignore-end[tests_mirror_real_usage]
 
     for selecting in ([], ["--label", f"launcher={preserved.second.labels['launcher']}"]):
-        broken = _onevcs(preserved.identity, "recoverable", "--json", *selecting)
-        assert broken.returncode != 0 and tree in broken.stderr, (
-            f"`recoverable --json {' '.join(selecting)}` should fail on the unreadable "
-            f"tree {tree}, and exited {broken.returncode}:\n{broken.stdout}\n{broken.stderr}"
+        broken = {row["session"]: row for row in _recoverable(preserved.identity, *selecting)}[
+            preserved.second.token
+        ]
+        assert broken["landed"]["state"] == "unknown" and tree in broken["stopped_because"], (
+            f"`recoverable --json {' '.join(selecting)}` should leave the landing of the "
+            f"branch over the unreadable tree {tree} undecided, naming it, and answered "
+            f"{broken}"
         )
 
     rows = _recoverable(
@@ -246,4 +258,7 @@ def test_a_filtered_read_answers_over_an_excluded_branch_git_cannot_read(
     )
     assert [row["session"] for row in rows] == [preserved.first.token], (
         f"the filtered read answered {rows}, not session {preserved.first.token}'s row alone"
+    )
+    assert rows[0]["landed"]["state"] != "unknown" and tree not in rows[0]["stopped_because"], (
+        f"the filtered read's row is not decided: {rows[0]}"
     )

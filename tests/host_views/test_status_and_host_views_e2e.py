@@ -4,10 +4,11 @@ Both recipes are the engine's views passed through untouched: `onepipeline statu
 `onepipeline host` print a `free space:` line per filesystem the runs root and the
 lifecycle workspaces are on. `just status --providers` ends with the `providers:` block
 `oneagentgraph health` contributes, which the view leaves out unless asked since engine
-0.103.0. `AGENTS.md`'s watch property 6 has a supervisor read `just status "$RUN"
---no-providers`, which leaves that block out and keeps everything above it, so these
-journeys hold the recipes to printing the engine's line there, to the block being the only
-difference, and to printing nothing of this repository's beside the engine's view.
+0.103.0, `--no-providers` being an accepted no-op. `AGENTS.md`'s watch property 6 has a
+supervisor read the default, `just status "$RUN"`, which leaves that block out and keeps
+everything above it, so these journeys hold the recipes to printing the engine's line
+there, to the block being the only difference, and to printing nothing of this
+repository's beside the engine's view.
 
 The engine is the real one and so are the recipes, the wrapper script and the shell: a
 view reaches no model, and a doubled engine would prove nothing about a rendering. The run
@@ -68,9 +69,12 @@ FAKE_BACKEND = helper("fake_backend.py")
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
 
 #: Where `just status`'s run-scoped lines stop and the host-wide provider report
-#: begins. `AGENTS.md` tells a supervisor to cut a watch here before matching words in
-#: what is above it, so a line below it is one no watch following that guidance sees.
+#: begins. `AGENTS.md` tells a watch to read the default view, which ends here, so a line
+#: below it is one no watch following that guidance sees.
 PROVIDERS = "  providers:"
+
+#: The engine's unread-surface line, which watch property 5 makes a HARD REQUIREMENT.
+UNREAD_SURFACE_LINE = "  1 planner update(s) waiting"
 
 #: The engine's free-space line, indented as a run's own block is — the reading watch
 #: property 6 depends on finding above `PROVIDERS`.
@@ -167,8 +171,8 @@ def _assert_free_space_above_the_cut(rendered: str, view: str, runs_root: Path) 
         f"{everything}"
     )
     assert _free_space(_above_providers(rendered)) == everything, (
-        "a free-space line sits below the `providers:` line, which is where this "
-        "repository's own guidance tells a supervisor to cut this view — no watch that "
+        "a free-space line sits below the `providers:` line, which is where the "
+        "default view this repository's guidance tells a watch to read ends — no watch that "
         f"follows that guidance would see it: {rendered!r}"
     )
 
@@ -196,37 +200,58 @@ def test_the_status_view_reports_free_space_above_the_line_a_watch_is_cut_at(
     _assert_free_space_above_the_cut(rendered.stdout, "status", probe.root)
 
 
-def test_the_status_view_without_providers_is_the_view_with_only_that_report_left_out(
+def test_the_status_view_by_default_is_the_view_with_only_the_provider_report_left_out(
     probe: Probe,
 ) -> None:
-    """Watch property 6's read: `just status <run> --no-providers`.
+    """Watch property 6's read: `just status <run>`, the default view.
 
-    The flag is what a supervisor's watch is told to read instead of cutting the view with
-    a shell filter, so it has to leave out the host's report and nothing else: the
-    free-space reading and every run-scoped line the view asked for the report prints
-    above it. The view names no report by default, so the bare form is held to the same.
+    A supervisor's watch reads the default view rather than cutting the view with a shell
+    filter, so the default has to leave out the host's report and nothing else: the
+    free-space reading, the unread-surface line rule 5 makes a HARD REQUIREMENT, and every
+    run-scoped line the view asked for the report prints above it. `--providers` is what
+    asks for the report, and `--no-providers` is an accepted no-op the default is held to.
     """
+    raised = _engine(
+        "surface",
+        probe.run,
+        "--kind",
+        "planner-question",
+        "--message",
+        "a question nobody has read yet",
+        runs_root=probe.root,
+    )
+    assert raised.returncode == 0, raised.stdout + raised.stderr
+
     whole = _view("status", probe.run, "--providers", runs_root=probe.root)
+    default = _view("status", probe.run, runs_root=probe.root)
     without = _view("status", probe.run, "--no-providers", runs_root=probe.root)
-    bare = _view("status", probe.run, runs_root=probe.root)
 
     assert whole.returncode == 0, whole.stderr
-    assert PROVIDERS in whole.stdout, whole.stdout
-    assert without.returncode == 0, without.stderr
-    assert bare.returncode == 0, bare.stderr
-    assert not any(line.startswith(PROVIDERS) for line in bare.stdout.splitlines()), (
-        f"`just status {probe.run}` asked the providers unbidden: {bare.stdout!r}"
+    assert PROVIDERS in whole.stdout, (
+        f"`just status {probe.run} --providers` did not print the host's provider report: "
+        f"{whole.stdout!r}"
     )
-    assert not any(line.startswith(PROVIDERS) for line in without.stdout.splitlines()), (
-        f"`just status {probe.run} --no-providers` still printed the host's provider "
-        f"report: {without.stdout!r}"
+    assert default.returncode == 0, default.stderr
+    assert not any(line.startswith(PROVIDERS) for line in default.stdout.splitlines()), (
+        f"`just status {probe.run}` asked the providers unbidden: {default.stdout!r}"
     )
-    _assert_free_space_above_the_cut(without.stdout, "status --no-providers", probe.root)
-    assert [_stable(line) for line in without.stdout.splitlines()] == [
+    assert any(line.startswith(UNREAD_SURFACE_LINE) for line in default.stdout.splitlines()), (
+        f"`just status {probe.run}` dropped the unread-surface line for the question raised "
+        f"on its channel, which no watch may miss: {default.stdout!r}"
+    )
+    _assert_free_space_above_the_cut(default.stdout, "status", probe.root)
+    assert [_stable(line) for line in default.stdout.splitlines()] == [
         _stable(line) for line in _above_providers(whole.stdout)
     ], (
-        "`--no-providers` changed more than the provider report: the plain view above that "
-        f"report was {whole.stdout!r} and the view without it was {without.stdout!r}"
+        "the default view differs from `--providers` by more than the provider report: the "
+        f"view with that report was {whole.stdout!r} and the default was {default.stdout!r}"
+    )
+    assert without.returncode == 0, without.stderr
+    assert [_stable(line) for line in without.stdout.splitlines()] == [
+        _stable(line) for line in default.stdout.splitlines()
+    ], (
+        "`--no-providers` is an accepted no-op on the adopted engine, and it changed the "
+        f"view: the default was {default.stdout!r} and with the flag {without.stdout!r}"
     )
 
 

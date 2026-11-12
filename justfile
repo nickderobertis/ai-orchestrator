@@ -875,8 +875,8 @@ telemetry-server *args:
     @./scripts/telemetry-server.sh "$@"
 
 # Show a run's live state: what is driving it, what is running, and what it is running
-# in. The engine prints its `free space:` lines whether or not `--no-providers` leaves
-# out the host's provider report, which is how a supervisor's watch is told to read it.
+# in. The host's provider report is left out unless `--providers` asks for it, and the
+# engine prints its `free space:` lines either way, so a supervisor's watch reads the default.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.
 status *args:
     @./scripts/onepipeline.sh status "$@"

@@ -1532,12 +1532,11 @@ do not just re-arm.
    line the views print per run, and the `N unread planner surface(s)` every watch
    heartbeat and ending line carries, have to reach you; filtering them out as noise is
    forbidden, because a blocking surface produces no other signal until it is read.
-6. **A grep over the whole of `just status` is watching two subjects at once**: the
+6. **A grep over `just status --providers` is watching two subjects at once**: the
    run's own lines, then `oneagentgraph health`'s report about the **host**, whose words
-   are the ones a real death is reported in. Leave the host's report out once, in one
-   snapshot the whole watch reads — `just status "$RUN" --no-providers` — which drops
-   that report and nothing else, so the unread-surface line and the free-space reading
-   both stay in it.
+   are the ones a real death is reported in. So a watch reads the default view, `just
+   status "$RUN"`, which leaves that report out and nothing else, so the unread-surface
+   line and the free-space reading both stay in it; `--providers` is what asks the host.
 7. **A planning flow is a dispatch, and the flow is what you watch.** `just plan`,
    `just finish-plan`, `just follow-ups` and `just follow-ups-answer-comments` each run
    as a **flow**: the engine's `onepipeline flow run`, owned by this session from the
@@ -1994,7 +1993,7 @@ agents` are how a run is read; never rebuild run state from `events.jsonl`, `ps`
 log`. Read the **side** a failed node died on before its identity, because the chains
 prefer different identities, and a `journal:` line as the one that makes the rest
 unprovable. Both `just status` and `just host` print the engine's own `free space:`
-line for every filesystem a run writes to, and `--no-providers` keeps it, so a watch still
+line for every filesystem a run writes to, with or without `--providers`, so a watch still
 sees it — read it, and leave acting on a filling disk to whoever owns what is filling
 it. A run that settled with every node done has had its dispatch scratch removed; one
 that ended otherwise or paused keeps it, and `just status` and `just results` print a

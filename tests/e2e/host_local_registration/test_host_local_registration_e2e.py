@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from ruled_registry import override_declaration
 from waits import timeout as e2e_timeout
 from waits import until
 
@@ -106,7 +107,11 @@ def _git(*args: str, cwd: Path) -> None:
 
 
 def _stand_in(home: Path, relative: str, identity: str) -> Path:
-    """A committed checkout of ``identity`` at ``~/relative`` whose bootstrap leaves a mark."""
+    """A committed checkout of ``identity`` at ``~/relative`` whose bootstrap leaves a mark.
+
+    A producer the tracked override names declares its default target, as every real one
+    does, because the installed `onevcs` refuses the configuration otherwise.
+    """
     checkout = home / relative
     checkout.mkdir(parents=True)
     (checkout / "justfile").write_text(
@@ -114,6 +119,8 @@ def _stand_in(home: Path, relative: str, identity: str) -> Path:
     )
     _git("init", "-q", "--initial-branch", "main", cwd=checkout)
     _git("remote", "add", "origin", f"https://{identity}.git", cwd=checkout)
+    if (declared := override_declaration(f"https://{identity}.git")) is not None:
+        (checkout / "release-targets.toml").write_text(declared, encoding="utf-8")
     _git("add", "-A", cwd=checkout)
     _git(
         "-c",
@@ -126,6 +133,10 @@ def _stand_in(home: Path, relative: str, identity: str) -> Path:
         "seed",
         cwd=checkout,
     )
+    # A fetched clone's `origin/HEAD`, so `onevcs` reads the base here rather than asking
+    # the real host for its default branch.
+    _git("update-ref", "refs/remotes/origin/main", "HEAD", cwd=checkout)
+    _git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main", cwd=checkout)
     return checkout
 
 

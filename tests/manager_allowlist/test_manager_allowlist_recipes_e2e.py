@@ -321,9 +321,9 @@ def test_sync_allowlist_puts_both_renderings_back_to_exactly_the_source(tmp_path
 
 
 #: The rows the Claude Code journeys drive: each allowed kind, a write, and two refusals.
-CLAUDE_ROWS = ("status-cut", "cd-and-import", "envelope-write", "stop", "launch-edit")
+CLAUDE_ROWS = ("status-run", "cd-and-import", "envelope-write", "stop", "launch-edit")
 #: The rows the Codex journey drives: an allowed row, a refusal, and two it cannot hold.
-CODEX_ROWS = ("status-cut", "stop", "unfinished", "cd-and-status")
+CODEX_ROWS = ("status-run", "stop", "unfinished", "cd-and-status")
 
 
 def _fake_bin(tmp_path: Path) -> Path:
@@ -446,7 +446,7 @@ def test_the_probe_falls_through_an_exhausted_identity_and_reads_each_row(tmp_pa
     first = calls[-1]
     assert "--permission-mode" in first["argv"] and "default" in first["argv"]
     assert "Bash(just status:*)" in first["settings"]["permissions"]["allow"]
-    for row in ("status-cut", "cd-and-import", "envelope-write"):
+    for row in ("status-run", "cd-and-import", "envelope-write"):
         assert "let through  ok" in _line(probed.stdout, row)
     for row in ("stop", "launch-edit"):
         assert "refused      ok" in _line(probed.stdout, row)
@@ -472,7 +472,7 @@ def test_a_step_the_tool_never_attempted_fails_an_allowed_row_and_is_named(
     probed, _ = _probe(tmp_path, refuse="launch.json", exhausted=False, skip="just status,stop")
 
     assert probed.returncode == 1, probed.stdout + probed.stderr
-    assert "not attempted MISMATCH" in _line(probed.stdout, "status-cut")
+    assert "not attempted MISMATCH" in _line(probed.stdout, "status-run")
     assert "not attempted MISMATCH" in _line(probed.stdout, "stop")
     assert "2 row(s) disagree with the table" in probed.stdout
 
@@ -500,7 +500,7 @@ def test_the_probe_drives_codex_through_the_synced_rules_under_the_next_login(
 
     assert probed.returncode == 0, probed.stdout + probed.stderr
     assert f"codex (as {CODEX_IDENTITIES[1][0]})" in probed.stdout
-    assert "let through  ok" in _line(probed.stdout, "status-cut")
+    assert "let through  ok" in _line(probed.stdout, "status-run")
     assert "not through  ok" in _line(probed.stdout, "stop")
     for row in ("unfinished", "cd-and-status"):
         assert "unexpressible:" in _line(probed.stdout, row)
@@ -640,12 +640,12 @@ def test_a_command_claude_ran_without_refusing_and_without_effect_is_named_so(
         tmp_path,
         "",
         False,
-        rows=("status-cut", "stop"),
+        rows=("status-run", "stop"),
         FAKE_CLAUDE_SHADOW="just status,just stop",
     )
 
     assert probed.returncode == 1, probed.stdout + probed.stderr
-    assert "no effect    MISMATCH" in _line(probed.stdout, "status-cut")
+    assert "no effect    MISMATCH" in _line(probed.stdout, "status-run")
     assert "no effect    MISMATCH" in _line(probed.stdout, "stop")
 
 
@@ -714,7 +714,7 @@ def test_a_codex_turn_that_never_runs_a_refused_row_holds_it_off_but_names_it_un
 
     assert probed.returncode == 1, probed.stdout + probed.stderr
     assert "not attempted ok" in _line(probed.stdout, "stop")
-    assert "not attempted MISMATCH" in _line(probed.stdout, "status-cut")
+    assert "not attempted MISMATCH" in _line(probed.stdout, "status-run")
 
 
 def test_a_codex_item_after_its_turn_completed_is_refused_rather_than_read(
@@ -857,14 +857,14 @@ def test_a_codex_login_exhausted_after_running_its_rows_leaves_nothing_the_next_
     probed = _run_probe(
         tmp_path,
         "codex",
-        ("status-cut", "stop"),
+        ("status-run", "stop"),
         {**_codex_logins(tmp_path), "FAKE_CODEX_EXHAUST_AFTER_RUN": "1"},
     )
 
     assert probed.returncode == 0, probed.stdout + probed.stderr
     assert f"codex (as {CODEX_IDENTITIES[1][0]})" in probed.stdout
     assert "not through  ok" in _line(probed.stdout, "stop")
-    assert "let through  ok" in _line(probed.stdout, "status-cut")
+    assert "let through  ok" in _line(probed.stdout, "status-run")
 
 
 def test_a_codex_command_run_under_no_shell_is_refused_rather_than_read(tmp_path: Path) -> None:
@@ -916,7 +916,7 @@ def test_the_default_run_drives_both_tools_and_reads_each_alone(tmp_path: Path) 
     probed = _run_probe(
         tmp_path,
         None,
-        ("status-cut", "stop"),
+        ("status-run", "stop"),
         {
             **identities,
             **_codex_logins(tmp_path),
@@ -928,7 +928,7 @@ def test_the_default_run_drives_both_tools_and_reads_each_alone(tmp_path: Path) 
     assert probed.returncode == 0, probed.stdout + probed.stderr
     for tool in ("claude-code", "codex"):
         lines = [line for line in probed.stdout.splitlines() if line.startswith(f"  {tool} ")]
-        assert any(" status-cut " in line and "let through  ok" in line for line in lines), lines
+        assert any(" status-run " in line and "let through  ok" in line for line in lines), lines
         assert any(" stop " in line and " ok " in line for line in lines), lines
     assert "every row as the table says" in probed.stdout
 
@@ -972,7 +972,7 @@ def test_a_scratch_project_git_cannot_initialise_stops_the_probe_before_any_turn
     probed = _run_probe(
         tmp_path,
         "claude-code",
-        ("status-cut",),
+        ("status-run",),
         {"FAKE_CLAUDE_LOG": str(log), "PATH": f"{refusing}{os.pathsep}{os.environ['PATH']}"},
     )
 
@@ -1088,7 +1088,7 @@ def test_a_scratch_directory_the_probe_cannot_write_is_named_with_what_to_do(
     locked.chmod(0o555)
     try:
         probed = subprocess.run(
-            ["just", "probe-allowlist", "--tool", "claude-code", "--row", "status-cut"],
+            ["just", "probe-allowlist", "--tool", "claude-code", "--row", "status-run"],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,

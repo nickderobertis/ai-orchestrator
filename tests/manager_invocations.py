@@ -284,7 +284,7 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _allow("history-show", "just history-show {run}", _RECIPES),
     _allow("replan", "just replan {brief}", _RECIPES),
     _allow("register-repo", "just register-repo {co}", _RECIPES),
-    _allow("status-cut", "just status {run} --no-providers", _VIEWS),
+    _allow("status-run", "just status {run}", _VIEWS),
     _allow("status-all", "just status", _VIEWS),
     _allow(
         "watch-log",
@@ -457,9 +457,7 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _unlisted("git-rev-parse", "git -C {workspace} rev-parse HEAD", _GIT_C_UNGRANTED),
     _unlisted("git-merge-base", "git -C {workspace} merge-base HEAD {base}", _GIT_C_UNGRANTED),
     # The same verbs behind the `cd <this checkout>` prefix most real invocations carry.
-    _allow(
-        "cd-and-status", "cd {checkout} && just status {run} --no-providers", _CD, codex=CODEX_CD
-    ),
+    _allow("cd-and-status", "cd {checkout} && just status {run}", _CD, codex=CODEX_CD),
     _allow(
         "cd-semicolon-watch",
         "cd {checkout}; just watch {run} --log {log}",

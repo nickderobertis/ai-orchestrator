@@ -33,7 +33,9 @@
     "support-published-tools",
     "support-pytest-temp-root",
     "support-registered-checkouts",
+    "support-ruled-registry",
     "support-scratch-identity",
+    "support-sibling-facts",
     "support-short-state",
     "support-waits"
   ],
@@ -134,7 +136,9 @@
             "support-published-tools",
             "support-pytest-temp-root",
             "support-registered-checkouts",
+            "support-ruled-registry",
             "support-scratch-identity",
+            "support-sibling-facts",
             "support-pooled-server-state",
             "support-short-state",
             "support-waits"

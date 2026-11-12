@@ -45,6 +45,7 @@ from typing import Literal, NamedTuple, NotRequired, TypedDict, cast
 import pytest
 from registered_checkouts import TRACKED_CHECKOUTS, RepoIdentity
 from ruled_registry import (
+    COMMITTER,
     TRACKED_RULES,
     apply_registry,
     checkout,
@@ -674,16 +675,47 @@ def test_a_producer_this_registry_does_not_hold_is_reported_not_failed(
 ) -> None:
     """A host holding a subset of the producers reads which ones it lacks.
 
-    The `applied` registry holds the pre-adoption checkouts, none of which carries a
-    declaration and one of which — `onetaskgraph` — is not among them at all, so the
-    table below the policy one names each line's state rather than the apply failing
-    for a checkout's momentary shape: an unregistered producer as not registered, and a
-    registered one whose base declares nothing as unresolved with `onevcs`'s own reason.
+    The `applied` registry holds the pre-adoption checkouts, one of which —
+    `onetaskgraph` — is not among them at all, so the table below the policy one names
+    it as not registered rather than the apply failing for a producer this host lacks.
     """
     reported = applied.result.stdout[applied.result.stdout.index("release adoption") :]
     assert re.search(r"github\.com/nickderobertis/onetaskgraph\s+not registered here", reported)
-    assert re.search(r"github\.com/nickderobertis/onepipeline\s+unresolved: ", reported)
     assert applied.result.returncode == 0
+
+
+def test_a_registered_producer_whose_base_declares_nothing_fails_the_apply(
+    tmp_path: Path,
+) -> None:
+    """A producer the override gives a default its own base never declares is refused.
+
+    The installed `onevcs rules check` reports that override as a release finding a
+    release verb refuses when used, and the recipe fails on it naming the producer, so
+    a host learns of the wait that could never complete when it applies the
+    configuration rather than when a node is held on it.
+    """
+    present = checkout(
+        tmp_path / "onepipeline", "https://github.com/nickderobertis/onepipeline.git"
+    )
+    subprocess.run(["git", "rm", "-q", "release-targets.toml"], cwd=present, check=True)
+    subprocess.run(
+        ["git", *COMMITTER, "commit", "-qm", "chore: declare nothing"], cwd=present, check=True
+    )
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=present, check=True
+    )
+    manifest = tmp_path / "checkouts"
+    manifest.write_text(f"{present}\n", encoding="utf-8")
+
+    result = apply_registry(manifest, tmp_path / "home")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert re.search(
+        r"release finding: .*github\.com/nickderobertis/onepipeline naming default_target "
+        r'"npm", which it does not declare as a target',
+        result.stdout + result.stderr,
+    ), result.stdout + result.stderr
+    assert "resolving the policy for onepipeline failed" in result.stderr, result.stderr
 
 
 def test_a_scratch_identity_seeds_beside_the_override_untouched_by_it(tmp_path: Path) -> None:

@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Literal, NamedTuple
 
 from conftest import git
+from ruled_registry import override_declaration
 from waits import timeout as e2e_timeout
 
 from orchestrator.record_shapes import hosted_origin
@@ -149,6 +150,10 @@ def seeded(
     and a journey driving a recipe that resolves a checkout by name needs them to be the
     names that recipe resolves.
 
+    A hosted ``origin`` the tracked release override gives a ``default_target`` seeds a
+    base declaring that target, as every real producer's does: the installed `onevcs`
+    refuses to resolve a producer whose base does not declare its override default.
+
     ``origin`` names the identity `onevcs` registers the pair under, as a normalized
     `host/owner/name`; left ``None``, the identity is the bare origin's own path, which
     is the one shape the reserved `onepipeline.repo` key exists for. Given one, both
@@ -181,6 +186,8 @@ def seeded(
     git("init", "-q", "--bare", "-b", "main", str(bare))
     git("init", "-q", "-b", "main", str(seed))
     (seed / "README.md").write_text("seed\n", encoding="utf-8")
+    if origin is not None and (declared := override_declaration(origin)) is not None:
+        (seed / DECLARATION).write_text(declared, encoding="utf-8")
     if ignored:
         (seed / ".gitignore").write_text("".join(f"{line}\n" for line in ignored), encoding="utf-8")
     git("add", "-A", cwd=seed)
@@ -265,10 +272,11 @@ def onevcs_in(
     )
 
 
-def land(identity: Identity, branch: str, files: Mapping[str, str]) -> None:
+def land(identity: Identity, branch: str, files: Mapping[str, str | None]) -> None:
     """Commit ``files`` on ``branch``, land it through `onevcs publish-branch`, then sync.
 
-    A file whose text opens with a shebang is made executable. `onevcs sync` runs in each
+    A file whose text opens with a shebang is made executable, and one given ``None`` is
+    removed. `onevcs sync` runs in each
     registered checkout afterwards, because a declaration is read at whichever one
     `onevcs` takes as the publication checkout, and one left behind its origin reads as
     declaring nothing — the remedy `AGENTS.md` names for that state.
@@ -276,6 +284,9 @@ def land(identity: Identity, branch: str, files: Mapping[str, str]) -> None:
     path = identity.publication
     git("checkout", "-qb", branch, cwd=path)
     for relative, text in files.items():
+        if text is None:
+            (path / relative).unlink()
+            continue
         (path / relative).parent.mkdir(parents=True, exist_ok=True)
         (path / relative).write_text(text, encoding="utf-8")
         if text.startswith("#!"):
@@ -317,6 +328,8 @@ def seeded_producer(root: Path, origin: str, declared: str | None) -> Identity:
     probe; it lands with :data:`NO_RELEASE_PROBE` through a publication, so the base
     `onevcs` and the release-contradiction check both read it at is one a landing left and
     what any later `release status` answers is decided by the landing and the override.
+    ``None`` lands the removal of the declaration :func:`seeded` gave a producer the
+    override names, which is a producer that stopped declaring after it was registered.
     """
     identity = seeded(root, origin=origin)
     if declared is not None:
@@ -325,6 +338,8 @@ def seeded_producer(root: Path, origin: str, declared: str | None) -> Identity:
             "chore/declare-release-targets",
             {DECLARATION: declared, NO_RELEASE_PROBE_PATH: NO_RELEASE_PROBE},
         )
+    elif (identity.publication / DECLARATION).exists():
+        land(identity, "chore/declare-no-release-targets", {DECLARATION: None})
     return identity
 
 
@@ -341,11 +356,18 @@ def _declaring_public(rules: str, identities: Sequence[str]) -> str:
 
 
 def _stub(root: Path, identity: str) -> Path:
-    """A checkout of no content whose `origin` is ``identity``'s ssh remote, to register."""
+    """A checkout whose `origin` is ``identity``'s ssh remote, to register.
+
+    It holds nothing but the declaration the tracked release override names for a
+    producer, which the installed `onevcs` refuses to resolve the producer without.
+    """
     host, owner, name = _hosted(identity)
     stub = root / "public-stubs" / f"{host}__{owner}__{name}"
     stub.mkdir(parents=True)
     git("init", "-q", "-b", "main", str(stub))
+    if (declared := override_declaration(identity)) is not None:
+        (stub / DECLARATION).write_text(declared, encoding="utf-8")
+        git("add", "-A", cwd=stub)
     git(*GIT_IDENTITY, "commit", "-q", "--allow-empty", "-m", "chore: stub", cwd=stub)
     git("remote", "add", "origin", f"git@{host}:{owner}/{name}.git", cwd=stub)
     return stub

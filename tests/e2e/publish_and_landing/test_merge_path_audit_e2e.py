@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from ruled_registry import checkout
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -84,18 +85,16 @@ def registry(tmp_path_factory: pytest.TempPathFactory) -> Registry:
     manifest = root / "checkouts"
     paths = []
     for identity in (LOCAL_DIRECT, SITE, MANY_REMOTE_CHECKS):
-        checkout = root / "checkouts.d" / identity.rpartition("/")[2]
-        checkout.mkdir(parents=True)
-        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=checkout, check=True)
         # The owner is part of the identity, so it is taken from the identity rather than
         # composed: a checkout registered under the wrong owner resolves a different
         # identity, and the audit would ask GitHub about a repository nobody meant.
-        subprocess.run(
-            ["git", "remote", "add", "origin", f"https://{identity}"],
-            cwd=checkout,
-            check=True,
+        paths.append(
+            checkout(
+                root / "checkouts.d" / identity.rpartition("/")[2],
+                f"https://{identity}",
+                SITE_BRANCH if identity == SITE else "main",
+            )
         )
-        paths.append(checkout)
     manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
     home = root / "onevcs"
     applied = repos(home, "repos-apply", "--checkouts", str(manifest))

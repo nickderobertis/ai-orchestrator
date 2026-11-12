@@ -2158,8 +2158,9 @@ def test_the_merge_queue_bound_is_floored_at_the_default_onevcs_declares() -> No
 
 
 #: The view a manager's watch reads, as `onepipeline` composes it. `just status` is a
-#: thin wrapper over `onepipeline status`, so what `--no-providers` leaves out of that
-#: view is this function's own composition and nothing on this side of the seam.
+#: thin wrapper over `onepipeline status`, so what its default leaves out of that view,
+#: and what `--providers` adds, is this function's own composition and nothing on this
+#: side of the seam.
 #:
 #: Read from `status_reporting`, which composes **one run's** block — its run lines, its
 #: node lines, and the health report under them — with that report said or left out,
@@ -2168,8 +2169,9 @@ def test_the_merge_queue_bound_is_floored_at_the_default_onevcs_declares() -> No
 #: function is how these gates came to report a line as gone from a view that still
 #: printed it: the composition moved down one function while the entry point kept its
 #: name. It moved down once more in https://github.com/nickderobertis/onepipeline/pull/574,
-#: which added `status --no-providers`: `status_of` now only calls `status_reporting`
-#: with the report on, and the block is composed there.
+#: which added `status --no-providers`, and the block is composed there. Since engine
+#: 0.103.0 `status_of` calls `status_reporting` with the report left out, `--providers`
+#: is what asks for it, and `--no-providers` is an accepted no-op.
 STATUS_VIEW = re.compile(r"pub\(crate\) fn status_reporting\(.*?\n\}\n", re.DOTALL)
 
 #: The helper that view writes a run's own block through, and the call by which it does.
@@ -2181,14 +2183,14 @@ STATUS_VIEW = re.compile(r"pub\(crate\) fn status_reporting\(.*?\n\}\n", re.DOTA
 STATUS_RUN_LINES = re.compile(r"fn status_run_lines\(.*?\n\}\n", re.DOTALL)
 STATUS_RUN_LINES_CALL = "status_run_lines("
 
-#: The call that writes the free-space reading watch property 6 says `--no-providers`
+#: The call that writes the free-space reading watch property 6 says the default view
 #: keeps.
 FREE_SPACE_CALL = "crate::freespace::lines("
 
 #: The line the embedded provider health report opens with, exactly as the view writes it.
 HEALTH_BLOCK_OPENER = '"  providers: '
 
-#: The condition the view writes that report under, and so the one thing `--no-providers`
+#: The condition the view writes that report under, and so the one thing `--providers`
 #: changes. Everything the view writes before it is written whichever way the flag goes.
 HEALTH_BLOCK_GATE = "if providers == Providers::Reported {"
 
@@ -2196,7 +2198,17 @@ HEALTH_BLOCK_GATE = "if providers == Providers::Reported {"
 UNREAD_SURFACE_LINE = '"  {} planner update(s) waiting'
 
 #: The read the watch rule prescribes, as the manager's document spells it.
-STATUS_WITHOUT_PROVIDERS = 'just status "$RUN" --no-providers'
+STATUS_WITHOUT_PROVIDERS = 'just status "$RUN"'
+
+#: The flag the watch rule once told a supervisor to pass. The engine's default view leaves
+#: the host's report out and accepts the flag as a no-op, so a document prescribing it is stale.
+NO_PROVIDERS_FLAG = "--no-providers"
+
+#: How `onepipeline status <RUN>` composes its default view: with the report left out.
+STATUS_DEFAULT_OMITS = re.compile(
+    r"pub\(crate\) fn status_of\(view: &RunView\) -> String \{\s*"
+    r"status_reporting\(view, Providers::Omitted\)\s*\}"
+)
 
 
 def _status_run_lines() -> str:
@@ -2214,7 +2226,7 @@ def _status_run_lines() -> str:
 
 
 def test_the_status_view_without_providers_drops_the_health_report_and_nothing_else() -> None:
-    """`--no-providers` leaves out the host's report and keeps what rule 5 and 6 read.
+    """The default view leaves out the host's report and keeps what rule 5 and 6 read.
 
     Both halves fail silently. A flag that stopped gating the report would put the host's
     health words back into the view a watch greps — the eleven-seconds-into-a-healthy-
@@ -2228,10 +2240,20 @@ def test_the_status_view_without_providers_drops_the_health_report_and_nothing_e
         f"{MANAGER.name} no longer tells a watch to read {STATUS_WITHOUT_PROVIDERS!r}, so "
         "this gate reconciles an instruction nobody is given"
     )
+    assert NO_PROVIDERS_FLAG not in written, (
+        f"{MANAGER.name} still names {NO_PROVIDERS_FLAG!r}, which onepipeline "
+        f"{ONEPIPELINE.ref} accepts as a no-op: the default view already leaves the host's "
+        "report out, so a supervisor told to pass it is told nothing true"
+    )
+    assert STATUS_DEFAULT_OMITS.search(_source(ONEPIPELINE, "views.rs")), (
+        f"onepipeline {ONEPIPELINE.ref}'s `status <RUN>` no longer composes its view with "
+        f"the provider report left out, so {MANAGER.name}'s {STATUS_WITHOUT_PROVIDERS!r} "
+        "may print the host's report into the view a watch greps for the run's words"
+    )
     view = STATUS_VIEW.search(_source(ONEPIPELINE, "views.rs"))
     assert view is not None, (
         f"onepipeline {ONEPIPELINE.ref} no longer composes its status view in "
-        "`status_reporting`, so nothing here can say what `--no-providers` leaves out"
+        "`status_reporting`, so nothing here can say what its default leaves out"
     )
     composed = view.group(0)
     gate = composed.find(HEALTH_BLOCK_GATE)

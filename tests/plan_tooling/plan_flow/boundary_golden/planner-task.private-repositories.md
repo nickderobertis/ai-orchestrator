@@ -44,6 +44,13 @@ that project will depend on. A plan that states nothing a rule could judge
 makes that rule not relevant; never report a rule against a file only because
 the repository it describes is not visible to you.
 
+Who ruled on a decision does not settle it. A decision the plan records as the
+manager's ruling, an answer to the planner's question or an exception the manager
+accepted, is judged against every rule like anything the planner chose. Only a
+decision the plan attributes to the user's own words is exempt: the user's ruling
+binds, so never report a violation in what the plan records as the user's own
+words, quoted or attributed to the user in its **Decided** or **Requested** part.
+
 ### The rules
 
 #### `budgets_track_product_owner_outcomes`
@@ -177,6 +184,28 @@ domain agrees on is a contract, and a `contract` project holding one
 domain's structs beside another's is a bag.
 
 Switched off in this checklist: never judged.
+
+#### `seam_decisions_rest_with_their_owner`
+
+true when every decision a contract between two components encodes is made by the
+component that owns the knowledge it rests on. A contract exposes what the caller
+needs as behaviour: a purpose-built call, or a general primitive such as
+list-then-fetch that the caller composes. false when a contract requires either side
+to name the other's internal vocabulary or to decide the other's concerns: a knob the
+caller tunes over the callee's internals, or a callee that encodes what its caller's
+screen or workflow needs.
+
+The incident this rule comes from, an engine and the read API that draws its runs:
+- false: `Selection::FirstScreen { node, node_latest, stub_kinds }`, where the read
+  API passes the engine's record kinds through `stub_kinds`. The caller names the
+  callee's internals.
+- false: the engine decides "every record whose payload a first screen draws" and
+  owns the screen's row count. The callee absorbs its caller's concern.
+- true: the engine returns the run's folded state plus a payload-free head for every
+  record, and fetches whole records by handle; the read API, which owns the screen,
+  chooses which records to fetch whole.
+
+Judged when the plan's design names a contract between two components, such as a call, a selection or query, a stored shape or a boundary between two collections of code.
 
 #### `plan_criteria_satisfiable_inside_the_dispatch`
 
