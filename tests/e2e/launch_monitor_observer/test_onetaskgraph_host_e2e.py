@@ -99,6 +99,9 @@ def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
 #: The engine's human item store, which it keeps beside the runs under a runs root once
 #: `.onepipeline/config.yaml` turns human items on; it is no run.
 ITEM_STORE = "human-items"
+#: What `just follow-ups` names the follow-up run the success hook launches beside a run
+#: that ends with every node done, so a count of the launched run leaves it out.
+FOLLOW_UPS_SUFFIX = "-follow-ups"
 
 ADOPTED = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
 _NodeId = NewType("_NodeId", str)
@@ -3296,7 +3299,7 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
     (run,) = [
         held
         for held in Path(launching["ONEPIPELINE_RUNS_DIR"]).iterdir()
-        if held.is_dir() and held.name != ITEM_STORE
+        if held.is_dir() and held.name != ITEM_STORE and not held.name.endswith(FOLLOW_UPS_SUFFIX)
     ]
     record = json.loads((run / "launch.json").read_text("utf-8"))
     assert record["require_rendered"] is True, record
@@ -3480,7 +3483,11 @@ def test_a_hand_written_plan_is_refused_by_check_plan_and_at_launch_unless_the_c
         )
     assert not refused_runs, f"a refused launch minted {refused_runs}"
     assert kept.returncode == 0, kept.stdout + kept.stderr
-    (run,) = [held for held in runs.iterdir() if held.is_dir() and held.name != ITEM_STORE]
+    (run,) = [
+        held
+        for held in runs.iterdir()
+        if held.is_dir() and held.name != ITEM_STORE and not held.name.endswith(FOLLOW_UPS_SUFFIX)
+    ]
     record = json.loads((run / "launch.json").read_text("utf-8"))
     assert record.get("require_rendered", False) is False, record
 

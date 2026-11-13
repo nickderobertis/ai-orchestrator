@@ -619,8 +619,10 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     # And before the run's own stream, the one line naming the engine this launch requests
     # and the one it ran, so a proof against a hand-installed engine can be read against
     # the pair it really ran on (ai-orchestrator#1217). Stderr only: stdout is the
-    # settlement record above and nothing else.
-    pairs = ENGINE_PAIR.findall(launch.stderr)
+    # settlement record above and nothing else. Read before the run's own stream, because
+    # the success hook launches the run's follow-up run, whose own engine line the attached
+    # launch relays with the hook's output once the run has ended.
+    pairs = ENGINE_PAIR.findall(launch.stderr.split("run-started", 1)[0])
     assert len(pairs) == 1, f"the launch printed {len(pairs)} engine lines:\n{launch.stderr}"
     ((requested, running, binary),) = pairs
     pin = (REPO_ROOT / "config" / "onepipeline.version").read_text(encoding="utf-8").strip()
