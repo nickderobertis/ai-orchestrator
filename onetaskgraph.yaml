@@ -41,6 +41,14 @@ sources:
     plugin: local-md
     config:
       root: .follow-ups/runs
+  # spike-sample-ticket (throwaway, never landed): the sample follow-up ticket's local
+  # Markdown source, which `spikes/follow-up-sample-ticket/file-sample.sh` copies onto
+  # `followups`.
+  follow-up-sample:
+    visibility: public
+    plugin: local-md
+    config:
+      root: spikes/follow-up-sample-ticket/store
   test-fixtures:
     # Deliberately private fixture projects stay local; copies to public boards are screened
     # again at their destination.
@@ -138,9 +146,33 @@ sources:
       # CLI's resolved config and its `key` and `path` to the record's metadata key and its
       # `host` key in `orchestrator/follow_up_tickets.py`.
       metadata_fields:
+        # spike-sample-ticket (throwaway, never landed): the proposed field set, read from the
+        # sample's own `orchestrator.follow-up-sample` record so no follow-up run reads the
+        # sample as a ticket. Each value is stored pre-rendered as a string, because 0.14.12
+        # projects only strings. `Host` is repointed at the sample key on this branch only:
+        # the store refuses two entries naming one field ("one field cannot hold two values"),
+        # and this branch's config drives only the spike's own commands on the sample.
         - field: Host
-          key: orchestrator.follow-up
+          key: orchestrator.follow-up-sample
           path: [host]
+        - field: Owning runs
+          key: orchestrator.follow-up-sample
+          path: [owning_runs]
+        - field: Basis
+          key: orchestrator.follow-up-sample
+          path: [basis]
+        - field: Drafts
+          key: orchestrator.follow-up-sample
+          path: [drafts]
+        - field: Transcripts
+          key: orchestrator.follow-up-sample
+          path: [transcripts]
+        - field: Witnesses
+          key: orchestrator.follow-up-sample
+          path: [witnesses]
+        - field: Verified at
+          key: orchestrator.follow-up-sample
+          path: [verified_at]
       # The owners a create on this board may file a follow-up ticket's issue under: the
       # board's own owner, so a ticket naming a repository of anybody else is refused by the
       # store as `creation-owner` before anything is written — filing an issue in a third
