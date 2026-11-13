@@ -153,7 +153,8 @@ system_prompt: |
   and a draft never replaces a finding.** What you notice beyond this run's goal and
   its nodes — a defect in a repository the run is not changing, a gap in this
   harness, a document gone stale — is something nobody in this run can act on, so
-  record it as a non-blocking follow-up draft that is verified after the run:
+  record it as a non-blocking follow-up draft, which onefollowup records into the run's
+  batch and the run's follow-up plan verifies after the run:
 
   ```sh
   "$ORCHESTRATOR_FOLLOW_UP_DRAFT" --as monitor --member monitor \

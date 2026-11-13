@@ -55,12 +55,8 @@
 # last place that can put it there, and `start` and `adopt` are every shape of launch
 # this repository has. `scripts/ask-manager-env.sh` owns the path and the refusal.
 #
-# For the same reason a launch carries the follow-up drafting seam: the absolute root of
-# the `drafts` plan source and the command every party drafts a non-blocking follow-up
-# with. `scripts/follow-up-env.sh` owns both names, both values and the refusal. It runs
-# after the design-approval gate below: the root is resolved through the plan-store CLI
-# healed before that gate, and a store that cannot be read at all is the gate's to report,
-# under its own exit status, rather than this seam's.
+# For the same reason a launch carries `ORCHESTRATOR_FOLLOW_UP_DRAFT`, the command every
+# party drafts a non-blocking follow-up with.
 #
 # Who is acting is `scripts/launcher-session.sh`'s to answer, sourced here and by
 # `scripts/telemetry-server.sh`, which hands the same answer to the read API so a
@@ -160,13 +156,11 @@ if [ "${1:-}" = start ]; then
     uv run orchestrator-launch-gate "${@:2}" || exit "$?"
 fi
 
-# The follow-up drafting seam, after the gate and for the launch shapes the arm above
-# decided; the header says why it waits for the gate.
+# The follow-up drafting command every dispatch and the monitor draft with, this checkout's
+# own `scripts/follow-up-draft.sh` over `onefollowup draft`; it reaches a dispatch only by
+# inheritance, so the launch is the last place that can put it there.
 if [ "$launching" = true ]; then
-    # shellcheck source=scripts/follow-up-env.sh
-    # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
-    . "$script_dir/follow-up-env.sh"
-    export_follow_up_drafts onepipeline || exit "$?"
+    export ORCHESTRATOR_FOLLOW_UP_DRAFT="$script_dir/follow-up-draft.sh"
 fi
 
 # Which `onepipeline` every verb runs: the binary `bun.lock` installs from npmjs.com into

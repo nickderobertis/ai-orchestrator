@@ -22,9 +22,8 @@
 # reads the store's own layered configuration, so a root moved in `onetaskgraph.yaml`
 # or overridden per launch moves this with it.
 #
-# `sources.authoring.plugin` is exported beside the root, as scripts/follow-up-env.sh
-# exports the drafts plugin beside its root, because a dispatch may run in a worktree of
-# another repository: its configuration declares no `authoring` source, and the store
+# `sources.authoring.plugin` is exported beside the root because a dispatch may run in a
+# worktree of another repository: its configuration declares no `authoring` source, and the store
 # refuses a source the environment names without a plugin, so a spike there could not
 # write its report into the plan's own project. The plugin is the one the resolution
 # below already holds the source to — it refuses any other — and only `authoring`'s is

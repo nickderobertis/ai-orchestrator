@@ -10,7 +10,7 @@
 # a routing change adds while a run is live reaches its next dispatch
 # (ai-orchestrator#1109) — and pass on `ONEPIPELINE_NODE_ID`, the node the engine names
 # to this hook and to nothing it dispatches, so a follow-up drafted from inside the
-# dispatch names its node (orchestrator/follow_up_drafts.py). Stderr is the resolvers' own diagnostics, which never echo a
+# dispatch names its node (scripts/follow-up-draft.sh). Stderr is the resolvers' own diagnostics, which never echo a
 # value; the engine keeps it under the run and never records a printed value.
 set -euo pipefail
 

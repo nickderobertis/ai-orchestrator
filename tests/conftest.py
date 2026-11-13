@@ -103,6 +103,7 @@ from nx_inputs import (
     repository_relative,
     target_input_globs,
 )
+from plan_sources import read_plan_sources
 from registered_checkouts import registered_checkout_paths
 from short_state import (  # noqa: F401 - registered by being named here
     module_node_scratch,
@@ -395,13 +396,11 @@ REAL_PLAN_STORE_ROOTS_MARKER = "real_plan_store_roots"
 def _plan_store_root_variables() -> Mapping[str, str]:
     """Each writable plan source this suite isolates, and the variable its root is set by.
 
-    Both the source and the variable are read out of the launch helper that composes
-    them — the one place either is spelled — rather than written again here:
-    `tests/test_plan_root_composition.py`
-    and `tests/test_follow_up_draft_composition.py` each allow exactly one composition of
-    such a name in this repository's tracked code, and a second copy in the suite is the
-    same defect those gates exist for, since a spelling that drifted would leave every
-    test below isolating a source nothing reads.
+    Both the source and the variable are read from where they are stated — the plan root's
+    out of the launch helper that composes it, and the drafts source out of
+    `onefollowup.yaml` — rather than written again here: `tests/test_plan_root_composition.py`
+    allows exactly one composition of such a name in this repository's tracked code, and a
+    spelling that drifted would leave every test below isolating a source nothing reads.
     """
     return {
         plan_root_variable.source(): plan_root_variable.name(),
@@ -434,6 +433,11 @@ def _isolated_plan_store_roots(tmp_path_factory: pytest.TempPathFactory) -> Iter
     would not be in force while the module- and session-scoped fixtures that spend the
     real launches are being set up. A journey that states roots of its own is unaffected:
     it overrides these the way it overrides an enclosing dispatch's.
+
+    onefollowup keeps each batch's working files in `.onefollowup/` beside the store's
+    `onetaskgraph.yaml`, so its store is stated too: `ONEFOLLOWUP_STORE` names a copy of this
+    checkout's document under the same base, each relative `local-md` root it names created
+    there as session setup creates them in a checkout.
     """
     base = tmp_path_factory.mktemp("plan-store-roots")
     isolated = {
@@ -452,6 +456,15 @@ def _isolated_plan_store_roots(tmp_path_factory: pytest.TempPathFactory) -> Iter
             root = base / source
             root.mkdir()
             patched.setenv(variable, str(root))
+        store = base / "onefollowup-store"
+        store.mkdir()
+        document = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+        (store / "onetaskgraph.yaml").write_text(document, encoding="utf-8")
+        for declared in read_plan_sources(document).values():
+            relative = declared.root
+            if declared.plugin == "local-md" and relative and not Path(relative).is_absolute():
+                (store / relative).mkdir(parents=True, exist_ok=True)
+        patched.setenv(follow_up_variables.ONEFOLLOWUP_STORE, str(store))
         yield
 
 

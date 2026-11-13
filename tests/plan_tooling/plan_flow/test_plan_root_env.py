@@ -36,7 +36,6 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
-import follow_up_variables
 import plan_root_variable
 import plan_store_cache
 import plan_store_user_layer
@@ -438,7 +437,6 @@ def _report_from_another_repository(tmp_path: Path, **environment: str) -> Repor
     scripts = plan_root_variable.HELPER.parent
     program = (
         f'set -euo pipefail; source "{plan_root_variable.HELPER}"; export_plan_authoring_root test'
-        f'; source "{scripts / "follow-up-env.sh"}"; export_follow_up_drafts test'
         f'; source "{scripts / "template-env.sh"}"; export_template_root test'
         "; export_noninteractive_plan_store test"
         '; "$1" project create authoring --id "$3" --title "$3" --json >/dev/null'
@@ -478,7 +476,6 @@ def _report_from_another_repository(tmp_path: Path, **environment: str) -> Repor
             **plan_store_cache.handed(),
             **plan_store_user_layer.handed(),
             plan_root_variable.name(): str(tmp_path / "plans"),
-            follow_up_variables.root_name(): str(tmp_path / "drafts"),
             **environment,
         },
         text=True,

@@ -34,7 +34,8 @@
       "{workspaceRoot}/scripts/**/*",
       "{workspaceRoot}/templates/**/*",
       "{workspaceRoot}/tests/test_plan_budgets_template.py",
-      "{workspaceRoot}/tests/family_scans/**/*"
+      "{workspaceRoot}/tests/family_scans/**/*",
+      "{workspaceRoot}/justfile"
     ]
   },
   "targets": {

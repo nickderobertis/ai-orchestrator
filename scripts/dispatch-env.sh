@@ -176,6 +176,7 @@ declare -A DISPATCH_ENVIRONMENT_KEPT_PREFIXES=(
     [ONEHARNESS_]="harness and identity routing: which chain, which model, which binary stands in for a provider"
     [ONEMESSAGEBUS_]="the channel's own names, including the transport directory a run's rendezvous is bound to"
     [ONETASKGRAPH_]="the plan store's own configuration layer, which is how a launch points a source at a root and how the board is nominated"
+    [ONEFOLLOWUP_]="the follow-up loop's own configuration layer, which is how a launch points the drafting command and the follow-up tools at a configuration file and a store"
     [LLMLINT_]="the judged lint tier's own names, which a worker iterating with 'just lint-llm-diff' reads"
     [CLAUDE]="every Claude name, CLAUDECODE and the CLAUDE_CODE_ session identity among them; the oneharness configs mask the ones an identity must not see, and a chain's bare candidate resolves no mask, so the family travels and the config decides"
     [CODEX_]="the same for codex, CODEX_HOME included: ambient configuration a developer may export, which the first codex variant deliberately honours"

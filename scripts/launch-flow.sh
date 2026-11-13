@@ -1,7 +1,6 @@
 # shellcheck shell=bash
 # The ONE way a launcher that creates runs over time holds its manager's session for its
-# whole life: sourced by scripts/plan.sh, scripts/finish-plan.sh, scripts/follow-ups.sh and
-# scripts/follow-ups-answer-comments.sh.
+# whole life: sourced by scripts/plan.sh and scripts/finish-plan.sh.
 #
 # A launcher like those starts a run, works between runs — a review, a check, a copy —
 # then starts more, and may ask its manager a blocking question at any point. A session

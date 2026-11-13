@@ -55,9 +55,8 @@ installed wheel does not ship. Both stand on the producer's own suite.
 
 The status-word half of that same plan-store adoption — the canonical `in-progress`
 reading back as its own category rather than as `unknown`
-(https://github.com/nickderobertis/onetaskgraph/issues/1140) — is driven where this
-repository depends on it, over a real follow-up ticket, in
-`tests/test_follow_up_tickets.py`.
+(https://github.com/nickderobertis/onetaskgraph/issues/1140) — stands on the producer's own
+suite and on onefollowup's, whose status roles read it.
 
 The onetaskgraph refusal is read through `project list` rather than `config show`: the
 released `config show` renders settings without constructing a source, so it accepted the
@@ -729,8 +728,7 @@ def test_a_relative_source_root_resolves_against_the_document_that_supplied_it(
 
 
 #: How the store spells `ROOT_SETTING` at its environment layer, which is the layer
-#: `scripts/plan-root-env.sh` and `scripts/follow-up-env.sh` export this checkout's own
-#: absolute roots at.
+#: `scripts/plan-root-env.sh` exports this checkout's own absolute root at.
 ROOT_SETTING_ENV = "ONETASKGRAPH_SOURCES__WORK__CONFIG__ROOT"
 
 
@@ -817,8 +815,7 @@ def test_a_listing_that_meets_a_malformed_record_names_it_instead_of_omitting_it
 #: The drafts root a follow-up run reads its tickets back out of, as this host lays it
 #: out: one project per run under `tasks/<run>/`, with the run's own `tickets/` and
 #: `drafts/` beside a `replies/` folder of comment replies that carry no front matter.
-#: `orchestrator/follow_up_tickets.py` and `orchestrator/follow_up_comments.py` state
-#: the two layouts; this is their shape and none of their content.
+#: This is that layout's shape and none of its content.
 DRAFTS_SOURCE = "drafts"
 DRAFTS_DOCUMENT = (
     f"default_sources: [{DRAFTS_SOURCE}]\n"

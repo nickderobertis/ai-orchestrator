@@ -19,19 +19,35 @@ import json
 import os
 import subprocess
 
+import follow_up_variables
 import jsonschema
 import onetaskgraph_user_layer
 import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import follow_up_drafts, follow_up_tickets, plan_copy, plan_review, plan_store
+from orchestrator import plan_copy, plan_review, plan_store
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
 
 def _configuration() -> str:
     return (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+
+
+def _follow_up_configuration() -> dict[str, object]:
+    """The follow-up loop's effective configuration, as the pinned `onefollowup` resolves it."""
+    shown = subprocess.run(  # noqa: S603 - the pinned onefollowup over this checkout
+        [str(REPO_ROOT / ".venv" / "bin" / "onefollowup"), "config", "show"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stderr
+    config: dict[str, object] = json.loads(shown.stdout)["config"]
+    return config
 
 
 def test_no_two_configured_sources_share_a_root() -> None:
@@ -393,20 +409,23 @@ def test_the_follow_ups_board_maps_every_priority_and_the_plans_board_maps_none(
     # A human-task board's labels are the operator's, not a follow-up ticket's.
     for source in HUMAN_BOARDS:
         assert mapped(source) == HUMAN_PRIORITIES, (source, mapped(source))
-    estimated = {level.value for level in follow_up_tickets.ESTIMATES}
+    rubric = _follow_up_configuration()["rubric"]
+    assert isinstance(rubric, dict), rubric
+    estimated = {str(level["priority"]) for level in rubric["levels"]}
     assert set(mapped("followups")) == estimated, (
         f"the `followups` source maps the priorities {sorted(mapped('followups'))}, and a "
         f"follow-up ticket's estimate is one of {sorted(estimated)}"
     )
 
 
-#: The board text field each follow-up ticket's record value is projected onto, per
-#: source. Stated here for the reason :data:`FOLLOWUPS_PRIORITIES` is: the other party is the
-#: live board, so what is held is the projection the installed CLI resolves. The tracked
-#: document declares no other board; a host's own follow-up trackers are its user layer's.
-FOLLOWUPS_METADATA_FIELDS = [
-    {"field": "Host", "key": follow_up_tickets.KEY, "path": [follow_up_tickets.HOST_FIELD]}
-]
+#: The board text field a follow-up ticket's `host` is projected onto. Stated here for the
+#: reason :data:`FOLLOWUPS_PRIORITIES` is: the other party is the live board, so what is held
+#: is the projection the installed CLI resolves. The tracked document declares no other board;
+#: a host's own follow-up trackers are its user layer's. The record key is onefollowup's
+#: `<namespace>.follow-up`, read from its resolved configuration below.
+HOST_FIELD = "Host"
+#: The field of onefollowup's ticket record naming the machine that verified it.
+RECORD_HOST = "host"
 
 
 @pytest.mark.reads_checkouts
@@ -414,17 +433,19 @@ def test_the_follow_ups_board_projects_a_ticket_s_host_onto_its_host_field() -> 
     """`followups` projects the record's `host` onto `Host`, and no other source projects.
 
     Read through the installed CLI's own resolution, because an entry the store does not
-    resolve is one no copy writes. Its `key` and `path` are this module's record constants,
-    so a record that renamed either would leave the board's field empty on every copy
-    rather than failing here.
+    resolve is one no copy writes. Its `key` is onefollowup's record key under the namespace
+    its configuration resolves, so a namespace that moved would leave the board's field empty
+    on every copy rather than failing here.
     """
     resolved = _resolved_configuration()
+    key = f"{_follow_up_configuration()['namespace']}.follow-up"
+    expected = [{"field": HOST_FIELD, "key": key, "path": [RECORD_HOST]}]
     projections = {
         key: value for key, value in resolved.items() if key.endswith(".config.metadata_fields")
     }
-    assert projections == {"sources.followups.config.metadata_fields": FOLLOWUPS_METADATA_FIELDS}, (
+    assert projections == {"sources.followups.config.metadata_fields": expected}, (
         f"onetaskgraph.yaml's sources resolve the metadata-field projections {projections}, "
-        f"and this host states only the `followups` source's {FOLLOWUPS_METADATA_FIELDS}"
+        f"and this host states only the `followups` source's {expected}"
     )
 
 
@@ -527,15 +548,16 @@ def test_the_drafts_source_is_a_local_directory_no_plan_listing_reads() -> None:
     it is ever committed is asked of git itself.
     """
     configured = read_plan_sources(_configuration())
-    assert follow_up_drafts.SOURCE in configured, (
-        f"onetaskgraph.yaml configures no {follow_up_drafts.SOURCE!r} source, which is where "
-        "orchestrator/follow_up_drafts.py stores every draft"
+    source = follow_up_variables.source()
+    assert source in configured, (
+        f"onetaskgraph.yaml configures no {source!r} source, which is where onefollowup.yaml "
+        "has every draft stored"
     )
-    drafts = configured[follow_up_drafts.SOURCE]
+    drafts = configured[source]
     assert (drafts.plugin, drafts.root) == (WRITABLE_PLUGIN, ".follow-ups"), (
         f"the drafts source is {drafts.plugin!r} rooted at {drafts.root!r}"
     )
-    assert follow_up_drafts.SOURCE not in read_default_sources(_configuration()), (
+    assert source not in read_default_sources(_configuration()), (
         "the drafts source is among default_sources, so every plan listing shows drafts"
     )
     ignored = subprocess.run(

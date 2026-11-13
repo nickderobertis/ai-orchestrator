@@ -99,8 +99,6 @@ COPIED_SCRIPTS = (
     "decline-ruling.sh",
     "finish-plan.sh",
     "follow-up-draft.sh",
-    "follow-up-env.sh",
-    "follow-ups.sh",
     "launch-flow.sh",
     "launcher-session.sh",
     "setup-llmlint.sh",

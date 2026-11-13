@@ -74,7 +74,7 @@ import pytest
 from registered_checkouts import discover_checkouts
 from test_linked_libraries import _linked_version
 
-from orchestrator import follow_up_drafts, npm_installs, spike_flow
+from orchestrator import npm_installs, spike_flow
 from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_checkouts
@@ -2372,9 +2372,10 @@ def _declared_fields(
     return tuple(fields)
 
 
-# `orchestrator/follow_up_drafts.py` reads a run's public id through the engine, under the
-# runs root the engine resolves; the gate below holds that resolution to the installed
-# engine's own declaration.
+#: The `batch_preparing` hook, which hands each delivery budget's command the runs root the
+#: engine resolves; the gate below holds its spelling of that resolution to the installed
+#: engine's own declaration.
+BUDGET_INPUTS = REPO_ROOT / "scripts" / "follow-up-budget-inputs.sh"
 
 
 def _joined_under_a_run_root(accessor: str) -> str:
@@ -2386,34 +2387,30 @@ def _joined_under_a_run_root(accessor: str) -> str:
     )
     assert joined is not None, (
         f"onepipeline {ONEPIPELINE.ref}'s `RunPaths::{accessor}` no longer joins a "
-        "literal name onto the run's directory where this gate reads it, so "
-        "orchestrator/follow_up_drafts.py's copy of that name cannot be reconciled; "
-        "re-read `ledger.rs` and correct both"
+        "literal name onto the run's directory where this gate reads it; re-read "
+        "`ledger.rs` and correct this gate"
     )
     return joined.group(1)
 
 
-def test_a_draft_looks_under_the_runs_root_the_engine_writes() -> None:
-    """The store a draft asks for its run's public id is `onepipeline`'s, resolved its way.
+def test_the_budget_inputs_hook_reads_the_runs_root_the_engine_writes() -> None:
+    """The runs root a delivery budget's command is handed is `onepipeline`'s, resolved its way.
 
-    A runs root read some other way is an answer about a different store: the run is not
-    found there and its drafts are keyed by its engine id rather than its public one.
+    A runs root read some other way is an answer about a different store: the run's
+    telemetry is not found there, and no landed change is checked against its budgets.
     """
     ledger = _source(ONEPIPELINE, "ledger.rs")
-    for pattern, copied, what in (
-        (RUNS_DIR_ENV, follow_up_drafts.RUNS_ROOT_ENV, "the variable that moves the runs root"),
-        (DEFAULT_RUNS_DIR, follow_up_drafts.DEFAULT_RUNS_ROOT, "the runs root nothing names"),
-    ):
-        declared = pattern.search(ledger)
-        assert declared is not None, (
-            f"onepipeline {ONEPIPELINE.ref} no longer declares {what} where this gate "
-            "reads it, so orchestrator/follow_up_drafts.py's copy of it cannot be "
-            "reconciled; re-read `ledger.rs` and correct both"
-        )
-        assert copied == declared.group(1), (
-            f"orchestrator/follow_up_drafts.py resolves {what} as {copied!r} while "
-            f"onepipeline {ONEPIPELINE.ref} declares {declared.group(1)!r}"
-        )
+    variable, default = RUNS_DIR_ENV.search(ledger), DEFAULT_RUNS_DIR.search(ledger)
+    assert variable is not None and default is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer declares the runs root and the variable "
+        "that moves it where this gate reads them; re-read `ledger.rs` and correct "
+        f"{BUDGET_INPUTS.name} and this gate"
+    )
+    spelled = f"${{{variable.group(1)}:-$checkout/{default.group(1)}}}"
+    assert spelled in BUDGET_INPUTS.read_text(encoding="utf-8"), (
+        f"{BUDGET_INPUTS} no longer resolves the runs root as {spelled}, the resolution "
+        f"onepipeline {ONEPIPELINE.ref} declares"
+    )
 
 
 def _journalled_payloads(root: Path, kind: str) -> list[dict[str, object]]:
@@ -3988,8 +3985,7 @@ LINEAGE_KEY_DECLARATION = re.compile(
 PROJECTION_ACTIONS_STRUCT = re.compile(r"pub struct ProjectionActions \{(.*?)\n\}", re.DOTALL)
 PROJECTION_ACTIONS_FIELD = re.compile(r"^\s{4}pub ([a-z_]+): u64,", re.MULTILINE)
 #: The stored shape this repository's readers rely on — `orchestrator/plan_store.py` reads
-#: items by `onepipeline.id`, and `orchestrator/follow_up_tickets.py` owns the board a
-#: delivered ticket sits on — as key → what the prose must say it holds.
+#: items by `onepipeline.id` — as key → what the prose must say it holds.
 LINEAGE_KEYS = {
     "onepipeline.id": "root",
     "onepipeline.node": "head",

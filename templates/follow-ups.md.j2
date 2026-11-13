@@ -1,0 +1,83 @@
+---
+onetaskgraph_template: 1
+description: >-
+  The plan that verifies one finished run's follow-ups through onefollowup: prepare the batch,
+  have the verifying agent dispose every draft and input, check, publish and settle. `just
+  follow-ups` creates it, and `scripts/run-ended.sh` through that recipe.
+variables:
+  project:
+    description: The plan's native id, which every member's own id is prefixed with.
+    type: string
+    required: true
+  run:
+    description: The run whose follow-ups this plan verifies, as the engine names it.
+    type: string
+    required: true
+  batch:
+    description: The onefollowup batch, which is the run's public id.
+    type: string
+    required: true
+  checkout:
+    description: The absolute path of the checkout the plan is launched from, where every onefollowup command runs.
+    type: string
+    required: true
+  store:
+    description: The absolute directory of the onetaskgraph store onefollowup works beside.
+    type: string
+    required: true
+  task_loader:
+    description: The loader document `onepipeline template resolve follow-up-task --json` stated, which the verifying agent's task is rendered through.
+    type: string
+    required: true
+members:
+  - id: "{{ project }}-prepare"
+    title: "Prepare the follow-up batch {{ batch }}"
+    template: {file: follow-up-step.md.j2}
+    answers: {step: "Snapshot the batch's drafts and budget inputs, read the destination, and write the verifying agent's task."}
+    metadata:
+      onepipeline.id: prepare
+      onepipeline.kind: command
+      onepipeline.command: [onefollowup, prepare, --batch, "{{ batch }}"]
+  - id: "{{ project }}-verify"
+    title: "Verify the follow-ups of run {{ run }}"
+    template: {loader: "{{ task_loader }}"}
+    answers:
+      mode: initial
+      batch: "{{ batch }}"
+      checkout: "{{ checkout }}"
+      task_file: "{{ store }}/.onefollowup/tasks/{{ batch }}/task.md"
+    depends_on: ["{{ project }}-prepare"]
+    metadata:
+      onepipeline.id: verify
+      onepipeline.persona: ../personas/follow-up.yaml
+      onepipeline.agent_graph: graphs/follow-up.yaml
+  - id: "{{ project }}-check"
+    title: "Check the follow-up batch {{ batch }}"
+    template: {file: follow-up-step.md.j2}
+    answers: {step: "Hold the batch's dispositions, tickets and staged writes to onefollowup's rules before anything is written."}
+    depends_on: ["{{ project }}-verify"]
+    metadata:
+      onepipeline.id: check
+      onepipeline.kind: command
+      onepipeline.command: [onefollowup, check, --batch, "{{ batch }}"]
+  - id: "{{ project }}-publish"
+    title: "Publish the follow-up batch {{ batch }}"
+    template: {file: follow-up-step.md.j2}
+    answers: {step: "Send the batch's staged writes to the destination and receipt every outcome."}
+    depends_on: ["{{ project }}-check"]
+    metadata:
+      onepipeline.id: publish
+      onepipeline.kind: command
+      onepipeline.command: [onefollowup, publish, --batch, "{{ batch }}"]
+  - id: "{{ project }}-settle"
+    title: "Settle the follow-up batch {{ batch }}"
+    template: {file: follow-up-step.md.j2}
+    answers: {step: "Read back what no answer confirmed, raise the follow-up review, and retire the batch's working files."}
+    depends_on: ["{{ project }}-publish"]
+    metadata:
+      onepipeline.id: settle
+      onepipeline.kind: command
+      onepipeline.command: [onefollowup, settle, --batch, "{{ batch }}"]
+---
+Verify the follow-up drafts and budget inputs run `{{ run }}` left, through onefollowup, and
+put the verified tickets on the destination `onefollowup.yaml` names.

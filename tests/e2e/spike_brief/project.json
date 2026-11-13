@@ -108,7 +108,6 @@
       "{workspaceRoot}/scripts/decline-ruling-env.sh",
       "{workspaceRoot}/scripts/decline-ruling.sh",
       "{workspaceRoot}/scripts/follow-up-draft.sh",
-      "{workspaceRoot}/scripts/follow-up-env.sh",
       "{workspaceRoot}/scripts/launcher-session.sh",
       "{workspaceRoot}/scripts/lock-timeout.sh",
       "{workspaceRoot}/scripts/plan-check.sh",

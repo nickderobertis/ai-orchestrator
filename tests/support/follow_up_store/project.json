@@ -1,17 +1,18 @@
 {
-  "name": "support-follow-up-boundary",
+  "name": "support-follow-up-store",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "tags": [
     "type:test-support"
   ],
   "implicitDependencies": [
-    "support-boundary-home",
-    "support-onevcs-state-snapshot"
+    "support-follow-up-variables"
   ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/follow_up_boundary.py",
+      "{workspaceRoot}/tests/follow_up_store.py",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]
   },

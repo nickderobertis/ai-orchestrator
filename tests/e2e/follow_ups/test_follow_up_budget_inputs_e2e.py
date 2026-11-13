@@ -1,4 +1,5 @@
-"""The `batch_preparing` hook, over a recorded run, through the real engine, onevcs and onebudgetspec.
+"""The `batch_preparing` hook over a recorded run, through the real engine, onevcs and
+onebudgetspec.
 
 `scripts/follow-up-budget-inputs.sh` is what `onefollowup prepare` runs to learn which of a
 finished run's landed changes went over their delivery budgets. Every verb it composes is the

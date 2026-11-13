@@ -562,9 +562,8 @@ LIVE_NOTE_AND_REDISPATCH_TIP_LANDINGS = (
 
 #: The follow-up comment flow plan's engine-side node, which relinked the plan store so a
 #: dispatch's linked store answers the narrowed comment query `just
-#: follow-ups-answer-comments` asks;
-#: `tests/plan_tooling/follow_ups/test_follow_ups_answer_comments_recipe_e2e.py` drives that query
-#: through a real launch.
+#: follow-ups-answer-comments` asks; onefollowup's comment pass now asks it through its own
+#: linked store, and the answering journey under `tests/e2e/follow_ups/` drives the recipe.
 COMMENT_FLOW_LANDINGS = (
     Landing(
         node="op-relink-onetaskgraph",
@@ -661,11 +660,12 @@ CORRELATED_RULING_LANDINGS = (
 )
 
 #: The engine-side nodes of the run-ending-liveness plan: a run's ending read from its
-#: run-end hook verdict and printed by `status --json`, which `scripts/follow-ups.sh` decides
-#: from; an envelope that does not decode refused rather than discarded; a live, quiet
+#: run-end hook verdict and printed by `status --json`, which `orchestrator/run_reading.py`
+#: decides from; an envelope that does not decode refused rather than discarded; a live, quiet
 #: driver read as `PARKED` and driven; a new hook epoch when an adoption finds the graph
 #: live; and the `driver-exited` journal record.
-#: `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` drives the reading on this host.
+#: `tests/e2e/launch_monitor_observer/test_reparent_waiting_human_adopted_e2e.py` drives the
+#: reading on this host.
 RUN_ENDING_LIVENESS_LANDINGS = (
     Landing(
         node="op-run-ending-reading",

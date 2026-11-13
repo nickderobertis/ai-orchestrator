@@ -1,22 +1,14 @@
-"""The engine's reading of one run, and whether `just follow-ups` may verify its drafts.
+"""The engine's reading of one run, and whether it has ended.
 
 `onepipeline status <run> --json` answers one document — the run's word, whether it is
 driven, and how it ended or what it is paused on — which the engine publishes as
-`schemas/run-reading.schema.json`. `scripts/follow-ups.sh` hands that answer to this
-module on stdin and acts on the one line it prints:
+`schemas/run-reading.schema.json`. :func:`decide` reads that answer into one decision:
 
 * ``ended`` — the reading carries an ending, of any kind, so the run's drafts are final;
 * ``driven <word>`` — something still drives the run;
 * ``paused <what waits>`` — nothing drives it, and it waits on a decision;
 * ``crashed <word>`` — nothing drives it, it has not ended, and nothing is decided on;
 * ``unreadable <why>`` — the answer is not the engine's document.
-
-With ``--public-id`` it prints instead the run's public id — the reading's `public_id`, what
-the run is named by wherever a destination is not private — which every follow-up record of
-the run is keyed by. The engine decides it; nothing here derives one. With ``--group`` it
-prints the run's effective project group — the reading's `group`, its launch group, project
-origin or project, as any label overlay leaves it — or an empty line where the run has none,
-which the follow-up run it launches is grouped under.
 
 The answer crosses a process boundary, so every field is checked against the document
 before anything is decided from it: an answer that half-matches is not one to launch on.
@@ -27,7 +19,6 @@ The vocabulary below restates the published schema, and
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import NewType
@@ -46,9 +37,6 @@ __all__ = [
     "RunId",
     "Unreadable",
     "decide",
-    "group",
-    "main",
-    "public_id",
 ]
 
 #: The run a reading is asked of, which the reading has to name back.
@@ -180,7 +168,7 @@ class Unreadable(ValueError):
 
 
 class Decision(StrEnum):
-    """What the recipe does with a run, decided from its reading."""
+    """What a reader does with a run, decided from its reading."""
 
     ENDED = "ended"
     DRIVEN = "driven"
@@ -190,7 +178,7 @@ class Decision(StrEnum):
 
 @dataclass(frozen=True)
 class Decided:
-    """One decision, and the detail the recipe's message names."""
+    """One decision, and the detail a reader's message names."""
 
     decision: Decision
     detail: str
@@ -371,19 +359,8 @@ def _checked(answer: str, run: RunId) -> dict[str, object]:
     return reading
 
 
-def public_id(answer: str, run: RunId) -> str:
-    """The public id the engine's ``answer`` names ``run`` by, from a reading held whole."""
-    return str(_checked(answer, run)["public_id"])
-
-
-def group(answer: str, run: RunId) -> str | None:
-    """The effective project group the engine's ``answer`` puts ``run`` in, if any."""
-    grouped = _checked(answer, run)["group"]
-    return None if grouped is None else str(grouped)
-
-
 def decide(answer: str, run: RunId) -> Decided:
-    """Decide what the recipe does with ``run`` from the engine's ``answer`` about it."""
+    """Decide what a reader does with ``run`` from the engine's ``answer`` about it."""
     reading = _checked(answer, run)
     word = str(reading["word"])
     driven = reading["driven"]
@@ -396,36 +373,3 @@ def decide(answer: str, run: RunId) -> Decided:
     if waiting is not None:
         return Decided(Decision.PAUSED, waiting)
     return Decided(Decision.CRASHED, word)
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Read the answer on stdin for the run ``argv`` names, and print the decision line."""
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    field = arguments[0] if arguments[:1] in (["--public-id"], ["--group"]) else None
-    if field is not None:
-        arguments = arguments[1:]
-    if len(arguments) != 1:
-        print(
-            "usage: python -m orchestrator.run_reading [--public-id | --group] <run-id> < answer",
-            file=sys.stderr,
-        )
-        return 2
-    try:
-        answer, run = sys.stdin.read(), RunId(arguments[0])
-        match field:
-            case "--public-id":
-                print(public_id(answer, run))
-            case "--group":
-                print(group(answer, run) or "")
-            case _:
-                print(decide(answer, run).line())
-    except Unreadable as unreadable:
-        if field is not None:
-            print(f"run_reading: unreadable {unreadable}", file=sys.stderr)
-            return 1
-        print(f"unreadable {unreadable}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -354,7 +354,7 @@ def test_each_delivery_threshold_is_stated_in_the_budgets_file_alone(identifier:
         for relative in (
             *MEASURING,
             "scripts/budget-cycle-time.sh",
-            "orchestrator/follow_up_tickets.py",
+            "scripts/follow-up-budget-inputs.sh",
             "templates/follow-up-task.md.j2",
         )
         if number.search((REPO_ROOT / relative).read_text(encoding="utf-8"))

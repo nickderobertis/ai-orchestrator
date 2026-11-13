@@ -3,10 +3,10 @@
 The realistic journeys are `tests/e2e/board_copy_approval/test_design_review_items_e2e.py` —
 the design review raised, completed from the CLI and the browser, refused for a changed
 document, and completed by `just approve-design`, over the real plan store — and the follow-up
-review journeys in `tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py`. What is
-proven here is every branch of the host's thin interface, in process: what it hands the engine,
-and how it reads each of the engine's answers, including the ones no journey reaches without
-breaking a store.
+review raised by `onefollowup settle`'s `batch_settled` hook in the verifying journey under
+`tests/e2e/follow_ups/`. What is proven here is every branch of the host's thin interface, in
+process: what it hands the engine, and how it reads each of the engine's answers, including the
+ones no journey reaches without breaking a store.
 
 The engine is the real one, run through `scripts/onepipeline.sh` with its live store under a
 runs root of each test's own and human items enabled by a host-local file, as a host enables
@@ -19,8 +19,8 @@ names a stand-in command answering the protocol, as a host may.
 llmlint: ignore-file[shell_test_tiers_stay_split] Not a shell suite and not a host tool: the
 engine every test here spawns is the workspace's own locked install from `bun.lock`, in this
 tier's key, each test's item store is a runs root of its own, and these cover
-`orchestrator/human_items.py`, `orchestrator/design_review.py` and the follow-up review step
-under the tier's 100% coverage floor, as `tests/test_design_approval.py`'s store tests do.
+`orchestrator/human_items.py` and `orchestrator/design_review.py` under the tier's 100%
+coverage floor, as `tests/test_design_approval.py`'s store tests do.
 """
 
 from __future__ import annotations
@@ -35,9 +35,8 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator import design_approval, design_review, follow_up_tickets, human_items
+from orchestrator import design_approval, design_review, human_items
 from orchestrator.design_approval import ApprovalKey, Approved
-from orchestrator.follow_up_tickets import Priority, ReviewTicket
 from orchestrator.plan_store import QualifiedDocumentId, StoreDocument
 
 HOME = "plans:PVT_review_home"
@@ -435,9 +434,6 @@ def test_a_session_helper_that_cannot_be_read_is_a_refusal_never_an_absent_sessi
     monkeypatch.setattr(human_items, "LAUNCHER_SESSION", tmp_path / "no-such-helper.sh")
     with pytest.raises(OSError, match="could not say which session"):
         human_items.acting_session()
-    touched = {"followups:I_1": ReviewTicket("https://github.invalid/i/1", Priority.LOW)}
-    said = follow_up_tickets.review_raised("run-d", touched)
-    assert "was not raised" in said and "could not say which session" in said
     assert design_review.raise_main(["authoring:review", "--in", "plans"]) == 0
     assert "could not say which session" in capsys.readouterr().err
 
@@ -682,45 +678,3 @@ def test_the_installed_command_runs_the_adapter_protocol_end_to_end() -> None:
         timeout=120,
     )
     assert ran.returncode == 1 and "nothing was approved" in ran.stderr, ran.stderr
-
-
-def test_the_review_task_is_raised_once_per_run_and_updated_in_place(store: Path) -> None:
-    touched = {
-        "followups:I_1": ReviewTicket("https://github.invalid/i/1", Priority.HIGH, "Retry drops")
-    }
-    first = follow_up_tickets.review_raised("run-b", touched)
-    touched["followups:I_2"] = ReviewTicket(
-        "https://github.invalid/i/2", Priority.NONE, "Watch never re-arms"
-    )
-    second = follow_up_tickets.review_raised("run-b", touched)
-    (task, finding) = sorted(human_items.open_items(), key=lambda item: item.title)
-    assert "review task" in first and "at priority medium" in first, first
-    assert task.id in second and "2 ticket(s)" in second, second
-    # Every ticket is linked by its title, never by its board id or its bare address.
-    assert "- [Retry drops](https://github.invalid/i/1)" in task.body, task.body
-    assert "No priority\n- [Watch never re-arms](https://github.invalid/i/2)" in task.body
-    assert "[Watch never re-arms](https://github.invalid/i/2)" in finding.body, finding.body
-    assert "followups:I_" not in task.body + finding.body
-    assert follow_up_tickets.review_raised("run-b", {}).endswith("has no review task")
-    assert human_items.open_items() == []
-
-
-def test_the_review_task_is_never_a_reason_to_refuse_a_closeout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    touched = {"followups:I_1": ReviewTicket("https://github.invalid/i/1", Priority.LOW)}
-    monkeypatch.setattr(human_items, "acting_session", lambda: None)
-    assert "acts as no session" in follow_up_tickets.review_raised("run-c", touched)
-    monkeypatch.setattr(human_items, "acting_session", lambda: SESSION)
-
-    def off(phase: str, context: object) -> None:
-        raise human_items.Unavailable
-
-    monkeypatch.setattr(human_items, "raise_phase", off)
-    assert "human items are off" in follow_up_tickets.review_raised("run-c", touched)
-
-    def broken(phase: str, context: object) -> None:
-        raise OSError("the store is full")
-
-    monkeypatch.setattr(human_items, "raise_phase", broken)
-    assert "was not raised: the store is full" in follow_up_tickets.review_raised("run-c", touched)

@@ -401,10 +401,10 @@ def _environment(
         environment.pop(name, None)
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     # llmlint: ignore-end[shell_test_tiers_stay_split]
-    # Every launch through the recipe names the run-end hooks, and the success hook reads
-    # the run's drafts and writes a follow-up project when it finds some. So the drafts
-    # root and the authoring root are this journey's own, never the real stores of the
-    # tree the suite runs in.
+    # Every launch through the recipe names the run-end hooks, and the success hook creates
+    # and launches the run's follow-up plan over its drafts. So the drafts root and the
+    # authoring root are this journey's own, never the real stores of the tree the suite
+    # runs in.
     root_name, plugin_name, command_name = follow_up_variables.all_names()
     environment.pop(command_name, None)
     environment[root_name] = str(tmp_path / "follow-ups")

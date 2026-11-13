@@ -1,67 +1,63 @@
-"""The names a launch exports its follow-up drafting seam under, read from their source.
+"""The names a test clears or points so that follow-up drafts land in its own store.
 
-`scripts/follow-up-env.sh` composes all three — the `drafts` source's root and plugin at
-the plan store's environment layer, and the command a party drafts with — and is the only
-place any of them is composed. So no test spells them: this reads each out of the helper by
-sourcing it and printing the constant it holds, which is the read
-`scripts/follow-up-draft.sh` makes for the root's name, one step short of the resolution.
+A draft is written by `onefollowup draft` into the source `onefollowup.yaml` names as its
+`drafts_source`, through the plan store, whose environment layer spells a source's root and
+plugin as `ONETASKGRAPH_SOURCES__<SOURCE>__CONFIG__ROOT` and `..__PLUGIN`. A launch exports
+the drafting command as `ORCHESTRATOR_FOLLOW_UP_DRAFT`, and onefollowup reads its own
+configuration file and store from `ONEFOLLOWUP_CONFIG` and `ONEFOLLOWUP_STORE`. The source
+is read from the configuration file rather than spelled, so a test cannot point a source
+this checkout does not draft into.
 """
 
 from __future__ import annotations
 
 import functools
-import subprocess
+
+import yaml
 
 from orchestrator.root import REPO_ROOT
 
-HELPER = REPO_ROOT / "scripts" / "follow-up-env.sh"
+CONFIG = REPO_ROOT / "onefollowup.yaml"
 
-#: The helper's own constants, by the names it holds them under. The source is held here
-#: too, because the helper composes the three names below out of it: a reader that spelled
-#: the source itself could name a source this checkout does not draft into.
-SOURCE_HOLDER = "FOLLOW_UP_DRAFTS_SOURCE"
-ROOT_HOLDER = "FOLLOW_UP_DRAFTS_ROOT_ENV"
-PLUGIN_HOLDER = "FOLLOW_UP_DRAFTS_PLUGIN_ENV"
-COMMAND_HOLDER = "FOLLOW_UP_DRAFT_ENV"
+#: The variable a launch exports the drafting command's path under.
+COMMAND = "ORCHESTRATOR_FOLLOW_UP_DRAFT"
+
+#: The variables onefollowup reads its configuration file and its store from.
+ONEFOLLOWUP_CONFIG = "ONEFOLLOWUP_CONFIG"
+ONEFOLLOWUP_STORE = "ONEFOLLOWUP_STORE"
 
 
 @functools.cache
-def _held(holder: str) -> str:
-    read = subprocess.run(  # noqa: S603 - this repository's own helper, read as its callers do
-        ["bash", "-c", f'source "{HELPER}"; printf "%s" "${holder}"'],  # noqa: S607
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if read.returncode != 0 or not read.stdout.strip():
-        raise AssertionError(
-            f"{HELPER} did not answer with the {holder} it composes; it is the one source of "
-            f"that name, so nothing here can stand in for it:\n{read.stdout}{read.stderr}"
-        )
-    return read.stdout.strip()
-
-
 def source() -> str:
-    """The plan source a draft is stored in, as this checkout's store configures it."""
-    return _held(SOURCE_HOLDER)
+    """The plan source a draft is stored in, as `onefollowup.yaml` names it."""
+    stated = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    return str(stated["drafts_source"])
+
+
+def _setting(path: str) -> str:
+    return f"ONETASKGRAPH_SOURCES__{source().upper().replace('-', '_')}__{path}"
 
 
 def root_name() -> str:
-    """The variable the `drafts` source's absolute root is exported under."""
-    return _held(ROOT_HOLDER)
+    """The variable the drafts source's root is set under at the store's environment layer."""
+    return _setting("CONFIG__ROOT")
 
 
 def plugin_name() -> str:
-    """The variable the `drafts` source's plugin is exported under."""
-    return _held(PLUGIN_HOLDER)
+    """The variable the drafts source's plugin is set under at the same layer."""
+    return _setting("PLUGIN")
 
 
 def command_name() -> str:
     """The variable the drafting command's path is exported under."""
-    return _held(COMMAND_HOLDER)
+    return COMMAND
 
 
 def all_names() -> tuple[str, str, str]:
-    """All three, for a journey that clears what an enclosing launch exported."""
+    """The three a launch's environment may carry, for a journey that clears them."""
     return root_name(), plugin_name(), command_name()
+
+
+def onefollowup_names() -> tuple[str, str]:
+    """The two onefollowup reads its configuration and store from."""
+    return ONEFOLLOWUP_CONFIG, ONEFOLLOWUP_STORE

@@ -13,9 +13,12 @@
 #     exactly the record `just approve-design` records for that stored version, or
 #     refuses a changed document for re-reading (`orchestrator/design_review.py`). Reopening
 #     it runs the adapter's `undo`, which removes that record, or refuses a launched plan.
-#   * `follow-up-review` — a follow-up run's closeout raises it over every ticket the run
-#     created or updated; the engine's `ticket_review` aggregation derives its priority,
-#     groups the links, and retires it when there are none. It holds nothing.
+#   * `follow-up-review` — over every ticket a follow-up batch created or updated; the
+#     engine's `ticket_review` aggregation derives its priority, groups the links, and
+#     retires it when there are none. It holds nothing. `onefollowup.yaml` names it as
+#     onefollowup's `batch_settled` hook, which the engine refuses today for the
+#     `--context` file onefollowup's settle does not hand it, so none is raised until
+#     that upstream gap is closed.
 #
 # Human items are on for every host of this repository: the item store, holds, the CLI, the
 # browser's Action items page, and each task's projection into `human-public`, the shared

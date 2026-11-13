@@ -1192,7 +1192,7 @@ def _stand_ins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, projects: list[s
 
 
 def _follow_ups_stamp(*nodes: str) -> Mapping[str, object]:
-    """The metadata `scripts/follow-ups.sh` writes onto the project a follow-ups launch makes."""
+    """The metadata the follow-up recipes write onto each plan they create from a template."""
     return {
         design_approval.PLAN_KIND: {
             design_approval.STAMP_KIND: design_approval.FOLLOW_UPS,
@@ -1254,15 +1254,12 @@ def test_a_follow_ups_stamp_naming_a_node_the_project_does_not_hold_is_refused(
     assert "claims 1 node(s) the project does not hold (follow-ups)" in assessed.refusal
 
 
-@pytest.mark.parametrize("nodes", [(), ("follow-ups", "second")], ids=["none", "two"])
-def test_a_follow_ups_stamp_naming_anything_but_one_node_bounds_nothing(
-    monkeypatch: pytest.MonkeyPatch,
-    template: design_approval.ChainDigest,
-    nodes: tuple[str, ...],
+def test_a_follow_ups_stamp_naming_no_node_bounds_nothing(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
-    """That launch writes one node, so a stamp of its kind naming more is no claim at all."""
-    _project(monkeypatch, _follow_ups_stamp(*nodes))
-    _tasks(monkeypatch, *nodes)
+    """A stamp naming no node bounds the exemption to nothing, so it exempts nothing."""
+    _project(monkeypatch, _follow_ups_stamp())
+    _tasks(monkeypatch)
     _holds(monkeypatch)
 
     assert design_approval.stamped_launch("authoring:run-1-follow-ups") is None
@@ -1270,6 +1267,22 @@ def test_a_follow_ups_stamp_naming_anything_but_one_node_bounds_nothing(
     assert assessed.exemption is None
     assert assessed.refusal is not None
     assert "follow-ups launch" not in assessed.refusal
+
+
+def test_a_follow_ups_plan_of_several_steps_is_exempt_for_exactly_those_nodes(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
+) -> None:
+    """The plan `just follow-ups` creates holds five nodes, and its stamp names all five."""
+    nodes = ("prepare", "verify", "check", "publish", "settle")
+    _project(monkeypatch, _follow_ups_stamp(*nodes))
+    _tasks(monkeypatch, *nodes)
+    _holds(monkeypatch)
+
+    assessed = design_approval.assess("authoring:run-1-follow-ups")
+
+    assert assessed.refusal is None
+    assert assessed.exemption is not None
+    assert "holds exactly the 5 node(s)" in assessed.exemption
 
 
 def _spikes_stamp(*nodes: str) -> Mapping[str, object]:

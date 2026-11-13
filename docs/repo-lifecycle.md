@@ -1355,7 +1355,7 @@ split at those seams rather than at convenient ones:
   workspace selects its project for every diff and the orchestrator project already is.
   It collects no journey: each journey project under `tests/e2e/` routes its own.
 - **The plan-tooling subjects** — `plan-tooling-check-and-review`,
-  `plan-tooling-follow-ups`, `plan-tooling-plan-flow` and `plan-tooling-plan-copy` under
+  `plan-tooling-plan-flow` and `plan-tooling-plan-copy` under
   `tests/plan_tooling/` — are projects of their own, each keyed on what its journeys read,
   with a whole-workspace `test-docs` target beside it where some of its journeys copy this
   checkout; `tests/nx_inputs.py`'s `PLAN_TOOLING_PROJECTS` says what each key names.

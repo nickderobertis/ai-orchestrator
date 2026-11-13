@@ -30,12 +30,15 @@ from typing import NamedTuple
 
 import pytest
 
-from orchestrator import follow_up_drafts
 from orchestrator.root import REPO_ROOT
 
 HOOK = REPO_ROOT / "scripts" / "dispatch-env-hook.sh"
 DEFINITION = REPO_ROOT / "scripts" / "dispatch-env.sh"
 LAUNCH_WRAPPER = REPO_ROOT / "scripts" / "onepipeline.sh"
+#: The drafting command, which reads the node a drafted follow-up's author label names.
+DRAFT_COMMAND = REPO_ROOT / "scripts" / "follow-up-draft.sh"
+#: The name the engine hands its dispatch-env hook the node under.
+NODE_ID_ENV = "ONEPIPELINE_NODE_ID"
 
 #: The resolvers `scripts/dispatch-env.sh` names, as `<helper>:<function>`, read off the
 #: file rather than restated: the table there is the one definition and this module
@@ -210,10 +213,11 @@ def test_the_node_the_engine_names_is_passed_on_to_the_dispatch(tmp_path: Path) 
     checkout = _checkout(tmp_path / "checkout")
     home = str(tmp_path / "home")
 
-    env = _env(_run(checkout, {"HOME": home, "ONEPIPELINE_NODE_ID": "lane/one"}))
+    env = _env(_run(checkout, {"HOME": home, NODE_ID_ENV: "lane/one"}))
 
-    assert env[follow_up_drafts.NODE_ID_ENV] == "lane/one"
-    assert follow_up_drafts.NODE_ID_ENV not in _env(_run(checkout, {"HOME": home}))
+    assert env[NODE_ID_ENV] == "lane/one"
+    assert NODE_ID_ENV not in _env(_run(checkout, {"HOME": home}))
+    assert f"${{{NODE_ID_ENV}:-}}" in DRAFT_COMMAND.read_text(encoding="utf-8")
 
 
 def test_the_template_root_is_the_hooks_own_checkout_whatever_the_environment_held(

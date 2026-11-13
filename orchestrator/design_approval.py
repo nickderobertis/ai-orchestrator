@@ -49,10 +49,10 @@ for the identifier that did exactly that.
 
 **One exemption exists, and what it is scoped to is the half worth reading.** A planning
 *launch* is exempt, because that run's output is the plan and the document it will be read
-as does not exist until the run has written one. The one-node project `just follow-ups`
+as does not exist until the run has written one. The project `just follow-ups`
 writes is exempt on the same terms and under the same bound, stamped as its own kind: its
-one node verifies a finished run's drafted follow-ups, and there is no plan for a person to
-read it as. So is the spikes project a planning flow launches between its draft and its
+nodes verify a finished run's drafted follow-ups through onefollowup, and there is no plan
+for a person to read it as. So is the spikes project a planning flow launches between its draft and its
 finalize, stamped `spikes`: its nodes measure what the plan's budgets and design rest on, and
 the document a person approves is the plan's, written only once the planner has finalized
 from what they found. That is a statement about a launch with
@@ -274,8 +274,8 @@ PLAN_KIND = "orchestrator.plan-kind"
 
 #: The kinds :data:`PLAN_KIND` names that are exempt. Every other project — and one that
 #: says nothing — is gated. `scripts/plan.sh` and `scripts/finish-plan.sh` stamp the first;
-#: `scripts/follow-ups.sh` stamps the second, whose launch dispatches exactly one node, so a
-#: stamp of that kind naming more than one bounds nothing and exempts nothing.
+#: the follow-up recipes stamp the second on each plan they create from a template, naming
+#: every node it holds.
 #: `scripts/plan.sh` stamps the third on a plan's `<plan>-spikes` project, naming every
 #: spike node the draft planner wrote there, before it launches them.
 PLANNING = "planning"
@@ -322,8 +322,8 @@ _LAUNCHES = {
     ),
     FOLLOW_UPS: Launch(
         "the project a follow-ups launch writes",
-        "its one node verifies a finished run's drafted follow-ups, and there is no plan for "
-        "a person to read it as",
+        "its nodes verify a finished run's drafted follow-ups or answer comments on their "
+        "tickets through onefollowup, and there is no plan for a person to read it as",
         "the project a follow-ups launch writes",
     ),
     SPIKES: Launch(
@@ -920,8 +920,7 @@ def stamped_launch(
     **A node claimed twice is answered as no claim at all**, for the reason every other
     unreadable shape is. A launch dispatches each of its nodes once, so a repeated id is
     not a set of ids any launch wrote; reading it charitably means collapsing it, and what
-    the exemption would then report as the launch's nodes is not what the stamp says. So is
-    a :data:`FOLLOW_UPS` stamp naming anything but one node, because that launch writes one.
+    the exemption would then report as the launch's nodes is not what the stamp says.
     """
     held = plan_store.project_record(project) if record is None else record
     match held.get("metadata"):
@@ -931,7 +930,6 @@ def stamped_launch(
             kind in EXEMPT_KINDS
             and all(isinstance(node, str) for node in written)
             and len(set(written)) == len(written)
-            and (kind != FOLLOW_UPS or len(written) == 1)
         ):
             # An empty list is answered with the shapes below rather than as an exemption
             # over an empty project: a stamp that names no node bounds the exemption to

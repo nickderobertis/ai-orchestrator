@@ -114,8 +114,10 @@ one labelled `host`, which every check runs.
 ## Delivery budgets after landing
 
 A repository opts in to delivery reporting by registering a budget in its root
-`budgets.yaml` with `labels: [onepipeline]`. Only this host's run-success hook, through
-`just follow-ups`, selects that label; pre-push hooks, CI and Nx targets exclude it.
+`budgets.yaml` with `labels: [onepipeline]`. Only the follow-up loop selects that label —
+`scripts/follow-up-budget-inputs.sh`, onefollowup's `batch_preparing` hook, checks each
+landed change with `onebudgetspec check --subjects` — and pre-push hooks, CI and Nx targets
+exclude it.
 An `onepipeline`-labelled budget's command runs from the root of that repository's
 registered publication checkout with `ONEPIPELINE_RUN_ID` naming the run that landed the
 change, `ONEPIPELINE_NODE_ID` naming its node, `ONEPIPELINE_RUNS_DIR` naming the runs root,
@@ -219,8 +221,8 @@ Each entry is a qualified plan project id and the reason it predates budgets. A 
 there is exempt from every refusal about its plan-level answers and held to everything
 else. Its migration reason remains a writer answer; design rendering follows the
 template guidance above. Adding to the list is a reviewed change to this repository, so a
-plan cannot exempt itself. The plan kinds exempt from design approval — a planning launch's project and
-a follow-ups launch's — are exempt here too.
+plan cannot exempt itself. The plan kinds exempt from design approval — a planning launch's
+project and a follow-up plan — are exempt here too.
 
 Exact current key sets are the implicit legacy format. Version 2 selects modern records;
 unknown versions, extra keys, partial fields and malformed types are refused. Legacy

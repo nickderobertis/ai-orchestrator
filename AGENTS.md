@@ -25,8 +25,8 @@ configures are in [the roster](#the-tools-this-harness-configures).
 
 This repository is the canonical example of how the published libraries — `onepipeline`,
 `onevcs`, `oneagentgraph`, `onejudge`, `oneharness`, `onetaskgraph`, `onemessagebus`,
-`onepipeline-ui`, `onebudgetspec` and `llmlint` — are used together, and a tool for dogfooding them. So
-outside the planning and follow-up flows it is configuration and thin wrappers over
+`onepipeline-ui`, `onebudgetspec`, `onefollowup` and `llmlint` — are used together, and a
+tool for dogfooding them. So outside the planning flow it is configuration and thin wrappers over
 their verbs, and nothing else: primarily config, and past that a very light wrapper on
 a CLI tool or no wrapper at all. Code that works around an upstream gap is an
 anti-pattern here, however small the fill — a verb, a flag or a contract a library
@@ -146,6 +146,8 @@ governed by its `config/<tool>.version` pin, `llmlint` excepted.
 - **`onemessagebus`** — the bus the channel, events and notes run on
   (`config/onemessagebus.yaml`).
 - **`onebudgetspec`** — the `budgets.yaml` budgets and the check that gates on them.
+- **`onefollowup`** — the follow-up loop: drafts, verification, one ticket per root cause,
+  and answers to people's comments, configured by the root `onefollowup.yaml` alone.
 - **`llmlint`** — the judged lint tier, installed by `scripts/setup-llmlint.sh`.
 
 ## Which pin governs a dispatch
@@ -585,17 +587,21 @@ follow-up <run-id>` only when nobody needs it during the run; a decision, an unm
 constraint, or a finding a node must act on goes over the channel at once, as below. A
 draft never stands in for a surface or for a question the user needed answered.
 
-**When a run you launched ends with every node done**, its success hook launches the
-follow-up run and names it. Tell the user the main work is complete and only follow-ups
-are being verified; that run is yours and owed a watch like any other. When it settles,
-give the user the link to every follow-up issue it created or updated, the drafts it
-dropped with why, and anything it found that should have been surfaced during the run.
-Read the follow-up run's budget closeout in `just results`, and repair a failed one before
-relaying the run. Every landed change is reported against its repository's delivery budgets; overruns collect evidence
-by root cause. A `budget-question` comments on a cause closed as not planned while its
-recorded budget still stands and asks the user whether that budget should change. A verified
-miss in an uncovered dimension proposes a general planner-checklist concept and the
-repository's own budget through a plan, never by editing the planner directly.
+**When a run you launched ends with every node done**, its success hook runs `just
+follow-ups <run-id>`, which creates the run's `follow-ups` plan from
+`templates/follow-ups.md.j2` — onefollowup's prepare, the verifying agent, check, publish
+and settle — launches it detached, and names it. Tell the user the main work is complete
+and only follow-ups are being verified; that run is yours and owed a watch like any other.
+When it settles, give the user the link to every follow-up issue it created or updated, the
+drafts it disposed of without a ticket and why, and anything it found that should have been
+surfaced during the run. Every landed change is checked against its repository's delivery
+budgets by onebudgetspec, through the `batch_preparing` hook
+(`scripts/follow-up-budget-inputs.sh`), and each overrun is one more input the verifying
+agent disposes. A verified miss in an uncovered dimension proposes a general
+planner-checklist concept and the repository's own budget through a plan, never by editing
+the planner directly. The `follow-up-review` item the `batch_settled` hook names is not
+raised yet: the engine's `raise --phase` wants a `--context` file onefollowup's settle does
+not hand it, an upstream gap.
 
 **When a run ends any other way**, the failure hook launches nothing. Raise a question item
 asking the user whether to verify its drafts by hand with `just follow-ups <run-id>`, which
@@ -607,11 +613,10 @@ too — and a failed node you `settle` `done` because its work landed another wa
 success hook, launching the follow-up run.
 
 **A dispatch briefed to pick up accepted follow-up tickets selects `Todo` items only**, on
-either destination — `python -m orchestrator.follow_up_tickets statuses` prints the
-vocabulary — and each node working one names it in the store's `delivers` field, one
-ticket per node. Feedback on a follow-up run goes back with `just follow-ups <run-id>
---feedback FILE`, and people's board comments are answered by `just
-follow-ups-answer-comments`.
+either destination — `onefollowup config show` prints the status roles — and each node
+working one names it in the store's `delivers` field, one ticket per node. People's board
+comments are answered by `just follow-ups-answer-comments`, which runs onefollowup's comment
+pass as a plan in a flow; `--dry-run` only reports what it would gather.
 
 **`complete` waits for the follow-up run's settlement and the links you relayed**, or for
 the user's recorded answer to that question item. Hooks come with an engine adopted between runs, so a run
@@ -681,7 +686,7 @@ do not just re-arm.
    status "$RUN"`, which leaves that report out and nothing else, so the unread-surface
    line and the free-space reading both stay in it; `--providers` is what asks the host.
 7. **A planning flow is a dispatch, and the flow is what you watch.** `just plan`,
-   `just finish-plan`, `just follow-ups` and `just follow-ups-answer-comments` each run
+   `just finish-plan` and `just follow-ups-answer-comments` each run
    as a **flow**: the engine's `onepipeline flow run`, owned by this session from the
    launcher's start to its exit, its runs and the steps between them alike, so a turn
    cannot end in a review step while the flow's next run and questions wait. Each prints

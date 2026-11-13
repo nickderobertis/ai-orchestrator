@@ -1,11 +1,8 @@
 """The throwaway checkout the delegated-recipe journeys run the real recipes in.
 
 Shared by `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py`, the recipe tier's
-delegation table, and by the one delegated journey whose answer moves with an
-`orchestrator/` module rather than with `scripts/` alone: `just follow-ups`, whose journey
-is in `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` because that project's
-key already carries `orchestrator/follow_up_tickets.py`, so an edit to that module re-runs
-one tier rather than every recipe journey. One definition, so the two tiers build the same checkout
+delegation table, and the other journeys that run the real recipes in a throwaway checkout.
+One definition, so the two tiers build the same checkout
 and a change to it reaches both.
 
 Only `uv` and the engine every `onepipeline` recipe reaches are doubled here, as the
@@ -76,18 +73,12 @@ WRAPPER_SCRIPTS = (
     # environment below rather than discovered, which keeps that resolution — and the
     # project the launch writes — inside this throwaway checkout.
     "plan-root-env.sh",
-    # Every launch also exports the follow-up drafting seam: the `drafts` source's root,
-    # stated in the environment below for the reason the plan-authoring root is, and the
-    # drafting command this helper refuses a launch without. `just follow-up` goes through
-    # the third, which establishes that seam and runs the command as the manager.
-    "follow-up-env.sh",
+    # Every launch exports the follow-up drafting command, the first, and `just follow-up`
+    # runs it as the manager through the second.
     "follow-up-draft.sh",
     "follow-up.sh",
-    # `just follow-ups` writes a one-node direct project and launches it through the same
-    # wrapper, having counted the run's drafts under the root `follow-up-env.sh` exports.
-    "follow-ups.sh",
-    # `just plan`, `just finish-plan`, `just follow-ups` and `just follow-ups-answer-comments`
-    # each re-execute inside a flow the launching session owns through this one.
+    # `just plan` and `just finish-plan` each re-execute inside a flow the launching
+    # session owns through this one.
     "launch-flow.sh",
     # This host's template root, which the launch wrapper names on every verb and which
     # the dispatch-environment definition below establishes for a dispatch; it refuses a
@@ -468,10 +459,9 @@ def run_recipe(
             answers={"units": []},
         )
     # llmlint: ignore-end[shell_test_tiers_stay_split]
-    # The follow-up drafts root every launch exports, stated for the same reason: an
-    # unstated one resolves to the real `.follow-ups` of the tree this suite runs in. The
-    # plugin and the command are the helper's to export and are cleared, so an enclosing
-    # launch's values are not what these rows measure.
+    # The follow-up drafts root, stated for the same reason: an unstated one resolves to the
+    # real `.follow-ups` of the tree this suite runs in. The plugin and the drafting command
+    # are cleared, so an enclosing launch's values are not what these rows measure.
     root, plugin, command = follow_up_variables.all_names()
     follow_ups = checkout / ".follow-ups"
     follow_ups.mkdir(exist_ok=True)

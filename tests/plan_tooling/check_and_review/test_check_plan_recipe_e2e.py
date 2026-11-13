@@ -3518,7 +3518,7 @@ def test_a_plan_homed_on_a_source_the_defaults_leave_out_is_read_whole(
 
     The engine this host once pinned read a plan's tasks from the default sources, which
     the store narrows to the home's own source, so a home those defaults did not name read
-    as its member's tasks alone (onepipeline #636), and `scripts/follow-ups.sh` widened the
+    as its member's tasks alone (onepipeline #636), and the follow-ups launcher widened the
     defaults to its launch's source to get past it. The installed engine reads the home
     where its id says. Driven through the real recipe and the installed engine over real
     `local-md` sources: the home on one the defaults leave out, its member project on the

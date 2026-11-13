@@ -62,7 +62,7 @@ jq -c '{
         [.subjects[] | .context as $change | .report.results[] | {
             id: "budget-overrun:\($change.node):\(.id)",
             source: "budget-overrun",
-            summary: "\($change.node)'"'"'s landed change \($change.landing) went over the delivery budget \(.id): \(.actual) \(.unit) against \(.threshold)",
+            summary: "The change node \($change.node) landed as \($change.landing) went over the delivery budget \(.id): \(.actual) \(.unit) against \(.threshold)",
             detail: ({node: $change.node, landing: $change.landing, change: $change.change,
                 repository: $change.repository, budget: .id, actual, threshold, unit,
                 direction, detail, file} | tostring)
@@ -70,7 +70,7 @@ jq -c '{
         + [.unanswered[] | .context as $change | {
             id: "budget-unanswered:\($change.node)",
             source: "budget-unanswered",
-            summary: "\($change.node)'"'"'s landed change \($change.landing) could not be checked against its delivery budgets",
+            summary: "The change node \($change.node) landed as \($change.landing) could not be checked against its delivery budgets",
             detail: ({node: $change.node, landing: $change.landing, change: $change.change,
                 repository: $change.repository, reason} | tostring)
         }]

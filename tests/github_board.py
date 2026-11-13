@@ -1,6 +1,6 @@
 """Stateful loopback Projects board and request budgets shared by real store journeys.
 
-Only the GitHub wire is simulated: the installed store, follow-up commands and recipes
+Only the GitHub wire is simulated: the installed store and the recipes
 remain real. Keeping this fixture outside test modules avoids unrelated test cache inputs.
 """
 
@@ -11,28 +11,21 @@ import json
 import os
 import random
 import re
-import socket
-import subprocess
 import threading
 import time
-import urllib.request
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, Literal, NamedTuple, NewType
 
-import follow_up_variables
 import onetaskgraph_user_layer
 import pytest
-from follow_up_ticket_shape import FIX, current_section, impact_prose
-from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator import follow_up_tickets, plan_store
 from orchestrator.root import REPO_ROOT
 
 #: The same project as every recipe here names it: qualified by the `authoring` source
@@ -672,7 +665,7 @@ class _Issue:
 # llmlint: ignore-block[e2e_not_mocked] The task requires a loopback GitHub board: a
 # real API would read or write the live followups board shared by all runs. This
 # stateful wire fixture answers the installed store's real GraphQL documents; the
-# store CLI, follow-up commands, recipes and shell remain real.
+# store CLI, recipes and shell remain real.
 class _BatchedWrite(NamedTuple):
     """One field write the source's batched document may carry, under an alias of its own."""
 
@@ -3305,12 +3298,6 @@ class _HumanTasksFixture(_GitHubFixture):
 #: The board a synthetic human-task source reaches when it is served.
 HUMAN_TASKS_BOARD = _HumanTasksBoard()
 
-#: The synthetic human-task source: declared in the store's environment layer alone, never
-#: in the tracked document, so a journey projects human tasks without this host's boards.
-HUMAN_TASKS_SOURCE = "humantasks"
-
-#: Its project number, apart from every tracked source's.
-HUMAN_TASKS_PROJECT_NUMBER = 70
 
 #: The operator-facing word each wire priority is labelled with on a human-task board:
 #: Critical for `urgent`, and the other three as they are spelled.
@@ -3318,76 +3305,6 @@ HUMAN_PRIORITY_LABELS = {"urgent": "Critical", "high": "High", "medium": "Medium
 
 #: The project a planless item is filed under: the board's own project issue.
 HUMAN_TASKS_PROJECT = "I_board_plan"
-
-
-@contextmanager
-def _serving_human_tasks(root: Path, environment: Mapping[str, str]) -> Iterator[dict[str, str]]:
-    """Serve a human-task board as :data:`HUMAN_TASKS_SOURCE` and turn human items on.
-
-    Yields what to lay over ``environment``: the source, declared through the store's
-    environment layer with the four word labels as its `priority_mapping` and the
-    `task_projection` this host is authoritative for; human items enabled the way a host
-    enables them, by the host-local file `ONEPIPELINE_CONFIG` names, projecting tasks into
-    that source; and a runs root of the journey's own under ``root``. The board's `Priority`
-    field is set up by `just plans sources fields --apply`, as an operator sets one up.
-    """
-    prefix = f"ONETASKGRAPH_SOURCES__{HUMAN_TASKS_SOURCE.upper()}__"
-    host = root / "onepipeline-host.yaml"
-    host.write_text(
-        f"human_items:\n  enabled: true\n  task_source: {HUMAN_TASKS_SOURCE}\n",
-        encoding="utf-8",
-    )
-    (root / "runs").mkdir(exist_ok=True)
-    with _served(
-        _HumanTasksFixture, HUMAN_TASKS_BOARD, STATUS_OPTIONS, HUMAN_TASKS_PROJECT_NUMBER
-    ) as endpoint:
-        declared = {
-            f"{prefix}PLUGIN": "github-projects",
-            f"{prefix}VISIBILITY": "public",
-            f"{prefix}CONFIG__OWNER": CONFIGURED_REPOSITORY.owner,
-            f"{prefix}CONFIG__PROJECT_NUMBER": str(HUMAN_TASKS_PROJECT_NUMBER),
-            f"{prefix}CONFIG__REPOSITORY": str(CONFIGURED_REPOSITORY),
-            f"{prefix}CONFIG__TOKEN_ENV": "GH_PROJECTS_TOKEN",
-            f"{prefix}CONFIG__ENDPOINT": endpoint,
-            f"{prefix}CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
-            **{
-                f"{prefix}CONFIG__PRIORITY_MAPPING__{wire.upper()}": label
-                for wire, label in HUMAN_PRIORITY_LABELS.items()
-            },
-            f"{prefix}TASK_PROJECTION__HOST": socket.gethostname(),
-            f"{prefix}TASK_PROJECTION__DIRECTORY": str(root / "intents"),
-            f"{prefix}TASK_PROJECTION__PROJECT": HUMAN_TASKS_PROJECT,
-            "ONEPIPELINE_CONFIG": str(host),
-            "ONEPIPELINE_RUNS_DIR": str(root / "runs"),
-        }
-        set_up = subprocess.run(
-            ["just", "plans", "sources", "fields", HUMAN_TASKS_SOURCE, "--apply"],
-            cwd=REPO_ROOT,
-            env={**environment, "GH_PROJECTS_TOKEN": "fixture-token", **declared},
-            text=True,
-            capture_output=True,
-            timeout=e2e_timeout(120),
-            check=False,
-        )
-        assert set_up.returncode == 0, set_up.stdout + set_up.stderr
-        planned = subprocess.run(
-            [str(ONETASKGRAPH_BIN), "sources", "fields", HUMAN_TASKS_SOURCE, "--json"],
-            cwd=REPO_ROOT,
-            env={**environment, "GH_PROJECTS_TOKEN": "fixture-token", **declared},
-            text=True,
-            capture_output=True,
-            timeout=e2e_timeout(120),
-            check=False,
-        )
-        assert planned.returncode == 0, planned.stdout + planned.stderr
-        (priority,) = [
-            one for one in json.loads(planned.stdout)["fields"] if one["field"] == "Priority"
-        ]
-        assert [option["name"] for option in priority["existing"]] == list(
-            HUMAN_PRIORITY_LABELS.values()
-        ), "the field setup did not create the four word labels the source maps"
-        _HumanTasksFixture.requests.clear()
-        yield declared
 
 
 def _prepare_plan_sources(root: Path) -> dict[str, str]:
@@ -3442,255 +3359,8 @@ BOARD_ENUMERATIONS = frozenset({_Operation.BOARD, _Operation.FIELD_SNAPSHOT})
 FOLLOWUPS_ENV_PREFIX = "ONETASKGRAPH_SOURCES__FOLLOWUPS__"
 
 
-#: The run and root cause of the one ticket the journeys below copy.
-PROPOSED_RUN = "proposal-run"
-
-
-PROPOSED_CAUSE = "ticket-lands-as-a-proposal"
-
-
 #: The `followups` board's Status options, `Proposal`, `Deferred` and `Queued` among them.
 FOLLOWUPS_OPTIONS = (*STATUS_OPTIONS, PROPOSAL, DEFERRED)
-
-
-def _follow_up_ticket(
-    repository: _Repository,
-    status: follow_up_tickets.Status = follow_up_tickets.Status.PROPOSED,
-    evidence: str = "",
-    cause: str = PROPOSED_CAUSE,
-    frequency: follow_up_tickets.Frequency = follow_up_tickets.Frequency.INTERMITTENT,
-    verified_on: str = "verifier.example",
-) -> follow_up_tickets.Ticket:
-    """One ticket about ``repository`` as the agent writes it, new and `backlog` by default.
-
-    ``evidence`` is added to its `## Evidence` section, the way a later run adds its own, and
-    ``frequency`` is the agent's judgment of the root cause. Its estimate, estimate line and
-    priority are `board-status`'s to write, so the ticket carries none of them yet.
-    ``verified_on`` is the host its record and evidence name.
-    """
-    host = follow_up_tickets.Host(verified_on)
-    origin = follow_up_tickets.Origin(_hosted(repository))
-    medium = follow_up_tickets.Severity.MEDIUM
-    impact = follow_up_tickets.impact_section(
-        impact_prose("Readers of the board miss the ticket's status.", workaround="none"),
-        medium,
-        "none",
-        medium,
-    )
-    return follow_up_tickets.Ticket(
-        title=f"{repository.name}: {cause.replace('-', ' ')}",
-        status=status,
-        root_cause=follow_up_tickets.RootCause(cause),
-        repository=origin,
-        created_by_run=follow_up_tickets.RunId(PROPOSED_RUN),
-        owning_runs=(follow_up_tickets.RunId(PROPOSED_RUN),),
-        drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{PROPOSED_RUN}/drafts/noticed"),),
-        basis=(follow_up_tickets.Basis(origin, follow_up_tickets.Commit("0" * 40)),),
-        verified_at=follow_up_tickets.Timestamp("2026-01-01T00:00:00Z"),
-        host=host,
-        body="\n\n".join(
-            f"## {heading}\n\n"
-            + (
-                impact
-                if heading == follow_up_tickets.IMPACT
-                else FIX
-                if heading == follow_up_tickets.SUGGESTED_FIX
-                else current_section(heading, f"Verified on `{host}` ({heading}).")
-            )
-            + (f" {evidence}" if evidence and heading == follow_up_tickets.EVIDENCE else "")
-            for heading in follow_up_tickets.HEADINGS
-        ),
-        frequency=frequency,
-    )
-
-
-#: The body slot the adopted store keeps an item's metadata in, as it writes one.
-METADATA_SLOT = "<!-- onetaskgraph.metadata\n{}\n-->"
-
-
-class _SeededState(NamedTuple):
-    """Where a seeded item stands: its Status option, its issue state, and why it was closed."""
-
-    option: _StatusOption
-    state: Literal["OPEN", "CLOSED"] = "OPEN"
-    reason: Literal["COMPLETED", "NOT_PLANNED"] | None = None
-
-
-#: Each board status a seeded item stands at, as GitHub holds an item at it.
-SEEDED_STATES: dict[follow_up_tickets.Status, _SeededState] = {
-    follow_up_tickets.Status.PROPOSED: _SeededState(PROPOSAL),
-    follow_up_tickets.Status.ACCEPTED: _SeededState(STATUS_OPTIONS[0]),
-    follow_up_tickets.Status.DEFERRED: _SeededState(DEFERRED),
-    follow_up_tickets.Status.FINISHED: _SeededState(DONE, "CLOSED", "COMPLETED"),
-    follow_up_tickets.Status.WITHDRAWN: _SeededState(CANCELLED, "CLOSED", "NOT_PLANNED"),
-}
-
-
-def _seeded_item(  # noqa: PLR0913 - each is one fact about the item a board already holds
-    at: int,
-    *,
-    run: str,
-    cause: str,
-    status: follow_up_tickets.Status,
-    origin: str | None,
-    origin_in_body: bool,
-    host: str = "verifier.example",
-) -> _Issue:
-    """One follow-up item already on the `followups` stand-in, put there without a request.
-
-    Written the way the store writes one — the ticket's body, then its metadata in the body's
-    slot — with its origin in the board's origin field. ``origin_in_body`` says whether the
-    slot carries that origin too, as the adopted store writes it; an item that reached the
-    board before the adoption carries it in the board field only. ``host`` is the machine its
-    ticket was verified on, which a comment pass narrows its search to.
-    """
-    written = _follow_up_ticket(SIBLING_REPOSITORY, cause=cause, verified_on=host)
-    medium, frequency = follow_up_tickets.Severity.MEDIUM, written.frequency
-    ticket = replace(
-        written,
-        created_by_run=follow_up_tickets.RunId(run),
-        owning_runs=(follow_up_tickets.RunId(run),),
-        drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{run}/drafts/noticed"),),
-        priority_estimate=follow_up_tickets.estimate(medium, frequency, 1),
-        body=follow_up_tickets.with_estimate_line(
-            written.body, follow_up_tickets.estimate_line(medium, frequency, 1)
-        ),
-    )
-    metadata: dict[str, object] = {
-        "onetaskgraph.item_kind": "task",
-        follow_up_tickets.KEY: follow_up_tickets.record(ticket),
-    }
-    if origin is not None and origin_in_body:
-        metadata[follow_up_tickets.ORIGIN_KEY] = origin
-    slot = METADATA_SLOT.format(json.dumps(metadata, separators=(",", ":"), sort_keys=True))
-    seeded = SEEDED_STATES[status]
-    issue = _Issue(
-        item_id=_BoardItemId(f"PVTI_seeded_{at}"),
-        content_id=_IssueNodeId(f"I_seeded_{at}"),
-        number=1000 + at,
-        title=ticket.title,
-        body=f"{ticket.body}\n\n{slot}",
-        repository=SIBLING_REPOSITORY,
-        origin=origin,
-        status=seeded.option.name,
-        state=seeded.state,
-        state_reason=seeded.reason,
-    )
-    issue.board = BOARD
-    BOARD.issues.append(issue)
-    return issue
-
-
-def _written_ticket(root: Path, ticket: follow_up_tickets.Ticket, text: str | None = None) -> Path:
-    """Write ``ticket`` under a drafts root at ``root``, rendered unless ``text`` says otherwise."""
-    path = follow_up_tickets.ticket_path(root, ticket.created_by_run, ticket.root_cause)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(follow_up_tickets.render(ticket) if text is None else text, encoding="utf-8")
-    return path
-
-
-def _rewritten_ticket(
-    environment: dict[str, str], root: Path, ticket: follow_up_tickets.Ticket
-) -> Path:
-    """Write ``ticket`` over the one already under ``root``, keeping what the store wrote there.
-
-    The agent edits its ticket in place, so the store's own link to the card, its origin, the
-    estimate the card last received and any intent to create stay as the store left them.
-    """
-    shown = _followups_command(
-        environment,
-        [str(ONETASKGRAPH_BIN), "task", "show"]
-        + [follow_up_tickets.qualified_id(ticket.created_by_run, ticket.root_cause), "--json"],
-    )
-    assert shown.returncode == 0, shown.stdout + shown.stderr
-    held = follow_up_tickets.from_store_item(
-        json.loads(shown.stdout)["items"][0]["item"], pending=True
-    )
-    kept = replace(
-        ticket,
-        links=held.links,
-        origin=held.origin,
-        board_estimate=held.board_estimate,
-        creating=held.creating,
-    )
-    return _written_ticket(root, kept)
-
-
-def _followups_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
-    """The environment a `followups` command runs under, and the drafts root it names.
-
-    Every command runs from this checkout, so the committed `onetaskgraph.yaml` decides the
-    source's owner and where `backlog` goes; only the endpoint, the credential and the
-    drafts root are pointed elsewhere. This checkout's installed CLIs are put first on
-    `PATH`, since `board-status` resolves the plan store from it.
-    """
-    drafts_root = tmp_path / "follow-ups"
-    environment = _plan_environment(tmp_path)
-    for name in [name for name in environment if name.startswith(FOLLOWUPS_ENV_PREFIX)]:
-        del environment[name]
-    environment[follow_up_variables.root_name()] = str(drafts_root)
-    environment[follow_up_variables.plugin_name()] = plan_store.WRITABLE_PLUGIN
-    environment["PATH"] = f"{ONETASKGRAPH_BIN.parent}{os.pathsep}{environment['PATH']}"
-    return environment, drafts_root
-
-
-@contextmanager
-def _serving_followups(
-    environment: dict[str, str],
-    options: tuple[_StatusOption, ...] = FOLLOWUPS_OPTIONS,
-    *,
-    fields: bool = False,
-) -> Iterator[None]:
-    """Serve the board fixture as `followups`, carrying ``options``, for ``environment``.
-
-    With ``fields``, the board is first set up the way the operator sets up the live one —
-    `just plans sources fields followups --apply`, the command `AGENTS.md` names — which
-    creates the `Priority` field from the source's `priority_mapping`.
-    """
-    with _serving_board(options=options, number=FOLLOWUPS_PROJECT_NUMBER) as remote:
-        environment.update(remote)
-        environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = (
-            "0"
-        )
-        if fields:
-            set_up = _followups_command(
-                environment,
-                ["just", "plans", "sources", "fields", follow_up_tickets.BOARD, "--apply"],
-            )
-            assert set_up.returncode == 0, set_up.stdout + set_up.stderr
-            # Read back through the same verb's read-only plan, as the operator checks it.
-            planned = _followups_command(
-                environment,
-                [str(ONETASKGRAPH_BIN), "sources", "fields", follow_up_tickets.BOARD, "--json"],
-            )
-            assert planned.returncode == 0, planned.stdout + planned.stderr
-            (priority,) = [
-                field
-                for field in json.loads(planned.stdout)["fields"]
-                if field["field"] == "Priority"
-            ]
-            assert (priority["exists"], priority["missing"]) == (True, []), priority
-            assert [option["name"] for option in priority["existing"]] == [
-                "Urgent",
-                "High",
-                "Medium",
-                "Low",
-            ], "the field setup did not create the Priority field the source maps"
-        yield
-
-
-def _followups_command(
-    environment: dict[str, str], command: list[str]
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 - the installed plan-store CLI and this checkout's module
-        command,
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(120),
-        check=False,
-    )
 
 
 def _sent(
@@ -3751,21 +3421,6 @@ def _field_writes(requests: list[_GraphQLRequest]) -> list[dict[str, object]]:
             if write.included(request.variables) and isinstance(payload, dict):
                 written.append(payload)
     return written
-
-
-def _field_clears(requests: list[_GraphQLRequest]) -> list[dict[str, object]]:
-    """The input of every field-value clear among ``requests``, batched or standalone."""
-    cleared: list[dict[str, object]] = []
-    for request in requests:
-        carried = {
-            _Operation.CLEAR_FIELD: (_BatchedWrite("clearProjectV2ItemFieldValue", "input", None),),
-            _Operation.UPDATE_FIELDS: BATCHED_CLEARS,
-        }.get(request.operation, ())
-        for clear in carried:
-            payload = request.variables.get(clear.variable)
-            if clear.included(request.variables) and isinstance(payload, dict):
-                cleared.append(payload)
-    return cleared
 
 
 def _board_cost(requests: list[_GraphQLRequest]) -> tuple[list[str], list[str]]:
@@ -3849,29 +3504,6 @@ def populate(board: _Board, total: int, seed: int = 0) -> None:
         plan += 1
 
 
-def _follow_up_step(
-    environment: dict[str, str], command: str, *arguments: str
-) -> subprocess.CompletedProcess[str]:
-    """One `orchestrator.follow_up_tickets` command, as the composed task has the agent run it."""
-    return _followups_command(
-        environment,
-        [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_tickets"]
-        + [command, *arguments],
-    )
-
-
-def _decided_status(environment: dict[str, str], ticket: Path, *extra: str) -> str:
-    """Run `board-status`, then write the word it prints as the ticket's `status`, as told."""
-    decided = _follow_up_step(
-        environment, "board-status", "--board", follow_up_tickets.BOARD, *extra, str(ticket)
-    )
-    assert decided.returncode == follow_up_tickets.SOUND, decided.stdout + decided.stderr
-    word = decided.stdout.strip()
-    text = ticket.read_text(encoding="utf-8")
-    ticket.write_text(re.sub(r'^status: "[^"]*"$', f'status: "{word}"', text, flags=re.M), "utf-8")
-    return word
-
-
 class RequestCost(NamedTuple):
     """The requests and modelled GitHub points one journey step spent."""
 
@@ -3884,21 +3516,6 @@ class DocumentPrice(NamedTuple):
 
     document: str
     points: int
-
-
-#: How many other items the `followups` stand-in holds when one ticket is filed on it: enough
-#: that a request walking the board, or a search it answers unnarrowed, is a cost that grows
-#: with the board rather than one a single item hides.
-OTHER_ITEMS = 60
-#: Board checks one follow-up launch's whole validation runs, dispatch through post-settle.
-LAUNCH_VALIDATION_BOARD_CHECKS = 1
-#: How many other items the realistic run's board holds before the run starts.
-REALISTIC_OTHER_ITEMS = 400
-#: The budget a realistic follow-up run's board points are, and the one a ticket's whole
-#: life is: each journey records its parts under one of them, and `tests/budget_telemetry.py`
-#: reports the figure and its breakdown.
-RUN_POINTS_BUDGET = "follow-up-run-points"
-TICKET_LIFECYCLE_BUDGET = "ticket-lifecycle-points"
 
 
 #: The source's PRICES entries used by the fixture's operations, each priced upstream at
@@ -4123,8 +3740,6 @@ def record(kind, argv):
         stream.write(json.dumps(entry) + "\\n")
 record("interpreter", sys.orig_argv)
 atexit.register(record, "interpreter-exit", sys.orig_argv)
-if "orchestrator.follow_up_tickets" in sys.orig_argv:
-    record("module", sys.orig_argv)
 def store(argv):
     return pathlib.Path(argv[0]).name == "onetaskgraph"
 hooked = set()
@@ -4264,71 +3879,3 @@ def _bounded_step(
     assert _wide_pages(requests) == [], (label, "a search asked for a page wider than its answer")
     _GitHubFixture.requests.clear()
     return cost
-
-
-def closed_through_rest(issue: _Issue, environment: Mapping[str, str], reason: str) -> RestRequest:
-    """Close ``issue`` the way a person on github.com, or an agent holding the board
-    credential, does: one `PATCH` to GitHub's REST issue endpoint, which writes the issue
-    and no board field. ``environment`` names the `followups` endpoint and the credential;
-    the request the loopback logged for it is returned."""
-    endpoint = environment[f"{FOLLOWUPS_ENV_PREFIX}CONFIG__ENDPOINT"].removesuffix("/graphql")
-    path = f"/repos/{issue.repository.owner}/{issue.repository.name}/issues/{issue.number}"
-    sent = len(_GitHubFixture.rest_requests)
-    request = urllib.request.Request(  # noqa: S310 - the loopback's own http:// endpoint
-        f"{endpoint}{path}",
-        data=json.dumps({"state": "closed", "state_reason": reason}).encode(),
-        headers={
-            "Authorization": f"Bearer {environment['GH_PROJECTS_TOKEN']}",
-            "Content-Type": "application/json",
-        },
-        method="PATCH",
-    )
-    with urllib.request.urlopen(request, timeout=30) as answer:  # noqa: S310 - as above
-        assert answer.status == 200, answer.status
-    (logged,) = _GitHubFixture.rest_requests[sent:]
-    assert (logged.method, logged.path) == ("PATCH", path), logged
-    return logged
-
-
-def writes_naming(
-    issue: _Issue, requests: Sequence[_GraphQLRequest] | None = None
-) -> list[_GraphQLRequest]:
-    """Every write among ``requests`` — by default, all the board was sent since its log was
-    last cleared — that names ``issue``'s row or the issue itself: a Status write addresses
-    the row, a closure the content."""
-    names = (f'"{issue.item_id}"', f'"{issue.content_id}"')
-    return [
-        request
-        for request in (_GitHubFixture.requests if requests is None else requests)
-        if request.is_mutation and any(name in json.dumps(request.variables) for name in names)
-    ]
-
-
-def planted_comment(
-    issue: _Issue, body: str, author: str | None, at: str | None = None
-) -> dict[str, object]:
-    """A comment a person wrote on GitHub, dated ``at`` or now: what a write here never adds.
-
-    The board answers every comment a write adds as the token's own account, so a person or an
-    app commenting on the live board is planted on the row instead, signed as they would be.
-    """
-    issue.held_by.commented += 1
-    moment = at or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    identifier = f"IC_planted_{issue.held_by.commented}"
-    comment: dict[str, object] = {
-        "id": identifier,
-        "author": None if author is None else {"login": author},
-        "createdAt": moment,
-        "updatedAt": moment,
-        "body": body,
-        "url": f"{issue.content()['url']}#issuecomment-{identifier}",
-    }
-    issue.comments.append(comment)
-    return comment
-
-
-def planted_edit(issue: _Issue, identifier: str, body: str, at: str | None = None) -> None:
-    """A person's edit of one comment on GitHub, which the board answers no mutation for."""
-    (comment,) = [one for one in issue.comments if one["id"] == identifier]
-    comment["body"] = body
-    comment["updatedAt"] = at or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

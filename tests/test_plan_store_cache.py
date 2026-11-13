@@ -90,7 +90,7 @@ def test_a_process_with_no_store_to_reach_is_not_held_to_the_tree() -> None:
     assert started.returncode == 0
     assert plan_store_cache.reaches_the_store(["just", "plans"], os.getcwd())
     assert plan_store_cache.reaches_the_store(
-        ["python3", "-m", "orchestrator.follow_up_tickets"], os.getcwd()
+        ["python3", "-m", "orchestrator.plan_check"], os.getcwd()
     )
     assert not plan_store_cache.reaches_the_store(
         ["python3", "-m", "orchestrator.no_such_module"], os.getcwd()

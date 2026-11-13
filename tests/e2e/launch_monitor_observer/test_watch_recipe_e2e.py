@@ -348,14 +348,14 @@ def test_follow_ups_reports_a_failed_liveness_read_with_the_engines_own_diagnost
     """A reading the engine could not give is not read as an ending of any kind.
 
     A run directory with no launch record is refused by `status --json`, and the recipe
-    passes on the engine's own words and launches nothing.
+    fails on the engine's own words, creating and launching nothing.
     """
     (tmp_path / "broken-run").mkdir()
 
     refused = follow_ups(tmp_path, "broken-run")
 
     said = refused.stdout + refused.stderr
-    assert refused.returncode == 2, said
-    assert "whether run 'broken-run' has ended could not be read: " in said
-    assert "'onepipeline status --json' exited 2, with the engine's diagnostic above" in said
+    assert refused.returncode != 0, said
     assert "launch.json" in refused.stderr, said
+    assert "follow-up run:" not in refused.stdout, said
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["broken-run"], said

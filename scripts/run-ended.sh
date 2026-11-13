@@ -15,12 +15,10 @@
 #     is discarded with `just reclaim-branch <branch> --repo <repository> --discard`, one
 #     line reporting each outcome; a branch it cannot discard, or a repository it cannot
 #     list, is reported and stops neither the others nor the follow-up run. Then it runs
-#     `just follow-ups <run-id> --detach` in
-#     this checkout and turns the recipe's two lines into the one a manager reads: the
-#     follow-up run's id and its watch command. Detached, because the hook is awaited and a
-#     follow-up run outlives its deadline. When the recipe answers that there is nothing to
-#     verify, its one line is relayed alone, because it already says no follow-up run was
-#     launched. It exits with the recipe's status.
+#     `just follow-ups <run-id>` in this checkout, which creates the `follow-ups` plan from
+#     its template and launches it detached — the hook is awaited and a follow-up run
+#     outlives its deadline — and turns the recipe's two lines into the one a manager reads:
+#     the follow-up run's id and its watch command. It exits with the recipe's status.
 #   * **failure** — the run ended any other way: a failed or skipped node, an unfinished
 #     graph with nothing left to decide, or a clean stop. It discards no spike branch,
 #     because a failed run's retries and recovery may still need them. It launches nothing,
@@ -29,7 +27,7 @@
 #     verifies the run's drafts by hand. It exits 0, because there is nothing it tried.
 #
 # What the engine hands it is validated before anything reads it: the run id against the
-# grammar `scripts/plan-brief.sh` declares for a run id, the run root as an absolute path
+# grammar of a run id, the run root as an absolute path
 # naming that run, and the failure document's version, hook, run, reason kind and nodes.
 # A document that fails still ends in the failure line, naming what was wrong, because
 # what a manager needs from that line does not depend on the reason.
@@ -42,8 +40,8 @@
 #
 # This is the only thing in this repository that launches `just follow-ups`; a manager
 # typing it is the only other way it runs. `just plan` and `just finish-plan` name no hook,
-# and `just follow-ups` names only its budget closeout, which launches nothing, so a
-# planning run and a follow-up run never launch one.
+# and the follow-up recipes launch with both hooks blank, so a planning run and a follow-up
+# run never launch one.
 # `tests/run_end_hooks/test_run_end_hooks_e2e.py` drives both modes through a real launch.
 set -euo pipefail
 
@@ -59,18 +57,13 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) || fail "this hook 
     "name it by an absolute path in a readable checkout"
 checkout=$(dirname -- "$script_dir")
 
-helper="$script_dir/plan-brief.sh"
-if [ ! -f "$helper" ] || [ ! -r "$helper" ]; then
-    fail "required helper is not a readable regular file: $helper" \
-        "restore it from the repository, then let the run's owner verify its drafts with 'just follow-ups <run-id>'"
-fi
-# shellcheck source=scripts/plan-brief.sh
-. "$helper"
+#: What a run id is: one word of letters, digits, `_` and `-`.
+RUN_ID='^[A-Za-z0-9_-]+$'
 
 run=${ONEPIPELINE_RUN_ID:-}
 [ -n "$run" ] || fail "ONEPIPELINE_RUN_ID is not set, so there is no run to report on" "$usage"
 # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
-[[ "$run" =~ $PLAN_SAFE_RUN_ID ]] || fail "ONEPIPELINE_RUN_ID '$run' is not a run id: a run id is one word of letters, digits, '_' and '-'" "$usage"
+[[ "$run" =~ $RUN_ID ]] || fail "ONEPIPELINE_RUN_ID '$run' is not a run id: a run id is one word of letters, digits, '_' and '-'" "$usage"
 
 # Discard every spike branch the plan of the run at ``$1`` names, reporting each outcome.
 # Nothing it meets ends the hook: a plan whose spikes outlive their use costs disk and a
@@ -125,17 +118,17 @@ case "${ONEPIPELINE_HOOK:-}" in
         status=0
         # Standard error is left alone, so the recipe's own diagnostics and the engine's
         # launch record reach the hook's log; standard output is the recipe's answer.
-        output=$(cd -- "$checkout" && just follow-ups "$run" --detach) || status=$?
+        output=$(cd -- "$checkout" && just follow-ups "$run") || status=$?
         if [ "$status" -ne 0 ]; then
             [ -z "$output" ] || printf '%s\n' "$output"
-            echo "run-ended: main work of run $run is complete, but 'just follow-ups $run --detach' exited $status, so no follow-up run was launched; the diagnostic above names why, and 'just follow-ups $run' verifies its drafts by hand"
+            echo "run-ended: main work of run $run is complete, but 'just follow-ups $run' exited $status, so no follow-up run was launched; the diagnostic above names why, and 'just follow-ups $run' verifies its drafts by hand"
             exit "$status"
         fi
         # Announced only when the recipe named exactly one follow-up run, spelled as a run id
         # is; anything else is relayed as the recipe said it.
         follow_up=$(sed -n 's/^follow-up run: //p' <<<"$output")
         # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
-        if [[ "$follow_up" =~ $PLAN_SAFE_RUN_ID ]]; then
+        if [[ "$follow_up" =~ $RUN_ID ]]; then
             echo "main work of run $run is complete; follow-ups are being verified in run $follow_up; watch it with: just watch $follow_up"
         else
             printf '%s\n' "$output"

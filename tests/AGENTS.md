@@ -17,8 +17,7 @@ Conventions for this repository's tests.
   `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py`** — the `just` invocation and the one
   command line it must produce. Add the row with the recipe. A recipe whose answer moves
   with an `orchestrator/` module lives in the tier keyed on that module instead, on the
-  same `tests/delegation_checkout.py` checkout: `just follow-ups`' row is in
-  `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py`.
+  same `tests/delegation_checkout.py` checkout.
 - **Wait on a fact, and assert one.** Never sleep and then assume; wait for an observable
   state transition, and correlate fields from one event rather than from log-wide
   matches.

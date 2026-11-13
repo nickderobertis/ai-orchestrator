@@ -722,39 +722,114 @@ agents *args:
 # Record an unverified, non-blocking follow-up against a run, as its manager:
 # `just follow-up <run-id> --title TITLE --repository HOST/OWNER/NAME [--path PATH]... < body.md`.
 #
-# The same draft a dispatch writes through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, stored in the
-# `drafts` plan source under that run's draft project: `scripts/follow-up.sh` establishes
-# the seam the way a launch does and runs the one drafting command as the manager.
-# `just follow-up --help` states the body's headings and what is stamped. Anything the run
-# needs decided now is a channel reply, never a draft.
+# The same draft a dispatch writes through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`: `onefollowup
+# draft` into the run's batch, authored `manager`. `just follow-up --help` states the body's
+# headings. Anything the run needs decided now is a channel reply, never a draft.
 [doc('Draft an unverified, non-blocking follow-up against a run as its manager; the body is read from stdin.')]
 follow-up *args:
     @./scripts/follow-up.sh "$@"
 
-# Verify a finished run's drafted follow-ups and put the verified tickets on the board:
-# `just follow-ups <run-id> [--feedback FILE] [--unanswered] [--detach] [--to SOURCE]`.
+# Verify a finished run's follow-ups through onefollowup: `just follow-ups <run-id>`.
 #
-# Launches one direct node under `graphs/follow-up.yaml` — a single-sided follow-up agent
-# with no judge — on a task the store renders from this host's `follow-up-task` template,
-# `templates/follow-up-task.md.j2`, answered by `orchestrator/follow_up_tickets.py`, which
-# owns the ticket shape and board ownership the template's prose states. It refuses a
-# run something is still driving, launches nothing for a run with no drafts or tickets,
-# and checks every ticket once an attached run settles; `--feedback` re-dispatches over the
-# same run, carrying the earlier pass's dispositions forward, `--unanswered` scopes it to the
-# drafts and tickets that pass left open, `--detach` returns at the launch record with the
-# follow-up run id and its watch
-# command, and `--to` names a configured source to copy onto instead of `followups`.
-# `scripts/follow-ups.sh` states each decision.
-[doc("Dispatch the follow-up agent over a run's drafted follow-ups; `--detach` returns at the launch record.")]
-follow-ups *args:
-    @./scripts/follow-ups.sh "$@"
+# Creates the `follow-ups` plan from `templates/follow-ups.md.j2` for the run's batch (its
+# public id) — prepare, the verifying agent, check, publish, settle — and launches it
+# detached, printing the follow-up run's id and its watch command. `onefollowup.yaml` is
+# the whole of what the loop is configured by; `scripts/run-ended.sh` runs this recipe when
+# a run ends with every node done.
+[doc("Create and launch the plan verifying a finished run's follow-ups through onefollowup.")]
+follow-ups run:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="{{repo_root}}/node_modules/.bin:{{repo_root}}/.venv/bin:$PATH"
+    export ONEPIPELINE_TEMPLATE_ROOT="{{repo_root}}/templates"
+    run=$1
+    store=${ONEFOLLOWUP_STORE:-{{repo_root}}}
+    [ -d "$store" ] || store=$(dirname -- "$store")
+    batch=$(onepipeline status "$run" --json | jq -er '.public_id')
+    runs=${ONEPIPELINE_RUNS_DIR:-{{repo_root}}/runs}
+    project="$run-follow-ups"
+    attempt=1
+    while [ -e "$runs/$project" ]; do attempt=$((attempt + 1)); project="$run-follow-ups-$attempt"; done
+    loader=$(mktemp)
+    trap 'rm -f "$loader"' EXIT
+    onepipeline template resolve follow-up-task --json >"$loader"
+    onetaskgraph project create follow-up-runs --id "$project" --title "$project" \
+        --template "{{repo_root}}/templates/follow-ups.md.j2" --search-path "{{repo_root}}/templates" \
+        --var "project=$project" --var "run=$run" --var "batch=$batch" --var "checkout={{repo_root}}" \
+        --var "store=$store" --var "task_loader=$loader" --no-interactive \
+        --metadata 'onepipeline.schema_version=3' \
+        --metadata "onepipeline.goal={\"text\": \"Verify the follow-ups of run $run\"}" \
+        --metadata 'orchestrator.plan-kind={"kind": "follow-ups", "nodes": ["prepare", "verify", "check", "publish", "settle"]}' >/dev/null
+    ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off --detach \
+        --label kind=follow-ups --success-hook= --failure-hook= --pr-author-graph= >&2
+    printf 'follow-up run: %s\nwatch it with: just watch %s\n' "$project" "$project"
 
-# `just follow-ups-answer-comments [--dry-run] [--run RUN-ID | --issue QUALIFIED-ID] [--to SOURCE]
-# [--since RFC3339] [--detach]`: `orchestrator/follow_up_comments.py` states which comments are
-# read, which run each goes to, and when the board's watermark moves.
-[doc("Answer people's unanswered board comments on follow-ups, one run per owning run; `--dry-run` reports only.")]
+# Answer people's comments on follow-up tickets through onefollowup:
+# `just follow-ups-answer-comments [--dry-run]`.
+#
+# Creates the `follow-up-comments` plan from `templates/follow-up-comments.md.j2` — gather,
+# answer, settle — and runs it attached in a flow. Each of its steps is this recipe again:
+# `--gather` runs `onefollowup comments gather`, keeping its answer in the run's own
+# directory for the steps after it; `--answer` creates each owning batch's feedback plan from
+# `templates/follow-up-feedback.md.j2` for the files `onefollowup comments launches` writes
+# and runs it attached in the same flow, failing when one fails; `--settle` runs
+# `onefollowup comments settle`. `--dry-run` runs only `onefollowup comments gather --dry-run`.
+[doc("Answer people's comments on follow-up tickets through onefollowup; `--dry-run` reports only.")]
 follow-ups-answer-comments *args:
-    @./scripts/follow-ups-answer-comments.sh "$@"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="{{repo_root}}/node_modules/.bin:{{repo_root}}/.venv/bin:$PATH"
+    export ONEPIPELINE_TEMPLATE_ROOT="{{repo_root}}/templates"
+    gathered="${ONEPIPELINE_RUN_ROOT:-}/gathering.json"
+    case "${1:-}" in
+        --dry-run)
+            exec onefollowup comments gather --dry-run
+            ;;
+        --gather)
+            onefollowup comments gather | tee "$gathered"
+            ;;
+        --answer)
+            launches=$(onefollowup comments launches --snapshot "$(jq -er '.snapshot' "$gathered")")
+            loader=$(mktemp)
+            trap 'rm -f "$loader"' EXIT
+            onepipeline template resolve follow-up-task --json >"$loader"
+            failed=0
+            while IFS=$'\t' read -r batch feedback; do
+                [ -n "$batch" ] || continue
+                stamp=$(basename -- "$feedback" .md)
+                project="$batch-answers-$stamp"
+                onetaskgraph project create follow-up-runs --id "$project" --title "$project" \
+                    --template "{{repo_root}}/templates/follow-up-feedback.md.j2" --search-path "{{repo_root}}/templates" \
+                    --var "project=$project" --var "batch=$batch" --var "checkout={{repo_root}}" \
+                    --var "feedback=$feedback" --var "task_loader=$loader" --no-interactive \
+                    --metadata 'onepipeline.schema_version=3' \
+                    --metadata "onepipeline.goal={\"text\": \"Answer the comments on batch $batch\"}" \
+                    --metadata 'orchestrator.plan-kind={"kind": "follow-ups", "nodes": ["answer"]}' >/dev/null
+                ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off \
+                    --label kind=follow-ups --success-hook= --failure-hook= --pr-author-graph= || failed=1
+            done < <(jq -r '.launches[] | [.batch, .feedback] | @tsv' <<<"$launches")
+            exit "$failed"
+            ;;
+        --settle)
+            exec onefollowup comments settle --snapshot "$(jq -er '.snapshot' "$gathered")"
+            ;;
+        "")
+            project="follow-up-comments-$(date -u +%Y%m%dT%H%M%SZ | tr 'TZ' 'tz')"
+            onetaskgraph project create follow-up-runs --id "$project" --title "$project" \
+                --template "{{repo_root}}/templates/follow-up-comments.md.j2" --search-path "{{repo_root}}/templates" \
+                --var "project=$project" --no-interactive \
+                --metadata 'onepipeline.schema_version=3' \
+                --metadata 'onepipeline.goal={"text": "Answer the comments on follow-up tickets"}' \
+                --metadata 'orchestrator.plan-kind={"kind": "follow-ups", "nodes": ["gather", "answer", "settle"]}' >/dev/null
+            exec ./scripts/onepipeline.sh flow run --name "$project" -- \
+                ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off \
+                --label kind=follow-ups --success-hook= --failure-hook= --pr-author-graph=
+            ;;
+        *)
+            echo "follow-ups-answer-comments: '$1' is not an option; usage: just follow-ups-answer-comments [--dry-run]" >&2
+            exit 2
+            ;;
+    esac
 
 # Register a repository checkout alias. Publication policy and approvals come from
 # the rules file the identity matches rather than from flags here; `onevcs` detects

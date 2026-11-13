@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import sys
 import venv
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,7 +23,6 @@ from orchestrator import (
     design_approval,
     design_chain,
     design_review,
-    follow_up_comments,
     plan_copy,
     plan_store,
 )
@@ -139,12 +137,6 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
     assert read["tasks"][1]["delivers"] == [DELIVERED]
     assert plan_store.task_record("sdksource:first")["title"] == "First"
     assert plan_store.read_projects("sdksource")[0].title == "demo"
-    # No task there carries a comment, so the narrowed query keeps none of them.
-    commented = plan_store.client().task_list(
-        source=["sdksource"],
-        commented_since=follow_up_comments.instant(datetime(2026, 1, 1, tzinfo=UTC)),
-    )
-    assert plan_store.sdk(commented).items == []
     assert plan_store.local_projects("sdksource") == ["sdksource:demo"]
     assert plan_store.task_document("sdksource", "first").is_file()
     assert plan_store.read_documents("sdksource:demo")[0].labels == ["design"]

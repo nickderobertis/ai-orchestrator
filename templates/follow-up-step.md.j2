@@ -1,0 +1,12 @@
+---
+onetaskgraph_template: 1
+description: >-
+  A command step of a follow-up plan: what the step does, for a person reading the plan. The
+  engine runs the step's command and judges nobody against this text.
+variables:
+  step:
+    description: What the step does, in one sentence.
+    type: string
+    required: true
+---
+{{ step }}

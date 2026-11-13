@@ -300,8 +300,8 @@ RECIPE_SCOPED = "test-recipes"
 #: verdict on whatever they looked like when it was recorded.
 CHECKOUT_SCOPED = "test-checkouts"
 #: The directory every host-tool journey over this repository's plan surface lives under —
-#: `just check-plan`, `just review-plan`, `just plan`, `just finish-plan`, `just
-#: follow-ups`, the registered check script, the installed engine and a real `oneharness
+#: `just check-plan`, `just review-plan`, `just plan`, `just finish-plan`,
+#: the registered check script, the installed engine and a real `oneharness
 #: run` — and which every other project's tiers ignore. Not a project itself, as
 #: `ASK_SEAM_ROOT` is not: each subject under it is a project in a directory of its own,
 #: because while one key covered every journey here, an edit any one of them read re-ran
@@ -354,8 +354,7 @@ class SubjectProject(NamedTuple):
 #: record of every `open` per test for what the journeys read themselves, each without the
 #: tests that copy the checkout, whose reads are everything. A family stays a tree where a
 #: test can name a path in it or reads every file of it: `scripts/` for the check-and-review
-#: journeys, one of which reads every script, and for the follow-up journeys, which copy the
-#: whole tree into the mirror checkout their recipe runs in; `personas/` and `graphs/` for
+#: journeys, one of which reads every script; `personas/` and `graphs/` for
 #: the check-and-review journeys, whose plans name a persona by path relative to `graphs/`;
 #: and `config/`, `templates/` and `orchestrator/` everywhere, because the engine and the
 #: plan store a launch reaches read pins and templates no test names, and a child running
@@ -367,18 +366,6 @@ PLAN_TOOLING_PROJECTS: tuple[SubjectProject, ...] = (
         "plan-tooling-check-and-review",
         f"{PLAN_TOOLING_ROOT}/check_and_review",
         "planToolingCheckAndReviewWorkspace",
-        docs_tier=True,
-    ),
-    SubjectProject(
-        "plan-tooling-comment-version",
-        f"{PLAN_TOOLING_ROOT}/comment_version",
-        "planToolingCommentVersionWorkspace",
-        docs_tier=False,
-    ),
-    SubjectProject(
-        "plan-tooling-follow-ups",
-        f"{PLAN_TOOLING_ROOT}/follow_ups",
-        "planToolingFollowUpsWorkspace",
         docs_tier=True,
     ),
     SubjectProject(
@@ -502,11 +489,6 @@ ASK_SEAM_JOURNEYS: tuple[AskSeamJourney, ...] = (
     ),
     AskSeamJourney(
         "ask-seam-decline-ruling", f"{ASK_SEAM_ROOT}/decline_ruling", "askSeamDeclineRuling"
-    ),
-    AskSeamJourney(
-        "ask-seam-follow-up-drafts-launch",
-        f"{ASK_SEAM_ROOT}/follow_up_drafts_launch",
-        "askSeamFollowUpDraftsLaunch",
     ),
     AskSeamJourney("ask-seam-launch", f"{ASK_SEAM_ROOT}/launch", "askSeamLaunch"),
     AskSeamJourney(

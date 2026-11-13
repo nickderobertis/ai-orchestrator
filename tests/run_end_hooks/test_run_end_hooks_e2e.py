@@ -9,12 +9,12 @@ left: the hook's log under the run, `just results`, `just runs`, and the launch 
 
 Everything between the recipe and the model is real: `just orchestrate`,
 `scripts/orchestrate.sh`, `scripts/onepipeline.sh` and its design-approval gate, the
-installed `onepipeline` driver, `scripts/run-ended.sh`, `just follow-ups` and the detached
-follow-up run it launches under `graphs/follow-up.yaml`, and the drafting command the
-drafts are written with. **The paid model alone is doubled**: `tests/e2e/fake_backend.py`
+installed `onepipeline` driver, `scripts/run-ended.sh`, and `just follow-ups` with the
+detached follow-up run it launches. What that follow-up run does is
+`tests/e2e/follow_ups/`'s journey; here it is only launched. **The paid model alone is doubled**: `tests/e2e/fake_backend.py`
 at the `oneagentgraph` seam for the main run's two-party worker, and
 `tests/e2e/fake_codex.py` at the provider binary for the follow-up agent's single-sided
-member. Every store a launch writes to — the runs root, the drafts root, the authoring
+member. Every store a launch writes to — the runs root, the follow-up store, the authoring
 root — is this module's own, so nothing lands in this checkout's.
 
 A hook never changes how a run settled, so each hooked launch has a twin launched with
@@ -22,7 +22,7 @@ both hooks named blank — the recipe keeps a caller's own value, and the engine
 blank one as none — and the two are held to the same exit status, settlement line, and
 node statuses.
 
-The refusals and the no-drafts ending are driven by running the script itself with the
+The refusals are driven by running the script itself with the
 environment the engine hands it, because no launch can put the engine's variables into a
 shape the engine never produces.
 """
@@ -32,13 +32,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import NamedTuple, TypedDict
 
+import follow_up_store
 import follow_up_variables
 import plan_root_variable
 import pytest
@@ -46,9 +46,7 @@ import short_state
 from harness_indirections import established_indirections
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
-from waits import until
 
-from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
 # What the recipes these journeys run leave in the temporary directory, by design or
@@ -83,6 +81,8 @@ INHERITED = (
     "CODEX_SESSION_ID",
     "FAKE_CODEX_HOLD_SECONDS",
     *follow_up_variables.all_names(),
+    *follow_up_variables.onefollowup_names(),
+    follow_up_store.RUNS_ROOT,
     plan_root_variable.name(),
 )
 
@@ -178,15 +178,14 @@ class RetryEnvelope(TypedDict):
 
 
 def _bench(tmp: Path, oneharness_bin: str) -> Bench:
-    runs, drafts_root, plans = tmp / "runs", tmp / "follow-ups", tmp / "plans"
+    runs, plans = tmp / "runs", tmp / "plans"
     environment = dict(os.environ)
     for name in INHERITED:
         environment.pop(name, None)
-    root_name, plugin_name, _ = follow_up_variables.all_names()
+    store = follow_up_store.isolated(tmp)
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEPIPELINE_RUNS_DIR"] = str(runs)
-    environment[root_name] = str(drafts_root)
-    environment[plugin_name] = WRITABLE_PLUGIN
+    environment = store.over(environment)
     environment[plan_root_variable.name()] = str(plans)
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
@@ -197,7 +196,7 @@ def _bench(tmp: Path, oneharness_bin: str) -> Bench:
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment.update(established_indirections(INDIRECTION_CALLER))
     environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp))
-    return Bench(environment, tmp, runs, drafts_root)
+    return Bench(environment, tmp, runs, store.drafts)
 
 
 def _just(
@@ -245,26 +244,6 @@ def _project(bench: Bench, name: str, **node: object) -> str:
     return project_from_plan(plan, name)
 
 
-def _draft(bench: Bench, run: str) -> None:
-    """One follow-up drafted against `run` through the real drafting command, as a manager."""
-    drafted = subprocess.run(  # noqa: S603 - the drafting command every party drafts with
-        [str(REPO_ROOT / "scripts" / "follow-up-draft.sh"), "--as", "manager", "--run", run]
-        + ["--title", "The listing cursor skips the last page"]
-        + ["--repository", "github.com/nickderobertis/some-service", "--path", "src/cursor.py"],
-        cwd=bench.tmp,
-        env=bench.environment,
-        input=(
-            "## What happened\nThe cursor skipped a page.\n\n## Where\n`src/cursor.py`.\n\n"
-            "## Why it is out of scope\nThe run was about something else.\n\n"
-            "## Evidence\nPage 9 of 9 never rendered.\n"
-        ),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert drafted.returncode == 0, drafted.stdout + drafted.stderr
-
-
 def _launch(bench: Bench, run: str, *flags: str, **node: object) -> Launch:
     project = _project(bench, run, **node)
     return Launch(_just(bench, "orchestrate", project, "--dag-graph", "off", *flags), run)
@@ -294,7 +273,6 @@ def _statuses(bench: Bench, run: str) -> dict[str, tuple[object, object]]:
 
 def _ended(bench: Bench, hooked: str, hook: str, **node: object) -> Ended:
     """Launch `hooked` through the recipe's defaults, then its twin with both hooks blank."""
-    _draft(bench, hooked)
     launched = _launch(bench, hooked, **node)
     twin = _launch(bench, f"{hooked}-twin", "--success-hook=", "--failure-hook=", **node)
     log_path = bench.runs / hooked / "hooks" / f"{hook}.log"
@@ -425,44 +403,6 @@ def _run_end_hook_logs(run_root: Path) -> list[Path]:
     ]
 
 
-def test_a_follow_up_run_names_only_its_closeout_and_launches_no_follow_up_run(
-    succeeded: Succeeded,
-) -> None:
-    """A follow-up run's one run-end hook is its own closeout, never `run-ended.sh`.
-
-    The stand-in agent answers nothing, so the closeout refuses the one draft it was given
-    and keeps itself and its snapshot for a re-run: the success the engine settled is not
-    reported as verification.
-    """
-    bench, follow_up = succeeded.ended.bench, succeeded.follow_up
-
-    assert succeeded.watched.returncode == 0, succeeded.watched.stdout + succeeded.watched.stderr
-    launched = _launch_record(bench, follow_up)
-    hooked = _launch_record(bench, succeeded.ended.hooked.run)
-    closeout = launched.get("success_hook")
-    assert isinstance(closeout, str) and closeout, launched
-    assert launched.get("failure_hook") == closeout, launched
-    assert closeout != hooked.get("success_hook"), (launched, hooked)
-    assert "run-ended" not in closeout, launched
-    # The hook fires once the driver has let go, which a settled watch may read first.
-    until(
-        "the follow-up run's closeout to end",
-        lambda: "exit: 1;" in _just(bench, "results", follow_up, seconds=60).stdout,
-        seconds=e2e_timeout(60),
-        state=lambda: _just(bench, "results", follow_up, seconds=60).stdout,
-    )
-    logs = _run_end_hook_logs(bench.runs / follow_up)
-    assert [log.name for log in logs] == ["success.log"], logs
-    said = logs[0].read_text("utf-8")
-    assert "run-ended:" not in said, said
-    assert "closeout refused: `check-dispositions` refused what is named above" in said, said
-    assert Path(closeout).exists(), closeout
-    command = shlex.split(Path(closeout).read_text("utf-8").split("exec ", 1)[1])
-    snapshot = Path(command[command.index("--measured") + 1])
-    assert snapshot.exists(), command
-    assert not list(bench.runs.glob(f"{follow_up}{FOLLOW_UPS_SUFFIX}*"))
-
-
 def test_a_hook_leaves_a_completed_runs_settlement_and_exit_status_as_they_were(
     succeeded: Succeeded,
 ) -> None:
@@ -505,7 +445,6 @@ def test_a_failed_run_retried_to_completion_launches_follow_up_verification(
     run = f"hooks-recovered-{os.getpid()}"
     follow_up = ""
     try:
-        _draft(bench, run)
         failed = _launch(bench, run, persona=UNCLAIMED_PERSONA)
         assert _settlement(failed)["settlement"] != "complete", failed.result.stdout
         assert (bench.runs / run / "hooks" / "failure.log").is_file()
@@ -628,7 +567,6 @@ def test_a_failed_run_whose_failed_node_is_settled_done_fires_its_success_hook_o
     run = f"hooks-settled-{os.getpid()}"
     follow_up = ""
     try:
-        _draft(bench, run)
         failed = _launch(bench, run, persona=UNCLAIMED_PERSONA)
         assert _settlement(failed)["settlement"] != "complete", failed.result.stdout
         assert (bench.runs / run / "hooks" / "failure.log").is_file()
@@ -775,51 +713,23 @@ def test_the_hook_refuses_an_environment_that_names_no_run_or_no_mode(
     assert refused.says in ran.stderr, ran.stderr
 
 
-def test_the_success_hook_relays_the_recipes_answer_when_there_is_nothing_to_verify(
-    tmp_path: Path,
-) -> None:
-    runs = tmp_path / "runs"
-    environment = {
-        "ONEPIPELINE_HOOK": "success",
-        "ONEPIPELINE_RUN_ID": "nothing-drafted",
-        "ONEPIPELINE_RUN_ROOT": str(runs / "nothing-drafted"),
-    }
-
-    ran = _hook(tmp_path, environment)
-
-    assert ran.returncode == 0, ran.stdout + ran.stderr
-    # One line, the recipe's own, which already says nothing was launched.
-    lines = ran.stdout.splitlines()
-    assert len(lines) == 1, ran.stdout
-    assert lines[0].startswith("follow-ups: run nothing-drafted holds no follow-up drafts"), (
-        ran.stdout
-    )
-    assert lines[0].endswith("no follow-up run was launched"), ran.stdout
-    assert not runs.exists() or not list(runs.iterdir())
-
-
 def test_the_success_hook_exits_with_the_recipes_status_when_the_recipe_refuses(
     tmp_path: Path,
 ) -> None:
-    # A drafts root that is a file rather than a directory, which the recipe refuses
-    # before it counts anything.
-    not_a_directory = tmp_path / "drafts-root-is-a-file"
-    not_a_directory.write_text("", encoding="utf-8")
-    root_name, _, _ = follow_up_variables.all_names()
+    # A run the engine has no record of, whose public id the recipe cannot read.
     environment = {
         "ONEPIPELINE_HOOK": "success",
         "ONEPIPELINE_RUN_ID": "refused",
         "ONEPIPELINE_RUN_ROOT": str(tmp_path / "runs" / "refused"),
-        root_name: str(not_a_directory),
+        "ONEPIPELINE_RUNS_DIR": str(tmp_path / "runs"),
     }
 
     ran = _hook(tmp_path, environment)
 
-    assert ran.returncode == 2, ran.stdout + ran.stderr
-    assert "could not be resolved to a writable root" in ran.stderr, ran.stderr
-    assert (
-        "but 'just follow-ups refused --detach' exited 2, so no follow-up run was launched"
-    ) in ran.stdout, ran.stdout
+    assert ran.returncode != 0, ran.stdout + ran.stderr
+    assert "but 'just follow-ups refused' exited" in ran.stdout, ran.stdout
+    assert "so no follow-up run was launched" in ran.stdout, ran.stdout
+    assert not (tmp_path / "runs" / "refused-follow-ups").exists()
 
 
 class Reason(NamedTuple):
@@ -920,10 +830,10 @@ BY_HAND = "no follow-up run was launched; verify its drafts by hand with: just f
 
 
 def _copied_hook(tmp_path: Path) -> Path:
-    """The hook and the helper it sources, in a checkout that carries no `.venv`."""
+    """The hook, in a checkout that carries no `.venv`."""
     scripts = tmp_path / "bare-checkout" / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("run-ended.sh", "plan-brief.sh"):
+    for name in ("run-ended.sh",):
         copied = scripts / name
         shutil.copy2(REPO_ROOT / "scripts" / name, copied)
     return scripts / "run-ended.sh"
@@ -989,24 +899,3 @@ def test_the_failure_hook_still_says_how_to_verify_by_hand_when_no_python_can_ru
         "(the reason could not be read, because no Python interpreter could run)" in ran.stdout
     ), ran.stdout
     assert ran.stdout.rstrip().endswith(BY_HAND), ran.stdout
-
-
-def test_the_hook_refuses_to_run_from_a_checkout_missing_the_run_id_grammar(tmp_path: Path) -> None:
-    hook = _copied_hook(tmp_path)
-    (hook.parent / "plan-brief.sh").unlink()
-
-    ran = subprocess.run(  # noqa: S603 - the script under test, from a checkout missing its helper
-        [str(hook)],
-        cwd=tmp_path,
-        env=_bench(tmp_path, "").environment
-        | {"ONEPIPELINE_HOOK": "failure", "ONEPIPELINE_RUN_ID": "demo"},
-        input=_failure_document(),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert ran.returncode == 2, ran.stdout + ran.stderr
-    assert "required helper is not a readable regular file" in ran.stderr, ran.stderr
-    assert "plan-brief.sh" in ran.stderr, ran.stderr

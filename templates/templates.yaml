@@ -6,7 +6,9 @@ onepipeline_templates: 1
 templates:
   follow-up-task:
     role: task
-    description: A follow-up ticket, verified after a run and filed on the followups board.
+    description: >-
+      The follow-up agent's task: this host's layer pointing it at the task onefollowup
+      rendered for a batch's verification or comment answers.
   design-doc:
     role: document
     description: The design document a plan is read and approved as.

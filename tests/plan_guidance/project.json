@@ -11,8 +11,6 @@
     "support-boundary-home",
     "support-conftest",
     "support-fake-codex",
-    "support-follow-up-boundary",
-    "support-follow-up-ticket-shape",
     "support-follow-up-variables",
     "support-github-board",
     "support-no-paid-provider",
@@ -50,7 +48,6 @@
       "{workspaceRoot}/orchestrator/**/*",
       "{workspaceRoot}/tests/fixtures/design-doc-why/**/*",
       "{workspaceRoot}/tests/fixtures/cycle-time/**/*",
-      "{workspaceRoot}/tests/test_follow_up_tickets.py",
       "{workspaceRoot}/tests/test_design_doc_template.py",
       "{workspaceRoot}/tests/test_design_approval.py",
       "{workspaceRoot}/tests/plan_guidance/**/*"
