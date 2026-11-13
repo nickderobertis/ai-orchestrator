@@ -21,6 +21,7 @@ import os
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 import boundary_home
 import yaml
@@ -39,11 +40,19 @@ UNBUDGETED = "github.com/nickderobertis/budget-none"
 #: A repository whose budget's command fails, so its measurement errors.
 BROKEN = "github.com/nickderobertis/budget-broken"
 
-#: Each landed change's node, the repository it landed in, and the cycle it took.
+
+class Landed(NamedTuple):
+    """One change a node landed: the repository it landed in and the seconds its cycle took."""
+
+    repository: str
+    cycle: int
+
+
+#: Each landed change, by the node that landed it.
 CHANGES = {
-    "slow-change": (OVER, 20),
-    "quick-change": (WITHIN, 20),
-    "unbudgeted-change": (UNBUDGETED, 20),
+    "slow-change": Landed(OVER, 20),
+    "quick-change": Landed(WITHIN, 20),
+    "unbudgeted-change": Landed(UNBUDGETED, 20),
 }
 
 
@@ -73,7 +82,7 @@ def _budget(threshold: int) -> str:
 # chosen cycles. The run root is written in the shapes the engine writes and read only through
 # the engine's own verb; the same hook over a real run's landings is
 # `tests/e2e/follow_ups/test_follow_ups_e2e.py`, which launches one.
-def recorded_run(runs: Path, run: str, changes: dict[str, tuple[str, int]]) -> None:
+def recorded_run(runs: Path, run: str, changes: dict[str, Landed]) -> None:
     """A run root the engine reads, each node landing one change after its cycle."""
     root = run_root(runs, run)
     plan = {
@@ -81,9 +90,9 @@ def recorded_run(runs: Path, run: str, changes: dict[str, tuple[str, int]]) -> N
         "name": run,
         "goal": {"text": "Land three changes"},
         "tasks": [
-            {"id": node, "repo": repository, "title": "feat: land", "persona": "engineer"}
+            {"id": node, "repo": landed.repository, "title": "feat: land", "persona": "engineer"}
             | {"task": "## What\nLand."}
-            for node, (repository, _) in changes.items()
+            for node, landed in changes.items()
         ],
     }
     (root / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
@@ -105,22 +114,24 @@ def recorded_run(runs: Path, run: str, changes: dict[str, tuple[str, int]]) -> N
         )
 
     event(None, 0, "pipeline", "run-started", {"plan": plan})
-    for node, (repository, cycle) in changes.items():
+    for node, landed in changes.items():
         event(node, 0, "pipeline", "node-dispatched", {"node": node})
         event(
             node,
-            cycle,
+            landed.cycle,
             "vcs",
             "merge-completed",
             {
-                "identity": repository,
+                "identity": landed.repository,
                 "landing": LANDING,
-                "landed_at": (datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=cycle))
+                "landed_at": (datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=landed.cycle))
                 .isoformat(timespec="milliseconds")
                 .replace("+00:00", "Z"),
             },
         )
-        event(node, cycle, "pipeline", "node-settled", {"status": "done", "outcome": "merged"})
+        event(
+            node, landed.cycle, "pipeline", "node-settled", {"status": "done", "outcome": "merged"}
+        )
     (root / "events.jsonl").write_text(
         "".join(json.dumps(line) + "\n" for line in journal), encoding="utf-8"
     )
@@ -208,7 +219,11 @@ def test_a_measurement_that_errors_is_relayed_as_unanswered_rather_than_dropped(
     """
     environment = budgeted_host(tmp_path)
     run = f"errored-{os.getpid()}"
-    recorded_run(tmp_path / "runs", run, {"broken-change": (BROKEN, 20), "slow-change": (OVER, 20)})
+    recorded_run(
+        tmp_path / "runs",
+        run,
+        {"broken-change": Landed(BROKEN, 20), "slow-change": Landed(OVER, 20)},
+    )
 
     answered = _hook(run, environment)
 

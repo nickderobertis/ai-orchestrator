@@ -207,7 +207,7 @@ def _just(
     environment: Mapping[str, str], *arguments: str, seconds: int = 300, stdin: str = ""
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 - this checkout's own recipes
-        ["just", *arguments],  # noqa: S607
+        ["just", *arguments],  # noqa: S607 - `just` from the search path, as a manager runs it
         cwd=REPO_ROOT,
         env=dict(environment),
         input=stdin,
@@ -712,3 +712,61 @@ def test_the_monitor_drafts_as_its_member_with_the_read_of_its_own_turns(
     assert record["transcript"] == (
         f'onepipeline monitor {verified.run} --filter \'{{"include":[{{"member":"monitor"}}]}}\''
     )
+
+
+def _drafted_from(
+    directory: Path, environment: Mapping[str, str], run: str, title: str
+) -> dict[str, str]:
+    """A manager's draft of ``run`` written from ``directory``, and onefollowup's answer."""
+    drafted = subprocess.run(  # noqa: S603 - the drafting command, from another directory
+        [str(REPO_ROOT / "scripts" / "follow-up-draft.sh"), "--as", "manager", "--run", run]
+        + ["--title", title, "--repository", ABOUT],
+        cwd=directory,
+        env=dict(environment),
+        input=DRAFT_BODY,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert drafted.returncode == 0, drafted.stdout + drafted.stderr
+    answer: dict[str, str] = json.loads(drafted.stdout)
+    return answer
+
+
+@pytest.mark.xdist_group("follow-ups")
+def test_a_draft_from_another_directory_reads_this_checkouts_configuration_unless_named(
+    verified: Verified, tmp_path: Path
+) -> None:
+    """Drafted from outside the checkout, a draft lands where this checkout's files route it.
+
+    With no store named, the store is this checkout's `onetaskgraph.yaml` and the configuration
+    its `onefollowup.yaml`, whatever directory the caller drafts from; a named configuration
+    file routes the draft to the source it names instead.
+    """
+    if "-failed-" in verified.run:
+        pytest.skip("drafted once, into the success-hook case's batch")
+    environment = {
+        name: value
+        for name, value in verified.environment.items()
+        if name != follow_up_variables.ONEFOLLOWUP_STORE
+    }
+    elsewhere = tmp_path / "another-worktree"
+    elsewhere.mkdir()
+
+    defaulted = _drafted_from(elsewhere, environment, verified.run, "Drafted from elsewhere")
+
+    assert defaulted["draft"].startswith(f"{follow_up_variables.source()}:"), defaulted
+    assert Path(defaulted["path"]).is_relative_to(verified.store.drafts), defaulted
+
+    named = tmp_path / "onefollowup.yaml"
+    named.write_text(
+        yaml.safe_dump({"destination": "followups", "drafts_source": "follow-up-runs"}),
+        encoding="utf-8",
+    )
+    environment[follow_up_variables.ONEFOLLOWUP_CONFIG] = str(named)
+
+    overridden = _drafted_from(elsewhere, environment, verified.run, "Drafted under a named file")
+
+    assert overridden["draft"].startswith("follow-up-runs:"), overridden
+    assert Path(overridden["path"]).is_relative_to(verified.store.plans), overridden
