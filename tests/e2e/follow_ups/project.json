@@ -8,7 +8,19 @@
     "type:tests"
   ],
   "implicitDependencies": [
-    "support-conftest"
+    "support-boundary-home",
+    "support-conftest",
+    "support-fake-backend",
+    "support-fake-codex",
+    "support-follow-up-store",
+    "support-harness-configs",
+    "support-harness-indirections",
+    "support-no-paid-provider",
+    "support-probe-run-root",
+    "support-project-fixtures",
+    "support-published-tools",
+    "support-scratch-identity",
+    "support-sibling-facts"
   ],
   "namedInputs": {
     "followUpsWorkspace": [
@@ -19,11 +31,30 @@
       "{workspaceRoot}/config/onefollowup.version",
       "{workspaceRoot}/config/onepipeline.version",
       "{workspaceRoot}/config/onevcs.version",
-      "{workspaceRoot}/scripts/budget-cycle-time.sh",
-      "{workspaceRoot}/scripts/follow-up-budget-inputs.sh",
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/.onepipeline/config.yaml",
+      "{workspaceRoot}/oneharness.toml",
+      "{workspaceRoot}/oneharness.judge.toml",
+      "{workspaceRoot}/oneharness.follow-up.toml",
+      "{workspaceRoot}/oneharness.identities.toml",
+      "{workspaceRoot}/config/oneagentgraph.version",
+      "{workspaceRoot}/config/oneharness.version",
+      "{workspaceRoot}/config/onejudge.version",
+      "{workspaceRoot}/config/onejudge.base.yaml",
+      "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/config/onepipeline.launch.yaml",
+      "{workspaceRoot}/config/onetaskgraph.version",
+      "{workspaceRoot}/config/onevcs.releases.yml",
+      "{workspaceRoot}/config/onevcs.workspaces.yml",
+      "{workspaceRoot}/graphs/follow-up.yaml",
+      "{workspaceRoot}/graphs/node-scope.yaml",
+      "{workspaceRoot}/personas/follow-up.yaml",
+      "{workspaceRoot}/templates/**/*",
+      "{workspaceRoot}/scripts/**/*",
       "{projectRoot}/**/*"
     ]
   },
