@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -237,6 +238,35 @@ def test_a_measurement_that_errors_is_relayed_as_unanswered_rather_than_dropped(
     detail = json.loads(errored["detail"])
     assert sorted(detail["nodes"]) == ["broken-change", "slow-change"], detail
     assert "exited 3" in detail["reason"], detail
+
+
+def test_a_change_in_a_repository_onevcs_cannot_resolve_fails_the_hook_naming_it(
+    tmp_path: Path,
+) -> None:
+    environment = budgeted_host(tmp_path)
+    run = f"unregistered-{os.getpid()}"
+    unregistered = "github.com/nickderobertis/budget-unregistered"
+    recorded_run(tmp_path / "runs", run, {"stray-change": Landed(unregistered, 20)})
+
+    answered = _hook(run, environment)
+
+    assert answered.returncode == 2, answered.stderr
+    assert answered.stdout == ""
+    assert f"could not resolve the publication checkout of {unregistered}" in answered.stderr
+    assert "just repos-apply" in answered.stderr, answered.stderr
+
+
+def test_a_publication_checkout_that_is_gone_fails_the_hook_naming_it(tmp_path: Path) -> None:
+    environment = budgeted_host(tmp_path)
+    run = f"vanished-{os.getpid()}"
+    recorded_run(tmp_path / "runs", run, {"slow-change": Landed(OVER, 20)})
+    shutil.rmtree(tmp_path / "onevcs-checkouts" / "github-com__nickderobertis__budget-over")
+
+    answered = _hook(run, environment)
+
+    assert answered.returncode == 2, answered.stderr
+    assert answered.stdout == ""
+    assert OVER in answered.stderr and "just bootstrap" in answered.stderr, answered.stderr
 
 
 def test_an_envelope_that_is_not_onefollowups_is_refused_with_its_repair(tmp_path: Path) -> None:

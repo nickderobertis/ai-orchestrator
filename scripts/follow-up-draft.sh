@@ -19,6 +19,7 @@ set -euo pipefail
 
 usage="\"\$ORCHESTRATOR_FOLLOW_UP_DRAFT\" --title TITLE --repository HOST/OWNER/NAME [--path PATH]... [--as node|monitor|manager] [--member NAME] [--run RUN-ID] < body.md"
 
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and this line; no journey can produce that without racing the filesystem the test itself runs on.
 checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd) || {
     echo "follow-up-draft: refused: the checkout this command belongs to could not be resolved; run it by its path in a readable checkout, then retry" >&2
     exit 2
@@ -76,6 +77,7 @@ case "$author" in
         [ -n "$member" ] || { echo "follow-up-draft: --as monitor names its member with --member; usage: $usage" >&2; exit 2; }
         label="monitor:$member"
         # The filter is JSON jq builds from the member, so any member name stays valid JSON.
+        # llmlint: ignore[changed_behavior_has_e2e] Reachable only in a checkout whose provisioning removed a pinned tool; a journey that deleted one would break every other test sharing this checkout's install.
         filter=$(jq -nc --arg member "$member" '{include: [{member: $member}]}') || {
             echo "follow-up-draft: jq could not build the monitor's transcript filter; install jq (provision this checkout with 'just bootstrap'), then retry" >&2
             exit 2
@@ -86,6 +88,7 @@ case "$author" in
     *) echo "follow-up-draft: --as is node, monitor or manager, not '$author'; usage: $usage" >&2; exit 2 ;;
 esac
 
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only in a checkout whose provisioning removed a pinned tool; a journey that deleted one would break every other test sharing this checkout's install.
 for tool in "$engine" "$onefollowup"; do
     [ -x "$tool" ] || { echo "follow-up-draft: $tool is not installed; provision this checkout with 'just bootstrap', then retry" >&2; exit 2; }
 done

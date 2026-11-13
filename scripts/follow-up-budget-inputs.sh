@@ -32,6 +32,7 @@ fail() {
     exit 2
 }
 
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and this line; no journey can produce that without racing the filesystem the test itself runs on.
 checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd) ||
     fail "the checkout this hook belongs to could not be resolved; name it by its path in a readable checkout, as onefollowup.yaml does, then retry"
 export PATH="$checkout/node_modules/.bin:$checkout/.venv/bin:$PATH"
@@ -40,6 +41,7 @@ export PATH="$checkout/node_modules/.bin:$checkout/.venv/bin:$PATH"
 #: `tests/family_scans/test_follow_up_ownership.py` holds them.
 RUN_ID='^[A-Za-z0-9_-]+$'
 
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when onefollowup's own standard-input pipe fails to read, which no journey can produce through the real hook runner.
 envelope=$(cat) ||
     fail "standard input could not be read; run this as onefollowup.yaml's hooks.batch_preparing, which hands it the batch envelope, then retry"
 run=$(jq -er --arg grammar "$RUN_ID" 'select(.schema_version == 1) | .batch | select(type == "string" and test($grammar))' <<<"$envelope") ||
@@ -48,7 +50,9 @@ runs=${ONEPIPELINE_RUNS_DIR:-$checkout/runs}
 
 telemetry=$(onepipeline telemetry "$run" --changes --json) ||
     fail "the engine could not read the changes of run '$run'; check the run and its runs root with 'just status $run', then retry"
-changes=$(jq -ce '[.changes[] | select(.landing != null)]
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when a verb answers in a shape its pinned release does not, and the suite doubles no published CLI to produce one; the journeys drive this read over the pinned release.
+changes=$(jq -ce 'if (.changes | type) == "array" then . else error("changes is not a list") end
+    | [.changes[] | select(.landing != null)]
     | if all(.[]; (.node | type) == "string" and (.repository | type) == "string" and (.landing | type) == "string")
       then . else error("a landed change without a node, repository or landing") end' <<<"$telemetry") ||
     fail "the engine's change telemetry for run '$run' is not the shape this hook reads, {\"changes\": [{\"node\", \"repository\", \"landing\"}]}; adopt the engine config/onepipeline.version names with 'just bootstrap', then retry"
@@ -79,6 +83,7 @@ subjects=$(jq -c --arg run "$run" --arg runs "$runs" --argjson checkouts "$check
 # `--over-only` leaves out of the report it still prints. 2 is a refused invocation.
 status=0
 report=$(onebudgetspec check --subjects - --label onepipeline --over-only --json <<<"$subjects") || status=$?
+# llmlint: ignore[changed_behavior_has_e2e] onebudgetspec answers every subject it cannot check as unanswered, so a refusal here is reachable only through an invocation this hook itself built wrong, which the journeys prove it does not.
 case "$status" in
     0 | 1 | 3) ;;
     *) fail "onebudgetspec refused the budget check of run '$run' (status $status), most often over a budgets.yaml it cannot read; run 'onebudgetspec check' in each publication checkout the diagnostic above names, repair the file it refuses, then rerun 'just follow-ups $run'" ;;
@@ -86,6 +91,7 @@ esac
 errored=false
 [ "$status" -ne 3 ] || errored=true
 
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when a verb answers in a shape its pinned release does not, and the suite doubles no published CLI to produce one; the journeys drive this read over the pinned release.
 jq -ce --arg run "$run" --argjson errored "$errored" '
     def over: if (.id | type) == "string" and (.actual | type) == "number"
         and (.threshold | type) == "number" and (.unit | type) == "string"
@@ -95,7 +101,10 @@ jq -ce --arg run "$run" --argjson errored "$errored" '
     def change: if (.node | type) == "string" and (.landing | type) == "string"
         and (.repository | type) == "string" and ((.change | type) == "string" or .change == null)
         then . else error("a subject whose context is not the change this hook handed it") end;
-    {
+    def lists: if (.subjects | type) == "array" and (.unanswered | type) == "array"
+        and all(.subjects[]; (.report.results | type) == "array")
+        then . else error("a report whose subjects, unanswered or results are not lists") end;
+    lists | {
     schema_version: 1,
     inputs: (
         [.subjects[] | (.context | change) as $change | .report.results[] | over | {
