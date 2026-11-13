@@ -103,9 +103,9 @@ NEW_TITLE = "The listing cursor skips the last page"
 EVIDENCE_TITLE = "The export dialog drops unicode"
 ABOUT = "github.com/nickderobertis/some-service"
 DRAFT_BODY = (
-    "## What happened\\nA reader missed results.\\n\\n## Where\\n`src/cursor.py`.\\n\\n"
-    "## Why it is out of scope\\nThe run was about something else.\\n\\n"
-    "## Evidence\\nSeen in the run's own log.\\n"
+    "## What happened\nA reader missed results.\n\n## Where\n`src/cursor.py`.\n\n"
+    "## Why it is out of scope\nThe run was about something else.\n\n"
+    "## Evidence\nSeen in the run's own log.\n"
 )
 
 #: The ticket already on the destination, the earlier run that filed it, and its comments.
@@ -240,7 +240,12 @@ def _budget(threshold: int) -> str:
 
 def _repositories(root: Path) -> tuple[Repository, Repository, Path]:
     """Two scratch repositories in one `onevcs` registry, each carrying its budget."""
-    over = seeded(root / "over", publication="over-publication", execution="over-execution")
+    # The repository the drafts are about is registered public: the store classifies a draft
+    # by its repository, and one the registry cannot classify is private, which a public
+    # batch project refuses.
+    over = seeded(
+        root / "over", publication="over-publication", execution="over-execution", public=(ABOUT,)
+    )
     within = seeded(root / "within", publication="within-publication", execution="within-execution")
     for identity, threshold in ((over, 0), (within, 1_000_000)):
         (identity.publication / "budgets.yaml").write_text(_budget(threshold), encoding="utf-8")
@@ -273,6 +278,25 @@ def _repositories(root: Path) -> tuple[Repository, Repository, Path]:
         check=False,
     )
     assert registered.returncode == 0, registered.stdout + registered.stderr
+    # Both scratch repositories are public, as a public repository's worker drafts from.
+    # onefollowup records the drafting worktree in the draft, and a worktree of a private
+    # repository carries that repository's name, which the store refuses on the drafts
+    # source this host declares no visibility for — the gap drafted upstream to onefollowup.
+    public = root / "public.rules.yml"
+    public.write_text(
+        (root / "over" / "onevcs.rules.yml")
+        .read_text(encoding="utf-8")
+        .replace("visibility: private", "visibility: public"),
+        encoding="utf-8",
+    )
+    applied = subprocess.run(  # noqa: S603 - the pinned onevcs, into the same registry
+        [str(REPO_ROOT / ".venv/bin/onevcs"), "rules", "apply", "--base", str(public)],
+        env={**os.environ, "ONEVCS_HOME": str(over.home)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert applied.returncode == 0, applied.stdout + applied.stderr
     return (
         Repository("land-over", over, 0),
         Repository("land-within", within, 1_000_000),
@@ -310,6 +334,7 @@ def _seed_destination(store: follow_up_store.Store) -> str:
 def _draft_commands(scratch_marker: str, log: Path) -> list[list[str]]:
     """What the node's worker runs: commit its change, then draft once through each road."""
     justfile = shlex.quote(str(REPO_ROOT / "justfile"))
+    body, logged = shlex.quote(DRAFT_BODY), shlex.quote(str(log))
     return [
         [
             "sh",
@@ -324,11 +349,12 @@ def _draft_commands(scratch_marker: str, log: Path) -> list[list[str]]:
             f'[ "$ONEPIPELINE_NODE_ID" = land-over ] || exit 0; '
             f'sentinel="$ONEPIPELINE_NODE_SCRATCH_DIR/{scratch_marker}"; '
             '[ -e "$sentinel" ] && exit 0; '
-            f"printf '{DRAFT_BODY}' | \"$ORCHESTRATOR_FOLLOW_UP_DRAFT\" "
+            f'printf %s {body} | "$ORCHESTRATOR_FOLLOW_UP_DRAFT" '
             f"--title {shlex.quote(NEW_TITLE)} --repository {ABOUT} --path src/cursor.py "
-            f"2>>{shlex.quote(str(log))} && "
-            f"printf '{DRAFT_BODY}' | just --justfile {justfile} follow-up \"$ONEPIPELINE_RUN_ID\" "
-            f'--title {shlex.quote(EVIDENCE_TITLE)} --repository {ABOUT} && touch "$sentinel"',
+            f"2>>{logged} && "
+            f'printf %s {body} | just --justfile {justfile} follow-up "$ONEPIPELINE_RUN_ID" '
+            f"--title {shlex.quote(EVIDENCE_TITLE)} --repository {ABOUT} 2>>{logged} "
+            '&& touch "$sentinel"',
         ],
     ]
 
@@ -354,7 +380,6 @@ def _plan(root: Path, run: str, repositories: tuple[Repository, ...], failing: b
                 "id": "breaks",
                 "persona": UNCLAIMED_PERSONA,
                 "task": "Report.\n\n## Acceptance criteria\n- Reported.",
-                "expects_no_diff": True,
             }
         )
     plan = root / f"{run}.plan.json"
@@ -498,7 +523,7 @@ def test_the_batch_was_prepared_with_both_drafts_and_exactly_the_one_overrun(
 
     overruns = [entry for entry in inputs if entry["source"] == "budget-overrun"]
     assert len(overruns) == 1, inputs
-    detail = json.loads(overruns[0]["detail"])
+    detail = json.loads(overruns[0]["body"])
     assert detail["node"] == verified.over.node
     assert detail["landing"] == verified.landings[verified.over.node]
     assert detail["budget"] == "cycle-time"

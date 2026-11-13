@@ -97,7 +97,6 @@ def verify(checkout: Path, batch: str, new: str, evidence: str, item: str, cause
     work = store / ".onefollowup"
     answers = work / "dispositions" / f"{batch}.json"
     held = json.loads(answers.read_text(encoding="utf-8"))
-    state = json.loads((work / "state" / f"{batch}.json").read_text(encoding="utf-8"))
     shown = _run(checkout, ["onefollowup", "config", "show"])
     host = str(shown["config"]["host_label"])  # type: ignore[index]
     drafts = {draft for draft in held["drafts"]}
@@ -135,7 +134,8 @@ def verify(checkout: Path, batch: str, new: str, evidence: str, item: str, cause
             "kind": "root-cause",
         },
     ]
-    for entry in _inputs(state):
+    # Every other input the batch was prepared with, the budget overrun among them.
+    for entry in sorted(drafts - {new_draft, evidence_draft}):
         dispositions.append(
             {
                 "draft": entry,
@@ -148,25 +148,6 @@ def verify(checkout: Path, batch: str, new: str, evidence: str, item: str, cause
     held["dispositions"] = dispositions
     answers.write_text(json.dumps(held, indent=2) + "\n", encoding="utf-8")
     _run(checkout, ["onefollowup", "check", "--batch", batch])
-
-
-def _inputs(state: dict[str, object]) -> list[str]:
-    """The ids of the inputs the batch was prepared with beyond its drafts."""
-    found: list[str] = []
-
-    def walk(value: object) -> None:
-        if isinstance(value, dict):
-            if isinstance(value.get("id"), str) and "source" in value and "summary" in value:
-                found.append(value["id"])
-                return
-            for nested in value.values():
-                walk(nested)
-        elif isinstance(value, list):
-            for nested in value:
-                walk(nested)
-
-    walk(state)
-    return sorted(set(found))
 
 
 def _ticked(line: str, label: str) -> str | None:

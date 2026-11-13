@@ -65,6 +65,9 @@ def isolated(root: Path) -> Store:
     (directory / "onetaskgraph.yaml").write_text(
         yaml.safe_dump(
             {
+                # This checkout's boundary policy, so every write is classified and checked
+                # as the checkout's own store would classify and check it.
+                "write_policy": CHECKOUT_STORE["write_policy"],
                 "default_sources": [follow_up_variables.source()],
                 "sources": {
                     follow_up_variables.source(): {
