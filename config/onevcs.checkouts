@@ -88,8 +88,8 @@
 ~/.ai-orchestrator/repos/nickderobertis__onebudgetspec-plugin-onevcs
 ~/projects/onebudgetspec-plugin-onevcs
 
-# `onefollowup`, which publishes the `onefollowup-cli` wheel this host will install once a
-# node adopts its first release. Listed under both layouts.
+# `onefollowup`, which publishes the `onefollowup-cli` wheel this host installs at
+# `config/onefollowup.version`. Listed under both layouts.
 ~/.ai-orchestrator/repos/nickderobertis__onefollowup
 ~/projects/onefollowup
 

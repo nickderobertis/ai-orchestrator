@@ -78,6 +78,7 @@ PUBLISHED_TOOLS = (
     PublishedTool("onemessagebus.version", "onemessagebus-cli", "onemessagebus"),
     PublishedTool("onetaskgraph.version", "onetaskgraph-cli", "onetaskgraph"),
     PublishedTool("onebudgetspec.version", "onebudgetspec-cli", "onebudgetspec"),
+    PublishedTool("onefollowup.version", "onefollowup-cli", "onefollowup"),
 )
 #: onejudge and oneharness are pinned here too, but each is read and verified by its
 #: own named function — onejudge's check also proves the `onejudge_sdk` import — so
