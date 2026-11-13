@@ -9,7 +9,7 @@
 #   spikes/follow-up-sample-ticket/measure-field-length.sh followups:<native id of the sample>
 set -euo pipefail
 
-target=${1:?pass the sample'"'"'s followups qualified id, as file-sample.sh printed it}
+target=${1:?pass the followups qualified id of the sample, as file-sample.sh printed it}
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH='' cd -- "$here/../.." && pwd)
 cd "$root"
@@ -58,7 +58,10 @@ print(" ".join((json.dumps(f) if f else "accepted: " + json.dumps(d)[:200]).spli
 }
 
 top=60000
-if try "$top"; then
+if [ -n "${PROBES:-}" ]; then
+    # Single lengths only, e.g. PROBES="1024 1025": no bisection.
+    for n in $PROBES; do try "$n" || true; done
+elif try "$top"; then
     echo "60000 accepted: no limit found below 60,000 characters"
 else
     lo=1000
@@ -71,6 +74,7 @@ else
     echo "longest accepted: $lo; shortest refused: $hi"
 fi
 
+[ -n "${KEEP_LAST:-}" ] && exit 0
 echo "== put the realistic value back"
 store --json task metadata set "$target" orchestrator.follow-up-sample \
     "$(./.venv/bin/python -c 'import json,sys; sys.path.insert(0,"spikes/follow-up-sample-ticket"); import build_source as b; print(json.dumps(b.record()))')"

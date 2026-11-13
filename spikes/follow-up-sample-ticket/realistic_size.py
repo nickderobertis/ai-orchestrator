@@ -9,6 +9,8 @@ import json
 import sys
 
 KEY = "orchestrator.follow-up"
+#: The longest text-field value the store wrote (measure-field-length.sh, measurements.tsv).
+LIMIT = 1024
 
 
 def render(value: object) -> str:
@@ -23,6 +25,7 @@ def main() -> None:
     items = json.load(sys.stdin)["items"]
     tickets = 0
     longest: dict[str, tuple[int, str]] = {}
+    over: dict[str, int] = {}
     for entry in items:
         task = entry.get("item", entry)
         task = task.get("task", task)
@@ -33,11 +36,13 @@ def main() -> None:
         for field in ("owning_runs", "basis", "drafts"):
             if field in record:
                 size = len(render(record[field]))
+                over[field] = over.get(field, 0) + (size > LIMIT)
                 if size > longest.get(field, (0, ""))[0]:
                     longest[field] = (size, task.get("url") or str(task.get("id")))
     print(f"items read: {len(items)}; tickets carrying {KEY}: {tickets}")
     for field, (size, where) in sorted(longest.items()):
         print(f"longest rendered {field}: {size} characters, on {where}")
+        print(f"  tickets whose rendered {field} exceeds {LIMIT} characters: {over.get(field, 0)}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,7 @@
 items read: 1802; tickets carrying orchestrator.follow-up: 1801
 longest rendered basis: 975 characters, on https://github.com/nickderobertis/ai-orchestrator/issues/1835
+  tickets whose rendered basis exceeds 1024 characters: 0
 longest rendered drafts: 1671 characters, on https://github.com/nickderobertis/printobserver/issues/287
+  tickets whose rendered drafts exceeds 1024 characters: 5
 longest rendered owning_runs: 132 characters, on https://github.com/nickderobertis/oneagentgraph/issues/181
+  tickets whose rendered owning_runs exceeds 1024 characters: 0
