@@ -35,7 +35,6 @@ from test_run_end_hooks_e2e import (
     Bench,
     Launch,
     _bench,
-    _draft,
     _hook,
     _just,
     _settlement,
@@ -205,7 +204,7 @@ def _local(identity: Identity) -> frozenset[str]:
 
 
 def _launch(bench: Bench, run: str, **direct: object) -> Ended:
-    """Launch a plan over a seeded identity whose origin holds its spikes, a follow-up drafted.
+    """Launch a plan over a seeded identity whose origin holds its spikes.
 
     The project is written first, because its native id is what the spikes' branches are
     named by; they are cut, preserved and released before anything is launched.
@@ -249,7 +248,6 @@ def _launch(bench: Bench, run: str, **direct: object) -> Ended:
     )
     project = project_from_plan(plan, run)
     seeded_ = _seeded(bench, identity, run, project.partition(":")[2])
-    _draft(bench, run)
     shutil.rmtree(unreachable.parent / f"{unreachable.name}-origin.git")
     result = _just(bench, "orchestrate", project, "--dag-graph", "off")
     hooks = bench.runs / run / "hooks"
@@ -392,27 +390,23 @@ def _spike_hook(tmp_path: Path, run_root: Path) -> subprocess.CompletedProcess[s
     )
 
 
-#: The success hook's line once it has asked `just follow-ups`, which the drafts decide.
-FOLLOWED_UP = "follow-ups: run "
-
-
-# llmlint: ignore[tests_mirror_real_usage] The hook is spawned exactly as the engine spawns it; what no launch produces on demand is a run whose plan cannot be read, which reaches this hook in life as a launch record a disk or a hand removed, so the run root here holds none — the shape the module beside this drives its nothing-to-verify ending through.  # noqa: E501 - a directive is one line
+# llmlint: ignore[tests_mirror_real_usage] The hook is spawned exactly as the engine spawns it; what no launch produces on demand is a run whose plan cannot be read, which reaches this hook in life as a launch record a disk or a hand removed, so the run root here holds none.  # noqa: E501 - a directive is one line
 def test_a_run_whose_spikes_cannot_be_listed_still_reaches_its_follow_up_run(
     tmp_path: Path,
 ) -> None:
     """No record to list by is said on the hook's log, and the hook goes on to follow up.
 
     Driven by spawning the hook as the engine does, over a run root holding no launch record,
-    which no launch produces: the same shape the module beside this drives the
-    nothing-to-verify ending through.
+    which no launch produces. With no run the engine can read either, `just follow-ups`
+    refuses it, so what shows the hook went on is its report of that recipe's status.
     """
     run_root = tmp_path / "runs" / f"unlistable-{os.getpid()}"
 
     ran = _spike_hook(tmp_path, run_root)
 
-    assert ran.returncode == 0, ran.stdout + ran.stderr
     assert "could not be listed (status 2), so none was discarded" in ran.stderr, ran.stderr
-    assert ran.stdout.startswith(FOLLOWED_UP), ran.stdout
+    assert f"but 'just follow-ups {run_root.name}' exited" in ran.stdout, ran.stdout
+    assert ran.returncode != 0, ran.stdout + ran.stderr
 
 
 def test_a_repository_whose_spikes_cannot_be_listed_is_named_and_stops_nothing(

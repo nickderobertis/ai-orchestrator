@@ -11,11 +11,11 @@ Everything between the recipe and the model is real: `just orchestrate`,
 `scripts/orchestrate.sh`, `scripts/onepipeline.sh` and its design-approval gate, the
 installed `onepipeline` driver, `scripts/run-ended.sh`, and `just follow-ups` with the
 detached follow-up run it launches. What that follow-up run does is
-`tests/e2e/follow_ups/`'s journey; here it is only launched. **The paid model alone is doubled**: `tests/e2e/fake_backend.py`
-at the `oneagentgraph` seam for the main run's two-party worker, and
-`tests/e2e/fake_codex.py` at the provider binary for the follow-up agent's single-sided
-member. Every store a launch writes to — the runs root, the follow-up store, the authoring
-root — is this module's own, so nothing lands in this checkout's.
+`tests/e2e/follow_ups/`'s journey; here it is only launched. **The paid model alone is
+doubled**: `tests/e2e/fake_backend.py` at the `oneagentgraph` seam for the main run's
+two-party worker, and `tests/e2e/fake_codex.py` at the provider binary for the follow-up
+agent's single-sided member. Every store a launch writes to — the runs root, the follow-up
+store, the authoring root — is this module's own, so nothing lands in this checkout's.
 
 A hook never changes how a run settled, so each hooked launch has a twin launched with
 both hooks named blank — the recipe keeps a caller's own value, and the engine reads a
