@@ -59,6 +59,8 @@
       "{workspaceRoot}/scripts/codex-alt-home.sh",
       "{workspaceRoot}/scripts/credentials-env.sh",
       "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/decline-ruling-env.sh",
+      "{workspaceRoot}/scripts/decline-ruling.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/templates/templates.yaml",
       "{workspaceRoot}/scripts/envelope-review.sh",

@@ -2057,6 +2057,8 @@ LAUNCH_SCRIPTS = (
     "onepipeline.sh",
     "launcher-session.sh",
     "dispatch-env.sh",
+    "decline-ruling-env.sh",
+    "decline-ruling.sh",
     "template-env.sh",
     "credentials-env.sh",
     "ask-manager-env.sh",

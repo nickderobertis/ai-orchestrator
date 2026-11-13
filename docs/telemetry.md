@@ -493,7 +493,7 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
    runs read here. On 0.80.0, ten of this host's own recent runs served both schema
-   numbers above.
+   numbers above, and 0.81.0 and 0.81.1 declare the same two in their own `src/contract.rs`.
    On 0.12.1 this was re-read against the recorded runs under
    `tests/fixtures/timeline-runs/`, which serve both schema numbers, every phase above,
    and every span kind but `human-wait`, which none of those runs records.

@@ -174,9 +174,10 @@ QUESTION_RULE = (
     "Claude Code's built-in question tool is one such harness tool, and its answer is recorded "
     "on the item with `just human-items answer`, acting for the user.",
     "When the user answers in chat, record it with `just human-items answer <item> --choice "
-    '<id>` and/or `--text "<their words>"`',
-    "or `just human-items answer-batch --input <file>` for several, acting for them as "
-    "completing a task for them does, so the page and every other manager see it answered",
+    '<id>` and/or `--text "<their words>"` `--as user`',
+    "or `just human-items answer-batch --input <file> --as user` for several, acting for "
+    "them as completing a task for them does, so the page and every other manager see it "
+    "answered",
     "A batch the user sends from the page arrives as answered items — one `just human-items "
     "watch` delivery listing every answer, or one `human-item` surface on each tied run's "
     "watch — so read it as their answers and never ask again",

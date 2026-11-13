@@ -24,6 +24,8 @@
       "{workspaceRoot}/scripts/allowlist-probe.py",
       "{workspaceRoot}/scripts/allowlist-probe.sh",
       "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/decline-ruling-env.sh",
+      "{workspaceRoot}/scripts/decline-ruling.sh",
       "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
       "{workspaceRoot}/scripts/codex-alt-home.sh",
       "{workspaceRoot}/scripts/credentials-env.sh",

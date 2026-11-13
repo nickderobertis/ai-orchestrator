@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # The ONE definition of which resolvers establish a dispatch's environment — the `.env`
 # credentials, every Claude identity's config directory, the alternate Codex home, this
-# checkout's template root and the plan store's non-interactive setting —
+# checkout's template root, the plan store's non-interactive setting and the decline seam —
 # sourced by scripts/onepipeline.sh at driver start and by scripts/dispatch-env-hook.sh
 # before every node-scope dispatch (ai-orchestrator#1109). One table serves both so the
 # two lists cannot drift; `tests/test_dispatch_env_hook.py` holds both callers to it.
@@ -21,6 +21,7 @@ DISPATCH_ENVIRONMENT_RESOLVERS=(
     "codex-alt-home.sh:ensure_codex_alt_home"
     "template-env.sh:export_template_root"
     "template-env.sh:export_noninteractive_plan_store"
+    "decline-ruling-env.sh:export_decline_ruling"
 )
 
 # Every variable the resolvers established on the last call, in resolver order, so a
@@ -56,7 +57,7 @@ export_dispatch_environment() {
         # What each resolver established, read off the resolver's own record of it: the
         # credentials helper's parser leaves the names its file defines in
         # `env_file_names`, the identities helper declares its five indirections, and
-        # the Codex helper and each template helper export exactly one.
+        # the Codex helper, each template helper and the decline helper export exactly one.
         case $function in
             export_host_credentials)
                 # shellcheck disable=SC2154  # left by read_env_file in credentials-env.sh
@@ -73,6 +74,9 @@ export_dispatch_environment() {
                 ;;
             export_noninteractive_plan_store)
                 dispatch_environment_names+=(ONETASKGRAPH_INTERACTIVE)
+                ;;
+            export_decline_ruling)
+                dispatch_environment_names+=(ORCHESTRATOR_DECLINE_RULING)
                 ;;
         esac
     done
@@ -163,7 +167,7 @@ declare -A DISPATCH_ENVIRONMENT_KEPT_NAMES=(
 declare -A DISPATCH_ENVIRONMENT_KEPT_PREFIXES=(
     [LC_]="every locale category, which decide how a tool decodes and sorts a repository's own content"
     [XDG_]="the platform directory roots this host points at its own caches, state and runtime directories, XDG_RUNTIME_DIR among them"
-    [ORCHESTRATOR_]="this host's own seam names: the five Claude identity indirections, the alternate Codex home, the ask shim, the follow-up drafting command and the comparison identity a gate replays"
+    [ORCHESTRATOR_]="this host's own seam names: the five Claude identity indirections, the alternate Codex home, the ask shim, the decline-ruling shim, the follow-up drafting command and the comparison identity a gate replays"
     [AI_ORCHESTRATOR_]="this host's own roots, which its scripts read"
     [ONEPIPELINE_]="the engine's own names, the launcher identity a nested launch inherits and the per-dispatch scratch directory among them"
     [ONEVCS_]="the lifecycle's own names: the state root, the session a dispatch publishes through, the comparison identity and the lock bound ai-orchestrator#1164 derives"

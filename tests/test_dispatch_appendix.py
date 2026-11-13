@@ -81,6 +81,7 @@ import re
 
 import pytest
 
+from orchestrator import envelope_review
 from orchestrator.criteria_guard import APPENDIX, AUTHORIZATIONS
 from orchestrator.root import REPO_ROOT
 
@@ -1247,6 +1248,123 @@ def test_the_appendix_tells_a_worker_to_ask_rather_than_stop(appendix: str) -> N
         f"{APPENDIX} does not name the ending it is refusing. The failure is not a worker "
         "that asked badly; it is one that stopped with the work undone and the question "
         "unasked, and a rule that does not say so reads as advice about phrasing"
+    )
+
+
+#: The rule on whose ruling binds, in what each paragraph has to say. The attribution lines
+#: are held to the engine's own sentences below rather than restated here.
+DECLINE_SEAM = re.compile(r'"\$ORCHESTRATOR_DECLINE_RULING"\s+--ruling\s+<ref>')
+WHOSE_RULING = re.compile(r"\*\*Whose\s+ruling\s+it\s+is\s+decides\s+how\s+it\s+binds\.\*\*")
+WHOSE_RULING_SAYS = (
+    ("that a user ruling binds", re.compile(r"a\s+user\s+ruling\s+binds\s+absolutely")),
+    (
+        "that a manager ruling beats the supervisor",
+        re.compile(r"outranks\s+anything\s+the\s+conversation's\s+supervisor\s+says"),
+    ),
+    (
+        "that a manager ruling may be declined for the user's goal",
+        re.compile(
+            r"you\s+may\s+decline\s+it\s+where\s+following\s+it\s+would\s+work\s+against\s+the\s+user's\s+goal"
+        ),
+    ),
+    ("the one route to decline it", DECLINE_SEAM),
+    (
+        "that a decline carries its reason",
+        re.compile(r"piping\s+your\s+reason\s+into\s+it"),
+    ),
+    ("that a decline is never silent", re.compile(r"never\s+silently")),
+    (
+        "which text is the supervisor's",
+        re.compile(r"carries\s+neither\s+line\s+is\s+the\s+supervisor's\s+own"),
+    ),
+)
+JUDGE_DEPARTS = re.compile(
+    r"\*\*A\s+judge\s+raises\s+its\s+own\s+departure\s+from\s+a\s+manager\s+ruling,\s+in\s+its\s+verdict\.\*\*"
+)
+JUDGE_DEPARTURE_SAYS = (
+    (
+        "that the verdict itself names the ruling and the reason",
+        re.compile(
+            r"its\s+verdict\s+itself\s+names\s+that\s+ruling\s+by\s+its\s+reference\s+and\s+gives\s+its\s+reason"
+        ),
+    ),
+    (
+        "that the judge does not wait for the worker",
+        re.compile(r"rather\s+than\s+waiting\s+for\s+the\s+worker\s+to\s+raise\s+it"),
+    ),
+    (
+        "that the judge never refuses work for following a manager ruling",
+        re.compile(r"never\s+refuses\s+work\s+for\s+following\s+a\s+manager\s+ruling"),
+    ),
+    (
+        "that the judge enforces a user ruling",
+        re.compile(r"A\s+user\s+ruling\s+it\s+enforces\s+as\s+written"),
+    ),
+    # Not a command: a dispatched judge runs read-only, so no guidance tells it to run one.
+)
+
+
+def _paragraph(appendix: str, opening: re.Pattern[str]) -> str:
+    """The one paragraph ``opening`` begins, whitespace collapsed, refused unless it is one."""
+    found = [" ".join(block.split()) for block in appendix.split("\n\n") if opening.search(block)]
+    assert len(found) == 1, f"{APPENDIX} opens {len(found)} paragraphs with {opening.pattern}"
+    return found[0]
+
+
+@pytest.mark.parametrize(
+    ("what", "stated_by"), WHOSE_RULING_SAYS, ids=[row[0] for row in WHOSE_RULING_SAYS]
+)
+def test_the_appendix_says_whose_ruling_binds_and_how_a_managers_is_declined(
+    appendix: str, what: str, stated_by: re.Pattern[str]
+) -> None:
+    """The worker and its judge read this file together, so it is where both learn that a
+    user's ruling binds while a manager's is a strong default declined only with a reason.
+
+    A departure from a manager's ruling must reach the manager with its reason: told the
+    difference and given no route, a reader sets the ruling aside unannounced.
+    """
+    paragraph = _paragraph(appendix, WHOSE_RULING)
+    assert stated_by.search(paragraph), f"{APPENDIX}'s rule on rulings no longer says {what}"
+
+
+def test_the_appendix_quotes_the_attribution_lines_the_engine_writes(appendix: str) -> None:
+    """How a reader tells the two parties apart is the attribution the engine renders, so
+    the lines the appendix quotes are the engine's own — held through
+    `orchestrator.envelope_review`, whose restatement `tests/test_engine_contracts.py` holds
+    to the engine's `ruling.rs` at the pinned release."""
+    paragraph = _paragraph(appendix, WHOSE_RULING)
+    for quoted, written in (
+        (
+            "Ruling from the user, relayed by the manager: it binds.",
+            envelope_review.USER_ATTRIBUTION,
+        ),
+        (
+            "Ruling from the manager (ruling reference",
+            envelope_review.manager_attribution(envelope_review.RulingReference("c0.0")),
+        ),
+    ):
+        assert written.startswith(quoted), (
+            f"the engine attributes a ruling as {written!r}, which {APPENDIX}'s quote "
+            f"{quoted!r} no longer opens"
+        )
+        assert quoted in paragraph, f"{APPENDIX} no longer quotes {quoted!r}:\n{paragraph}"
+
+
+@pytest.mark.parametrize(
+    ("what", "stated_by"), JUDGE_DEPARTURE_SAYS, ids=[row[0] for row in JUDGE_DEPARTURE_SAYS]
+)
+def test_the_appendix_gives_the_judge_its_own_duty_to_raise_a_departure(
+    appendix: str, what: str, stated_by: re.Pattern[str]
+) -> None:
+    """The judge reads the same ruling and must raise its own departure: one that reached
+    the manager only when the worker chose to relay it would leave the supervisor that saw
+    the problem with no way to say so. A dispatched judge runs read-only — no shell on one
+    chain, a sandbox refusing the channel's write on the other — so the duty is stated as
+    what it can do, in its verdict, and the paragraph tells it to run no command."""
+    paragraph = _paragraph(appendix, JUDGE_DEPARTS)
+    assert stated_by.search(paragraph), f"{APPENDIX}'s judge duty no longer says {what}"
+    assert "$ORCHESTRATOR_DECLINE_RULING" not in paragraph, (
+        f"{APPENDIX} tells a read-only judge to run a command it cannot run:\n{paragraph}"
     )
 
 

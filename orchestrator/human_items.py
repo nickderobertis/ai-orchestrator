@@ -62,6 +62,8 @@ CHOICE_TITLE_LENGTH = 80
 CHOICE_FIELDS = frozenset({"id", "title", "description"})
 
 #: Every field the engine's `HumanItemResolution` declares; it declares no other.
+#: `provenance` is whose words the resolution was — written only for the user's, relayed
+#: with `--as user` — which a resolution must be admitted carrying.
 RESOLUTION_FIELDS = frozenset({"actor", "on_behalf_of", "text", "choice", "reason", "provenance"})
 
 #: Whose words a resolution is (onepipeline's `Provenance`), from onepipeline 0.110.0: the

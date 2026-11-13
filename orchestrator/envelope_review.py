@@ -70,7 +70,7 @@ import hashlib
 import json
 import sys
 from collections.abc import Iterator, Mapping, Sequence
-from typing import NamedTuple, Protocol
+from typing import Literal, NamedTuple, NewType, Protocol
 
 from orchestrator import plan_review, structural_guard
 from orchestrator.criteria_guard import (
@@ -105,8 +105,8 @@ AMENDMENT_PRECEDENCE = (
     "operational note below, the clause here wins and the contradicted one no longer "
     "binds."
 )
-#: :data:`AMENDMENT_PRECEDENCE` for an amendment whose attribution line says it is the
-#: user's words, relayed by the manager: the same authority, naming that party.
+#: The same authority, naming the user: the sentence the engine opens an amendment with
+#: when it is the user's words, relayed by the manager.
 USER_AMENDMENT_PRECEDENCE = (
     "The user amended this node's bar. Every clause below is an acceptance criterion "
     "of this node and takes precedence over the whole task: where a clause here "
@@ -116,77 +116,122 @@ USER_AMENDMENT_PRECEDENCE = (
 )
 ADDITIONAL_INFO_HEADING = "## Additional info"
 
-#: How the engine attributes a ruling stored in a string — `onepipeline`'s `src/ruling.rs`,
-#: whose `attribution` writes the sentence and whose `split_attribution` reads an
-#: amendment's first line as one only where it is byte for byte a sentence `attribution`
-#: writes. Such a line opens the amendment block and decides its precedence sentence, and
-#: is never one of its clauses; `tests/test_engine_contracts.py` holds these to the source.
+#: The attribution the engine stores a ruling under — `onepipeline`'s `src/ruling.rs`,
+#: whose `attribution` writes one of these three sentences and whose `origin_of` reads a
+#: stored first line as one only where it is byte for byte one of them. A recorded
+#: amendment carries it as its first line, and `amended` opens the block with it and picks
+#: the precedence sentence by its party, so it is restated here for the same reason the
+#: precedence is; `tests/test_engine_contracts.py` holds all three to the engine's source.
 ATTRIBUTION_OPENING = "Ruling from the "
 USER_ATTRIBUTION = (
-    f"{ATTRIBUTION_OPENING}user, relayed by the manager: it binds. Follow it as "
-    "written; a user's ruling cannot be declined."
+    f"{ATTRIBUTION_OPENING}user, relayed by the manager: it binds. Follow it as written; "
+    "a user's ruling cannot be declined."
 )
-MANAGER_ATTRIBUTION = (
+UNREFERENCED_MANAGER_ATTRIBUTION = (
     f"{ATTRIBUTION_OPENING}manager: a strong default you may decline with your reason "
     "through `onepipeline decline-ruling`."
 )
-#: The manager's attribution naming its ruling reference, `{reference}` its token.
-MANAGER_REFERENCE_ATTRIBUTION = (
-    f"{ATTRIBUTION_OPENING}manager (ruling reference `{{reference}}`): a strong default "
-    "you may decline with your reason. To decline it, run `onepipeline decline-ruling "
-    '"$ONEPIPELINE_RUN_ID" --ruling {reference}` with the reason on standard input; '
-    "the manager is told, and may take it to the user."
-)
-#: The widths the engine reads a ruling reference's numbers at: an envelope or a reply is
-#: a `u64`, a command's index within its envelope a `u32`.
-_U64 = 2**64
-_U32 = 2**32
-#: The most digits either width spells, so a longer run is refused before it is converted.
-_DIGITS = len(str(_U64 - 1))
-_MANAGER_REFERENCE_OPENING = MANAGER_REFERENCE_ATTRIBUTION.split("{reference}", 1)[0]
 
 
-def _number(text: str, bound: int) -> int | None:
-    """``text`` as the engine reads one number of a reference: ASCII digits, below ``bound``."""
-    if not 0 < len(text) <= _DIGITS or any(digit not in "0123456789" for digit in text):
-        return None
-    if int(text) >= bound:
-        return None
-    return int(text)
+#: A ruling reference as the engine mints one — `c<envelope>.<index>` or `a<reply>` — told
+#: apart from the prose it is read out of. Only `_minted` decides that a string is one.
+RulingReference = NewType("RulingReference", str)
 
 
-def _minted(token: str) -> bool:
-    """Whether ``token`` is a ruling reference the engine mints and writes back as itself:
-    a command's `c<envelope>.<index>` or an answer's `a<reply>`."""
-    if token.startswith("a"):
-        reply = _number(token[1:], _U64)
-        return reply is not None and token == f"a{reply}"
-    envelope_text, dot, index_text = token.removeprefix("c").partition(".")
-    envelope, index = _number(envelope_text, _U64), _number(index_text, _U32)
+def manager_attribution(reference: RulingReference) -> str:
+    """The attribution of a manager's ruling the engine names by ``reference``."""
     return (
-        token.startswith("c")
-        and bool(dot)
-        and envelope is not None
-        and index is not None
-        and token == f"c{envelope}.{index}"
+        f"{ATTRIBUTION_OPENING}manager (ruling reference `{reference}`): a strong default "
+        "you may decline with your reason. To decline it, run `onepipeline decline-ruling "
+        f'"$ONEPIPELINE_RUN_ID" --ruling {reference}` with the reason on standard input; '
+        "the manager is told, and may take it to the user."
     )
 
 
-def _attribution(line: str) -> str | None:
-    """``line`` where it is exactly an attribution the engine writes, else ``None``."""
-    if line in (USER_ATTRIBUTION, MANAGER_ATTRIBUTION):
-        return line
-    token = line.removeprefix(_MANAGER_REFERENCE_OPENING).split("`", 1)[0]
-    if _minted(token) and line == MANAGER_REFERENCE_ATTRIBUTION.format(reference=token):
-        return line
+#: The widths the engine parses each part of a ruling reference into: `u64`, and `u32` for
+#: a command's index, and the most significant digits a `u64` can have.
+_U64, _U32 = 2**64, 2**32
+_U64_DIGITS = len(str(_U64 - 1))
+
+
+def _number(text: str, bound: int) -> int | None:
+    """``text`` as the number the engine parses it into, where it reads it below ``bound``.
+
+    Bounded before it is converted: the engine's parse accepts leading zeros, so they are
+    dropped, and what is left is refused unread when it has more digits than a `u64` holds
+    — a line carrying thousands of digits is ordinary amendment text, not a reference, and
+    Python refuses to convert a run that long at all.
+    """
+    if not text or not all(digit in "0123456789" for digit in text):
+        return None
+    significant = text.lstrip("0")
+    if len(significant) > _U64_DIGITS:
+        return None
+    number = int(significant or "0")
+    return number if number < bound else None
+
+
+def _minted(reference: str) -> RulingReference | None:
+    """``reference`` as the engine's `Reference::from_str` reads it and its `Display` writes
+    it back — command ``index`` of envelope ``envelope`` as ``c<envelope>.<index>``, or the
+    reply that answered a question as ``a<reply>`` — or nothing where it reads none."""
+    if reference.startswith("c"):
+        envelope, dot, index = reference[1:].partition(".")
+        command = (_number(envelope, _U64), _number(index, _U32))
+        if not dot or command[0] is None or command[1] is None:
+            return None
+        return RulingReference(f"c{command[0]}.{command[1]}")
+    reply = _number(reference[1:], _U64) if reference.startswith("a") else None
+    return None if reply is None else RulingReference(f"a{reply}")
+
+
+#: Whose words a ruling is, as the engine's `Provenance` spells the two parties.
+Party = Literal["user", "manager"]
+
+
+class Attribution(NamedTuple):
+    """The attribution line a stored ruling opens with, and the party it names."""
+
+    party: Party
+    line: str
+
+
+class Split(NamedTuple):
+    """A stored ruling as the engine splits it: its attribution, where its first line is
+    exactly one the engine writes, and the ruling's own text."""
+
+    attribution: Attribution | None
+    text: str
+
+
+def _attribution_party(line: str) -> Party | None:
+    """Whose ruling ``line`` attributes, where it is exactly an attribution the engine writes."""
+    if line == USER_ATTRIBUTION:
+        return "user"
+    if line == UNREFERENCED_MANAGER_ATTRIBUTION:
+        return "manager"
+    opening = f"{ATTRIBUTION_OPENING}manager (ruling reference `"
+    if not line.startswith(opening):
+        return None
+    # The engine parses the reference and compares the whole line with the attribution it
+    # would write for what it parsed, so a reference it reads but would spell differently —
+    # leading zeros — makes the line ordinary text, here as there.
+    minted = _minted(line[len(opening) :].split("`", 1)[0])
+    if minted is not None and line == manager_attribution(minted):
+        return "manager"
     return None
 
 
-def split_attribution(text: str) -> tuple[str | None, str]:
-    """``text``'s attribution line, if it opens with one, and the ruling after it."""
-    first, _, rest = text.lstrip().partition("\n")
-    attribution = _attribution(first)
-    return (attribution, rest) if attribution is not None else (None, text)
+def split_attribution(text: str) -> Split:
+    """``text`` split as the engine's `split_attribution` splits a stored ruling: no
+    attribution and ``text`` unchanged where its first line is not exactly one of the
+    attributions above."""
+    trimmed = text.lstrip()
+    first, _, rest = trimmed.partition("\n")
+    party = _attribution_party(first)
+    if party is None:
+        return Split(None, text)
+    return Split(Attribution(party, first), rest)
 
 
 #: The field a node carries its binding amendment in: the correction an `amend` set, or
@@ -327,7 +372,10 @@ def amended(task: str, amendment: str | None) -> str:
 
     One acceptance section: the amendment's clauses — :func:`amendment_clauses` — go at
     the end of the task's :data:`CRITERIA_HEADING` section, under
-    :data:`AMENDMENT_HEADING` and opening with :data:`AMENDMENT_PRECEDENCE`. A task
+    :data:`AMENDMENT_HEADING` and opening with :data:`AMENDMENT_PRECEDENCE` — or, where the
+    amendment's first line attributes it to the user, that line and
+    :data:`USER_AMENDMENT_PRECEDENCE`; a manager's attribution line opens the block above
+    the manager's sentence. A task
     stating no criteria section is given one, immediately before an
     :data:`ADDITIONAL_INFO_HEADING` stated on a line of its own, or at the end of a task
     that states none. A blank amendment renders nothing, which is what the engine does
@@ -336,12 +384,11 @@ def amended(task: str, amendment: str | None) -> str:
     """
     if amendment is None or not amendment.strip():
         return task
-    attribution, _ = split_attribution(amendment)
-    users = attribution == USER_ATTRIBUTION
-    precedence = USER_AMENDMENT_PRECEDENCE if users else AMENDMENT_PRECEDENCE
-    opening = "" if attribution is None else f"{attribution}\n"
-    clauses = amendment_clauses(amendment.strip())
-    block = f"{AMENDMENT_HEADING}\n{opening}{precedence}\n\n{clauses}"
+    attribution = split_attribution(amendment.strip()).attribution
+    user = attribution is not None and attribution.party == "user"
+    precedence = USER_AMENDMENT_PRECEDENCE if user else AMENDMENT_PRECEDENCE
+    opening = f"{attribution.line}\n" if attribution is not None else ""
+    block = f"{AMENDMENT_HEADING}\n{opening}{precedence}\n\n{amendment_clauses(amendment.strip())}"
     end = _criteria_section_end(task)
     if end is not None:
         bar, rest = task[:end], task[end:]
@@ -364,9 +411,9 @@ def amendment_clauses(amendment: str) -> str:
     Every word is kept and only the shape changes: a bullet or numbered item is one
     clause, a paragraph is one clause with its lines joined, and a heading becomes a bold
     label, because a heading inside the criteria section would end it. An attribution
-    line opening it says whose ruling it is and is never a clause.
+    first line is who the ruling is from, never one of its clauses, so it is left out.
     """
-    _, amendment = split_attribution(amendment)
+    amendment = split_attribution(amendment).text
     lines: list[str] = []
     clause: str | None = None
     for line in amendment.split("\n"):

@@ -80,7 +80,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import NamedTuple, TypedDict
+from typing import NamedTuple, NotRequired, TypedDict
 
 #: The real CLI every invocation is delegated to. Named rather than discovered:
 #: this file *is* `oneharness` as far as the run is concerned, so resolving the
@@ -232,6 +232,26 @@ ASK_RECORD_ENV = "FAKE_BACKEND_ASK_RECORD"
 #: The reply window that ask waits, passed as the verb's own `--timeout` when a journey
 #: names one; unset, the ask waits the window the run's launch record carries.
 ASK_TIMEOUT_ENV = "FAKE_BACKEND_ASK_TIMEOUT"
+
+#: The seam a dispatch declines a manager's ruling through, run by the worker-side branch
+#: below as a dispatched worker runs it. A real dispatched judge runs read-only and cannot
+#: run it yet, so it states a departure in its verdict instead
+#: (`templates/dispatch-appendix.md`); a journey still reads this name off the judge side's
+#: turn environment, so the day a judge can run it nothing else has to change.
+DECLINE_RULING_ENV = "ORCHESTRATOR_DECLINE_RULING"
+
+#: The reason one dispatched member's WORKER side declines a manager's ruling with, and
+#: where what came back is written. Both, or neither, as for the ask above: the decline is
+#: a command a worker runs inside its own turn, so nothing above the turn reports that it
+#: ran, and the record is how a journey reads that it did — and which side ran it.
+DECLINE_REASON_ENV = "FAKE_BACKEND_DECLINE_REASON"
+DECLINE_RECORD_ENV = "FAKE_BACKEND_DECLINE_RECORD"
+
+#: The attribution the engine renders beside a manager's ruling, naming the reference a
+#: dispatch declines it by — `onepipeline`'s `ruling::attribution`, which
+#: `tests/test_engine_contracts.py` holds `orchestrator.envelope_review` to. Read off the
+#: turn's own prompt, so the reference is the one the dispatch was really handed.
+MANAGER_RULING = re.compile(r"Ruling from the manager \(ruling reference `(?P<reference>[^`]+)`\)")
 
 #: The `graphs/node-scope.yaml` member a dispatched plan node runs as, which is what
 #: makes the branch below about a *dispatch*: `oneagentgraph` names every member's
@@ -713,6 +733,72 @@ def _ask_manager(config: str | None) -> None:
     )
 
 
+class DeclineRecord(TypedDict):
+    """What the worker-side branch below writes, declared beside it so its reader imports it.
+
+    `wrapper` is `None` when the turn's environment named no wrapper, and then the last
+    three are absent: nothing was run, which is the finding a journey reads.
+    """
+
+    wrapper: str | None
+    ruling: str
+    config: str | None
+    status: NotRequired[int]
+    out: NotRequired[str]
+    err: NotRequired[str]
+
+
+def _decline_ruling(config: str | None, prompt: str) -> None:
+    """Decline the manager's ruling a dispatched member's worker reads, from that turn.
+
+    The worker runs the wrapper itself, as `config/onejudge.base.yaml` tells it to: the
+    wrapper, the run and the reference all come from this turn's own inherited environment
+    and prompt, so a launch that withheld any of them fails here exactly as it would for a
+    real worker. The judge side never reaches this.
+
+    Exactly one turn declines, claimed by creating the record exclusively, as the ask is;
+    a turn whose prompt names no manager ruling claims nothing, so the decline waits for
+    the turn that is handed one. A wrapper missing from the environment is recorded absent.
+    """
+    reason = os.environ.get(DECLINE_REASON_ENV)
+    record = os.environ.get(DECLINE_RECORD_ENV)
+    if not reason or not record or _judges(config):
+        return
+    named = MEMBER_OF_CONFIG.search(config or "")
+    if named is None or named.group(1) != DISPATCHED_MEMBER:
+        return
+    found = MANAGER_RULING.search(prompt)
+    if found is None:
+        return
+    claimed = Path(record)
+    try:
+        claimed.touch(exist_ok=False)
+    except FileExistsError:
+        return
+    wrapper = os.environ.get(DECLINE_RULING_ENV)
+    reference = found.group("reference")
+    if not wrapper:
+        absent: DeclineRecord = {"wrapper": None, "ruling": reference, "config": config}
+        claimed.write_text(json.dumps(absent), encoding="utf-8")
+        return
+    declined = subprocess.run(  # noqa: S603 - the real wrapper, as a dispatched worker runs it
+        [wrapper, "--ruling", reference],
+        input=f"{reason}\n",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    ran: DeclineRecord = {
+        "wrapper": wrapper,
+        "ruling": reference,
+        "config": config,
+        "status": declined.returncode,
+        "out": declined.stdout,
+        "err": declined.stderr,
+    }
+    claimed.write_text(json.dumps(ran), encoding="utf-8")
+
+
 def _author_plan(config: str | None) -> None:
     """Write the records a dispatched planner would have authored, once.
 
@@ -1100,6 +1186,7 @@ def _turn(original: list[str], argv: list[str], prompt: str) -> int:
     if config and not _judged(config):
         return _answer(argv, UNJUDGED_REPORT)
     _ask_manager(config)
+    _decline_ruling(config, prompt)
     _author_plan(config)
     _run_on_marker(config, prompt, _flag(argv, CWD_FLAG))
     if held := os.environ.get(AGENT_DELAY_ENV):

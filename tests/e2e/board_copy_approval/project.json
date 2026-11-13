@@ -101,6 +101,8 @@
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/decline-ruling-env.sh",
+      "{workspaceRoot}/scripts/decline-ruling.sh",
       "{workspaceRoot}/scripts/dispatch-env-hook.sh",
       "{workspaceRoot}/scripts/ask-manager-env.sh",
       "{workspaceRoot}/scripts/ask-manager.sh",

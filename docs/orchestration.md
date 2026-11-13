@@ -2614,12 +2614,13 @@ reply is `{"completion":false,"message":"what to do next","reason":"why"}`;
 an approval is `{"completion":true,"reason":"what was verified"}`. Either may
 also contain `"version":4` plus a `"commands"` array using the operations below.
 That version is the engine's own `REPLY_ENVELOPE_VERSION`, and it reads **4** since
-the adopted engine added the optional top-level `provenance`; it read **3** from
-`settle` growing the optional `landing` above, and **2** from the manager-note
-collapse that removed `context` from the envelope until then. Each move is additive
-and the engine still reads envelopes at 3 and 2, each as the manager's words, so a
-caller that sends `2` is accepted and simply cannot name a landing — which is why the
-examples below name the current one rather than the oldest that still works.
+the envelope grew the optional top-level `provenance` — `manager`, its default and never
+written, or `user` for the user's own words relayed, which `just channel-reply --as user`
+sets; it read **3** from `settle` growing the optional `landing` above, and **2** from the
+manager-note collapse that removed `context` until then. Each move is additive and the
+engine still reads `3` and `2`, every one of them as the manager's, so an older caller is
+accepted and simply cannot say the words are the user's — which is why the examples below
+name the current version rather than the oldest that still works.
 The convenience recipes construct the common forms: `channel-approve` sends a
 completed verdict, `channel-reject` sends a continuing verdict whose reason and
 message are the supplied text, and `channel-continue` sends the same continuing

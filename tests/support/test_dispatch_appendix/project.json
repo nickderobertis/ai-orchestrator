@@ -13,6 +13,7 @@
       "{workspaceRoot}/orchestrator/accepted_opaque.py",
       "{workspaceRoot}/orchestrator/design_approval.py",
       "{workspaceRoot}/orchestrator/design_chain.py",
+      "{workspaceRoot}/orchestrator/envelope_review.py",
       "{workspaceRoot}/orchestrator/host_installs.py",
       "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/plan_budgets.py",

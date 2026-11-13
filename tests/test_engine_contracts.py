@@ -3502,10 +3502,11 @@ def test_the_markers_a_snapshot_withdraws_are_the_ones_the_engine_takes_back() -
     )
 
 
-#: The four strings the engine composes an amendment into a task with, and where each
+#: The five strings the engine composes an amendment into a task with, and where each
 #: is declared in `src/plan.rs`: the heading it renders under, the sentence stating its
-#: authority, the criteria heading it renders into, and the notes heading a task stating
-#: no criteria section has one opened above. Read as declarations of string constants
+#: authority for the manager's amendment and the one for the user's, the criteria heading
+#: it renders into, and the notes heading a task stating no criteria section has one
+#: opened above. Read as declarations of string constants
 #: rather than as prose, so a reworded sentence is a moved value here rather than a
 #: paragraph quietly drifting. A Rust literal wrapped with a trailing backslash is read as
 #: the one line it compiles to.
@@ -3526,12 +3527,12 @@ AMENDMENT_CONSTANTS = {
 RUST_CONTINUATION = re.compile(r"\\\n\s*")
 
 #: The engine's `amended`, whose arms are the whole of the placement rule: the block is
-#: one heading, one precedence sentence, a blank line and the amendment's clauses; a task
+#: one heading, the attribution line a recorded amendment carries where it carries one,
+#: the precedence sentence of that attribution's party — the user's for the user's, the
+#: manager's otherwise — a blank line and the amendment's clauses; a task
 #: stating a criteria section gets the block at that section's end, followed by whatever
 #: comes after it; and one stating none gets a criteria section opened for it,
 #: immediately before the operational-notes heading, or at the end.
-#: From onepipeline 0.110.0 the block opens with the amendment's attribution line where
-#: its first line is one, and a user's attribution selects `USER_AMENDMENT_PRECEDENCE`.
 AMENDED = re.compile(
     r"fn amended\(task: &str, amendment: &str\) -> String \{\s*"
     r"(?://[^\n]*\s*)*"
@@ -3565,10 +3566,6 @@ AMENDED = re.compile(
 #: each rule at the declaration `orchestrator.envelope_review.amendment_clauses` and
 #: `_criteria_section_end` restate, so a release that moved one fails here by name.
 AMENDMENT_SHAPING = {
-    "an attribution opening the amendment is no clause": re.compile(
-        r"let \(_, amendment\) = crate::ruling::split_attribution\(amendment\);\s*"
-        r"let mut lines"
-    ),
     "a clause is one bullet": re.compile(r'lines\.push\(format!\("- \{clause\}"\)\);'),
     "a heading becomes a bold label between blank lines": re.compile(
         r"lines\.push\(String::new\(\)\);\s*"
@@ -3595,6 +3592,71 @@ AMENDMENT_SHAPING = {
         r"if trimmed == CRITERIA_HEADING \{\s*inside = true;\s*\}.*?"
         r"inside\.then_some\(task\.len\(\)\)",
         re.DOTALL,
+    ),
+    "an attribution first line is never one of the clauses": re.compile(
+        r"fn amendment_clauses\(amendment: &str\) -> String \{\s*(?://[^\n]*\s*)*"
+        r"let \(_, amendment\) = crate::ruling::split_attribution\(amendment\);"
+    ),
+}
+
+#: How the engine attributes a stored ruling, in `src/ruling.rs`, which
+#: `orchestrator.envelope_review.split_attribution` restates to find the attribution line a
+#: recorded amendment opens with: the three sentences `attribution` writes, the grammar of
+#: the reference `Reference` mints, and the split of a stored string's first line. Each is
+#: held to its declaration so a reworded sentence fails here by name rather than leaving an
+#: attributed amendment's line read as one of its clauses. The parser's and the recognizer's
+#: whole bodies are held, because `orchestrator.envelope_review._minted` restates which tokens
+#: the one accepts and the widths it parses each part into, and `_attribution_party` which
+#: lines the other recognizes, and a display format alone would show neither move.
+#: The arm of `attribution` each restated sentence is written by, read as the literal it
+#: compiles to and compared to the restatement whole.
+ATTRIBUTION_ARMS = {
+    "USER_ATTRIBUTION": r"\(Provenance::User, _\)",
+    "manager_attribution": r"\(Provenance::Manager, Some\(reference\)\)",
+    "UNREFERENCED_MANAGER_ATTRIBUTION": r"\(Provenance::Manager, None\)",
+}
+RULING_ATTRIBUTION = {
+    "every attribution opens with the same words": re.compile(
+        r'const ATTRIBUTION_OPENING: &str = "Ruling from the ";'
+    ),
+    "a reference is c<envelope>.<index> or a<reply>": re.compile(
+        r'Self::Command \{ envelope, index \} => write!\(f, "c\{envelope\}\.\{index\}"\),\s*'
+        r'Self::Answer \{ reply \} => write!\(f, "a\{reply\}"\),'
+    ),
+    "a reference parses as c<u64>.<u32> or a<u64>, of ASCII digits, and nothing else": (
+        re.compile(
+            r"fn from_str\(text: &str\) -> std::result::Result<Self, Self::Err> \{\s*"
+            r"let digits = \|text: &str\| -> std::result::Result<u64, \(\)> \{\s*"
+            r"if text\.is_empty\(\) \|\| "
+            r"!text\.bytes\(\)\.all\(\|byte\| byte\.is_ascii_digit\(\)\) \{\s*"
+            r"return Err\(\(\)\);\s*\}\s*text\.parse\(\)\.map_err\(drop\)\s*\};\s*"
+            r"if let Some\(rest\) = text\.strip_prefix\('c'\) \{\s*"
+            r"let \(envelope, index\) = rest\.split_once\('\.'\)\.ok_or\(\(\)\)\?;\s*"
+            r"return Ok\(Self::Command \{\s*envelope: digits\(envelope\)\?,\s*"
+            r"index: u32::try_from\(digits\(index\)\?\)\.map_err\(drop\)\?,\s*\}\);\s*\}\s*"
+            r"if let Some\(reply\) = text\.strip_prefix\('a'\) \{\s*"
+            r"return Ok\(Self::Answer \{\s*reply: digits\(reply\)\?,\s*\}\);\s*\}\s*"
+            r"Err\(\(\)\)"
+        )
+    ),
+    "a line is an attribution only where it is byte for byte one the engine writes": re.compile(
+        r"fn origin_of\(line: &str\) -> Option<Origin> \{\s*"
+        r"if line == attribution\(Provenance::User, None\) \{\s*"
+        r"return Some\(Origin \{\s*provenance: Provenance::User,\s*reference: None,\s*\}\);\s*\}\s*"
+        r"if line == attribution\(Provenance::Manager, None\) \{\s*"
+        r"return Some\(Origin::default\(\)\);\s*\}\s*"
+        r"let reference: Reference = line\s*"
+        r'\.strip_prefix\(&format!\("\{ATTRIBUTION_OPENING\}manager \(ruling reference `"\)\)\?\s*'
+        r"\.split_once\('`'\)\?\s*\.0\s*\.parse\(\)\s*\.ok\(\)\?;\s*"
+        r"\(line == attribution\(Provenance::Manager, Some\(&reference\)\)\)"
+        r"\.then_some\(Origin \{\s*"
+        r"provenance: Provenance::Manager,\s*reference: Some\(reference\),\s*\}\)"
+    ),
+    "only a stored string's exact first line is its attribution": re.compile(
+        r"let trimmed = text\.trim_start\(\);\s*"
+        r"let \(first, rest\) = trimmed\.split_once\('\\n'\)\.unwrap_or\(\(trimmed, \"\"\)\);\s*"
+        r"match origin_of\(first\) \{\s*Some\(origin\) => \(Some\(origin\), rest\),\s*"
+        r"None => \(None, text\),"
     ),
 }
 
@@ -3805,76 +3867,40 @@ def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it
             f"{rule!r} where `orchestrator.envelope_review` restates it; re-read "
             "`amendment_clauses` and `criteria_section_end` and correct the restatement"
         )
+    ruling_rs = _source(ONEPIPELINE, "ruling.rs")
+    for rule, declared in RULING_ATTRIBUTION.items():
+        assert declared.search(ruling_rs) is not None, (
+            f"onepipeline {ONEPIPELINE.ref} no longer declares the attribution rule "
+            f"{rule!r} in ruling.rs where `orchestrator.envelope_review` restates it; "
+            "re-read `attribution`, `Reference` and `split_attribution` and correct the "
+            "restatement"
+        )
+    for name, arm in ATTRIBUTION_ARMS.items():
+        literal = re.search(arm + r' => format!\(\s*"((?:[^"\\]|\\[\s\S])*)"\s*\)', ruling_rs)
+        assert literal is not None, (
+            f"onepipeline {ONEPIPELINE.ref} no longer writes the {name} sentence from the "
+            "arm of `attribution` in ruling.rs this gate reads it at"
+        )
+        compiled = (
+            RUST_CONTINUATION.sub("", literal.group(1))
+            .replace('\\"', '"')
+            .replace("{ATTRIBUTION_OPENING}", envelope_review.ATTRIBUTION_OPENING)
+        )
+        restated = getattr(envelope_review, name)
+        restated = (
+            restated(envelope_review.RulingReference("{reference}"))
+            if callable(restated)
+            else restated
+        )
+        assert restated == compiled, (
+            f"orchestrator/envelope_review.py restates {name} as {restated!r} while "
+            f"onepipeline {ONEPIPELINE.ref} writes {compiled!r}"
+        )
     assert AMENDED.search(plan_rs) is not None, (
         f"onepipeline {ONEPIPELINE.ref}'s `amended` no longer places the block the way "
         "`orchestrator.envelope_review.amended` restates; re-read it and correct the "
         "restatement"
     )
-
-
-#: How `src/ruling.rs` mints, writes and reads a ruling reference and the line attributing
-#: a ruling, each at the declaration `orchestrator.envelope_review` restates.
-RULING_DECLARATIONS = {
-    "a command reference is `c<envelope>.<index>`": re.compile(
-        r'Self::Command \{ envelope, index \} => write!\(f, "c\{envelope\}\.\{index\}"\)'
-    ),
-    "an answer reference is `a<reply>`": re.compile(
-        r'Self::Answer \{ reply \} => write!\(f, "a\{reply\}"\)'
-    ),
-    "a command's envelope is a u64 and its index a u32": re.compile(
-        r"Command \{ envelope: u64, index: u32 \}"
-    ),
-    "an answer's reply is a u64": re.compile(r"Answer \{ reply: u64 \}"),
-    "a reference's numbers are ASCII digits, never empty": re.compile(
-        r"text\.is_empty\(\) \|\| !text\.bytes\(\)\.all\(\|byte\| byte\.is_ascii_digit\(\)\)"
-    ),
-    "a line is an attribution only where it is exactly one `attribution` writes": re.compile(
-        r"if line == attribution\(Provenance::User, None\) \{.*?"
-        r"if line == attribution\(Provenance::Manager, None\) \{.*?"
-        r"\(line == attribution\(Provenance::Manager, Some\(&reference\)\)\)\.then_some",
-        re.DOTALL,
-    ),
-    "only the first line, after leading whitespace, is read": re.compile(
-        r"let trimmed = text\.trim_start\(\);\s*"
-        r"let \(first, rest\) = trimmed\.split_once\('\\n'\)\.unwrap_or\(\(trimmed, \"\"\)\);\s*"
-        r"match origin_of\(first\) \{\s*"
-        r"Some\(origin\) => \(Some\(origin\), rest\),\s*"
-        r"None => \(None, text\),"
-    ),
-}
-
-
-def test_the_attribution_an_amendment_opens_with_is_read_as_the_engine_reads_it() -> None:
-    """`orchestrator/envelope_review.py` reads an amendment's attribution line the way
-    onepipeline's `src/ruling.rs` does, because that line opens the block a node's judge
-    reads and decides its precedence sentence. Each sentence it restates is held to the
-    literal `attribution` formats, and each rule to its declaration, at the pinned release.
-    """
-    from orchestrator import envelope_review
-
-    ruling_rs = _source(ONEPIPELINE, "ruling.rs")
-    opening = re.search(r'pub\(crate\) const ATTRIBUTION_OPENING: &str = "([^"]+)";', ruling_rs)
-    assert opening is not None and opening.group(1) == envelope_review.ATTRIBUTION_OPENING, (
-        f"onepipeline {ONEPIPELINE.ref} declares ATTRIBUTION_OPENING as "
-        f"{opening and opening.group(1)!r}, and orchestrator/envelope_review.py restates "
-        f"{envelope_review.ATTRIBUTION_OPENING!r}"
-    )
-    body = ruling_rs.split("pub(crate) fn attribution(", 1)[1].split("\n}\n", 1)[0]
-    written = RUST_CONTINUATION.sub("", body).replace('\\"', '"')
-    for name in ("USER_ATTRIBUTION", "MANAGER_ATTRIBUTION", "MANAGER_REFERENCE_ATTRIBUTION"):
-        sentence = getattr(envelope_review, name).replace(
-            envelope_review.ATTRIBUTION_OPENING, "{ATTRIBUTION_OPENING}", 1
-        )
-        assert f'"{sentence}"' in written, (
-            f"onepipeline {ONEPIPELINE.ref}'s `attribution` no longer writes "
-            f"orchestrator/envelope_review.py's {name}, {sentence!r}; re-read it and move "
-            "the restatement"
-        )
-    for rule, declared in RULING_DECLARATIONS.items():
-        assert declared.search(ruling_rs) is not None, (
-            f"onepipeline {ONEPIPELINE.ref} no longer declares the ruling rule {rule!r} "
-            "where `orchestrator.envelope_review.split_attribution` restates it"
-        )
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

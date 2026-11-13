@@ -435,9 +435,10 @@ Claude Code's built-in question tool is one such harness tool, and its answer is
 on the item with `just human-items answer`, acting for the user.
 
 **An answer is recorded on its item.** When the user answers in chat, record it with
-`just human-items answer <item> --choice <id>` and/or `--text "<their words>"`, or `just
-human-items answer-batch --input <file>` for several, acting for them as completing a
-task for them does, so the page and every other manager see it answered. A batch the user
+`just human-items answer <item> --choice <id>` and/or `--text "<their words>"` `--as
+user`, or `just human-items answer-batch --input <file> --as user` for several, acting for
+them as completing a task for them does, so the page and every other manager see it
+answered. A batch the user
 sends from the page arrives as answered items — one `just human-items watch` delivery
 listing every answer, or one `human-item` surface on each tied run's watch — so read it
 as their answers and never ask again.
@@ -475,6 +476,12 @@ the CLI and the page show and do the same things.
 An item names its source — the plan and run it came from, the manager session for a
 question raised outside a run, or the host — and, when it blocks, says "blocks N steps in
 <plan>", "blocks all of <plan>" or "blocks all work on this host".
+**Whose words a ruling is, is recorded.** `just channel-reply` and `just human-items`
+record your own ruling by default, which a dispatch may decline with its reason; `--as
+user` marks the user's own words, which bind, and is used only to relay them. A
+`declined-ruling` surface is read like any planner surface: weigh its reason, and raise it
+as a question item where the user's goal is at stake.
+
 **A worker's `ORCHESTRATOR_ASK_MANAGER` question is worker-to-manager**, on that run's
 channel: answer it yourself; where only the user can, raise it as a question item, with
 choices where they fit, and relay the answer it records back on that run's channel. Complete an item for the user only after they decided in this chat —
@@ -760,15 +767,20 @@ there reaches every dispatch: `user.persona` is **replaced** by every dispatch �
 built-in name and a path alike — so a bound written there reaches nothing, and
 `user.done_when` is handed to the judge, which is the wrong party to bind. The clause
 says that an instruction arriving inside the dispatch's own conversation is its
-supervisor rather than its manager, that a manager's ruling arrives as planner context
-or as a note attributed to the planner, and that where the two disagree the planner's
-wins; `tests/test_shared_dispatch_bar.py` holds the base config to that. The monitor is
+supervisor rather than its manager, that a ruling arrives as planner context or as a note
+the engine attributes to the manager or the user, and that a ruling wins over the
+supervisor. Every agent below the manager serves the user's goals, so a user ruling binds
+absolutely, while a manager ruling may be declined, only through
+`$ORCHESTRATOR_DECLINE_RULING` with its reason, never silently;
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` holds that on a real
+dispatched worker's system prompt. A dispatched judge runs read-only, so it raises its
+departure in its verdict instead (`templates/dispatch-appendix.md`). The monitor is
 bound the same way in [`personas/orchestrator.yaml`](personas/orchestrator.yaml),
 because a simulated user's turn reaches the event stream carrying the role `user`,
 exactly what a delivered manager note looks like: a turn inside a dispatch is never the
 planner whatever role it carries, no `cancel` may be grounded in one, and a manager's
 instruction to a node is the `edit-committed` event on the run's journal carrying the
-command against the node.
+command against the node, whose recorded `provenance` says whether it is the user's.
 
 ## The two sides of the conversation
 

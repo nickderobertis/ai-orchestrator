@@ -296,6 +296,15 @@ JOURNAL_FOLLOWING_ENGINE_FLOOR = Release(0, 106, 0)
 #: `resettable` on every surface read; from it on, a graph's own `reset_on` is the only
 #: reset, which for this host is graphs/dag-scope.yaml's `progress-report` note.
 BUILT_IN_RESET_REMOVED_ENGINE_FLOOR = Release(0, 108, 0)
+#: onepipeline https://github.com/nickderobertis/onepipeline/pull/1529 (`627635f0`), cut
+#: as 0.110.0: every ruling records whose words it carries, `manager` or `user`, and every
+#: ruling text a dispatch reads names that party, a manager's beside an opaque ruling
+#: reference; `decline-ruling` raises a non-blocking `declined-ruling` surface against a
+#: manager's ruling and refuses a user's. Below it `scripts/decline-ruling.sh` execs a verb
+#: the engine does not have, and the authority `config/onejudge.base.yaml` states names a
+#: party no ruling a dispatch reads is attributed to.
+RULING_PROVENANCE_ENGINE_FLOOR = Release(0, 110, 0)
+
 #: onevcs https://github.com/nickderobertis/onevcs/pull/667 (`28e0fe84`), first cut as
 #: 0.65.2 and linked by onepipeline 0.110.0 and onepipeline-api 0.81.1: `decisions::load`
 #: in crates/onevcs/src/decisions.rs keys each recorded recovery decision on its branch
@@ -1433,6 +1442,11 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
             BUILT_IN_RESET_REMOVED_ENGINE_FLOOR,
             "restarts no observer clock on a surface read, leaving `reset_on` the only reset",
         ),
+        (
+            "onepipeline",
+            RULING_PROVENANCE_ENGINE_FLOOR,
+            "records and renders whose ruling a dispatch reads, and lets it decline a manager's",
+        ),
     ],
     ids=(
         "onevcs",
@@ -1448,6 +1462,7 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
         "oneagentgraph-scheduled-notes",
         "onepipeline-journal-following",
         "onepipeline-built-in-reset-removed",
+        "onepipeline-ruling-provenance",
     ),
 )
 def test_the_linked_sibling_carries_this_plans_change_to_it(

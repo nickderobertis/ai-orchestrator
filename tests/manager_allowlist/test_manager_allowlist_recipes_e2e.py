@@ -1128,6 +1128,8 @@ def test_a_codex_login_the_probe_cannot_read_is_named_with_what_to_do(tmp_path: 
 WRAPPER_SCRIPTS = (
     "allowlist-probe.sh",
     "dispatch-env.sh",
+    "decline-ruling-env.sh",
+    "decline-ruling.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
     "credentials-env.sh",

@@ -62,6 +62,8 @@
       "{workspaceRoot}/scripts/credentials-env.sh",
       "{workspaceRoot}/scripts/dispatch-env-hook.sh",
       "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/decline-ruling-env.sh",
+      "{workspaceRoot}/scripts/decline-ruling.sh",
       "{workspaceRoot}/scripts/finish-plan.sh",
       "{workspaceRoot}/scripts/follow-up-draft.sh",
       "{workspaceRoot}/scripts/follow-up-env.sh",

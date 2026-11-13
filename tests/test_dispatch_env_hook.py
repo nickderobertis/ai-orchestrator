@@ -56,6 +56,11 @@ CODEX_INDIRECTION = "ORCHESTRATOR_CODEX_ALT_HOME"
 #: `scripts/template-env.sh` establishes them.
 TEMPLATE_ROOT = "ONEPIPELINE_TEMPLATE_ROOT"
 INTERACTIVE = "ONETASKGRAPH_INTERACTIVE"
+#: The decline seam `scripts/decline-ruling-env.sh` establishes: the path of the wrapper a
+#: worker, its judge or a planner declines a manager's ruling through, in the hook's own
+#: checkout.
+DECLINE_RULING = "ORCHESTRATOR_DECLINE_RULING"
+DECLINE_WRAPPER = "decline-ruling.sh"
 
 #: An environment variable name, which is what every member of `env` has to be.
 VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -83,7 +88,7 @@ def _checkout(root: Path) -> Path:
     (root / "templates" / "templates.yaml").write_bytes(
         (REPO_ROOT / "templates" / "templates.yaml").read_bytes()
     )
-    for name in ("dispatch-env-hook.sh", "dispatch-env.sh", *_resolver_helpers()):
+    for name in ("dispatch-env-hook.sh", "dispatch-env.sh", DECLINE_WRAPPER, *_resolver_helpers()):
         copied = scripts / name
         copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
         copied.chmod(0o755)
@@ -157,6 +162,7 @@ def test_the_document_carries_what_the_resolvers_establish(tmp_path: Path) -> No
         CODEX_INDIRECTION: str(home / ".codex-alt"),
         TEMPLATE_ROOT: str(checkout / "templates"),
         INTERACTIVE: "false",
+        DECLINE_RULING: str(checkout / "scripts" / DECLINE_WRAPPER),
     }
     # The Codex resolver's one side effect, which the hook has to keep: an absent home
     # falls through as `auth` and a missing one hard-fails.
@@ -170,7 +176,29 @@ def test_without_a_credentials_file_the_document_carries_the_indirections_alone(
 
     env = _env(_run(checkout, {"HOME": str(tmp_path / "home")}))
 
-    assert tuple(env) == (*CLAUDE_INDIRECTIONS, CODEX_INDIRECTION, TEMPLATE_ROOT, INTERACTIVE)
+    assert tuple(env) == (
+        *CLAUDE_INDIRECTIONS,
+        CODEX_INDIRECTION,
+        TEMPLATE_ROOT,
+        INTERACTIVE,
+        DECLINE_RULING,
+    )
+
+
+def test_a_checkout_whose_decline_wrapper_is_not_runnable_is_refused_by_the_hook(
+    tmp_path: Path,
+) -> None:
+    """No document at all, rather than a dispatch told to decline through a command that
+    names nothing: the seam's helper refuses, naming the wrapper and the repair."""
+    checkout = _checkout(tmp_path / "checkout")
+    (checkout / "scripts" / DECLINE_WRAPPER).chmod(0o644)
+
+    ran = _run(checkout, {"HOME": str(tmp_path / "home")})
+
+    assert ran.returncode == 2, ran
+    assert ran.stdout == ""
+    assert "the decline-ruling wrapper is not an executable file at" in ran.stderr, ran.stderr
+    assert str(checkout / "scripts" / DECLINE_WRAPPER) in ran.stderr
 
 
 def test_the_node_the_engine_names_is_passed_on_to_the_dispatch(tmp_path: Path) -> None:
@@ -339,6 +367,7 @@ def test_the_definition_names_the_resolvers_the_driver_start_arm_ran() -> None:
         ("codex-alt-home.sh", "ensure_codex_alt_home"),
         ("template-env.sh", "export_template_root"),
         ("template-env.sh", "export_noninteractive_plan_store"),
+        ("decline-ruling-env.sh", "export_decline_ruling"),
     ]
     for helper, function in entries:
         source = (REPO_ROOT / "scripts" / helper).read_text("utf-8")

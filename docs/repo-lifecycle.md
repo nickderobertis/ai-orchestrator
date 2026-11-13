@@ -187,10 +187,12 @@ and every read gives it back in the authored form; the engine restarts no observ
 when a surface is read, and oneagentgraph no longer has `resettable` or `reset-timer`, so a
 graph's own `reset_on` is the only thing that restarts a scheduled clock.
 The adoption after that moves the engine to 0.110.0, the read API to 0.81.1, the release
-linking it, and onevcs to 0.65.2, the release both link: a warm host-wide unpublished read
-reuses each branch's recorded decision per checkout rather than deriving every branch again,
-and a reply envelope reads at version 4, its optional `provenance` saying whether a ruling is
-the user's or the manager's, which every dispatch reads beside the ruling.
+linking it, and onevcs to 0.65.2, the release both link: every ruling records whose words it
+carries, the manager's or the user's, every ruling a dispatch reads is rendered beside that
+attribution, and `onepipeline decline-ruling` lets a dispatch decline a manager's ruling with
+its reason; a warm host-wide unpublished read reuses each branch's recorded decision per
+checkout rather than deriving every branch again; the reply envelope reads at version 4 and
+the planner-channel layout at 3.0.0.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole

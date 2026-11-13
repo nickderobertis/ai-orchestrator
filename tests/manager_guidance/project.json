@@ -41,6 +41,8 @@
       "{workspaceRoot}/docs/telemetry.md",
       "{workspaceRoot}/graphs/pr-author.yaml",
       "{workspaceRoot}/graphs/review-reply.yaml",
+      "{workspaceRoot}/config/manager-allowlist.toml",
+      "{workspaceRoot}/personas/orchestrator.yaml",
       "{workspaceRoot}/personas/planner.yaml",
       "{workspaceRoot}/templates/dispatch-appendix.md",
       "{workspaceRoot}/orchestrator/**/*",

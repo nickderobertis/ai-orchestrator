@@ -364,6 +364,36 @@ def test_a_question_offering_choices_and_its_answer_are_read_as_the_engine_recor
     )
 
 
+def test_an_answer_recorded_as_the_users_own_words_is_read_as_the_engine_records_it(
+    store: Path, tmp_path: Path
+) -> None:
+    """A manager relaying the user's answer records it `--as user`, and the installed
+    engine's receipt then carries that provenance on the resolution — a field this host's
+    parser has to admit, or every answer relayed that way reads as an unreadable item."""
+    request = tmp_path / "question.json"
+    request.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "dedup_key": "provenance:name",
+                "kind": "question",
+                "title": "What is the service called?",
+                "body": "Name it.",
+                "priority": "medium",
+                "owner": {"session": SESSION, "run": None, "plan": None},
+                "block": {"scope": "nothing"},
+                "approval": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    raised = human_items.receipt_item(human_items.verb(["raise", "--input", str(request)]))
+    receipt = human_items.verb(["answer", raised.id, "--text", "Aurora", "--as", "user"])
+    assert json.loads(receipt)["item"]["item"]["resolution"]["provenance"] == "user", receipt
+    answered = human_items.receipt_item(receipt)
+    assert (answered.state, answered.text) == ("answered", "Aurora")
+
+
 def test_raising_completing_and_dismissing_go_through_the_engine_and_narrow_by_plan(
     store: Path,
 ) -> None:

@@ -501,6 +501,9 @@ ASK_SEAM_JOURNEYS: tuple[AskSeamJourney, ...] = (
         "ask-seam-channel-reply", f"{ASK_SEAM_ROOT}/channel_reply", "askSeamChannelReply"
     ),
     AskSeamJourney(
+        "ask-seam-decline-ruling", f"{ASK_SEAM_ROOT}/decline_ruling", "askSeamDeclineRuling"
+    ),
+    AskSeamJourney(
         "ask-seam-follow-up-drafts-launch",
         f"{ASK_SEAM_ROOT}/follow_up_drafts_launch",
         "askSeamFollowUpDraftsLaunch",

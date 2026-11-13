@@ -95,6 +95,8 @@ COPIED_SCRIPTS = (
     "credentials-env.sh",
     "dispatch-env-hook.sh",
     "dispatch-env.sh",
+    "decline-ruling-env.sh",
+    "decline-ruling.sh",
     "finish-plan.sh",
     "follow-up-draft.sh",
     "follow-up-env.sh",

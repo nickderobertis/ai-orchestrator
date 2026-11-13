@@ -98,6 +98,8 @@ WRAPPER_SCRIPTS = (
     # it — for the engine to re-run before each node-scope dispatch. A checkout without
     # either is refused before it delegates.
     "dispatch-env.sh",
+    "decline-ruling-env.sh",
+    "decline-ruling.sh",
     "dispatch-env-hook.sh",
     # The bound every waiter for the merge-queue lock queues under, derived from how long
     # this identity's gate last took. `just integrate` sources it, and so does the launch
