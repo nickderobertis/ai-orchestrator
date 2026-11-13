@@ -1,0 +1,16 @@
+issue: https://github.com/nickderobertis/ai-orchestrator/issues/2505 OPEN
+board item on project 3 (Follow-ups):
+  Title: "[sample] follow-up ticket structure"
+  Status: "Proposal"
+  onetaskgraph.origin: "follow-up-sample:follow-up-collapsed-agent-sections/sample-ticket"
+  Host: "lima-hp"
+  Owning runs: "User-rulings-bind--manager-rulings-are-challengeable--and-plan-review-checks-who-owns-the-knowledge-at-a-seam"
+  Basis: "github.com/nickderobertis/onejudge: e1299b8ac7b4131bf3b7de587dfadda70bf7ba10\ngithub.com/nickderobertis/onepipeline: 5f7f4611e1a88685dd8846b50d77d06eb50d2f89"
+  Drafts: "drafts:User-rulings-bind--manager-rulings-are-challengeable--and-plan-review-checks-who-owns-the-knowledge-at-a-seam/drafts/20261112T195514Z-let-a-read-only-judge-decline-a-manager-ruling-t"
+  Transcripts: "onepipeline transcript User-rulings-bind--manager-rulings-are-challengeable--and-plan-review-checks-who-owns-the-knowledge-at-a-seam aio-adopt-ruling-provenance"
+  Witnesses: "none recorded (the source ticket, issue 2499, names no witness)"
+  Verified at: "2026-11-13T04:36:44Z"
+body has an Owning runs section: False
+body: <details> summary='Cost of the workaround' collapsed=True rendered=['<ul', '<li']
+body: <details> summary='Contributing locations' collapsed=True rendered=['<ul', '<li', '<code']
+https://github.com/nickderobertis/ai-orchestrator/issues/2505#issuecomment-6845837157: <details> summary="This run's evidence" collapsed=True rendered=['<ul', '<li']

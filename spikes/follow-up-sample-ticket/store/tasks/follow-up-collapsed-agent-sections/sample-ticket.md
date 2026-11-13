@@ -4,6 +4,8 @@ status: "backlog"
 repositories: ["github.com/nickderobertis/ai-orchestrator"]
 metadata:
   "orchestrator.follow-up-sample": {"host": "lima-hp", "owning_runs": "User-rulings-bind--manager-rulings-are-challengeable--and-plan-review-checks-who-owns-the-knowledge-at-a-seam", "basis": "github.com/nickderobertis/onejudge: e1299b8ac7b4131bf3b7de587dfadda70bf7ba10\ngithub.com/nickderobertis/onepipeline: 5f7f4611e1a88685dd8846b50d77d06eb50d2f89", "drafts": "drafts:User-rulings-bind--manager-rulings-are-challengeable--and-plan-review-checks-who-owns-the-knowledge-at-a-seam/drafts/20261112T195514Z-let-a-read-only-judge-decline-a-manager-ruling-t", "transcripts": "onepipeline transcript User-rulings-bind--manager-rulings-are-challengeable--and-plan-review-checks-who-owns-the-knowledge-at-a-seam aio-adopt-ruling-provenance", "witnesses": "none recorded (the source ticket, issue 2499, names no witness)", "verified_at": "2026-11-13T04:36:44Z"}
+  "onetaskgraph.copies": {"followups":"followups:I_kwDOTXCWqs8AAAABe3Kl1w"}
+  "onetaskgraph.copy_locations": {"followups":{"id":"followups:I_kwDOTXCWqs8AAAABe3Kl1w","location":{"url":"https://github.com/nickderobertis/ai-orchestrator/issues/2505"}}}
 ---
 
 > **This is a sample of the proposed follow-up ticket structure, not a ticket**: its content is copied from issue #2499 so the shape can be judged on real text, and it will be closed as not planned once the structure is confirmed.
