@@ -790,6 +790,12 @@ follow-ups-answer-comments *args:
             ;;
         --answer)
             launches=$(onefollowup comments launches --snapshot "$(jq -er '.snapshot' "$gathered")")
+            # Parsed before the loop, so a launch list jq cannot read fails the step rather than
+            # leaving the loop below nothing to run.
+            listed=$(jq -er '.launches[] | [.batch, .feedback] | @tsv' <<<"$launches" || jq -e '.launches == []' <<<"$launches" >/dev/null) || {
+                echo "follow-ups-answer-comments: onefollowup comments launches answered a launch list this step cannot read; adopt the release config/onefollowup.version names with 'just bootstrap', then rerun 'just follow-ups-answer-comments'" >&2
+                exit 2
+            }
             loader=$(mktemp)
             trap 'rm -f "$loader"' EXIT
             onepipeline template resolve follow-up-task --json >"$loader"
@@ -807,7 +813,7 @@ follow-ups-answer-comments *args:
                     --metadata 'orchestrator.plan-kind={"kind": "follow-ups", "nodes": ["answer"]}' >/dev/null
                 ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off \
                     --label kind=follow-ups --success-hook= --failure-hook= --pr-author-graph= || failed=1
-            done < <(jq -r '.launches[] | [.batch, .feedback] | @tsv' <<<"$launches")
+            done <<<"$listed"
             exit "$failed"
             ;;
         --settle)

@@ -801,3 +801,20 @@ def test_a_node_draft_with_no_node_named_reads_the_whole_runs_turns(verified: Ve
     # onefollowup records a node author whose node is not named as an unresolved one.
     assert record["author"] == {"kind": "node", "node": "unresolved", "member": None}
     assert record["transcript"] == f"onepipeline transcript {verified.run}"
+
+
+@pytest.mark.xdist_group("follow-ups")
+def test_the_verifying_agent_is_pointed_at_the_task_prepare_wrote(verified: Verified) -> None:
+    """The verify node's task names the task file `onefollowup prepare` says it rendered.
+
+    The plan names that file before prepare runs, from onefollowup's working-file layout, so
+    this holds the pointer to prepare's own answer; settle has retired the file itself.
+    """
+    follow_up = Path(verified.environment["ONEPIPELINE_RUNS_DIR"]) / verified.follow_up
+    log = (follow_up / "commands" / "prepare.log").read_text("utf-8")
+    prepared = json.loads(log[log.index("{") :])
+    task_template = Path(prepared["task_template"])
+
+    plan = json.loads((follow_up / "plan.json").read_text("utf-8"))
+    (verify,) = [task for task in plan["tasks"] if task["id"] == "verify"]
+    assert str(task_template) in verify["task"], verify["task"]

@@ -40,7 +40,8 @@ export PATH="$checkout/node_modules/.bin:$checkout/.venv/bin:$PATH"
 #: `tests/family_scans/test_follow_up_ownership.py` holds them.
 RUN_ID='^[A-Za-z0-9_-]+$'
 
-envelope=$(cat)
+envelope=$(cat) ||
+    fail "standard input could not be read; run this as onefollowup.yaml's hooks.batch_preparing, which hands it the batch envelope, then retry"
 run=$(jq -er --arg grammar "$RUN_ID" 'select(.schema_version == 1) | .batch | select(type == "string" and test($grammar))' <<<"$envelope") ||
     fail "standard input is not onefollowup's batch_preparing envelope, {\"schema_version\": 1, \"batch\": \"<run id>\"}; run this as onefollowup.yaml's hooks.batch_preparing, which hands it that"
 runs=${ONEPIPELINE_RUNS_DIR:-$checkout/runs}
@@ -115,7 +116,7 @@ jq -ce --arg run "$run" --argjson errored "$errored" '
         + (if $errored then [{
             id: "budget-unanswered:errored",
             source: "budget-unanswered",
-            summary: "A delivery budget measurement errored for at least one of run \($run)'"'"'s landed changes, and the over-only report does not say which",
+            summary: "A delivery budget measurement errored for at least one landed change of run \($run), and the over-only report does not say which",
             detail: ({run: $run, nodes: [.subjects[].context.node],
                 reason: "onebudgetspec check exited 3: a measurement errored, which --over-only leaves out of its report"} | tostring)
         }] else [] end)

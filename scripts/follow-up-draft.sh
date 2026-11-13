@@ -76,7 +76,10 @@ case "$author" in
         [ -n "$member" ] || { echo "follow-up-draft: --as monitor names its member with --member; usage: $usage" >&2; exit 2; }
         label="monitor:$member"
         # The filter is JSON jq builds from the member, so any member name stays valid JSON.
-        filter=$(jq -nc --arg member "$member" '{include: [{member: $member}]}')
+        filter=$(jq -nc --arg member "$member" '{include: [{member: $member}]}') || {
+            echo "follow-up-draft: jq could not build the monitor's transcript filter; install jq (provision this checkout with 'just bootstrap'), then retry" >&2
+            exit 2
+        }
         stamps=(--stamp "transcript=onepipeline monitor $run_word --filter $(printf %q "$filter")")
         ;;
     manager) label=manager ;;
