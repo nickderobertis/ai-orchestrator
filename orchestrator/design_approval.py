@@ -49,10 +49,10 @@ for the identifier that did exactly that.
 
 **One exemption exists, and what it is scoped to is the half worth reading.** A planning
 *launch* is exempt, because that run's output is the plan and the document it will be read
-as does not exist until the run has written one. The project `just follow-ups`
-writes is exempt on the same terms and under the same bound, stamped as its own kind: its
-nodes verify a finished run's drafted follow-ups through onefollowup, and there is no plan
-for a person to read it as. So is the spikes project a planning flow launches between its draft and its
+as does not exist until the run has written one. The project `just follow-ups` writes is
+exempt on the same terms and under the same bound, stamped as its own kind: its nodes verify
+a finished run's drafted follow-ups through onefollowup, and there is no plan for a person to
+read it as. So is the spikes project a planning flow launches between its draft and its
 finalize, stamped `spikes`: its nodes measure what the plan's budgets and design rest on, and
 the document a person approves is the plan's, written only once the planner has finalized
 from what they found. That is a statement about a launch with

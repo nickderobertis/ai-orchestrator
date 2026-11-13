@@ -332,6 +332,13 @@ def test_an_answer_that_is_not_the_engines_reading_is_unreadable(answer: str, sa
     assert said in str(refused.value)
 
 
+# llmlint: ignore-block[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] This
+# module's project, the root `orchestrator`, splits its tiers by pytest marker over the keys of its
+# four targets. The subject of the tests below is the engine's registered checkout, read at the
+# pinned tag the way `tests/test_engine_contracts.py` reads it, which lives outside this workspace
+# and so outside every one of those keys — hence `reads_checkouts`, the uncached tier, where a memo
+# cannot replay a green across the pin bump these exist to catch.
+#: The published document, at the release `config/onepipeline.version` pins.
 def _schema() -> dict[str, object]:
     document: object = json.loads(_source(ONEPIPELINE_SCHEMAS, "run-reading.schema.json"))
     assert isinstance(document, dict)

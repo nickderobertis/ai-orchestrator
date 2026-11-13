@@ -61,11 +61,55 @@ RUN_ENDED = "scripts/run-ended.sh"
 #: The shell's own plumbing, which composes and decides nothing about follow-ups.
 PLUMBING = frozenset(
     {
-        "set", "export", "local", "echo", "printf", "cat", "exit", "exec", "shift", "case",
-        "esac", "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "until",
-        "read", "return", "trap", "rm", "mktemp", "dirname", "basename", "cd", "pwd",
-        "sort", "tee", "date", "tr", "[", "[[", "test", ":", "true", "false", "continue",
-        "break", "esac", "{", "}", "(", ")", "!", "command", "printf", "wait",
+        "set",
+        "export",
+        "local",
+        "echo",
+        "printf",
+        "cat",
+        "exit",
+        "exec",
+        "shift",
+        "case",
+        "esac",
+        "if",
+        "then",
+        "else",
+        "elif",
+        "fi",
+        "for",
+        "while",
+        "do",
+        "done",
+        "until",
+        "read",
+        "return",
+        "trap",
+        "rm",
+        "mktemp",
+        "dirname",
+        "basename",
+        "cd",
+        "pwd",
+        "sort",
+        "tee",
+        "date",
+        "tr",
+        "[",
+        "[[",
+        "test",
+        ":",
+        "true",
+        "false",
+        "continue",
+        "break",
+        "{",
+        "}",
+        "(",
+        ")",
+        "!",
+        "command",
+        "wait",
     }
 )
 
@@ -202,7 +246,8 @@ def test_each_wrapper_runs_only_the_verbs_it_composes(wrapper: str) -> None:
     ran = commands(text)
 
     assert ran <= allowed, sorted(ran - allowed)
-    assert "python" not in text and "orchestrator." not in text.replace("orchestrator.plan-kind", "")
+    assert "python" not in text
+    assert "orchestrator." not in text.replace("orchestrator.plan-kind", "")
 
 
 def test_the_success_branch_of_the_run_end_hook_only_launches_the_follow_ups_recipe() -> None:

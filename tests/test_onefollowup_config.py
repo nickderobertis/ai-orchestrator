@@ -59,8 +59,6 @@ def test_onefollowup_resolves_those_keys_from_the_file_and_every_other_from_its_
     from_file = {key for key, source in sources.items() if source["layer"] == "file"}
     assert from_file == set(STATED)
     assert {sources[key]["name"] for key in from_file} == {str(CONFIG)}
-    assert {source["layer"] for key, source in sources.items() if key not in STATED} == {
-        "default"
-    }
+    assert {source["layer"] for key, source in sources.items() if key not in STATED} == {"default"}
     for key, value in STATED.items():
         assert document["config"][key] == value
