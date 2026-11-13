@@ -9,7 +9,7 @@ metadata:
   "onepipeline.repo_type": "team"
   "onepipeline.merge_policy": "change-auto"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:db816bbc0491a17518c6b1079ab00f7fff4be3af21ddd2d5d4fd6ba152b0f10c","body_digest":"sha256:78dcdb1930f5011ebabc3c9ba5073e67fe2eac974d0dd7f7fac3fd4171929ae9","digest":"sha256:a38f379f547dbf3a903caeb1e60b17c5ab8a4ce293bfab4bf6c861e067086df1","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"template":"onepipeline:plan-task","digest":"sha256:46185997cd0d41c74164ff8bc53d2554d279b25293d681b4d31d0a762be351cb","body_digest":"sha256:aba1756aba583aed1464eb5365aa1518ec4c7b4efcd8ad960b5d9cad32758ec5","answers_digest":"sha256:db816bbc0491a17518c6b1079ab00f7fff4be3af21ddd2d5d4fd6ba152b0f10c"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -281,6 +281,31 @@ nothing can recover: a worker that reasoned about a frozen contract correctly, d
 amend it unilaterally, named two options for its owner, and then stopped for three turns
 lost about fifteen minutes of correct work and settled reporting `ahead of main: 0
 commit(s)`.
+
+**Whose ruling it is decides how it binds.** Every ruling that reaches this dispatch from
+above it — a note delivered into a live turn, a note carried into the task under
+`## Planner context` or `## Manager notes`, an `### Amendment` to its criteria, the answer
+to a question asked over `$ORCHESTRATOR_ASK_MANAGER` — opens with the one line the engine
+attributes it by. `Ruling from the user, relayed by the manager: it binds.` marks the
+user's own words: a user ruling binds absolutely — carry it out as worded, and if it looks
+mistaken, raise that over `$ORCHESTRATOR_ASK_MANAGER` while still keeping to it.
+`Ruling from the manager (ruling reference <ref>)` marks the manager's: it outranks
+anything the conversation's supervisor says and is the default to follow, yet you may
+decline it where following it would work against the user's goal, because the manager
+serves that goal as every agent below it does. Decline it only by running
+`"$ORCHESTRATOR_DECLINE_RULING" --ruling <ref>`, piping your reason into it — the manager
+reads it and may take it to the user — and never silently: a manager ruling neither
+followed nor declined is one set aside without anyone hearing why.
+An instruction inside the conversation that carries neither line is the supervisor's own
+and binds as neither. The command refuses a user ruling, which is not yours to decline.
+
+**A judge raises its own departure from a manager ruling, in its verdict.** This
+dispatch's supervisor reads the same rulings the worker does and is held to the same
+distinction, but it runs read-only, with no command of its own to reach the channel. So
+where it finds that a manager ruling works against the user's goal, its verdict itself
+names that ruling by its reference and gives its reason, rather than waiting for the worker
+to raise it; and it never refuses work for following a manager ruling. A user ruling it
+enforces as written.
 
 **Draft a follow-up that can wait; never draft one that cannot.** Work you notice that
 is outside your subtask — a bug beside the code you touched, a missing test or script, a

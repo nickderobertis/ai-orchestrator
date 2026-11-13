@@ -8,7 +8,7 @@ metadata:
   "orchestrator.unit": "Health endpoint"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:dc2a9217bfc72da6dc21cd511148eccd9577af71e90a1809422e4e1db86adeab","body_digest":"sha256:75c0cc72f0cfc051fe638f91e02b0136622d908601f0d1eaf4955e74613b1ad8","digest":"sha256:a38f379f547dbf3a903caeb1e60b17c5ab8a4ce293bfab4bf6c861e067086df1","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"template":"onepipeline:plan-task","digest":"sha256:46185997cd0d41c74164ff8bc53d2554d279b25293d681b4d31d0a762be351cb","body_digest":"sha256:b47d76ca07d4fd91ee5ef3f6515227641ecaac569dd3f8bb249e96fd9470e75e","answers_digest":"sha256:dc2a9217bfc72da6dc21cd511148eccd9577af71e90a1809422e4e1db86adeab"}
   "orchestrator.budgets": [{"basis":"estimate","check_runtime_seconds":3,"command":"python scripts/budgets/health_latency.py .budgets/health-requests.jsonl","direction":"max","evidence":"Estimate: the handler returns build metadata fixed at startup and reads no store, so its time is routing and serialization, a few milliseconds; 50 ms leaves headroom for a loaded test host.","file":"budgets.yaml","file_change":"add","id":"health-endpoint-p95-latency","inner_measure_reason":"","measure":"The 95th-percentile time a poller waits for `GET /health`, from the request sent to the response read through the service's real HTTP stack, over the requests the endpoint's request tests record; its analysis reports the median and the slowest request as its breakdown.","name":"Health endpoint p95 latency","repository":"github.com/nickderobertis/some-service","schema_version":2,"source":"telemetry","threshold":50,"unit":"ms","workload":"200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes."}]
 ---
 ## What
@@ -298,6 +298,31 @@ nothing can recover: a worker that reasoned about a frozen contract correctly, d
 amend it unilaterally, named two options for its owner, and then stopped for three turns
 lost about fifteen minutes of correct work and settled reporting `ahead of main: 0
 commit(s)`.
+
+**Whose ruling it is decides how it binds.** Every ruling that reaches this dispatch from
+above it — a note delivered into a live turn, a note carried into the task under
+`## Planner context` or `## Manager notes`, an `### Amendment` to its criteria, the answer
+to a question asked over `$ORCHESTRATOR_ASK_MANAGER` — opens with the one line the engine
+attributes it by. `Ruling from the user, relayed by the manager: it binds.` marks the
+user's own words: a user ruling binds absolutely — carry it out as worded, and if it looks
+mistaken, raise that over `$ORCHESTRATOR_ASK_MANAGER` while still keeping to it.
+`Ruling from the manager (ruling reference <ref>)` marks the manager's: it outranks
+anything the conversation's supervisor says and is the default to follow, yet you may
+decline it where following it would work against the user's goal, because the manager
+serves that goal as every agent below it does. Decline it only by running
+`"$ORCHESTRATOR_DECLINE_RULING" --ruling <ref>`, piping your reason into it — the manager
+reads it and may take it to the user — and never silently: a manager ruling neither
+followed nor declined is one set aside without anyone hearing why.
+An instruction inside the conversation that carries neither line is the supervisor's own
+and binds as neither. The command refuses a user ruling, which is not yours to decline.
+
+**A judge raises its own departure from a manager ruling, in its verdict.** This
+dispatch's supervisor reads the same rulings the worker does and is held to the same
+distinction, but it runs read-only, with no command of its own to reach the channel. So
+where it finds that a manager ruling works against the user's goal, its verdict itself
+names that ruling by its reference and gives its reason, rather than waiting for the worker
+to raise it; and it never refuses work for following a manager ruling. A user ruling it
+enforces as written.
 
 **Draft a follow-up that can wait; never draft one that cannot.** Work you notice that
 is outside your subtask — a bug beside the code you touched, a missing test or script, a
