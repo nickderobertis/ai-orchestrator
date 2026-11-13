@@ -2,11 +2,12 @@
 
 The realistic journeys are `tests/e2e/board_copy_approval/test_design_review_items_e2e.py` —
 the design review raised, completed from the CLI and the browser, refused for a changed
-document, and completed by `just approve-design`, over the real plan store — and the follow-up
-review raised by `onefollowup settle`'s `batch_settled` hook in the verifying journey under
-`tests/e2e/follow_ups/`. What is proven here is every branch of the host's thin interface, in
-process: what it hands the engine, and how it reads each of the engine's answers, including the
-ones no journey reaches without breaking a store.
+document, and completed by `just approve-design`, over the real plan store. The follow-up
+review is not raised yet: the verifying journey under `tests/e2e/follow_ups/` holds
+`onefollowup settle`'s `batch_settled` hook to the engine's refusal of it. What is proven here
+is every branch of the host's thin interface, in process: what it hands the engine, and how it
+reads each of the engine's answers, including the ones no journey reaches without breaking a
+store.
 
 The engine is the real one, run through `scripts/onepipeline.sh` with its live store under a
 runs root of each test's own and human items enabled by a host-local file, as a host enables

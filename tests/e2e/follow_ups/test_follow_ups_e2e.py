@@ -645,6 +645,32 @@ def test_a_persons_comment_is_answered_once_and_a_second_pass_answers_nothing(
     assert _replies(verified, item, comment) == 1
 
 
+def _draft_record(case: Verified, title: str) -> dict[str, object]:
+    """The draft record onefollowup stored for ``title``, as its front matter holds it."""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    text = (case.store.drafts / "tasks" / f"{slug}.md").read_text("utf-8")
+    record: dict[str, object] = yaml.safe_load(text.split("---\n")[1])["metadata"][
+        "orchestrator.follow-up-draft"
+    ]
+    return record
+
+
+@pytest.mark.xdist_group("follow-ups")
+def test_each_draft_names_who_drafted_it_and_where_its_turns_are_read(
+    verified: Verified,
+) -> None:
+    """The worker's draft names its node and its transcript read; the manager's names neither."""
+    worker = _draft_record(verified, NEW_TITLE)
+    assert worker["run"] == verified.run
+    assert worker["author"] == {"kind": "node", "node": verified.over.node, "member": None}
+    assert worker["transcript"] == f"onepipeline transcript {verified.run} {verified.over.node}"
+
+    manager = _draft_record(verified, EVIDENCE_TITLE)
+    assert manager["run"] == verified.run
+    assert manager["author"] == {"kind": "manager", "node": None, "member": None}
+    assert manager["transcript"] is None
+
+
 #: The draft the run's monitor writes, after the run, through the same drafting command.
 MONITOR_TITLE = "The monitor saw a stale document"
 

@@ -59,11 +59,18 @@ EOF
 done
 
 [ -n "$run" ] || { echo "follow-up-draft: no run is named: pass --run RUN-ID, or draft from inside a dispatch, whose ONEPIPELINE_RUN_ID names it; usage: $usage" >&2; exit 2; }
+# The run and the node are written into the transcript stamp's command, so each is held to an
+# identifier's grammar: one word of letters, digits, '_' and '-'.
+identifier='^[A-Za-z0-9_-]+$'
+# llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
+[[ "$run" =~ $identifier ]] || { echo "follow-up-draft: the run '$run' is not a run id: one word of letters, digits, '_' and '-'; name it as 'just runs' prints it; usage: $usage" >&2; exit 2; }
 
 stamps=()
 case "$author" in
     node)
         node=${ONEPIPELINE_NODE_ID:-}
+        # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
+        [ -z "$node" ] || [[ "$node" =~ $identifier ]] || { echo "follow-up-draft: ONEPIPELINE_NODE_ID '$node' is not a node id: one word of letters, digits, '_' and '-'; draft from the dispatch the engine started, which sets it; usage: $usage" >&2; exit 2; }
         label="node${node:+:$node}"
         stamps=(--stamp "transcript=onepipeline transcript $run${node:+ $node}")
         ;;

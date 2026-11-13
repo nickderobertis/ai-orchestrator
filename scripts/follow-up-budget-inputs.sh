@@ -76,7 +76,7 @@ status=0
 report=$(onebudgetspec check --subjects - --label onepipeline --over-only --json <<<"$subjects") || status=$?
 case "$status" in
     0 | 1 | 3) ;;
-    *) fail "onebudgetspec refused the budget check of run '$run' (status $status); its diagnostic above names why" ;;
+    *) fail "onebudgetspec refused the budget check of run '$run' (status $status), most often over a budgets.yaml it cannot read; run 'onebudgetspec check' in each publication checkout the diagnostic above names, repair the file it refuses, then rerun 'just follow-ups $run'" ;;
 esac
 errored=false
 [ "$status" -ne 3 ] || errored=true
@@ -87,10 +87,13 @@ jq -ce --arg run "$run" --argjson errored "$errored" '
         then . else error("an over result without its budget id, actual, threshold or unit") end;
     def unanswered: if (.reason | type) == "string"
         then . else error("an unanswered subject without its reason") end;
+    def change: if (.node | type) == "string" and (.landing | type) == "string"
+        and (.repository | type) == "string" and ((.change | type) == "string" or .change == null)
+        then . else error("a subject whose context is not the change this hook handed it") end;
     {
     schema_version: 1,
     inputs: (
-        [.subjects[] | .context as $change | .report.results[] | over | {
+        [.subjects[] | (.context | change) as $change | .report.results[] | over | {
             id: "budget-overrun:\($change.node):\(.id)",
             source: "budget-overrun",
             summary: "The change node \($change.node) landed as \($change.landing) went over the delivery budget \(.id): \(.actual) \(.unit) against \(.threshold)",
@@ -98,7 +101,7 @@ jq -ce --arg run "$run" --argjson errored "$errored" '
                 repository: $change.repository, budget: .id, actual, threshold, unit,
                 direction, detail, file} | tostring)
         }]
-        + [.unanswered[] | unanswered | .context as $change | {
+        + [.unanswered[] | unanswered | (.context | change) as $change | {
             id: "budget-unanswered:\($change.node)",
             source: "budget-unanswered",
             summary: "The change node \($change.node) landed as \($change.landing) could not be checked against its delivery budgets",
