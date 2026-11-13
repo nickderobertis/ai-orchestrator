@@ -2779,9 +2779,15 @@ def test_follow_up_request_prices_match_the_adopted_stores_table() -> None:
         check=False,
     )
     assert library.returncode == 0, library.stderr
+    # Only the plain `PRICES` table: from 0.14.14 the same file also prices each document
+    # a source opted in to assignees sends (`OPTED_PRICES`), and no source here opts in.
+    plain = re.search(
+        r"const PRICES: &\[\(&str, u64\)\] = &\[(?P<rows>.*?)\n\];", source.stdout, re.S
+    )
+    assert plain is not None, f"v{ADOPTED}'s point_cost.rs no longer declares `const PRICES`"
     upstream = dict(
         (name, int(price))
-        for name, price in re.findall(r"\(graphql::([A-Z_]+), (\d+)\)", source.stdout)
+        for name, price in re.findall(r"\(graphql::([A-Z_]+), (\d+)\)", plain["rows"])
     )
     for price in REQUEST_PRICES.values():
         assert upstream.get(price.document) == price.points, (

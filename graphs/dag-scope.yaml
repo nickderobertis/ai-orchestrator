@@ -59,7 +59,7 @@ members:
     # The channel directory is the run's own, and an argv cannot name a run it is not
     # told: the engine exports `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID` to both
     # sides of an observer member —
-    # measured against onepipeline 0.110.0 on both of that member's sides, by dumping
+    # measured against onepipeline 0.110.2 on both of that member's sides, by dumping
     # each one's whole environment on the suite's real launches with their paid model
     # doubled (tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py re-takes
     # it every gate run) — so the command composes the directory from those and nothing

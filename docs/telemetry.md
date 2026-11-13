@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.110.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.110.2 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -468,17 +468,18 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.81.1**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.81.2**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 28 on the envelope, as 0.80.0 and 0.79.0
-   served, where 0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
+   what re-opens this paragraph: `telemetry_schema_version` 29 on the envelope, where 0.81.1, 0.81.0, 0.80.0 and 0.79.0
+   served 28, 0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
    0.48.1 served 24, 0.44.0 served 21, 0.13.0 served 20 and
    0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15 — 26 reads every
    turn whole from the history file its record points at, through the engine's transcript
    resolver, and marks the turn's transcript unavailable where that file cannot be read, and
    27 serves a node's `complete-but-draft` and `complete-but-held` statuses as themselves and
-   gives a node's result the `awaiting` releases its settlement still awaits, and 28 opens
-   a run progressively, each view's shape stated by onepipeline-ui's own `docs/contract.md`;
+   gives a node's result the `awaiting` releases its settlement still awaits, 28 opens
+   a run progressively, and 29 serves a plan task's and a node result's `command` kind and
+   lists a run's refused edits, each view's shape stated by onepipeline-ui's own `docs/contract.md`;
    `timeline_schema_version` 15, where 0.65.4, 0.62.1, 0.62.0, 0.61.0, 0.60.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served 14, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
    11 and 0.21.1 served 10 — 15 carries each check’s requirement label and recorded URL, and 14 gives every `turn-started`, `turn-message` and
    `turn-activity` event a one-line `description` the engine's resolver writes, 13 counts a
@@ -492,8 +493,9 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
-   runs read here. On 0.80.0, ten of this host's own recent runs served both schema
-   numbers above, and 0.81.0 and 0.81.1 declare the same two in their own `src/contract.rs`.
+   runs read here. On 0.80.0, ten of this host's own recent runs served telemetry 28
+   and timeline 15, and 0.81.0 and 0.81.1 declare the same two in their own `src/contract.rs`;
+   0.81.2 declares telemetry 29 and timeline 15 there.
    On 0.12.1 this was re-read against the recorded runs under
    `tests/fixtures/timeline-runs/`, which serve both schema numbers, every phase above,
    and every span kind but `human-wait`, which none of those runs records.

@@ -24,7 +24,11 @@
 # llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer (see header): `set -e` is omitted so a flaky install can't abort the hook — the script owns its exit codes and always exits 0; success logs progress while failures log-and-continue rather than block startup; and the toolchain is installed from PyPI (`uv tool install llmlint-cli`) whose wheels ship with Trusted Publishing + PEP 740 attestations, so no unvalidated external input is executed.
 set -uo pipefail
 
-# Floor: llmlint >= 0.4.11: `llmlint fingerprint` prints the judge digest the cached
+# Floor: llmlint >= 0.4.13: `llmlint rules` prints the rules that would judge given paths
+# before anything is written, with no harness started and no model called
+# (https://github.com/nickderobertis/llmlint/pull/268); `tests/test_llmlint_release_pin.py`
+# runs it over `config/plan-checklist.llmlint.yml` for a task document not yet written. It subsumes 0.4.11, under which
+# `llmlint fingerprint` prints the judge digest the cached
 # `workspace:lint-llm-diff` target keys on, a reply leaving a selected rule unanswered
 # is refused rather than read as a pass. It is also the release the libyaml-removal plan
 # adopts: from 0.4.8 llmlint reads its configs with `serde-saphyr` in place of
@@ -48,7 +52,7 @@ set -uo pipefail
 # than replacing them. Nothing here passes positional files — `just lint-llm-diff` scopes
 # by `--diff` — so this host is unaffected by that half.
 # llmlint: ignore[changed_behavior_has_e2e] declarative dependency floor only; the installer's selection is driven by tests/e2e/llmlint_installer/test_setup_llmlint_e2e.py.
-readonly LLMLINT_MIN="0.4.11"
+readonly LLMLINT_MIN="0.4.13"
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
 readonly repo_root

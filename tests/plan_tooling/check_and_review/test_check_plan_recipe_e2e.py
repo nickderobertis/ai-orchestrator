@@ -2676,6 +2676,16 @@ def _consumer(**fields: object) -> dict[str, object]:
 
 PRODUCER = {"id": "producer", "title": "feat: release the library", "repo": "library"}
 
+#: How `just check-plan` prefixes a refusal the adopted engine's loader made under a rule
+#: of the `onevcs` it links (`onepipeline` 0.110.2, linking `onevcs` 0.66.0): the source
+#: is `onevcs` and the node is the consumer, followed by the plan field to change.
+ONEVCS_REFUSED = "check-plan: onevcs: consumer: "
+#: What the recipe says of this repository's own check when the loader refused first.
+HOST_CHECK_DID_NOT_RUN = (
+    "check-plan: scripts/plan-check.sh could not be run: the plan loader refused the "
+    "project, so there was no loaded plan to hand this check; it did not run"
+)
+
 
 def _adoption_check(
     tmp_path: Path, *nodes: dict[str, object], environment: dict[str, str] | None = None
@@ -2694,7 +2704,9 @@ def test_a_consumed_target_the_producer_does_not_resolve_is_refused_listing_what
 
     The producer really declares a wheel, in its origin's first commit where `onevcs`
     reads a declaration from, so what the refusal lists is what the real verb resolved
-    rather than what the plan claimed.
+    rather than what the plan claimed. The adopted engine's loader asks the `onevcs` it
+    links first and refuses under that library's rule, so this repository's own check —
+    which states the same rule — never runs on the refused plan.
     """
     registered(
         tmp_path / "registry",
@@ -2707,11 +2719,13 @@ def test_a_consumed_target_the_producer_does_not_resolve_is_refused_listing_what
     accepted = _adoption_check(tmp_path, PRODUCER, _consumer(consumes={"producer": "pypi"}))
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "check-plan: scripts/plan-check.sh: consumer: consumes:" in refused.stderr, (
-        refused.stderr
-    )
-    assert "'npm'" in refused.stderr, refused.stderr
+    assert (
+        f"{ONEVCS_REFUSED}consumes: dependency 'producer': consumes-undeclared-target: "
+        in refused.stderr
+    ), refused.stderr
+    assert 'the target "npm"' in refused.stderr, refused.stderr
     assert "resolves: pypi" in refused.stderr, refused.stderr
+    assert HOST_CHECK_DID_NOT_RUN in refused.stderr, refused.stderr
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert "2 dispatched node(s)" in accepted.stdout, accepted.stdout
 
@@ -2719,11 +2733,15 @@ def test_a_consumed_target_the_producer_does_not_resolve_is_refused_listing_what
 def test_a_published_node_with_no_target_to_wait_on_is_refused_as_held_for_ever(
     tmp_path: Path,
 ) -> None:
-    """R3: the hold nothing can end, with the node's rung read out of the real override.
+    """R3: the hold nothing can end, refused by the adopted engine under onevcs's rule.
 
     The node states no `adoption` of its own; `published` is what `onevcs` answers for
-    its repository out of the `releases.yml` seeded into the scratch registry — so the
-    rung the engine would hold it on is the one this refusal read.
+    its repository out of the `releases.yml` seeded into the scratch registry, and the
+    producer declares a wheel with no `default_target` resolved for it. The adopted
+    engine's loader asks the `onevcs` it links whether that adoption can complete and
+    refuses the plan as it loads, the refusal attributed to `onevcs` and naming its rule,
+    `published-no-target` — so this repository's own check, which states the same rule,
+    is never handed the plan. Naming the target, the correction the refusal names, loads.
     """
     root = tmp_path / "registry"
     registered(
@@ -2741,12 +2759,13 @@ def test_a_published_node_with_no_target_to_wait_on_is_refused_as_held_for_ever(
     )
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "check-plan: scripts/plan-check.sh: consumer: adoption:" in refused.stderr, (
-        refused.stderr
-    )
-    assert "held for ever" in refused.stderr, refused.stderr
-    assert "`consumes: {producer: <target>}`" in refused.stderr, refused.stderr
-    assert "`default_target` in config/onevcs.releases.yml" in refused.stderr, refused.stderr
+    assert (
+        f"{ONEVCS_REFUSED}adoption: dependency 'producer': published-no-target: " in refused.stderr
+    ), refused.stderr
+    assert "no target is resolved for that wait" in refused.stderr, refused.stderr
+    assert "has no `default_target`" in refused.stderr, refused.stderr
+    assert HOST_CHECK_DID_NOT_RUN in refused.stderr, refused.stderr
+    assert _adoption_refusals(refused) == [], refused.stderr
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
 
 
@@ -2895,7 +2914,10 @@ def test_every_adoption_refusal_of_a_plan_is_reported_together(tmp_path: Path) -
     """The verb collects every refusal the rules make, one per node, in one report.
 
     Two violations in one plan, one per node, so a report naming only the first would be
-    visibly short; on a plan carrying one violation the report names that one.
+    visibly short; on a plan carrying one violation the report names that one. Both are
+    the `fast` node publishing `local-direct` behind a release, which only this
+    repository's check refuses: a `published` node with no target is the adopted engine's
+    loader's to refuse, and a loader refusal hands this check no plan at all.
     """
     root = tmp_path / "registry"
     registered(
@@ -2904,11 +2926,11 @@ def test_every_adoption_refusal_of_a_plan_is_reported_together(tmp_path: Path) -
         declarations={"library": _declaring(WHEEL)},
         releases=_releases(root, service={"adoption": "published"}),
     )
-    held = _consumer(id="held")
+    landed = _consumer(id="landed", adoption="fast")
     drafted = _consumer(id="drafted", adoption="fast")
-    two = project_from_plan(_publishing_plan(tmp_path, PRODUCER, held, drafted))
+    two = project_from_plan(_publishing_plan(tmp_path, PRODUCER, landed, drafted))
     (tmp_path / "one").mkdir()
-    one = project_from_plan(_publishing_plan(tmp_path / "one", PRODUCER, held))
+    one = project_from_plan(_publishing_plan(tmp_path / "one", PRODUCER, drafted))
     registry = _in_registry(root / "onevcs")
 
     through = _check_project(two, environment=registry)
@@ -2920,9 +2942,9 @@ def test_every_adoption_refusal_of_a_plan_is_reported_together(tmp_path: Path) -
         for line in through.stderr.splitlines()
         if line.startswith("check-plan: scripts/plan-check.sh: ")
     ]
-    assert {line.split(": ")[0] for line in collected} == {"held", "drafted"}, collected
+    assert {line.split(": ")[0] for line in collected} == {"landed", "drafted"}, collected
     assert through_one.returncode == 1, through_one.stdout + through_one.stderr
-    assert "held: adoption: this node adopts `published`" in through_one.stderr, through_one.stderr
+    assert "drafted: adoption: this node adopts `fast`" in through_one.stderr, through_one.stderr
 
 
 #: The tracked override, which the journeys below install over producers registered under
@@ -3096,14 +3118,25 @@ def test_a_node_of_this_repository_awaits_llmlints_wheel_with_no_refusal(
 def test_the_same_wait_behind_a_producer_with_no_rule_is_held_for_ever(
     tmp_path: Path, tracked_override: dict[str, str]
 ) -> None:
-    """Without a rule in the override there is no target to wait for, and that is refused."""
+    """Without a rule in the override there is no target to wait for, and that is refused.
+
+    Under this host's tracked override, by the adopted engine's loader: the `onevcs` it
+    links answers that this `published` wait can never complete, so the refusal is
+    attributed to `onevcs` and names its rule, and this repository's own check, handed no
+    loaded plan, does not run.
+    """
     checked = _adoption_check(tmp_path, *_behind(UNRULED), environment=tracked_override)
 
     assert checked.returncode == 1, checked.stdout + checked.stderr
-    (refused,) = _adoption_refusals(checked)
-    assert refused.startswith("check-plan: scripts/plan-check.sh: adopting: adoption:"), refused
-    assert "held for ever" in refused, refused
-    assert "no `default_target`" in refused, refused
+    (refused,) = [
+        line for line in checked.stderr.splitlines() if line.startswith("check-plan: onevcs: ")
+    ]
+    assert refused.startswith(
+        "check-plan: onevcs: adopting: adoption: dependency 'released': published-no-target: "
+    ), refused
+    assert f"{UNRULED} has no `default_target`" in refused, refused
+    assert HOST_CHECK_DID_NOT_RUN in checked.stderr, checked.stderr
+    assert _adoption_refusals(checked) == [], checked.stderr
 
 
 def test_a_node_of_this_repository_waiting_on_llmlints_crate_is_still_refused(
