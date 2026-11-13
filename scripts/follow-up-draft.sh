@@ -61,16 +61,18 @@ done
 [ -n "$run" ] || { echo "follow-up-draft: no run is named: pass --run RUN-ID, or draft from inside a dispatch, whose ONEPIPELINE_RUN_ID names it; usage: $usage" >&2; exit 2; }
 # The run and the node are written into the transcript stamp's command, so each is held to an
 # identifier's grammar: one word of letters, digits, '_' and '-'.
-identifier='^[A-Za-z0-9_-]+$'
+#: The grammar of a run id, which a node id and a public id share; the same in every script
+#: that holds one to it, as `tests/family_scans/test_follow_up_ownership.py` holds them.
+RUN_ID='^[A-Za-z0-9_-]+$'
 # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
-[[ "$run" =~ $identifier ]] || { echo "follow-up-draft: the run '$run' is not a run id: one word of letters, digits, '_' and '-'; name it as 'just runs' prints it; usage: $usage" >&2; exit 2; }
+[[ "$run" =~ $RUN_ID ]] || { echo "follow-up-draft: the run '$run' is not a run id: one word of letters, digits, '_' and '-'; name it as 'just runs' prints it; usage: $usage" >&2; exit 2; }
 
 stamps=()
 case "$author" in
     node)
         node=${ONEPIPELINE_NODE_ID:-}
         # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
-        [ -z "$node" ] || [[ "$node" =~ $identifier ]] || { echo "follow-up-draft: ONEPIPELINE_NODE_ID '$node' is not a node id: one word of letters, digits, '_' and '-'; draft from the dispatch the engine started, which sets it; usage: $usage" >&2; exit 2; }
+        [ -z "$node" ] || [[ "$node" =~ $RUN_ID ]] || { echo "follow-up-draft: ONEPIPELINE_NODE_ID '$node' is not a node id: one word of letters, digits, '_' and '-'; draft from the dispatch the engine started, which sets it; usage: $usage" >&2; exit 2; }
         label="node${node:+:$node}"
         stamps=(--stamp "transcript=onepipeline transcript $run${node:+ $node}")
         ;;
@@ -93,7 +95,7 @@ done
 
 # The batch is the run's public id as the engine reads it: one word, as a run id is.
 # llmlint: ignore[changed_behavior_has_e2e] The engine names a public id other than the run id only for a run whose id carries a private repository's term, and a draft into such a run carries that id in its transcript stamp, which the store refuses on the drafts source this host declares no visibility for (the onefollowup gap drafted upstream); no journey can land one until that is fixed, and the journeys hold this read where the two ids agree.
-batch=$("$engine" status "$run" --json | jq -er '.public_id | select(type == "string" and test("^[A-Za-z0-9_-]+$"))') || {
+batch=$("$engine" status "$run" --json | jq -er --arg grammar "$RUN_ID" '.public_id | select(type == "string" and test($grammar))') || {
     echo "follow-up-draft: the engine named no public id for run '$run', so there is no batch to draft into; check the run with 'just status $run', then retry" >&2
     exit 2
 }

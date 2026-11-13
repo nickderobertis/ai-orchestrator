@@ -36,8 +36,12 @@ checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd) ||
     fail "the checkout this hook belongs to could not be resolved; name it by its path in a readable checkout, as onefollowup.yaml does, then retry"
 export PATH="$checkout/node_modules/.bin:$checkout/.venv/bin:$PATH"
 
+#: The grammar of a run id, the same in every script that holds one to it, as
+#: `tests/family_scans/test_follow_up_ownership.py` holds them.
+RUN_ID='^[A-Za-z0-9_-]+$'
+
 envelope=$(cat)
-run=$(jq -er 'select(.schema_version == 1) | .batch | select(type == "string" and test("^[A-Za-z0-9_-]+$"))' <<<"$envelope") ||
+run=$(jq -er --arg grammar "$RUN_ID" 'select(.schema_version == 1) | .batch | select(type == "string" and test($grammar))' <<<"$envelope") ||
     fail "standard input is not onefollowup's batch_preparing envelope, {\"schema_version\": 1, \"batch\": \"<run id>\"}; run this as onefollowup.yaml's hooks.batch_preparing, which hands it that"
 runs=${ONEPIPELINE_RUNS_DIR:-$checkout/runs}
 

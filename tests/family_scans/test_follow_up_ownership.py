@@ -273,3 +273,23 @@ def test_a_file_outside_the_list_that_touches_the_loop_is_named(tmp_path: Path) 
     assert not touches("scripts/new.sh", "# onefollowup owns this\n")
     assert not touches("orchestrator/new.py", '"""onefollowup owns this."""\n')
     assert not touches("orchestrator/new.py", 'ROW = "pypi:onefollowup-cli"\n')
+
+
+#: The scripts that hold a run id to a grammar, each declaring it once as `RUN_ID`.
+RUN_ID_HOLDERS = (RUN_ENDED, "scripts/follow-up-draft.sh", "scripts/follow-up-budget-inputs.sh")
+#: A run-id-shaped grammar literal, wherever it is spelled.
+RUN_ID_LITERAL = re.compile(r"\^\[A-Za-z0-9_-\]\+\$")
+
+
+def test_every_script_holding_a_run_id_states_one_grammar_and_uses_only_it() -> None:
+    """A run id's grammar is declared once per script, identically, and spelled nowhere else."""
+    declared: dict[str, list[str]] = {}
+    for script in RUN_ID_HOLDERS:
+        text = (REPO_ROOT / script).read_text(encoding="utf-8")
+        declared[script] = re.findall(r"^RUN_ID='([^']*)'$", text, re.MULTILINE)
+        assert len(RUN_ID_LITERAL.findall(text)) == 1, (
+            f"{script} must spell a run id's grammar exactly once, as its RUN_ID declaration"
+        )
+
+    assert all(len(found) == 1 for found in declared.values()), declared
+    assert len({found[0] for found in declared.values()}) == 1, declared

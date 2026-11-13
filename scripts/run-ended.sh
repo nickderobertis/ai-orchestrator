@@ -57,7 +57,8 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) || fail "this hook 
     "name it by an absolute path in a readable checkout"
 checkout=$(dirname -- "$script_dir")
 
-#: What a run id is: one word of letters, digits, `_` and `-`.
+#: What a run id is: one word of letters, digits, `_` and `-`; the same in every script that
+#: holds one to it, as `tests/family_scans/test_follow_up_ownership.py` holds them.
 RUN_ID='^[A-Za-z0-9_-]+$'
 
 run=${ONEPIPELINE_RUN_ID:-}
