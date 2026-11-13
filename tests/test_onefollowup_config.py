@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from typing import Any
 
 import yaml
 
@@ -22,7 +21,7 @@ CONFIG = REPO_ROOT / "onefollowup.yaml"
 ONEFOLLOWUP = REPO_ROOT / ".venv" / "bin" / "onefollowup"
 
 #: The file, whole: the keys and values this host states and no others.
-STATED: dict[str, Any] = {
+STATED: dict[str, object] = {
     "destination": "followups",
     "drafts_source": "drafts",
     "hooks": {

@@ -456,7 +456,7 @@ def _verified(root: Path, oneharness_bin: str, failing: bool) -> Iterator[Verifi
             assert not (root / "runs" / f"{run}-follow-ups").exists()
             by_hand = _just(environment, "follow-ups", run, seconds=300)
             assert by_hand.returncode == 0, by_hand.stdout + by_hand.stderr
-            follow_up = by_hand.stdout.split("follow-up run: ", 1)[1].split()[0]
+            follow_up = by_hand.stdout.split("follow-up run: ", 1)[1].split(";")[0]
         else:
             assert launched.returncode == 0, launched.stdout + launched.stderr
             matched = LAUNCHED.search(log)
@@ -609,9 +609,6 @@ def test_settle_runs_the_configured_review_sink_and_the_engine_refuses_it_for_it
     assert settled["hook"]["exit"] == 2
 
 
-# --- answering board comments ------------------------------------------------------------
-
-
 def _replies(case: Verified, item: Path, comment: str) -> int:
     return item.read_text("utf-8").count(f'kind="reply" answers="{comment}"')
 
@@ -646,3 +643,46 @@ def test_a_persons_comment_is_answered_once_and_a_second_pass_answers_nothing(
     second = _just(verified.environment, "follow-ups-answer-comments", seconds=900)
     assert second.returncode == 0, second.stdout + second.stderr
     assert _replies(verified, item, comment) == 1
+
+
+#: The draft the run's monitor writes, after the run, through the same drafting command.
+MONITOR_TITLE = "The monitor saw a stale document"
+
+
+def _monitor_draft(case: Verified, member: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - the drafting command the monitor's prompt names
+        [str(REPO_ROOT / "scripts" / "follow-up-draft.sh"), "--as", "monitor"]
+        + ["--member", member, "--run", case.run, "--title", MONITOR_TITLE]
+        + ["--repository", ABOUT],
+        cwd=REPO_ROOT,
+        env=case.environment,
+        input=DRAFT_BODY,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+
+@pytest.mark.xdist_group("follow-ups")
+def test_the_monitor_drafts_as_its_member_with_the_read_of_its_own_turns(
+    verified: Verified,
+) -> None:
+    """A monitor's draft names its member and the stream read that shows the turns it saw."""
+    if "-failed-" in verified.run:
+        pytest.skip("drafted once, into the success-hook case's batch")
+    refused = _monitor_draft(verified, 'monitor"],"x":["')
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert "is not a member name" in refused.stderr, refused.stderr
+
+    drafted = _monitor_draft(verified, "monitor")
+
+    assert drafted.returncode == 0, drafted.stdout + drafted.stderr
+    path = Path(json.loads(drafted.stdout)["path"])
+    front = yaml.safe_load(path.read_text("utf-8").split("---\n")[1])
+    record = front["metadata"]["orchestrator.follow-up-draft"]
+    assert record["run"] == verified.run
+    assert record["author"] == {"kind": "monitor", "node": None, "member": "monitor"}
+    assert record["transcript"] == (
+        f'onepipeline monitor {verified.run} --filter \'{{"include":[{{"member":"monitor"}}]}}\''
+    )

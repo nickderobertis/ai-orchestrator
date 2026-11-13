@@ -19,7 +19,10 @@ set -euo pipefail
 
 usage="\"\$ORCHESTRATOR_FOLLOW_UP_DRAFT\" --title TITLE --repository HOST/OWNER/NAME [--path PATH]... [--as node|monitor|manager] [--member NAME] [--run RUN-ID] < body.md"
 
-checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd) || {
+    echo "follow-up-draft: refused: the checkout this command belongs to could not be resolved; run it by its path in a readable checkout, then retry" >&2
+    exit 2
+}
 onefollowup="$checkout/.venv/bin/onefollowup"
 engine="$checkout/node_modules/.bin/onepipeline"
 
@@ -66,6 +69,10 @@ case "$author" in
         ;;
     monitor)
         [ -n "$member" ] || { echo "follow-up-draft: --as monitor names its member with --member; usage: $usage" >&2; exit 2; }
+        # The member is written into the stamp's JSON filter, so it is held to a member name's
+        # grammar rather than quoted: one word of letters, digits, '_', '.' and '-'.
+        # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
+        [[ "$member" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "follow-up-draft: --member '$member' is not a member name: one word of letters, digits, '_', '.' and '-'; usage: $usage" >&2; exit 2; }
         label="monitor:$member"
         stamps=(--stamp "transcript=onepipeline monitor $run --filter '{\"include\":[{\"member\":\"$member\"}]}'")
         ;;
@@ -73,7 +80,15 @@ case "$author" in
     *) echo "follow-up-draft: --as is node, monitor or manager, not '$author'; usage: $usage" >&2; exit 2 ;;
 esac
 
-batch=$("$engine" status "$run" --json | jq -er '.public_id')
+for tool in "$engine" "$onefollowup"; do
+    [ -x "$tool" ] || { echo "follow-up-draft: $tool is not installed; provision this checkout with 'just bootstrap', then retry" >&2; exit 2; }
+done
+
+# The batch is the run's public id as the engine reads it: one word, as a run id is.
+batch=$("$engine" status "$run" --json | jq -er '.public_id | select(type == "string" and test("^[A-Za-z0-9_-]+$"))') || {
+    echo "follow-up-draft: the engine named no public id for run '$run', so there is no batch to draft into; check the run with 'just status $run', then retry" >&2
+    exit 2
+}
 
 exec "$onefollowup" --config "${ONEFOLLOWUP_CONFIG:-$checkout/onefollowup.yaml}" \
     --store "${ONEFOLLOWUP_STORE:-$checkout}" draft \

@@ -207,6 +207,11 @@ def commands(text: str) -> set[str]:
     return heads
 
 
+def defined(text: str) -> set[str]:
+    """The shell functions ``text`` defines, whose bodies are scanned as part of ``text``."""
+    return set(re.findall(r"^\s*([A-Za-z_][\w-]*)\(\)\s*\{", text, re.MULTILINE))
+
+
 def _tracked() -> dict[str, str]:
     listed = subprocess.run(
         ["git", "ls-files", "orchestrator", "scripts"],
@@ -241,7 +246,7 @@ def test_only_the_named_wrappers_touch_the_follow_up_loop() -> None:
 def test_each_wrapper_runs_only_the_verbs_it_composes(wrapper: str) -> None:
     text = _subjects()[wrapper]
     allowed = WRAPPERS[wrapper] | PLUMBING | {"just", "./scripts/follow-up-draft.sh"}
-    allowed |= {"$draft", "$engine", "$onefollowup", "${!FOLLOW_UP_DRAFT_ENV}"}
+    allowed |= {"$draft", "$engine", "$onefollowup"} | defined(text)
 
     ran = commands(text)
 

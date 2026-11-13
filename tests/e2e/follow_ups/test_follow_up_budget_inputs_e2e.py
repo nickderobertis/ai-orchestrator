@@ -36,6 +36,8 @@ LANDING = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 OVER = "github.com/nickderobertis/budget-over"
 WITHIN = "github.com/nickderobertis/budget-within"
 UNBUDGETED = "github.com/nickderobertis/budget-none"
+#: A repository whose budget's command fails, so its measurement errors.
+BROKEN = "github.com/nickderobertis/budget-broken"
 
 #: Each landed change's node, the repository it landed in, and the cycle it took.
 CHANGES = {
@@ -65,6 +67,12 @@ def _budget(threshold: int) -> str:
     )
 
 
+# llmlint: ignore-block[tests_mirror_real_usage] This node's acceptance criteria name this
+# test's shape: the real `onepipeline telemetry --changes` over a fixture run directory, so the
+# hook's per-change wiring is held over changes no launch could land on four repositories with
+# chosen cycles. The run root is written in the shapes the engine writes and read only through
+# the engine's own verb; the same hook over a real run's landings is
+# `tests/e2e/follow_ups/test_follow_ups_e2e.py`, which launches one.
 def recorded_run(runs: Path, run: str, changes: dict[str, tuple[str, int]]) -> None:
     """A run root the engine reads, each node landing one change after its cycle."""
     root = run_root(runs, run)
@@ -118,15 +126,23 @@ def recorded_run(runs: Path, run: str, changes: dict[str, tuple[str, int]]) -> N
     )
 
 
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
 def budgeted_host(tmp_path: Path) -> dict[str, str]:
-    """An environment whose onevcs registers the three repositories, two with a budget."""
-    home = boundary_home.registered_home(tmp_path, public=(OVER, WITHIN, UNBUDGETED))
+    """An environment whose onevcs registers the four repositories, three with a budget."""
+    home = boundary_home.registered_home(tmp_path, public=(OVER, WITHIN, UNBUDGETED, BROKEN))
     checkouts = tmp_path / "onevcs-checkouts"
     (checkouts / "github-com__nickderobertis__budget-over" / "budgets.yaml").write_text(
         _budget(10), encoding="utf-8"
     )
     (checkouts / "github-com__nickderobertis__budget-within" / "budgets.yaml").write_text(
         _budget(100), encoding="utf-8"
+    )
+    broken = yaml.safe_load(_budget(10))
+    broken["budgets"][0]["command"] = ["sh", "-c", "echo the measurement failed >&2; exit 7"]
+    (checkouts / "github-com__nickderobertis__budget-broken" / "budgets.yaml").write_text(
+        yaml.safe_dump(broken), encoding="utf-8"
     )
     environment = boundary_home.environment(None, home)
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
@@ -180,6 +196,51 @@ def test_the_hook_names_the_one_change_over_its_budget_and_the_one_it_could_not_
     assert json.loads(unanswered[0]["detail"])["repository"] == UNBUDGETED
     assert len(inputs) == 2, inputs
     assert not any("quick-change" in entry["detail"] for entry in inputs), inputs
+
+
+def test_a_measurement_that_errors_is_relayed_as_unanswered_rather_than_dropped(
+    tmp_path: Path,
+) -> None:
+    """onebudgetspec's over-only report leaves an errored measurement out, saying so by its exit.
+
+    So the hook relays that exit as one `budget-unanswered` input naming every change it may
+    concern, beside the overrun the same run's other change still reports.
+    """
+    environment = budgeted_host(tmp_path)
+    run = f"errored-{os.getpid()}"
+    recorded_run(tmp_path / "runs", run, {"broken-change": (BROKEN, 20), "slow-change": (OVER, 20)})
+
+    answered = _hook(run, environment)
+
+    assert answered.returncode == 0, answered.stderr
+    inputs = json.loads(answered.stdout)["inputs"]
+    assert sorted(entry["source"] for entry in inputs) == [
+        "budget-overrun",
+        "budget-unanswered",
+    ], inputs
+    (errored,) = [entry for entry in inputs if entry["source"] == "budget-unanswered"]
+    detail = json.loads(errored["detail"])
+    assert sorted(detail["nodes"]) == ["broken-change", "slow-change"], detail
+    assert "exited 3" in detail["reason"], detail
+
+
+def test_an_envelope_that_is_not_onefollowups_is_refused_with_its_repair(tmp_path: Path) -> None:
+    environment = budgeted_host(tmp_path)
+
+    refused = subprocess.run(  # noqa: S603 - this checkout's own hook
+        [str(HOOK)],
+        input=json.dumps({"schema_version": 2, "batch": "some-run"}),
+        env=environment,
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=300,
+        check=False,
+    )
+
+    assert refused.returncode == 2, refused.stderr
+    assert refused.stdout == ""
+    assert "hooks.batch_preparing" in refused.stderr, refused.stderr
 
 
 def test_a_run_that_landed_nothing_gives_no_inputs(tmp_path: Path) -> None:

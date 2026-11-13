@@ -17,7 +17,7 @@
 #     list, is reported and stops neither the others nor the follow-up run. Then it runs
 #     `just follow-ups <run-id>` in this checkout, which creates the `follow-ups` plan from
 #     its template and launches it detached — the hook is awaited and a follow-up run
-#     outlives its deadline — and turns the recipe's two lines into the one a manager reads:
+#     outlives its deadline — and turns the recipe's line into the one a manager reads:
 #     the follow-up run's id and its watch command. It exits with the recipe's status.
 #   * **failure** — the run ended any other way: a failed or skipped node, an unfinished
 #     graph with nothing left to decide, or a clean stop. It discards no spike branch,
@@ -126,7 +126,7 @@ case "${ONEPIPELINE_HOOK:-}" in
         fi
         # Announced only when the recipe named exactly one follow-up run, spelled as a run id
         # is; anything else is relayed as the recipe said it.
-        follow_up=$(sed -n 's/^follow-up run: //p' <<<"$output")
+        follow_up=$(sed -n 's/^follow-up run: \([^;]*\); watch it with: just watch .*$/\1/p' <<<"$output")
         # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
         if [[ "$follow_up" =~ $RUN_ID ]]; then
             echo "main work of run $run is complete; follow-ups are being verified in run $follow_up; watch it with: just watch $follow_up"

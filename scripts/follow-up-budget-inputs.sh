@@ -17,25 +17,48 @@
 #     to decide;
 #   * `jq` turns each over result into one `budget-overrun` input and each subject
 #     onebudgetspec could not check into one `budget-unanswered` input, so none is dropped.
+#     A measurement that errored is one `--over-only` leaves out of its report, saying so
+#     only by exiting 3, so that exit is relayed as one more `budget-unanswered` input naming
+#     every change it may concern.
+#
+# Every record a verb answers with is checked for the fields read from it before any of it
+# is relayed, and every failure names the verb, what it was asked, and how to repair it.
 #
 # `tests/e2e/follow_ups/test_follow_up_budget_inputs_e2e.py` drives it over a recorded run.
 set -euo pipefail
 
-checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+fail() {
+    echo "follow-up-budget-inputs: $1" >&2
+    exit 2
+}
+
+checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd) ||
+    fail "the checkout this hook belongs to could not be resolved; name it by its path in a readable checkout, as onefollowup.yaml does, then retry"
 export PATH="$checkout/node_modules/.bin:$checkout/.venv/bin:$PATH"
 
-run=$(jq -er '.batch | strings')
+envelope=$(cat)
+run=$(jq -er 'select(.schema_version == 1) | .batch | select(type == "string" and test("^[A-Za-z0-9_-]+$"))' <<<"$envelope") ||
+    fail "standard input is not onefollowup's batch_preparing envelope, {\"schema_version\": 1, \"batch\": \"<run id>\"}; run this as onefollowup.yaml's hooks.batch_preparing, which hands it that"
 runs=${ONEPIPELINE_RUNS_DIR:-$checkout/runs}
 
-changes=$(onepipeline telemetry "$run" --changes --json | jq -c '[.changes[] | select(.landing != null)]')
+telemetry=$(onepipeline telemetry "$run" --changes --json) ||
+    fail "the engine could not read the changes of run '$run'; check the run and its runs root with 'just status $run', then retry"
+changes=$(jq -ce '[.changes[] | select(.landing != null)]
+    | if all(.[]; (.node | type) == "string" and (.repository | type) == "string" and (.landing | type) == "string")
+      then . else error("a landed change without a node, repository or landing") end' <<<"$telemetry") ||
+    fail "the engine's change telemetry for run '$run' is not the shape this hook reads, {\"changes\": [{\"node\", \"repository\", \"landing\"}]}; adopt the engine config/onepipeline.version names with 'just bootstrap', then retry"
 
+repositories=$(jq -r '.[].repository' <<<"$changes" | sort -u)
 checkouts='{}'
 while IFS= read -r repository; do
     [ -n "$repository" ] || continue
-    directory=$(onevcs resolve "$repository" | jq -er '.publication_checkout')
+    directory=$(onevcs resolve "$repository" | jq -er '.publication_checkout | select(type == "string" and . != "")') ||
+        fail "onevcs could not resolve the publication checkout of $repository, where run '$run' landed a change; register it with 'just repos-apply', then retry"
+    [ -d "$directory" ] ||
+        fail "the publication checkout onevcs names for $repository, $directory, is not a directory; re-provision it with 'just bootstrap', then retry"
     checkouts=$(jq -c --arg repository "$repository" --arg directory "$directory" \
         '. + {($repository): $directory}' <<<"$checkouts")
-done < <(jq -r '.[].repository' <<<"$changes" | sort -u)
+done <<<"$repositories"
 
 subjects=$(jq -c --arg run "$run" --arg runs "$runs" --argjson checkouts "$checkouts" '{
     schema_version: 1,
@@ -53,13 +76,21 @@ status=0
 report=$(onebudgetspec check --subjects - --label onepipeline --over-only --json <<<"$subjects") || status=$?
 case "$status" in
     0 | 1 | 3) ;;
-    *) exit "$status" ;;
+    *) fail "onebudgetspec refused the budget check of run '$run' (status $status); its diagnostic above names why" ;;
 esac
+errored=false
+[ "$status" -ne 3 ] || errored=true
 
-jq -c '{
+jq -ce --arg run "$run" --argjson errored "$errored" '
+    def over: if (.id | type) == "string" and (.actual | type) == "number"
+        and (.threshold | type) == "number" and (.unit | type) == "string"
+        then . else error("an over result without its budget id, actual, threshold or unit") end;
+    def unanswered: if (.reason | type) == "string"
+        then . else error("an unanswered subject without its reason") end;
+    {
     schema_version: 1,
     inputs: (
-        [.subjects[] | .context as $change | .report.results[] | {
+        [.subjects[] | .context as $change | .report.results[] | over | {
             id: "budget-overrun:\($change.node):\(.id)",
             source: "budget-overrun",
             summary: "The change node \($change.node) landed as \($change.landing) went over the delivery budget \(.id): \(.actual) \(.unit) against \(.threshold)",
@@ -67,12 +98,20 @@ jq -c '{
                 repository: $change.repository, budget: .id, actual, threshold, unit,
                 direction, detail, file} | tostring)
         }]
-        + [.unanswered[] | .context as $change | {
+        + [.unanswered[] | unanswered | .context as $change | {
             id: "budget-unanswered:\($change.node)",
             source: "budget-unanswered",
             summary: "The change node \($change.node) landed as \($change.landing) could not be checked against its delivery budgets",
             detail: ({node: $change.node, landing: $change.landing, change: $change.change,
                 repository: $change.repository, reason} | tostring)
         }]
+        + (if $errored then [{
+            id: "budget-unanswered:errored",
+            source: "budget-unanswered",
+            summary: "A delivery budget measurement errored for at least one of run \($run)'"'"'s landed changes, and the over-only report does not say which",
+            detail: ({run: $run, nodes: [.subjects[].context.node],
+                reason: "onebudgetspec check exited 3: a measurement errored, which --over-only leaves out of its report"} | tostring)
+        }] else [] end)
     )
-}' <<<"$report"
+}' <<<"$report" ||
+    fail "onebudgetspec's report for run '$run' is not the shape this hook reads; adopt the release config/onebudgetspec.version names with 'just bootstrap', then retry"

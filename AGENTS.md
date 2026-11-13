@@ -588,20 +588,16 @@ constraint, or a finding a node must act on goes over the channel at once, as be
 draft never stands in for a surface or for a question the user needed answered.
 
 **When a run you launched ends with every node done**, its success hook runs `just
-follow-ups <run-id>`, which creates the run's `follow-ups` plan from
-`templates/follow-ups.md.j2` — onefollowup's prepare, the verifying agent, check, publish
-and settle — launches it detached, and names it. Tell the user the main work is complete
-and only follow-ups are being verified; that run is yours and owed a watch like any other.
-When it settles, give the user the link to every follow-up issue it created or updated, the
-drafts it disposed of without a ticket and why, and anything it found that should have been
-surfaced during the run. Every landed change is checked against its repository's delivery
-budgets by onebudgetspec, through the `batch_preparing` hook
-(`scripts/follow-up-budget-inputs.sh`), and each overrun is one more input the verifying
-agent disposes. A verified miss in an uncovered dimension proposes a general
-planner-checklist concept and the repository's own budget through a plan, never by editing
-the planner directly. The `follow-up-review` item the `batch_settled` hook names is not
-raised yet: the engine's `raise --phase` wants a `--context` file onefollowup's settle does
-not hand it, an upstream gap.
+follow-ups <run-id>`, which launches the run's follow-up plan through onefollowup, detached,
+and names it. Tell the user the main work is complete and only follow-ups are being
+verified; that run is yours and owed a watch like any other. When it settles, give the user
+the link to every follow-up issue it created or updated, the drafts it disposed of without a
+ticket and why, and anything it found that should have been surfaced during the run. Each
+landed change's delivery-budget overrun is one more input the verifying agent disposes; a
+verified miss in an uncovered dimension proposes a general planner-checklist concept and the
+repository's own budget through a plan, never by editing the planner directly. No
+`follow-up-review` item is raised when the plan settles yet, an upstream gap, so relay its
+tickets yourself.
 
 **When a run ends any other way**, the failure hook launches nothing. Raise a question item
 asking the user whether to verify its drafts by hand with `just follow-ups <run-id>`, which

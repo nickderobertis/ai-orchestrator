@@ -98,7 +98,9 @@ def verify(checkout: Path, batch: str, new: str, evidence: str, item: str, cause
     answers = work / "dispositions" / f"{batch}.json"
     held = json.loads(answers.read_text(encoding="utf-8"))
     shown = _run(checkout, ["onefollowup", "config", "show"])
-    host = str(shown["config"]["host_label"])  # type: ignore[index]
+    config = shown["config"]
+    assert isinstance(config, dict), shown
+    host = str(config["host_label"])
     drafts = {draft for draft in held["drafts"]}
     new_draft = next(draft for draft in drafts if draft.endswith(_slug(new)))
     evidence_draft = next(draft for draft in drafts if draft.endswith(_slug(evidence)))

@@ -733,9 +733,9 @@ follow-up *args:
 #
 # Creates the `follow-ups` plan from `templates/follow-ups.md.j2` for the run's batch (its
 # public id) — prepare, the verifying agent, check, publish, settle — and launches it
-# detached, printing the follow-up run's id and its watch command. `onefollowup.yaml` is
-# the whole of what the loop is configured by; `scripts/run-ended.sh` runs this recipe when
-# a run ends with every node done.
+# detached, printing the follow-up run's id and its watch command on one line.
+# `onefollowup.yaml` is the whole of what the loop is configured by; `scripts/run-ended.sh`
+# runs this recipe when a run ends with every node done.
 [doc("Create and launch the plan verifying a finished run's follow-ups through onefollowup.")]
 follow-ups run:
     #!/usr/bin/env bash
@@ -762,7 +762,7 @@ follow-ups run:
         --metadata 'orchestrator.plan-kind={"kind": "follow-ups", "nodes": ["prepare", "verify", "check", "publish", "settle"]}' >/dev/null
     ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off --detach \
         --label kind=follow-ups --success-hook= --failure-hook= --pr-author-graph= >&2
-    printf 'follow-up run: %s\nwatch it with: just watch %s\n' "$project" "$project"
+    printf 'follow-up run: %s; watch it with: just watch %s\n' "$project" "$project"
 
 # Answer people's comments on follow-up tickets through onefollowup:
 # `just follow-ups-answer-comments [--dry-run]`.

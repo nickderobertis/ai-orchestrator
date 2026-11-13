@@ -9,7 +9,17 @@
 set -euo pipefail
 
 usage="just follow-up <run-id> --title TITLE --repository HOST/OWNER/NAME [--path PATH]... < body.md"
-draft="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/follow-up-draft.sh"
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || {
+    echo "follow-up: refused: this checkout's scripts directory could not be resolved; run the recipe from a readable checkout, then retry" >&2
+    exit 2
+}
+draft="$here/follow-up-draft.sh"
+# Checked before either exec below, which would otherwise end on the shell's bare
+# "No such file" with nothing saying how to restore it.
+[ -x "$draft" ] || {
+    echo "follow-up: refused: $draft is missing or not executable; restore it with 'git checkout -- scripts/follow-up-draft.sh', then retry" >&2
+    exit 2
+}
 
 run=${1:-}
 case "$run" in
