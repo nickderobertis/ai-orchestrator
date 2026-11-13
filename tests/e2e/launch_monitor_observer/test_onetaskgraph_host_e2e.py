@@ -2743,7 +2743,11 @@ def _run_id(runs: Path) -> str:
     deadline = time.monotonic() + e2e_timeout(180)
     while time.monotonic() < deadline:
         minted = (
-            [held.name for held in runs.iterdir() if held.name != ITEM_STORE]
+            [
+                held.name
+                for held in runs.iterdir()
+                if held.name != ITEM_STORE and not held.name.endswith(FOLLOW_UPS_SUFFIX)
+            ]
             if runs.is_dir()
             else []
         )

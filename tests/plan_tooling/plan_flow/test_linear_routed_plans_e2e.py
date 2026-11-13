@@ -1382,7 +1382,13 @@ def _minted(runs: Path, launch: subprocess.Popen[str]) -> str:
     deadline = time.monotonic() + e2e_timeout(180)
     while time.monotonic() < deadline:
         minted = (
-            sorted(held.name for held in runs.iterdir() if held.name != ITEM_STORE)
+            sorted(
+                held.name
+                for held in runs.iterdir()
+                # The follow-up run the success hook launches once the run ends is not this
+                # launch's own.
+                if held.name != ITEM_STORE and not held.name.endswith("-follow-ups")
+            )
             if runs.is_dir()
             else []
         )
