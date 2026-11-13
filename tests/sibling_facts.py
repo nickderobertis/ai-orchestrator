@@ -41,7 +41,6 @@ from typing import NamedTuple
 
 import pytest
 from registered_checkouts import (
-    TRACKED_CHECKOUTS,
     RepoIdentity,
     UnreadableSibling,
     discover_checkouts,
@@ -55,14 +54,14 @@ from orchestrator.host_installs import (
     Installed,
     by_producer,
 )
+from orchestrator.record_shapes import hosted_origin
 from orchestrator.root import REPO_ROOT
 
-#: The files that say which repositories this host registers, how it routes, pools and
-#: adopts them, and what it installs from each. A change touching one of them is the
-#: change a sibling's contradiction of them is refused for.
+#: The tracked files that say how this host pools and adopts the repositories it
+#: registers, and what it installs from each. A change touching one of them is the change
+#: a sibling's contradiction of them is refused for. Which repositories are registered,
+#: and how each routes, is the host's own registration rather than a file here.
 REGISTRATION_FILES = (
-    "config/onevcs.checkouts",
-    "config/onevcs.rules.yml",
     "config/onevcs.releases.yml",
     "config/onevcs.workspaces.yml",
     "orchestrator/host_installs.py",
@@ -75,6 +74,9 @@ COMPARISON_BASE = REPO_ROOT / "scripts" / "comparison-base.sh"
 
 #: A repository's own release declaration, at its root.
 DECLARATION = "release-targets.toml"
+
+#: A committer for the commits a scratch checkout carries, so no host identity is read.
+COMMITTER = ("-c", "user.email=t@example.com", "-c", "user.name=Test")
 
 #: How a checkout's fetched base is resolved. `origin/HEAD` is the remote's own answer
 #: and is asked first; the fallbacks are for a clone that never recorded one. A
@@ -222,16 +224,17 @@ class Declaring(NamedTuple):
     unreadable: list[str]
 
 
-def declaring_identities(manifest: Path = TRACKED_CHECKOUTS) -> Declaring:
-    """How many release targets each repository ``manifest`` lists declares at its base.
+def declaring_identities(home: Path | None = None) -> Declaring:
+    """How many release targets each repository the registry under ``home`` holds declares.
 
     Derived from the declarations every time it is asked, since which repositories declare
     and how many is each repository's own to decide; read at the base for the reason
     :data:`REMOTE_BASES` gives. A repository whose declaration could not be read is a
-    finding in ``unreadable``, for the caller to settle, as is a listed checkout whose
-    identity could not be read.
+    finding in ``unreadable``, for the caller to settle, as is a registry or a registered
+    checkout that could not be read. ``home`` is as `registered_checkouts.registry_listing`
+    takes it.
     """
-    discovered = discover_checkouts(manifest)
+    discovered = discover_checkouts(home)
     read = read_declarations({identity: paths[0] for identity, paths in discovered.held.items()})
     counts = {
         identity: len(declared) for identity, declared in read.found.items() if declared is not None
@@ -457,56 +460,56 @@ def settle_drift(
 
 
 def held_checkouts(
-    manifest: Path = TRACKED_CHECKOUTS,
+    home: Path | None = None,
     *,
     root: Path = REPO_ROOT,
     comparison: Mapping[str, str] = ENCLOSING_COMPARISON,
 ) -> dict[RepoIdentity, list[Path]]:
-    """Every checkout ``manifest`` lists that this host holds, by identity, in order.
+    """Every checkout the registry under ``home`` lists that this host holds, by identity.
 
-    A listed checkout this host has but cannot resolve an identity for is settled with
-    :func:`settle_drift` against the change at ``root``, and the readable ones are kept:
-    which checkouts a sibling's directory and origin make readable is that sibling's live
-    state, so it is drift like any other read of it.
+    In the registry's order; ``home`` omitted is this host's registry. A registry or a
+    registered checkout that cannot be read is settled with :func:`settle_drift` against
+    the change at ``root``, and the readable ones are kept: which checkouts a host can
+    read is its live state, so it is drift like any other read of it.
     """
-    discovered = discover_checkouts(manifest)
+    discovered = discover_checkouts(home)
     settle_drift(list(discovered.unreadable), root=root, comparison=comparison)
     return discovered.held
 
 
 def registered_checkouts(
-    manifest: Path = TRACKED_CHECKOUTS,
+    home: Path | None = None,
     *,
     root: Path = REPO_ROOT,
     comparison: Mapping[str, str] = ENCLOSING_COMPARISON,
 ) -> dict[RepoIdentity, Path]:
-    """The first listed held checkout of each identity, which a reconciliation searches.
+    """The first registered held checkout of each identity, which a reconciliation searches.
 
     Settled as :func:`held_checkouts` settles. A host holding none of them resolves
     nothing, which is what each caller reports rather than asserts on.
     """
     return {
         identity: paths[0]
-        for identity, paths in held_checkouts(manifest, root=root, comparison=comparison).items()
+        for identity, paths in held_checkouts(home, root=root, comparison=comparison).items()
     }
 
 
 def check_release_contradictions(
-    manifest: Path = TRACKED_CHECKOUTS,
+    home: Path | None = None,
     *,
     root: Path = REPO_ROOT,
     comparison: Mapping[str, str] = ENCLOSING_COMPARISON,
 ) -> None:
-    """The release-contradiction check, over the checkouts ``manifest`` lists, gating ``root``.
+    """The release-contradiction check, over the registry under ``home``, gating ``root``.
 
     Every producer the tracked override gives a default target, held here, is read at its
     fetched base; each unreadable declaration and every contradiction with the override,
     the table and the three sets is settled by :func:`settle_drift` against the change at
     ``root``, so it refuses a change editing the registration and is reported for any
-    other. The merge path runs it over this host's tracked list and this repository; a
-    journey hands it a scratch registration's list and a gated clone.
+    other. The merge path runs it over this host's registry and this repository; a journey
+    hands it a scratch registry and a gated clone.
     """
-    held = registered_checkouts(manifest, root=root, comparison=comparison)
+    held = registered_checkouts(home, root=root, comparison=comparison)
     defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
     read = read_declarations(
         {producer: held[producer] for producer in defaults if producer in held}
@@ -600,6 +603,41 @@ def declaration(targets: Mapping[str, str]) -> str:
         for name, artifact in targets.items()
     )
     return f'schema_version = 1\nprobe = "scripts/release-probe.sh"\n{rows}'
+
+
+def override_declaration(origin: str) -> str | None:
+    """The `release-targets.toml` declaring what the tracked override defaults `origin` to.
+
+    ``None`` for an origin the override names no ``default_target`` for. The target is
+    declared under the name the override uses, and nothing a probe runs.
+    """
+    target = override_default_targets(RELEASES.read_text(encoding="utf-8")).get(
+        hosted_origin(origin) or ""
+    )
+    return None if target is None else declaration({target: f"scratch:{target}"})
+
+
+def origin_checkout(directory: Path, origin: str, base: str = "main") -> Path:
+    """A real git checkout of `origin`, with a base `onevcs` can read a declaration at.
+
+    Every checkout a host registers has a commit on its base, and a producer the tracked
+    override names declares the target the override makes its default; the installed
+    `onevcs rules check` refuses a checkout whose base it cannot read and an override
+    `default_target` its producer does not declare, so a checkout lacking either is one
+    no host has. A journey about such a producer declares more over this base itself.
+    """
+    directory.mkdir(parents=True)
+    _run(directory, "init", "-q", "-b", base)
+    _run(directory, "remote", "add", "origin", origin)
+    if (declared := override_declaration(origin)) is not None:
+        (directory / DECLARATION).write_text(declared, encoding="utf-8")
+        _run(directory, "add", "-A")
+    _run(directory, *COMMITTER, "commit", "-q", "--allow-empty", "-m", "chore: base")
+    # A fetched clone's `origin/HEAD`, so the base is ``base`` and never what the real
+    # remote's network answer would make it.
+    _run(directory, "update-ref", f"refs/remotes/origin/{base}", "HEAD")
+    _run(directory, "symbolic-ref", "refs/remotes/origin/HEAD", f"refs/remotes/origin/{base}")
+    return directory
 
 
 def _run(checkout: Path, *arguments: str) -> None:

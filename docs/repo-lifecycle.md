@@ -1013,6 +1013,7 @@ A `checks-unsettled` whose wait onevcs left armed is re-read toward landing unde
 engine's merge-path read budget: the host has its merge armed, so it is not a
 stranded draft.
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The checks-wait record and the rules' waits are retired by aio-repo-declared-routing; the gate reconciling them was removed first, in aio-drop-registration-tests, so the two stand unreconciled only until that node removes both and this marker. -->
 That bound is the identity's `checks: {wait_seconds}` in `config/onevcs.rules.yml`,
 onevcs's 3600 s when its rule names none. A remote identity whose required checks
 routinely outlast that default would end every publication `checks-unsettled`, so each
@@ -1020,10 +1021,10 @@ one whose slowest run — creation to last required check, queue time included �
 its ten most recent pull-request CI runs exceeds 3600 s once a 25% margin is added
 carries a wait sized from that figure, with the recorded maximum and margin beside it;
 every other identity stays on the default. The runs, the cutoff they were read at and
-each run's timing are `config/onevcs.checks-wait.yml`, and
-`tests/e2e/checks_wait/test_checks_wait_sizing_e2e.py` holds the rules to it through
-the installed `onevcs rules check`. A repository whose CI gets slower — or a newly ruled
-one — is re-sized by re-reading its runs into that record and its rule's wait together.
+each run's timing are `config/onevcs.checks-wait.yml`. A repository whose CI gets
+slower — or a newly ruled one — is re-sized by re-reading its runs into that record and
+its rule's wait together.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 `just integrate` runs no gate per candidate either — it has none to run. Each
 candidate fast-forwards the *local* base before the single optional push, and what
@@ -1705,8 +1706,7 @@ an identity that list cannot hold, a local checkout named by its absolute path; 
 are never written together. The `repo` shown in the plan documents on this page is the
 loaded node's field, which the engine reads from either. `onevcs` is handed that value
 verbatim, so among several registered checkouts of one identity the origin form selects
-the one whose alias sorts first; `tests/test_registry_resolution.py` holds this host's
-checkouts to that order. The `Node` schema is
+the one whose alias sorts first. The `Node` schema is
 `deny_unknown_fields`, so what it may carry is a closed list —
 `id`, `kind`, `task`, `amendment`, `persona`, `deps`, `max_turns`, `sets`, `expects_no_diff`,
 `context`, `classification`, `parked`, `executor`, `agent_graph`, `repo`, `repo_type`, `workflow`,

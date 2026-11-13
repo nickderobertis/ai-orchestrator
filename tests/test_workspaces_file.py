@@ -32,8 +32,7 @@ THIS_REPOSITORY = "github.com/nickderobertis/ai-orchestrator"
 DELETED_ON_RETURN = '[".logs/"]'
 
 #: One rule of the file: its one-line `match:` flow mapping and the indented fields
-#: under it, comments between them included, read from the text the way
-#: `tests/test_repository_registration.py` reads the rules file, because the shape
+#: under it, comments between them included, read from the text because the shape
 #: asserted is the shape written.
 RULE = re.compile(
     r"^  - match: \{host: (?P<host>[^,}]+), owner: (?P<owner>[^,}]+), name: (?P<name>[^,}]+)\}\n"

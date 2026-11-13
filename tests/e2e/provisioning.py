@@ -169,7 +169,8 @@ def setup_repo(
     manifest, lock = engine_manifest_and_lock()
     (repo / "package.json").write_text(manifest, encoding="utf-8")
     (repo / "bun.lock").write_text(lock, encoding="utf-8")
-    shutil.copy2(REPO_ROOT / "config" / "onevcs.checkouts", config / "onevcs.checkouts")
+    # A checkout list of `~/` paths, which `HOME` being `tmp_path` leaves absent.
+    (config / "onevcs.checkouts").write_text("~/no-such-sibling\n", encoding="utf-8")
     # Every adopted release is copied, so a further pinned tool needs no fixture edit;
     # the parameters below then restate only what a journey deliberately moves.
     for declared in (REPO_ROOT / "config").glob("*.version"):

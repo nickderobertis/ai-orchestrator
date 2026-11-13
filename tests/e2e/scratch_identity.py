@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Literal, NamedTuple
 
 from conftest import git
-from ruled_registry import override_declaration
+from sibling_facts import override_declaration
 from waits import timeout as e2e_timeout
 
 from orchestrator.record_shapes import hosted_origin

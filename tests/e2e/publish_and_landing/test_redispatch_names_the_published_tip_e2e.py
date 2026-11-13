@@ -19,7 +19,7 @@ worker's commit is the one decision of the model's substituted, by
 `FAKE_BACKEND_RUN_ON_MARKER`, and it is made by real git where the dispatch runs. The remote
 host's decisioning — the change request, and the required check it reports red — is the
 `gh` stand-in `onevcs` proves its own publications against, read at the tag
-`config/onevcs.version` names out of the checkout `config/onevcs.checkouts` registers for
+`config/onevcs.version` names out of the checkout this host's onevcs registry holds for
 it, and reached through `ONEVCS_GH`, the variable `onevcs` publishes for exactly this. So the
 host answers every call the linked `onevcs` makes in the shapes that release reads, and a
 host double written here could not drift from them.
@@ -66,7 +66,7 @@ from fake_backend import JUDGE_CONFIG_NAME, MEMBER_OF_CONFIG, PROMPT_LOG_ENV, RU
 from harness_indirections import established_indirections
 from project_fixtures import helper, project_from_plan
 from published_tools import PUBLISHED_TOOLS
-from registered_checkouts import listed_checkout_paths
+from registered_checkouts import discover_checkouts
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -176,9 +176,7 @@ def _host_double(destination: Path) -> Path:
     """
     pin = next(tool for tool in PUBLISHED_TOOLS if tool.version_file == "onevcs.version")
     tag = f"v{pin.adopted_version}"
-    for checkout in listed_checkout_paths():
-        if checkout.name.split("__")[-1] != "onevcs" or not (checkout / ".git").exists():
-            continue
+    for checkout in discover_checkouts().held.get("github.com/nickderobertis/onevcs", []):
         shown = subprocess.run(
             ["git", "-C", str(checkout), "show", f"{tag}:{HOST_DOUBLE}"],
             text=True,
@@ -195,8 +193,8 @@ def _host_double(destination: Path) -> Path:
         return destination
     raise AssertionError(
         "no registered checkout of onevcs on this host, so the host double its publications "
-        "are proven against cannot be read. Clone it into one of the paths "
-        "`config/onevcs.checkouts` names"
+        "are proven against cannot be read. Clone it and register the clone with "
+        "`onevcs register <path>`"
     )
 
 

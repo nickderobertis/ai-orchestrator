@@ -3,7 +3,7 @@
 The published audit used to answer whether *something* verifies an identity's merge path
 and print one `merge-path coverage:` line saying which. Read as coverage, that line is
 what hid this host's defect: `nick-derobertis-site` reported coverage, a dispatched branch
-passed the gate `config/onevcs.rules.yml` then named, published as PR #77, and the
+passed the gate this host's rules then named, published as PR #77, and the
 required `llmlint` check that gate never ran refused it — a full dispatch and a full gate
 cycle spent before anybody learned the verification was incomplete.
 
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from ruled_registry import checkout
+from sibling_facts import origin_checkout
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -72,6 +72,27 @@ REQUIRED = "required checks:"
 pytestmark = pytest.mark.reads_checkouts
 
 
+#: The scratch rules the registry is applied with: this repository merged locally, each
+#: other identity through a change request, as each publishes. Stated here rather than read
+#: from this host's own routing, because the audit's answer is the subject, not the routing.
+RULES = (
+    "version: 4\n"
+    "trailer_prefix: Orchestrator-\n"
+    "rules:\n"
+    "  - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}\n"
+    "    publication: local-direct\n"
+    "    approvals: none\n"
+    "    visibility: public\n"
+    "  - match: {host: github.com, owner: nickderobertis}\n"
+    "    publication: change-auto\n"
+    "    approvals: none\n"
+    "    visibility: public\n"
+    "default:\n"
+    "  publication: change-open\n"
+    "  approvals: required\n"
+)
+
+
 class Registry(NamedTuple):
     """A scratch registry the real recipes can be run against."""
 
@@ -89,15 +110,17 @@ def registry(tmp_path_factory: pytest.TempPathFactory) -> Registry:
         # composed: a checkout registered under the wrong owner resolves a different
         # identity, and the audit would ask GitHub about a repository nobody meant.
         paths.append(
-            checkout(
+            origin_checkout(
                 root / "checkouts.d" / identity.rpartition("/")[2],
                 f"https://{identity}",
                 SITE_BRANCH if identity == SITE else "main",
             )
         )
     manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
+    rules = root / "rules.yml"
+    rules.write_text(RULES, encoding="utf-8")
     home = root / "onevcs"
-    applied = repos(home, "repos-apply", "--checkouts", str(manifest))
+    applied = repos(home, "repos-apply", "--checkouts", str(manifest), "--rules", str(rules))
     assert applied.returncode == 0, applied.stdout + applied.stderr
     return Registry(home=home)
 

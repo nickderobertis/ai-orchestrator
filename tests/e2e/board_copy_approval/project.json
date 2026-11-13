@@ -36,7 +36,6 @@
       "{workspaceRoot}/oneharness.plan-review.toml",
       "{workspaceRoot}/config/onemessagebus.yaml",
       "{workspaceRoot}/config/onetaskgraph.user-layer.example.yaml",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/config/plan-review-verdict.schema.json",
       "{workspaceRoot}/personas/planner.yaml",
       "{workspaceRoot}/scripts/claude-alt-config-dir.sh",

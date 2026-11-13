@@ -9,7 +9,7 @@ repository reads `unknown`, which is private, and every item naming one is refus
 public board. That is the boundary working, and a test of
 anything else needs the repositories its fixtures name to have a recorded visibility.
 
-`registered_home()` builds such a root: the tracked rules composed through the real
+`registered_home()` builds such a root: a base rules file composed through the real
 `onevcs rules apply` with an overlay declaring each named identity's visibility — so the
 host is never asked — and one stub checkout per identity, registered through the real
 `onevcs register`, whose `origin` is that identity's GitHub URL. `environment()` points a
@@ -40,8 +40,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: The pinned `onevcs` the store's `write_policy` reaches through `PATH`.
 ONEVCS = REPO_ROOT / ".venv" / "bin" / "onevcs"
 
-#: The tracked base rules every composed root starts from.
-TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
+#: The base rules every composed root starts from: this repository merged locally, as it
+#: publishes, and the reviewed default for every other identity. Stated here rather than
+#: read from a host's routing, because what a root answers is visibility, not routing.
+BASE_RULES = (
+    "version: 3\n"
+    "trailer_prefix: Orchestrator-\n"
+    "rules:\n"
+    "  - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}\n"
+    "    publication: local-direct\n"
+    "    approvals: none\n"
+    "default:\n"
+    "  publication: change-open\n"
+    "  approvals: required\n"
+)
 
 #: This repository's identity, which most fixtures file their work against.
 THIS_REPOSITORY = "github.com/nickderobertis/ai-orchestrator"
@@ -195,8 +207,10 @@ def declared_home(
         lines.append(f"  - match: {{host: {host}, owner: {owner}, name: {name}}}")
         lines.append(f"    visibility: {visibility}")
     overlay.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    base = root / "onevcs-base-rules.yml"
+    base.write_text(BASE_RULES, encoding="utf-8")
     _run(
-        [str(ONEVCS), "rules", "apply", "--base", str(TRACKED_RULES), "--overlay", str(overlay)],
+        [str(ONEVCS), "rules", "apply", "--base", str(base), "--overlay", str(overlay)],
         environment(None, home, transports=False),
     )
     return home

@@ -101,7 +101,7 @@ ABANDONED_MESSAGE = "\n# Please enter the commit message for your changes.\n"
 SUBJECT_LIMIT_DECLARATION = re.compile(r"^SUBJECT_LIMIT=(\d+)$", re.MULTILINE)
 
 #: The origin whose provenance subjects the hook exempts. Which checkout of it a host
-#: holds is per-host, so it is resolved from `config/onevcs.checkouts` rather than
+#: holds is per-host, so it is resolved from this host's onevcs registry rather than
 #: named here.
 ONEVCS_ORIGIN = "nickderobertis/onevcs"
 
@@ -128,9 +128,8 @@ def _declared_subject_limit() -> int:
 def _onevcs_checkout() -> Path | None:
     """Whichever registered checkout of `onevcs` this host actually holds, if any.
 
-    The tracked list carries both host layouts, so the path is resolved by asking git
-    which origin a checkout really has rather than by trusting a directory name; a listed
-    checkout whose origin cannot be read is settled as drift by `tests/sibling_facts.py`.
+    Read from this host's onevcs registry rather than a path written here; a registry or a
+    registered checkout that cannot be read is settled as drift by `tests/sibling_facts.py`.
     """
     return registered_checkouts().get(f"github.com/{ONEVCS_ORIGIN}")
 
@@ -452,7 +451,7 @@ def _provenance_findings(checkout: Path, tmp_path: Path) -> list[str]:
 # read its verdict on the subjects onevcs writes. Not expensive: it takes under a second (`pytest
 # --durations`) and spends no paid turn, no launch and no network. Settled rather than asserted
 # because ai-orchestrator#1529 rules, and this check's task states as a criterion, that a check
-# whose subject is a sibling's live state refuses only a push changing one of the five registration
+# whose subject is a sibling's live state refuses only a push changing one of the registration
 # files and reports the drift otherwise; `tests/sibling_facts.py`'s `settle_drift` is the one place
 # that is decided, and `tests/test_sibling_drift.py` drives both pushes through it.
 @pytest.mark.reads_checkouts
@@ -505,12 +504,12 @@ def test_a_provenance_file_onevcs_dropped_fails_a_change_editing_a_registration_
         tmp_path / "onevcs", f"github.com/{ONEVCS_ORIGIN}", {"README.md": "moved\n"}
     )
     clone = published_clone(tmp_path / "gated")
-    commit_change(clone, "config/onevcs.rules.yml")
+    commit_change(clone, "config/onevcs.releases.yml")
 
     with pytest.raises(pytest.fail.Exception) as failed:
         settle_drift(_provenance_findings(checkout, tmp_path), root=clone, comparison={})
 
-    assert "this change edits config/onevcs.rules.yml" in str(failed.value)
+    assert "this change edits config/onevcs.releases.yml" in str(failed.value)
     assert f"{checkout} has no {ONEVCS_PROVENANCE}" in str(failed.value)
 
 
@@ -541,7 +540,7 @@ NOT_UTF_8_PROVENANCE = (
 
 @pytest.mark.parametrize(
     ("changed", "settles"),
-    [("config/onevcs.rules.yml", "fails"), (PERSONA, "reports")],
+    [("config/onevcs.releases.yml", "fails"), (PERSONA, "reports")],
 )
 def test_a_provenance_file_that_is_not_utf_8_is_settled_though_every_subject_is_intact(
     tmp_path: Path, changed: str, settles: str
@@ -567,7 +566,7 @@ def test_a_provenance_file_that_is_not_utf_8_is_settled_though_every_subject_is_
 
 @pytest.mark.parametrize(
     ("changed", "settles"),
-    [("config/onevcs.rules.yml", "fails"), (PERSONA, "reports")],
+    [("config/onevcs.releases.yml", "fails"), (PERSONA, "reports")],
 )
 def test_a_provenance_file_that_cannot_be_read_is_settled_rather_than_raised(
     tmp_path: Path, changed: str, settles: str

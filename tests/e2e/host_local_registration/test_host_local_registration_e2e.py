@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from ruled_registry import override_declaration
+from sibling_facts import override_declaration
 from waits import timeout as e2e_timeout
 from waits import until
 

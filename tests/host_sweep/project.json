@@ -21,7 +21,6 @@
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/config/**/*.version",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/scripts/session-setup.sh",
       "{workspaceRoot}/scripts/host-sweep.sh",
       "{workspaceRoot}/scripts/setup-llmlint.sh",

@@ -36,7 +36,6 @@
       "{workspaceRoot}/config/onepipeline-ui.version",
       "{workspaceRoot}/config/onetaskgraph.version",
       "{workspaceRoot}/config/onevcs.version",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/graphs/pr-author.yaml",
       "{workspaceRoot}/graphs/review-reply.yaml",

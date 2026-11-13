@@ -1,31 +1,33 @@
-"""Where the repositories this host routes are checked out, and what each one defines.
+"""Where the repositories this host registers are checked out, and what each one defines.
 
 Several guards here reconcile this repository's own configuration against another
 repository — a repo-specific persona's review bar against the recipes that
 repository has. All of them need the same two facts first:
-which identity each listed checkout really is, and what its justfile defines. Stating
+which checkouts this host holds of each identity, and what its justfile defines. Stating
 that twice would let two guards disagree about which checkout they searched, so both
 resolve it from here.
 
-`config/onevcs.checkouts` is the tracked list `just repos-apply` registers, and it is
-read rather than restated: a checkout added there is one these guards then cover. A
-path this host does not have is skipped for the reason the recipe skips it — the list
-names both of the layouts this repository dispatches from, and each host holds one.
+Which checkouts exist is this host's onevcs registry's to say, read through the installed
+`onevcs repos` — the listing `just repos` prints — and never from a tracked list: which
+repositories a host works on is the host's own registration, so registering one changes
+nothing in this repository. A sibling this host has not registered, or registers at a path
+it does not have, is skipped, and each caller decides what an absent sibling means.
+
+The host's registry is read from the suite's copy of it,
+`onevcs_state_snapshot.host_registry_environment()`, because the root the suite exports
+registers no identity: `tests/onevcs_state_snapshot.py` says why.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
 import onevcs_state_snapshot
-
-from orchestrator.root import REPO_ROOT
 
 #: `host/owner/name`, the identity `onevcs` files a repository under. It is the
 #: vocabulary every set and helper keyed by a repository uses, rather than bare text:
@@ -33,42 +35,8 @@ from orchestrator.root import REPO_ROOT
 #: and `onevcs rules check` takes it as its argument.
 RepoIdentity = str
 
-#: The tracked checkout list `just repos-apply` registers by default.
-TRACKED_CHECKOUTS = REPO_ROOT / "config" / "onevcs.checkouts"
-
-
-def listed_checkout_paths(manifest: Path = TRACKED_CHECKOUTS) -> tuple[Path, ...]:
-    """Every directory ``manifest`` says a checkout of some repository lives in.
-
-    In the order listed and without duplicates, because the first listed checkout of
-    an identity is the one a reconciliation searches. `~` is expanded the way the
-    recipe expands it; nothing else about a path is interpreted, since registration
-    resolves a checkout's identity from its own `origin` rather than from its path.
-    """
-    found: list[Path] = []
-    for line in manifest.read_text(encoding="utf-8").splitlines():
-        entry = line.partition("#")[0].strip()
-        if not entry:
-            continue
-        path = Path(entry).expanduser()
-        if path not in found:
-            found.append(path)
-    return tuple(found)
-
-
-def normalized_identity(origin: str) -> RepoIdentity:
-    """The identity `onevcs` files an origin URL under: `host/owner/name`.
-
-    Both spellings this host's checkouts carry are handled — `https://host/owner/name`
-    with or without `.git`, and git's scp-like `user@host:owner/name` — because which
-    one a clone has is an accident of how it was made.
-    """
-    without_scheme = re.sub(r"^[a-z][a-z0-9+.-]*://", "", origin.strip())
-    user, _, remainder = without_scheme.rpartition("@")
-    if user:
-        # scp-like: the host is separated from the path by a colon, not a slash.
-        remainder = remainder.replace(":", "/", 1)
-    return remainder.removesuffix(".git").removesuffix("/")
+#: What `onevcs repos` prints for a registry holding no checkout at all.
+NOTHING_REGISTERED = "no repositories registered"
 
 
 class UnreadableSibling(ValueError):
@@ -99,210 +67,141 @@ def sibling_git(checkout: Path, *arguments: str) -> subprocess.CompletedProcess[
 
 
 class Discovery(NamedTuple):
-    """The checkouts a list names that this host holds, and a finding for each it could not read."""
+    """The registered checkouts this host holds, and a finding for each it could not read."""
 
-    #: Each identity's held checkouts, in the order listed.
+    #: Each identity's held checkouts, in the order the registry lists them.
     held: dict[RepoIdentity, list[Path]]
-    #: A listed checkout this host has but could not resolve an identity for, each with
-    #: its path and why — for the caller to settle as drift rather than drop.
+    #: Why the registry, or a checkout it names, could not be read — for the caller to
+    #: settle as drift rather than drop.
     unreadable: tuple[str, ...]
 
 
-#: An identity as `onevcs` files one: a host, then an owner, then a name, any of them
-#: further nested, with no whitespace. An origin normalizing to anything else names no
-#: repository this host could register.
-IDENTITY = re.compile(r"^[^/\s]+(?:/[^/\s]+){2,}$")
+def _environment(home: Path | None) -> Mapping[str, str]:
+    """The environment one registry read runs in: ``home``'s, or the suite's host copy."""
+    if home is None:
+        return onevcs_state_snapshot.host_registry_environment()
+    return {**os.environ, onevcs_state_snapshot.ONEVCS_HOME: str(home)}
 
 
-def _identity_of(path: Path) -> RepoIdentity | str:
-    """``path``'s identity from its own `origin`, or raises :class:`UnreadableSibling`."""
-    origin = sibling_git(path, "remote", "get-url", "origin")
-    if origin.returncode != 0:
-        raise UnreadableSibling(
-            f"{path} is a listed git checkout that answered no origin "
-            f"({origin.stderr.decode('utf-8', 'replace').strip()}); an identity is read off "
-            "its origin, so give it one or drop it from config/onevcs.checkouts"
-        )
-    try:
-        url = origin.stdout.decode("utf-8").strip()
-    except UnicodeDecodeError as error:
-        raise UnreadableSibling(
-            f"{path}'s origin is not UTF-8 ({error}), so it names no identity; correct "
-            "that checkout's `remote.origin.url`"
-        ) from error
-    identity = normalized_identity(url)
-    if not IDENTITY.match(identity):
-        raise UnreadableSibling(
-            f"{path}'s origin {url!r} names no host/owner/name identity; correct that "
-            "checkout's `remote.origin.url`"
-        )
-    return identity
+def parse_listing(listing: str) -> dict[RepoIdentity, list[Path]]:
+    """Each identity `onevcs repos` lists, with its checkout paths in the order listed.
 
-
-def discover_checkouts(manifest: Path = TRACKED_CHECKOUTS) -> Discovery:
-    """Every checkout ``manifest`` lists that this host holds, grouped by identity, in order.
-
-    Git is asked which identity a checkout really is rather than the path being
-    trusted to say, so a directory named after one repository but cloned from another
-    resolves to what it is. A path this host does not have — or has as no git checkout —
-    is left out, for the reason the recipe skips it: the list names both layouts this
-    repository dispatches from. A checkout this host has but cannot enter, run git in, or
-    read an identity off is named in ``unreadable`` instead, and every other is kept.
+    An identity line is `identity<TAB>gate` at the margin, and each checkout under it an
+    indented `alias<TAB>path`. Raises :class:`UnreadableSibling` naming the first line of
+    any other shape, since a listing this reader does not know says nothing about which
+    checkouts exist.
     """
-    found: dict[RepoIdentity, list[Path]] = {}
-    unreadable: list[str] = []
-    for path in listed_checkout_paths(manifest):
-        try:
-            (path / ".git").stat()
-        except (FileNotFoundError, NotADirectoryError):
+    registered: dict[RepoIdentity, list[Path]] = {}
+    current: list[Path] | None = None
+    for line in listing.splitlines():
+        if not line.strip() or line.strip() == NOTHING_REGISTERED:
             continue
-        except OSError as error:
-            unreadable.append(
-                f"{path} cannot be read ({error.strerror or error}), so which repository it "
-                "checks out is unknown; restore this process's access to it"
-            )
-            continue
-        try:
-            identity = _identity_of(path)
-        except UnreadableSibling as error:
-            unreadable.append(str(error))
-            continue
-        found.setdefault(identity, []).append(path)
-    return Discovery(found, tuple(unreadable))
+        indented = line[:1].isspace()
+        match line.strip().split("\t"):
+            case [identity, _gate] if identity and not indented:
+                current = registered.setdefault(identity, [])
+            case [_alias, path] if path and indented and current is not None:
+                current.append(Path(path))
+            case _:
+                raise UnreadableSibling(
+                    f"`onevcs repos` printed a line of no known shape: {line!r}"
+                )
+    return registered
 
 
-class Disagreement(NamedTuple):
-    """One identity whose origin form and first listed alias resolve to different checkouts."""
+def registry_listing(home: Path | None = None) -> dict[RepoIdentity, list[Path]]:
+    """Every identity the registry under ``home`` lists, with its checkouts, in its order.
 
-    identity: RepoIdentity
-    #: The checkout `onevcs resolve <identity>` selects as the publication checkout.
-    by_origin: Path
-    #: The alias the manifest lists first for the identity, and the checkout it resolves to.
-    first_alias: str
-    by_first_alias: Path
-
-
-class Resolutions(NamedTuple):
-    """What comparing the two spellings of every multi-checkout identity found."""
-
-    #: The identities with more than one held checkout whose two spellings agree.
-    agreeing: tuple[RepoIdentity, ...]
-    disagreeing: tuple[Disagreement, ...]
-    #: Identities with more than one checkout that one spelling or the other could not
-    #: be resolved for, each with why. Reported rather than counted either way: an
-    #: identity this registry does not hold is not evidence about how it selects.
-    unresolved: dict[RepoIdentity, str]
-    #: Listed checkouts whose identity could not be read at all, as discovery names them.
-    unreadable: tuple[str, ...] = ()
-
-
-def _resolved_publication_checkout(repo: str, home: Path | None) -> Path:
-    """The publication checkout `onevcs resolve` answers for ``repo``.
-
-    Raises :class:`UnreadableSibling` naming why for every way the answer cannot be read —
-    no answer, a CLI that cannot run, bytes that are not UTF-8, a document that does not
-    parse or one of a shape this reader does not know — so each is a finding for the caller
-    to settle rather than an exception or a silent miss.
+    ``home`` names a registry root; omitted, this host's registry as the suite copied it.
+    Raises :class:`UnreadableSibling` where the installed `onevcs` cannot answer.
     """
-    # The host's identities are only in the registry copy, which the suite exports to no
-    # process: `tests/onevcs_state_snapshot.py` says why.
-    environment: Mapping[str, str] = (
-        onevcs_state_snapshot.host_registry_environment()
-        if home is None
-        else {**os.environ, "ONEVCS_HOME": str(home)}
-    )
-    asked_for = f"`onevcs resolve {repo}`"
     try:
         asked = subprocess.run(
-            ["onevcs", "resolve", repo], env=environment, capture_output=True, check=False
+            ["onevcs", "repos"],
+            env=_environment(home),
+            capture_output=True,
+            timeout=120,
+            check=False,
         )
     except OSError as error:
-        raise UnreadableSibling(f"{asked_for} could not run ({error})") from error
+        raise UnreadableSibling(f"`onevcs repos` could not run ({error})") from error
     if asked.returncode != 0:
         raise UnreadableSibling(
-            f"{asked_for} answered no publication checkout "
+            "`onevcs repos` could not list this host's registry "
             f"({asked.stderr.decode('utf-8', 'replace').strip()})"
         )
     try:
-        answer = json.loads(asked.stdout.decode("utf-8"))
+        listing = asked.stdout.decode("utf-8")
     except UnicodeDecodeError as error:
         raise UnreadableSibling(
-            f"{asked_for} answered bytes that are not UTF-8 ({error})"
+            f"`onevcs repos` printed bytes that are not UTF-8 ({error})"
         ) from error
-    except ValueError as error:
-        raise UnreadableSibling(
-            f"{asked_for} answered a document that is not JSON ({error})"
-        ) from error
-    match answer:
-        case {"publication_checkout": str(checkout)} if checkout:
-            return Path(checkout).resolve()
-        case _:
-            raise UnreadableSibling(
-                f"{asked_for} answered a document naming no `publication_checkout`: {answer!r}"
-            )
+    return parse_listing(listing)
 
 
-def publication_resolutions(
-    manifest: Path = TRACKED_CHECKOUTS, home: Path | None = None
-) -> Resolutions:
-    """Compare, per identity with several held checkouts, its origin form with its first alias.
+def registered_checkout_paths(home: Path | None = None) -> tuple[Path, ...]:
+    """Every checkout path the registry lists, in its order; none where it cannot be read.
 
-    Among several checkouts of one identity, `onevcs resolve <origin>` selects the one
-    whose alias sorts first: `store::resolve` at `onevcs` v0.21.0 answers the identity-key
-    branch with ``registry.checkouts.iter().find(|(_, c)| c.identity == key)`` over a
-    ``BTreeMap`` keyed by alias, so which checkout a plan naming its repository by origin
-    publishes from is decided by alias order. This host's publication checkouts sort
-    first by the accident of their names — `ai-orchestrator` before
-    `ai-orchestrator-isolated` — and this is what notices a checkout registered later
-    under a name that sorts earlier, before a publication is redirected into it. The
-    live answer is read rather than the rule restated: both spellings are asked of the
-    installed `onevcs`, under ``home`` when one is named and the suite's copy of this
-    host's registry otherwise. The alias is the checkout's directory name, which is what `onevcs
-    register` derives it from.
+    For a caller that only needs to know where siblings live, such as the suite's guard
+    on which directories are outside this workspace.
     """
-    agreeing: list[RepoIdentity] = []
-    disagreeing: list[Disagreement] = []
-    unresolved: dict[RepoIdentity, str] = {}
-    discovered = discover_checkouts(manifest)
-    for identity, paths in discovered.held.items():
-        if len(paths) < 2:
-            continue
-        first_alias = paths[0].name
-        try:
-            by_origin = _resolved_publication_checkout(identity, home)
-            by_first_alias = _resolved_publication_checkout(first_alias, home)
-        except UnreadableSibling as error:
-            unresolved[identity] = str(error)
-            continue
-        if by_origin == by_first_alias:
-            agreeing.append(identity)
-        else:
-            disagreeing.append(Disagreement(identity, by_origin, first_alias, by_first_alias))
-    return Resolutions(tuple(agreeing), tuple(disagreeing), unresolved, discovered.unreadable)
+    try:
+        listed = registry_listing(home)
+    except UnreadableSibling:
+        return ()
+    return tuple(path for paths in listed.values() for path in paths)
 
 
-def resolution_findings(resolved: Resolutions) -> list[str]:
-    """Every way ``resolved`` shows the live registry selecting other than its first alias.
+def scratch_registry(home: Path, checkouts: Iterable[Path]) -> Path:
+    """A registry root at ``home`` in which the installed `onevcs` registered ``checkouts``.
 
-    A disagreement, an identity one spelling or the other could not be resolved for, and a
-    listed checkout whose identity could not be read: each is a finding about the checkouts
-    this host holds and the registry over them, worded for a reader to act on alone, for
-    the caller to settle with `tests/sibling_facts.py`'s `settle_drift`.
+    Registered one by one, in order, through `onevcs register` — the verb a host's own
+    registration runs — so what a reader then lists is what the real CLI recorded. Each
+    checkout's identity is resolved from its own `origin`.
     """
-    return [
-        *(
-            f"{found.identity}: `onevcs resolve {found.identity}` publishes from "
-            f"{found.by_origin}, while its first listed checkout {found.first_alias!r} is "
-            f"{found.by_first_alias}; a checkout registered under a name that sorts earlier "
-            "has redirected this identity's publications"
-            for found in resolved.disagreeing
-        ),
-        *(
-            f"{identity}: {why}, so which of its checkouts publishes cannot be compared"
-            for identity, why in sorted(resolved.unresolved.items())
-        ),
-        *resolved.unreadable,
-    ]
+    for checkout in checkouts:
+        registered = subprocess.run(
+            ["onevcs", "register", str(checkout)],
+            env={**os.environ, onevcs_state_snapshot.ONEVCS_HOME: str(home)},
+            text=True,
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+        assert registered.returncode == 0, (
+            f"`onevcs register {checkout}` failed: {registered.stdout}{registered.stderr}"
+        )
+    return home
+
+
+def discover_checkouts(home: Path | None = None) -> Discovery:
+    """Every checkout the registry lists that this host holds, grouped by identity, in order.
+
+    A registered path this host does not have — or has as no git checkout — is left out,
+    as a sibling this host never registered is. A path this host has but cannot read is
+    named in ``unreadable`` instead, as is a registry `onevcs` could not list, and every
+    other is kept.
+    """
+    try:
+        listed = registry_listing(home)
+    except UnreadableSibling as error:
+        return Discovery({}, (str(error),))
+    found: dict[RepoIdentity, list[Path]] = {}
+    unreadable: list[str] = []
+    for identity, paths in listed.items():
+        for path in paths:
+            try:
+                (path / ".git").stat()
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError as error:
+                unreadable.append(
+                    f"{path}, a registered checkout of {identity}, cannot be read "
+                    f"({error.strerror or error}); restore this process's access to it"
+                )
+                continue
+            found.setdefault(identity, []).append(path)
+    return Discovery(found, tuple(unreadable))
 
 
 class Recipes(NamedTuple):

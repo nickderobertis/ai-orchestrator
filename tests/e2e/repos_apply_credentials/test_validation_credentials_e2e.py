@@ -38,6 +38,11 @@ def test_the_validation_checkout_asks_no_credential_helper(
     manifest = tmp_path / "checkouts"
     # Nothing to register: the subject is the checkout the apply makes for itself.
     manifest.write_text("# no checkouts\n", encoding="utf-8")
+    rules = tmp_path / "rules.yml"
+    rules.write_text(
+        "version: 3\nrules: []\ndefault:\n  publication: change-open\n  approvals: required\n",
+        encoding="utf-8",
+    )
     config_home = tmp_path / "config"
     config_home.mkdir()
     gh_state = tmp_path / "gh-state"
@@ -55,7 +60,7 @@ def test_the_validation_checkout_asks_no_credential_helper(
         monkeypatch.setenv(name, value)
 
     result = subprocess.run(
-        ["just", "repos-apply", "--checkouts", str(manifest)],
+        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules)],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,

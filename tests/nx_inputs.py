@@ -935,7 +935,6 @@ E2E_JOURNEYS: tuple[JourneyProject, ...] = (
         f"{E2E_ROOT}/host_local_registration",
         "hostLocalRegistrationWorkspace",
     ),
-    JourneyProject("checks-wait", f"{E2E_ROOT}/checks_wait", "checksWaitWorkspace"),
     JourneyProject("release-adoption", f"{E2E_ROOT}/release_adoption", "releaseAdoptionWorkspace"),
     # The installer journeys drive the real `scripts/setup-llmlint.sh` and `uv tool install`
     # against a throwaway tool directory, so they sit behind an edge of their own, keyed on
@@ -945,11 +944,11 @@ E2E_JOURNEYS: tuple[JourneyProject, ...] = (
     ),
     # The journey modules left directly under `tests/e2e/`, which the families above leave
     # alone: today the registry installer's, kept at its path because the rules file
-    # `config/onevcs.rules.yml` names it there, and a change to that file is one a sibling's
-    # drift refuses. The nested projects own their own directories, so this one collects
-    # its modules by name and keys on them alone, with the registry files, scripts and
-    # `orchestrator/` modules the installer journeys read rather than either whole tree,
-    # so an unrelated change to the package or `config/` never re-runs its real CLIs.
+    # `config/onevcs.rules.yml` names it there. The nested projects own their own
+    # directories, so this one collects its modules by name and keys on them alone, with
+    # the registry files, scripts and `orchestrator/` modules the installer journeys read
+    # rather than either whole tree, so an unrelated change to the package or `config/`
+    # never re-runs its real CLIs.
     JourneyProject(E2E_ROOT_PROJECT, E2E_ROOT, "e2eRootWorkspace"),
 )
 #: The journey project whose journeys copy this checkout — and so read every file it tracks

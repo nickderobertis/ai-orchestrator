@@ -114,8 +114,8 @@ def test_privateterms_declaring_no_target_contradicts_the_override(tmp_path: Pat
     """The release-contradiction check refuses a privateterms base that declares nothing.
 
     `tests/sibling_facts.py`'s `check_release_contradictions`, the callable the merge path
-    runs over this host's tracked checkout list, handed instead each of two controlled
-    registrations' lists and a gated clone whose change edits the release override, each
+    runs over this host's registry, handed instead each of two controlled registries and a
+    gated clone whose change edits the release override, each
     producer read at the fetched base its publication left: one declaring `crate` passes,
     and one declaring no target refuses the change, naming privateterms and the `crate`
     the override names for it, because a `published` node behind it would wait on a
@@ -127,10 +127,8 @@ def test_privateterms_declaring_no_target_contradicts_the_override(tmp_path: Pat
     commit_change(clone, "config/onevcs.releases.yml")
 
     def gate(identity: Identity) -> None:
-        # llmlint: ignore[tests_mirror_real_usage] The merge-path gate is a pytest test bound to the tracked checkout list and REPO_ROOT, so this shared callable is its only entry point a scratch registration can be handed.  # noqa: E501
-        check_release_contradictions(
-            identity.home.parent / "onevcs.checkouts", root=clone, comparison={}
-        )
+        # llmlint: ignore[tests_mirror_real_usage] The merge-path gate is a pytest test bound to this host's registry and REPO_ROOT, so this shared callable is its only entry point a scratch registry can be handed.  # noqa: E501
+        check_release_contradictions(identity.home, root=clone, comparison={})
 
     declared = declaration({PRIVATETERMS_TARGET: PRIVATETERMS_ARTIFACT})
     gate(seeded_producer(tmp_path / "declaring", PRIVATETERMS, declared))

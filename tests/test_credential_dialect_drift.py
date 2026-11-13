@@ -43,11 +43,7 @@ from pathlib import Path
 
 import pytest
 from credential_dialect import DIALECT, Rule
-from registered_checkouts import (
-    TRACKED_CHECKOUTS,
-    UnreadableSibling,
-    sibling_git,
-)
+from registered_checkouts import UnreadableSibling, sibling_git
 from sibling_facts import (
     ENCLOSING_COMPARISON,
     REGISTRATION_FILES,
@@ -109,8 +105,8 @@ def _published_parser() -> str | None:
     if checkout is None:
         pytest.skip(
             f"no registered checkout of {ONETASKGRAPH} on this host, so nothing here can "
-            f"reconcile the dialect against its own parser. {TRACKED_CHECKOUTS} lists "
-            "every path `just repos-apply` registers; clone it into one of them"
+            "reconcile the dialect against its own parser; clone it and register the "
+            "clone with `onevcs register <path>`"
         )
     return parser_at(checkout)
 
@@ -197,7 +193,7 @@ def transformation_findings(parser: str) -> list[str]:
 
 # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than asserted
 # because ai-orchestrator#1529 rules, and this check's task states as a criterion, that a check
-# whose subject is a sibling's live state refuses only a push changing one of the five registration
+# whose subject is a sibling's live state refuses only a push changing one of the registration
 # files and reports the drift otherwise; `tests/sibling_facts.py`'s `settle_drift` is the one place
 # that is decided, and `tests/test_sibling_drift.py` drives both pushes through it.
 @pytest.mark.parametrize("rule", DIALECT, ids=lambda rule: rule.name)
@@ -233,7 +229,7 @@ def test_onetaskgraph_applies_no_rule_the_dialect_does_not_account_for() -> None
 
 @pytest.mark.parametrize(
     ("changed", "settles"),
-    [("config/onevcs.checkouts", "fails"), ("personas/crozier/crozier-corpus.yaml", "reports")],
+    [("config/onevcs.releases.yml", "fails"), ("personas/crozier/crozier-corpus.yaml", "reports")],
 )
 def test_a_published_parser_that_is_not_utf_8_is_settled_though_every_rule_is_intact(
     tmp_path: Path, changed: str, settles: str
@@ -265,7 +261,7 @@ def test_a_published_parser_that_is_not_utf_8_is_settled_though_every_rule_is_in
 #: editing a registration file, which fails, and one editing only a persona, which is
 #: reported.
 PERSONA = "personas/crozier/crozier-corpus.yaml"
-PUSHES = ("config/onevcs.checkouts", PERSONA)
+PUSHES = ("config/onevcs.releases.yml", PERSONA)
 #: Every fragment every rule names, so a published parser carrying it passes every rule.
 INTACT = "\n".join(fragment for rule in DIALECT for fragment in rule.upstream)
 

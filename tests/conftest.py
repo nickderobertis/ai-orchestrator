@@ -103,7 +103,7 @@ from nx_inputs import (
     repository_relative,
     target_input_globs,
 )
-from registered_checkouts import listed_checkout_paths
+from registered_checkouts import registered_checkout_paths
 from short_state import (  # noqa: F401 - registered by being named here
     module_node_scratch,
     module_tmpdir,
@@ -1050,15 +1050,17 @@ def _recipe_reads_are_declared(
 
 
 def _registered_checkout_roots() -> tuple[str, ...]:
-    """Every directory the tracked list says another repository is checked out in.
+    """Every directory this host's registry says another repository is checked out in.
 
-    Resolved from the same list the guards that reconcile against those checkouts
+    Resolved from the same registry the guards that reconcile against those checkouts
     read, so the tier boundary and the tests it routes cannot disagree about which
-    directories are outside this workspace. This checkout is excluded: the list names
+    directories are outside this workspace. This checkout is excluded: the registry holds
     `ai-orchestrator` too, and reading *this* tree is what the keys already describe.
     """
     return tuple(
-        sorted(f"{path}{os.sep}" for path in listed_checkout_paths() if str(path) != str(REPO_ROOT))
+        sorted(
+            f"{path}{os.sep}" for path in registered_checkout_paths() if str(path) != str(REPO_ROOT)
+        )
     )
 
 

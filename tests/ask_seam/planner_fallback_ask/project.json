@@ -22,7 +22,6 @@
       "{projectRoot}/project.json",
       "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/config/onemessagebus.yaml",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/graphs/node-scope.yaml",
       "{workspaceRoot}/graphs/pr-author.yaml",
       "{workspaceRoot}/graphs/review-reply.yaml",

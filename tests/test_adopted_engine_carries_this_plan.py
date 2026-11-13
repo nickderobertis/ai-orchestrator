@@ -45,7 +45,7 @@ from typing import NamedTuple
 
 import pytest
 from published_tools import PUBLISHED_TOOLS
-from registered_checkouts import listed_checkout_paths
+from registered_checkouts import discover_checkouts
 
 pytestmark = pytest.mark.reads_checkouts
 
@@ -1040,13 +1040,12 @@ def _checkout() -> Path:
     length: a gate that answers "no checkout, nothing to say" is one the whole quality
     tier passes while reconciling nothing.
     """
-    for path in listed_checkout_paths():
-        if path.name.split("__")[-1] == ENGINE and (path / ".git").exists():
-            return path
+    for path in discover_checkouts().held.get(f"github.com/nickderobertis/{ENGINE}", []):
+        return path
     raise AssertionError(
         f"no registered checkout of {ENGINE} on this host, so nothing here can ask "
-        "whether the adopted release carries this plan's engine-side work. Clone it "
-        "into one of the paths `config/onevcs.checkouts` names"
+        "whether the adopted release carries this plan's engine-side work. Clone it and "
+        "register the clone with `onevcs register <path>`"
     )
 
 

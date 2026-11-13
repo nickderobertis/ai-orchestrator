@@ -24,7 +24,6 @@
       "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/config/onejudge.base.yaml",
       "{workspaceRoot}/config/onemessagebus.yaml",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/config/plan-review-verdict.schema.json",
       "{workspaceRoot}/graphs/node-scope.yaml",
       "{workspaceRoot}/graphs/pr-author.yaml",

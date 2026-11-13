@@ -1,23 +1,18 @@
-"""Every repository keeps the policy it published under before `onevcs` owned the registry.
+"""`just repos-apply` registers a checkout list and installs the rules it is handed.
 
-This host ran on a registry of its own until the adopted stack moved that mechanism
-to `onevcs` — and moved none of the data, so `just repos` listed nothing and no
-lifecycle dispatch could resolve a repository at all. `just repos-apply` is the
-reproducible form of carrying it across, and what it carries is a merge path: an
-identity re-registered a notch wider publishes to a base branch without the review
-its repository requires, and nothing downstream notices.
+The recipe is how a host brings its `onevcs` registry up to a configuration: it composes
+a base rules file with the host's own overlay through `onevcs rules apply`, installs the
+release override and the workspaces file beside it, registers every listed checkout it
+has, and refuses a checkout no rule matches. These journeys hold the recipe to that
+behaviour and to nothing about which repositories any host registers: every one runs the
+real recipe and the installed `onevcs` on a synthetic checkout list and a synthetic rules
+file, passed through `--checkouts` and `--rules`, under a sandboxed `HOME`,
+`XDG_CONFIG_HOME` and `ONEVCS_HOME` — so what is asserted is what `onevcs` itself
+resolved from what the journey wrote, never a reading of this host's routing.
 
-So the pre-adoption registry is checked in at `tests/fixtures/pre-adoption-repos.json`
-and this journey holds the tracked configuration to reproducing it. It builds a
-checkout per pre-adoption checkout, carrying that repository's real origin, and
-drives the real recipe with the real `config/onevcs.rules.yml` against a scratch
-registry root — so what is asserted is what `onevcs` itself resolves, not a reading
-of the YAML.
-
-The tracked rules and checkout list name public repositories only. A private
-repository's rule lives in the host's own overlay, outside every checkout, so every
-journey about one installs a host overlay over synthetic identities under a scratch
-XDG configuration home and reads the composed policy back through the installed
+A private repository's rule lives in the host's own overlay, outside every checkout, so
+every journey about one installs a host overlay over synthetic identities under the
+scratch XDG configuration home and reads the composed policy back through the installed
 `onevcs rules check`.
 
 llmlint: ignore-file[e2e_not_mocked] The scratch checkouts stand in for this host's
@@ -25,11 +20,10 @@ own clones, which a test may not register or publish from; the recipe, the scrip
 `onevcs`, and git are all real, and the policy asserted is the one `onevcs` resolved.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] This module is the one journey of `just
-repos-apply`, and every journey of that recipe lives here — the ones this change adds
-beside the ones the migration wrote — so they select the same tier and read the same
-key. Moving the recipe's journeys to a project of their own is a change to `nx.json`,
-`orchestrator/project.json` and `tests/nx_inputs.py` together, for every one of them at
-once, and is not one more journey's to make.
+repos-apply`, and every journey of that recipe lives here, so they select the same tier
+and read the same key. Moving the recipe's journeys to a project of their own is a change
+to `nx.json`, `orchestrator/project.json` and `tests/nx_inputs.py` together, for every one
+of them at once, and is not one more journey's to make.
 """
 
 from __future__ import annotations
@@ -39,30 +33,19 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal, NamedTuple, NotRequired, TypedDict, cast
+from typing import NamedTuple, NotRequired, TypedDict, cast
 
 import pytest
-from registered_checkouts import TRACKED_CHECKOUTS, RepoIdentity
-from ruled_registry import (
-    COMMITTER,
-    TRACKED_RULES,
-    apply_registry,
-    checkout,
-    onevcs,
-    reported,
-    ruled_identities,
-    ruled_registry,
-)
+from registered_checkouts import RepoIdentity
 from scratch_identity import seeded
-from sibling_facts import declaration, default_target_complaint, override_default_targets
+from sibling_facts import COMMITTER, declaration
+from sibling_facts import origin_checkout as checkout
 
 from orchestrator.gate_impact import UV_LOCK
-from orchestrator.host_installs import AWAITING_FIRST_ADOPTION, INSTALLED, Installed, by_producer
+from orchestrator.host_installs import INSTALLED, Installed
 from orchestrator.root import REPO_ROOT
-
-#: The registry this host ran on before `onevcs` owned one, verbatim.
-GOLDEN = REPO_ROOT / "tests" / "fixtures" / "pre-adoption-repos.json"
 
 #: The tracked release override the recipe installs beside the rules file, which
 #: decides the rung a node of each repository adopts a dependency's release on and
@@ -79,7 +62,7 @@ SHARED_OVERFLOW = "unlimited"
 #: Where the recipe reads a host's overlay from under its XDG configuration home, the
 #: directory the Claude identities file lives in. Every journey here points that home
 #: at scratch, so the host this suite runs on says nothing into a registry a journey
-#: is asserting the tracked file alone reached.
+#: is asserting its own files alone reached.
 HOST_OVERLAY = Path("ai-orchestrator") / "workspaces.yml"
 #: The identity `config/onevcs.releases.yml` gives the one non-default rung, and the
 #: rung: a node of this repository waits for a producer's release rather than adopting
@@ -90,49 +73,41 @@ THIS_REPOSITORY_RUNG = "published"
 #: for them — and what `onevcs` answers for a repository the override never mentions.
 GLOBAL_RUNG = "fast"
 
-#: The schema this host's rules file declares. At 3 a `gate:` anywhere is refused by
+#: The schema a current rules file declares. At 3 a `gate:` anywhere is refused by
 #: `deny_unknown_fields`; at 1 and 2 it is accepted, ignored, and reported once. Both
-#: halves are driven below, because "we migrated" and "the engine still tolerates an
-#: unmigrated host" are separate claims and only one of them is about this file.
+#: halves are driven below, because "the engine refuses a gate" and "the engine still
+#: tolerates an unmigrated host" are separate claims.
 RULES_SCHEMA_VERSION = 3
 
-#: The identities whose policy differs from every other rule in the tracked file, with
-#: the `(publication, approvals)` each one resolves. Unlike the historical golden below,
-#: this also covers identities registered after the onevcs adoption.
-POLICY_EXCEPTIONS = {
-    "github.com/nickderobertis/ai-orchestrator": ("local-direct", "none"),
-    "github.com/nickderobertis/spanish-language-tutor": ("local-direct", "none"),
-}
-#: What every *other* tracked identity publishes under: a single-owner `nickderobertis`
-#: repository whose change request merges itself once its merge path passes. The
-#: golden covers this for the identities that predate the adoption; a rule written
-#: since — `llmlint` was the first, `allowlister-remote` and `cloud-agent-dev-env` the
-#: latest — is covered by nothing else, so a new sibling given a policy of its own
-#: fails here rather than at its first publication.
-#:
-#: The tracked file names public repositories only. A team repository whose change
-#: request stays ready-for-review, or a private one publishing locally, is ruled by the
-#: host's own overlay, which `HOST_RULES_OVERLAY_TEXT` below stands in for.
-SIBLING_POLICY = ("change-auto", "none")
+#: The synthetic public identities the base rules below route, one per publication kind
+#: a base rule states, and the `(publication, approvals)` each one is written with. No
+#: host registers them, and the rules naming them are this module's own.
+LOCALLY: RepoIdentity = "github.com/scratchowner/locally"
+SIBLING: RepoIdentity = "github.com/scratchowner/sibling"
 
-#: The identity whose routing the journey below resolves. Spelled out rather than
-#: derived from the tracked files, so that what the journey claims to prove is stated
-#: independently of the configuration under test.
-PRINTOBSERVER: RepoIdentity = "github.com/nickderobertis/printobserver"
-#: The team identity whose routing the host-overlay journey resolves, spelled out for
-#: the same reason. It is the one whose rule a resolver cannot be taken on trust for:
-#: `default:` resolves the reviewed pair too, so a policy read alone would answer
-#: identically whether the rule matched or nothing did. Synthetic, and private: no
-#: tracked file names it, and its rule exists only in the host overlay below.
+
+class Policy(NamedTuple):
+    """How a change to one identity publishes, as a rule states it."""
+
+    publication: str
+    approvals: str
+
+
+#: Merged in place, with nobody else's approval.
+LOCAL_DIRECT = Policy("local-direct", "none")
+#: A change request that merges itself once its merge path passes.
+CHANGE_AUTO = Policy("change-auto", "none")
+BASE_POLICY: dict[RepoIdentity, Policy] = {LOCALLY: LOCAL_DIRECT, SIBLING: CHANGE_AUTO}
+
+#: The synthetic team identity whose routing the host-overlay journey resolves. It is the
+#: one whose rule a resolver cannot be taken on trust for: `default:` resolves the
+#: reviewed pair too, so a policy read alone would answer identically whether the rule
+#: matched or nothing did. Private: its rule exists only in the host overlay below.
 QUIETHARBOR: RepoIdentity = "github.com/hiddenco/quietharbor"
-#: The pre-adoption registry's one team repository, synthetic and private like the
-#: identity above, so its policy too comes from the host overlay alone.
+#: A second private team identity, so the overlay states more than one rule.
 STILLWATER: RepoIdentity = "github.com/hiddenco/stillwater"
 #: A private personal repository that publishes locally, ruled by the overlay alone.
-PEBBLECRAFT: RepoIdentity = "github.com/nickderobertis/pebblecraft"
-#: The public sibling the tracked list and rules were extended with, spelled out for
-#: the reason `PRINTOBSERVER` is.
-CLOUD_AGENT_DEV_ENV: RepoIdentity = "github.com/nickderobertis/cloud-agent-dev-env"
+PEBBLECRAFT: RepoIdentity = "github.com/scratchowner/pebblecraft"
 #: Where the recipe reads a host's rules overlay from under its XDG configuration home.
 HOST_RULES = Path("ai-orchestrator") / "onevcs.rules.yml"
 #: A host's own rules overlay over the synthetic private identities: the shape a host
@@ -149,7 +124,7 @@ HOST_RULES_OVERLAY_TEXT = (
     "    publication: change-open\n"
     "    approvals: required\n"
     "    visibility: private\n"
-    "  - match: {host: github.com, owner: nickderobertis, name: pebblecraft}\n"
+    "  - match: {host: github.com, owner: scratchowner, name: pebblecraft}\n"
     "    publication: local-direct\n"
     "    approvals: none\n"
     "    visibility: private\n"
@@ -163,106 +138,127 @@ class OverlayPolicy(NamedTuple):
     approvals: str
     position: int
 
+    @property
+    def policy(self) -> Policy:
+        """The publication and approvals alone, as a base rule would state them."""
+        return Policy(self.publication, self.approvals)
+
 
 #: What that overlay states for each identity, restated independently of its text; the
-#: composed file keeps each rule's position ahead of every tracked rule.
+#: composed file keeps each rule's position ahead of every base rule.
 OVERLAY_POLICY: dict[RepoIdentity, OverlayPolicy] = {
     QUIETHARBOR: OverlayPolicy("change-open", "required", 1),
     STILLWATER: OverlayPolicy("change-open", "required", 2),
     PEBBLECRAFT: OverlayPolicy("local-direct", "none", 3),
 }
-#: The producer whose override rule precedes its first release, spelled out for the
-#: same reason, with the target its plan contracts as the wheel this host will install.
-ONEBUDGETSPEC: RepoIdentity = "github.com/nickderobertis/onebudgetspec"
-ONEBUDGETSPEC_TARGET = "pypi"
-ONEBUDGETSPEC_ARTIFACT = "pypi:onebudgetspec-cli"
-#: The single-owner siblings this host installs nothing from and registers so plans can
-#: dispatch into them, spelled out for the same reason: the shared pruner each Rust
-#: repository's declared pool maintenance runs, and the library answering a GraphQL
-#: document's node count and rate-limit points that other repositories' query gates
-#: depend on.
-PRUNER: RepoIdentity = "github.com/nickderobertis/cargo-prune-superseded"
-GRAPHQL_NODE_COUNT: RepoIdentity = "github.com/nickderobertis/github-graphql-node-count"
-BUDGET_ONEVCS: RepoIdentity = "github.com/nickderobertis/onebudgetspec-plugin-onevcs"
-BUDGET_ACTION: RepoIdentity = "github.com/nickderobertis/onebudgetspec-github-action"
-TASK_UI: RepoIdentity = "github.com/nickderobertis/onetaskgraph-ui"
-#: The producer registered ahead of its first release, which a node of this repository
-#: adopts as the `onefollowup-cli` wheel under the override's `pypi` default.
-ONEFOLLOWUP: RepoIdentity = "github.com/nickderobertis/onefollowup"
-ONEFOLLOWUP_TARGET = "pypi"
-ONEFOLLOWUP_ARTIFACT = "pypi:onefollowup-cli"
-
-RepoType = Literal["single-owner", "team"]
-Workflow = Literal["local", "remote"]
 
 
-class Identity(NamedTuple):
-    """One repository as the pre-adoption registry described it."""
+def rules_naming(policies: Mapping[RepoIdentity, Policy]) -> str:
+    """A base rules file with one rule per identity of ``policies``, in order, and a default.
 
-    #: The key the pre-adoption registry filed it under, which its checkouts name.
-    url: str
-    #: The identity `onevcs` normalizes this repository's origin URL to.
-    key: RepoIdentity
-    origin: str
-    #: `single-owner` or `team`.
-    repo_type: RepoType
-    #: `local` or `remote`.
-    workflow: Workflow
-
-    @property
-    def publication(self) -> str:
-        """How a change here must publish now.
-
-        This is the whole migration, stated once: the old registry split the
-        decision across a repository type and a workflow, and the rules file states
-        it as how a change publishes plus whether somebody else has to approve it.
-        """
-        if self.workflow == "local":
-            return "local-direct"
-        return "change-open" if self.repo_type == "team" else "change-auto"
-
-    @property
-    def approvals(self) -> str:
-        """Whether somebody else has to approve a change here."""
-        return "required" if self.repo_type == "team" else "none"
-
-
-class Checkout(NamedTuple):
-    """One local checkout as the pre-adoption registry described it."""
-
-    path: str
-    #: The pre-adoption identity URL this checkout belongs to.
-    identity: str
-
-
-def _golden() -> tuple[tuple[Identity, ...], tuple[Checkout, ...]]:
-    """The pre-adoption registry, read once into records with a shape to check."""
-    document = json.loads(GOLDEN.read_text(encoding="utf-8"))
-    identities = tuple(
-        Identity(
-            url=url,
-            key=record["origin"].removeprefix("https://").removesuffix(".git"),
-            origin=record["origin"],
-            repo_type=record["repo_type"],
-            workflow=record["workflow"],
+    Each rule names its repository outright and declares it `public`, so registering one
+    never asks a host about a repository that does not exist; the default is the reviewed
+    pair, which `just repos-apply` refuses a checkout for falling through to.
+    """
+    rules = "".join(
+        "  - match: {{host: {}, owner: {}, name: {}}}\n"
+        "    publication: {}\n"
+        "    approvals: {}\n"
+        "    visibility: public\n".format(
+            *identity.split("/"), policy.publication, policy.approvals
         )
-        for url, record in sorted(document["identities"].items())
+        for identity, policy in policies.items()
     )
-    checkouts = tuple(
-        Checkout(path=record["path"], identity=record["identity"])
-        for _, record in sorted(document["checkouts"].items())
+    return (
+        "version: 4\n"
+        "trailer_prefix: Orchestrator-\n"
+        f"rules:\n{rules or '  []\n'}"
+        "default:\n"
+        "  publication: change-open\n"
+        "  approvals: required\n"
     )
-    return identities, checkouts
 
 
-IDENTITIES, CHECKOUTS = _golden()
-#: Each identity, keyed the way its checkout records name it.
-BY_URL = {identity.url: identity for identity in IDENTITIES}
-#: The `$HOME` the pre-adoption registry's paths are absolute under, taken from the
-#: fixture itself. The registry was captured on one host and this suite runs on
-#: others, so substituting *this* host's home would render the fixture's paths as
-#: `~`-spellings no host has and make the tracked list unmatchable off that machine.
-PRE_ADOPTION_HOME = os.path.commonpath([entry.path for entry in CHECKOUTS])
+def write_rules(path: Path, policies: Mapping[RepoIdentity, Policy] = BASE_POLICY) -> Path:
+    """``path``, holding :func:`rules_naming` of ``policies``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rules_naming(policies), encoding="utf-8")
+    return path
+
+
+def sandbox(home: Path, config_home: Path) -> dict[str, str]:
+    """The environment every journey runs the recipe in: no file of this host's reached.
+
+    A scratch `HOME` beside the registry root, the scratch XDG configuration home, and the
+    registry root itself, so the recipe finds neither this host's checkout list nor its
+    rules or workspaces overlays, and writes no registry but ``home``.
+    """
+    user_home = home.parent / f"{home.name}-user"
+    user_home.mkdir(parents=True, exist_ok=True)
+    config_home.mkdir(parents=True, exist_ok=True)
+    return {
+        **os.environ,
+        "HOME": str(user_home),
+        "XDG_CONFIG_HOME": str(config_home),
+        "ONEVCS_HOME": str(home),
+    }
+
+
+def apply_registry(
+    manifest: Path,
+    home: Path,
+    rules: Path,
+    *arguments: str,
+    config_home: Path | None = None,
+    temporary: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run the real recipe on ``manifest`` and ``rules`` against a scratch registry root.
+
+    ``config_home`` is the XDG configuration home the recipe resolves the host's
+    workspaces and rules overlays under; a scratch sibling of ``home`` holding nothing
+    when a journey names none, so the files the journey names are installed alone.
+    ``temporary``, when named, is the recipe's ``TMPDIR``, for a journey that reads what
+    a run left there.
+    """
+    if config_home is None:
+        config_home = home.parent / f"{home.name}-config"
+    scratch = {"TMPDIR": str(temporary)} if temporary is not None else {}
+    return subprocess.run(
+        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules), *arguments],
+        cwd=REPO_ROOT,
+        env={**sandbox(home, config_home), **scratch},
+        text=True,
+        capture_output=True,
+    )
+
+
+def onevcs(
+    home: Path, *arguments: str, stdin: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """The installed `onevcs`, reading the registry under ``home``."""
+    return subprocess.run(
+        ["uv", "run", "--project", str(REPO_ROOT), "onevcs", *arguments],
+        cwd=REPO_ROOT,
+        env={**os.environ, "ONEVCS_HOME": str(home)},
+        text=True,
+        input=stdin,
+        capture_output=True,
+    )
+
+
+def reported(output: str, key: str) -> str:
+    """One field of `onevcs rules check`, without its `(from rule 1)` annotation."""
+    for line in output.splitlines():
+        name, separator, value = line.partition(": ")
+        if separator and name.strip() == key:
+            return value.split(" (from ")[0].strip()
+    raise AssertionError(f"no {key!r} in:\n{output}")
+
+
+def listed(path: Path, *checkouts: Path | str) -> Path:
+    """``path``, holding a checkout list naming each of ``checkouts``, one per line."""
+    path.write_text("".join(f"{entry}\n" for entry in checkouts), encoding="utf-8")
+    return path
 
 
 def declaring_checkout(directory: Path, origin: str, targets: dict[str, str]) -> Path:
@@ -279,10 +275,12 @@ def declaring_checkout(directory: Path, origin: str, targets: dict[str, str]) ->
     (directory / "release-targets.toml").write_text(
         declaration({**targets, "crate": f"crate:{directory.name}"}), encoding="utf-8"
     )
-    committer = ["-c", "user.email=t@example.com", "-c", "user.name=Test"]
     subprocess.run(["git", "add", "-A"], cwd=directory, check=True)
     subprocess.run(
-        ["git", *committer, "commit", "-qm", "chore: declare"], cwd=directory, check=True
+        ["git", *COMMITTER, "commit", "-qm", "chore: declare"], cwd=directory, check=True
+    )
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=directory, check=True
     )
     return directory
 
@@ -318,10 +316,11 @@ def registered_paths(home: Path) -> set[str]:
 
 
 class Applied(NamedTuple):
-    """One scratch registry, brought up to the tracked configuration."""
+    """One scratch registry, brought up to a synthetic base and a host overlay."""
 
     home: Path
     manifest: Path
+    rules: Path
     result: subprocess.CompletedProcess[str]
 
 
@@ -337,93 +336,59 @@ class RegistryDocument(TypedDict):
 
 @pytest.fixture(scope="module")
 def applied(tmp_path_factory: pytest.TempPathFactory) -> Applied:
-    """The pre-adoption registry's checkouts, registered by the real recipe.
+    """A checkout of every base and overlay identity, registered by the real recipe.
 
-    The registry held one private team repository, whose rule no tracked file carries
-    any longer: it comes from the host's own rules overlay, installed here under a
-    scratch XDG configuration home, so every pre-adoption row is still asserted against
-    what `onevcs` resolves — the public ones from the tracked rules, the private one
-    from the overlay composed over them.
+    The base identities are ruled by the synthetic base rules handed to `--rules`; the
+    private ones by the host's own rules overlay, installed under a scratch XDG
+    configuration home, so the composed policy is read from both sides.
     """
     root = tmp_path_factory.mktemp("repo-registry")
     paths = [
-        checkout(root / "checkouts" / Path(entry.path).name, BY_URL[entry.identity].origin)
-        for entry in CHECKOUTS
+        checkout(root / "checkouts" / key.rpartition("/")[2], f"https://{key}.git")
+        for key in (*BASE_POLICY, *OVERLAY_POLICY)
     ]
-    manifest = root / "checkouts.list"
-    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
+    manifest = listed(root / "checkouts.list", *paths)
+    rules = write_rules(root / "rules.yml")
     home = root / "onevcs"
-    result = apply_registry(manifest, home, config_home=host_config(root / "xdg"))
+    result = apply_registry(manifest, home, rules, config_home=host_config(root / "xdg"))
     assert result.returncode == 0, result.stdout + result.stderr
-    return Applied(home=home, manifest=manifest, result=result)
+    return Applied(home=home, manifest=manifest, rules=rules, result=result)
 
 
-@pytest.fixture(scope="module")
-def overlaid(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A registry holding a checkout of every identity the host overlay names.
-
-    Beside one tracked identity of each publication the tracked file routes, so the
-    composition is read from both sides: the overlay's identities resolve its rules,
-    and the tracked ones still resolve theirs.
-    """
-    root = tmp_path_factory.mktemp("overlaid-registry")
-    keys = (*OVERLAY_POLICY, THIS_REPOSITORY, "github.com/nickderobertis/onevcs")
-    paths = [
-        checkout(root / "checkouts" / key.rpartition("/")[2], f"https://{key}") for key in keys
-    ]
-    manifest = root / "checkouts.list"
-    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
-    home = root / "onevcs"
-    result = apply_registry(manifest, home, config_home=host_config(root / "xdg"))
-    assert result.returncode == 0, result.stdout + result.stderr
-    return home
-
-
-@pytest.fixture(scope="module")
-def ruled(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A registry holding a checkout of *every* identity the tracked rules name.
-
-    The `applied` fixture registers the pre-adoption checkouts, which is what the
-    migration assertions are about; an identity registered since — `llmlint` is the
-    first — has a rule there but no checkout, and `onevcs rules check` resolves a
-    repository through a registered checkout. Registering one per rule is what lets
-    the gate assertions below cover the whole file rather than only the rules that
-    predate the adoption.
-    """
-    return ruled_registry(tmp_path_factory.mktemp("ruled-registry"))
-
-
-def test_every_pre_adoption_identity_and_checkout_is_registered(applied: Applied) -> None:
+def test_every_listed_checkout_is_registered_under_its_origins_identity(applied: Applied) -> None:
     registry: RegistryDocument = json.loads(
         (applied.home / "registry.json").read_text(encoding="utf-8")
     )
-    assert set(registry["identities"]) == {identity.key for identity in IDENTITIES}
+    assert set(registry["identities"]) == {*BASE_POLICY, *OVERLAY_POLICY}
     actual = {(record["path"], record["identity"]) for record in registry["checkouts"].values()}
     expected = {
-        (
-            str(applied.manifest.parent / "checkouts" / Path(entry.path).name),
-            BY_URL[entry.identity].key,
-        )
-        for entry in CHECKOUTS
+        (str(applied.manifest.parent / "checkouts" / key.rpartition("/")[2]), key)
+        for key in (*BASE_POLICY, *OVERLAY_POLICY)
     }
     assert actual == expected
 
 
 def test_apply_reports_the_resolved_policy_table(applied: Applied) -> None:
-    assert "apply-repo-registry: resolved policy" in applied.result.stdout
-    assert "ai-orchestrator" in applied.result.stdout
-    assert "local-direct" in applied.result.stdout
-    assert "stillwater" in applied.result.stdout
-    assert "change-open" in applied.result.stdout
+    """One row per registered checkout, with the policy `onevcs` resolved for it."""
+    table = applied.result.stdout.split("apply-repo-registry: resolved policy", 1)[1]
+    rows = table.split("apply-repo-registry: release adoption", 1)[0]
+    policies = {
+        **BASE_POLICY,
+        **{key: overlay.policy for key, overlay in OVERLAY_POLICY.items()},
+    }
+    for identity, policy in policies.items():
+        row = next(line for line in rows.splitlines() if f" {identity} " in line)
+        expected = rf"\s{re.escape(policy.publication)}\s+{re.escape(policy.approvals)}$"
+        assert re.search(expected, row), row
     overlay = applied.manifest.parent / "xdg" / HOST_RULES
     assert (
         f"rules      the rules composed from 2 file(s) are at {applied.home / 'rules.yml'}"
-        f"  (from {TRACKED_RULES} overlaid by {overlay})"
+        f"  (from {applied.rules} overlaid by {overlay})"
     ) in applied.result.stdout, applied.result.stdout
 
 
 def test_apply_installs_the_tracked_release_override_and_says_so(applied: Applied) -> None:
-    """The third tracked file, installed whole beside the rules file and reported."""
+    """The release override, installed whole beside the rules file and reported."""
     installed = applied.home / "releases.yml"
     assert installed.read_bytes() == TRACKED_RELEASES.read_bytes()
     assert f"releases   installed  {installed}" in applied.result.stdout
@@ -432,7 +397,7 @@ def test_apply_installs_the_tracked_release_override_and_says_so(applied: Applie
 def test_apply_installs_the_tracked_workspaces_file_and_the_pool_resolves_from_it(
     applied: Applied,
 ) -> None:
-    """The fourth tracked file, installed whole and read back through the verb that owns it.
+    """The workspaces file, installed whole and read back through the verb that owns it.
 
     Installed bytes prove the copy; `onevcs pool status` proves the install is the one
     a session open resolves its placement out of, answering this host's default for an
@@ -467,7 +432,7 @@ HOST_OVERLAY_TEXT = (
 )
 
 
-# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] An existing journey of `just repos-apply`, retargeted at the one tracked rule left; every journey of that recipe lives in this module, and the module docstring's ignore of `shell_test_tiers_stay_split` says why moving them to a project of their own is a change for all of them at once rather than this edit's.  # noqa: E501
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] An existing journey of `just repos-apply`; every journey of that recipe lives in this module, and the module docstring's ignore of `shell_test_tiers_stay_split` says why moving them to a project of their own is a change for all of them at once rather than this edit's.  # noqa: E501
 def test_the_hosts_overlay_is_composed_onto_the_tracked_file_and_installed(
     tmp_path: Path,
 ) -> None:
@@ -478,19 +443,23 @@ def test_the_hosts_overlay_is_composed_onto_the_tracked_file_and_installed(
     the host's default over the tracked one, and the report says both sources. The
     tracked file itself is untouched, which is the point of the overlay.
     """
-    present = checkout(
-        tmp_path / "ai-orchestrator", "https://github.com/nickderobertis/ai-orchestrator.git"
-    )
+    present = checkout(tmp_path / "ai-orchestrator", f"https://{THIS_REPOSITORY}.git")
     other = checkout(tmp_path / "onejudge", "https://github.com/nickderobertis/onejudge.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n{other}\n", encoding="utf-8")
+    manifest = listed(tmp_path / "checkouts", present, other)
+    rules = write_rules(
+        tmp_path / "rules.yml",
+        {
+            THIS_REPOSITORY: LOCAL_DIRECT,
+            "github.com/nickderobertis/onejudge": CHANGE_AUTO,
+        },
+    )
     config_home = tmp_path / "xdg"
     (config_home / HOST_OVERLAY).parent.mkdir(parents=True)
     (config_home / HOST_OVERLAY).write_text(HOST_OVERLAY_TEXT, encoding="utf-8")
     home = tmp_path / "home"
     tracked_before = TRACKED_WORKSPACES.read_bytes()
 
-    result = apply_registry(manifest, home, config_home=config_home)
+    result = apply_registry(manifest, home, rules, config_home=config_home)
 
     assert result.returncode == 0, result.stdout + result.stderr
     installed = home / "workspaces.yml"
@@ -510,7 +479,7 @@ def test_the_hosts_overlay_is_composed_onto_the_tracked_file_and_installed(
     assert text.count("name: ai-orchestrator}") == 1, text
     assert text.index("name: ai-orchestrator}") < text.index("name: onevcs}"), text
 
-    again = apply_registry(manifest, home, config_home=config_home)
+    again = apply_registry(manifest, home, rules, config_home=config_home)
 
     assert again.returncode == 0, again.stdout + again.stderr
     assert "workspaces unchanged" in again.stdout
@@ -518,15 +487,16 @@ def test_the_hosts_overlay_is_composed_onto_the_tracked_file_and_installed(
 
 def test_a_host_overlay_the_composer_refuses_installs_nothing(tmp_path: Path) -> None:
     """A host file at another schema version is refused by name before validation."""
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    present = checkout(tmp_path / "sibling", f"https://{SIBLING}.git")
+    manifest = listed(tmp_path / "checkouts", present)
     config_home = tmp_path / "xdg"
     (config_home / HOST_OVERLAY).parent.mkdir(parents=True)
     (config_home / HOST_OVERLAY).write_text("version: 2\ndefault:\n  pool: 3\n", encoding="utf-8")
     home = tmp_path / "home"
 
-    result = apply_registry(manifest, home, config_home=config_home)
+    result = apply_registry(
+        manifest, home, write_rules(tmp_path / "rules.yml"), config_home=config_home
+    )
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "declares version 2, and the tracked one 1" in result.stderr, result.stderr
@@ -542,15 +512,14 @@ class Producers(NamedTuple):
     result: subprocess.CompletedProcess[str]
 
 
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Nine `git init`s and
-# one registry apply — the cost class of the `applied` and `ruled` fixtures above, which
-# register thirteen and twenty-five — in the module every journey of this recipe lives
-# in; the project edge those would all sit behind is the module docstring's follow-up.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] A handful of `git
+# init`s and one registry apply, in the module every journey of this recipe lives in; the
+# project edge those would all sit behind is the module docstring's follow-up.
 # Block-scoped because the rule reads the fixture's body, not its decorator line.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] The edge this fixture
 # would sit behind is the one the module docstring's `shell_test_tiers_stay_split` note
 # defers: a project of this recipe's own is a change to `nx.json`,
-# `orchestrator/project.json` and `tests/nx_inputs.py` for all three module fixtures and
+# `orchestrator/project.json` and `tests/nx_inputs.py` for every module fixture and
 # every journey here at once, and one more fixture of the same cost class in the same
 # module is not the change that makes it.
 @pytest.fixture(scope="module")
@@ -561,7 +530,7 @@ def producers(tmp_path_factory: pytest.TempPathFactory) -> Producers:
     `onevcs release targets` answers for a `default_target` depends on the producer
     declaring that target: a producer whose declaration cannot be read is *refused*
     for naming one, not answered without it, so a registry of empty checkouts would
-    prove nothing about the override.
+    prove nothing about the override. Each is routed by a synthetic rule of its own.
     """
     root = tmp_path_factory.mktemp("producers")
     paths = [
@@ -573,10 +542,15 @@ def producers(tmp_path_factory: pytest.TempPathFactory) -> Producers:
         for row in INSTALLED
     ]
     paths.append(checkout(root / "checkouts" / "ai-orchestrator", f"https://{THIS_REPOSITORY}.git"))
-    manifest = root / "checkouts.list"
-    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
+    rules = write_rules(
+        root / "rules.yml",
+        {
+            **{row.producer: CHANGE_AUTO for row in INSTALLED},
+            THIS_REPOSITORY: LOCAL_DIRECT,
+        },
+    )
     home = root / "onevcs"
-    result = apply_registry(manifest, home)
+    result = apply_registry(listed(root / "checkouts.list", *paths), home, rules)
     assert result.returncode == 0, result.stdout + result.stderr
     return Producers(home=home, result=result)
 
@@ -663,9 +637,9 @@ def test_apply_reports_what_each_installed_producer_resolves(producers: Producer
     stdout = producers.result.stdout
     table = stdout.index("apply-repo-registry: release adoption")
     assert table > stdout.index("apply-repo-registry: resolved policy")
-    reported = stdout[table:]
+    reported_lines = stdout[table:]
     for row in INSTALLED:
-        line = next(line for line in reported.splitlines() if row.producer in line)
+        line = next(line for line in reported_lines.splitlines() if row.producer in line)
         assert re.search(rf"default target {re.escape(row.target)}\s", line), line
         assert line.rstrip().endswith(f"adoption {GLOBAL_RUNG}"), line
 
@@ -675,12 +649,14 @@ def test_a_producer_this_registry_does_not_hold_is_reported_not_failed(
 ) -> None:
     """A host holding a subset of the producers reads which ones it lacks.
 
-    The `applied` registry holds the pre-adoption checkouts, one of which —
-    `onetaskgraph` — is not among them at all, so the table below the policy one names
-    it as not registered rather than the apply failing for a producer this host lacks.
+    The `applied` registry holds none of them — `onetaskgraph` among them — so the table
+    below the policy one names it as not registered rather than the apply failing for a
+    producer this host lacks.
     """
-    reported = applied.result.stdout[applied.result.stdout.index("release adoption") :]
-    assert re.search(r"github\.com/nickderobertis/onetaskgraph\s+not registered here", reported)
+    reported_lines = applied.result.stdout[applied.result.stdout.index("release adoption") :]
+    assert re.search(
+        r"github\.com/nickderobertis/onetaskgraph\s+not registered here", reported_lines
+    )
     assert applied.result.returncode == 0
 
 
@@ -694,9 +670,8 @@ def test_a_registered_producer_whose_base_declares_nothing_fails_the_apply(
     a host learns of the wait that could never complete when it applies the
     configuration rather than when a node is held on it.
     """
-    present = checkout(
-        tmp_path / "onepipeline", "https://github.com/nickderobertis/onepipeline.git"
-    )
+    producer = "github.com/nickderobertis/onepipeline"
+    present = checkout(tmp_path / "onepipeline", f"https://{producer}.git")
     subprocess.run(["git", "rm", "-q", "release-targets.toml"], cwd=present, check=True)
     subprocess.run(
         ["git", *COMMITTER, "commit", "-qm", "chore: declare nothing"], cwd=present, check=True
@@ -704,10 +679,9 @@ def test_a_registered_producer_whose_base_declares_nothing_fails_the_apply(
     subprocess.run(
         ["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=present, check=True
     )
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    rules = write_rules(tmp_path / "rules.yml", {producer: CHANGE_AUTO})
 
-    result = apply_registry(manifest, tmp_path / "home")
+    result = apply_registry(listed(tmp_path / "checkouts", present), tmp_path / "home", rules)
 
     assert result.returncode != 0, result.stdout + result.stderr
     assert re.search(
@@ -734,25 +708,29 @@ def test_a_scratch_identity_seeds_beside_the_override_untouched_by_it(tmp_path: 
     assert answer["targets"] == [], answer
 
 
+def _one_sibling(tmp_path: Path) -> tuple[Path, Path]:
+    """A checkout list naming one checkout of :data:`SIBLING`, and the rules routing it."""
+    present = checkout(tmp_path / "sibling", f"https://{SIBLING}.git")
+    return listed(tmp_path / "checkouts", present), write_rules(tmp_path / "rules.yml")
+
+
 def test_a_different_release_override_is_installed_in_place_of_the_tracked_one(
     tmp_path: Path,
 ) -> None:
     """`--releases FILE` installs FILE, observed as the installed bytes becoming its own."""
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    manifest, rules = _one_sibling(tmp_path)
     candidate = tmp_path / "candidate.yml"
     candidate.write_text(
         "version: 1\ndefault:\n  adoption: published\nrepositories: []\n", encoding="utf-8"
     )
     home = tmp_path / "home"
 
-    result = apply_registry(manifest, home, "--releases", str(candidate))
+    result = apply_registry(manifest, home, rules, "--releases", str(candidate))
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (home / "releases.yml").read_bytes() == candidate.read_bytes()
     assert (home / "releases.yml").read_bytes() != TRACKED_RELEASES.read_bytes()
-    answer = release_targets(home, "github.com/nickderobertis/onevcs")
+    answer = release_targets(home, SIBLING)
     assert answer["adoption"] == "published", answer
 
 
@@ -768,21 +746,19 @@ def test_a_different_workspaces_file_is_installed_in_place_of_the_tracked_one(
     tmp_path: Path,
 ) -> None:
     """`--workspaces FILE` installs FILE, observed through the pool the identity then resolves."""
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    manifest, rules = _one_sibling(tmp_path)
     candidate = tmp_path / "candidate.yml"
     candidate.write_text(
         "version: 1\ndefault:\n  pool: 3\n  overflow: 1\nrules: []\n", encoding="utf-8"
     )
     home = tmp_path / "home"
 
-    result = apply_registry(manifest, home, "--workspaces", str(candidate))
+    result = apply_registry(manifest, home, rules, "--workspaces", str(candidate))
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (home / "workspaces.yml").read_bytes() == candidate.read_bytes()
     assert (home / "workspaces.yml").read_bytes() != TRACKED_WORKSPACES.read_bytes()
-    status = onevcs(home, "pool", "status", "onevcs", "--json")
+    status = onevcs(home, "pool", "status", "sibling", "--json")
     assert status.returncode == 0, status.stdout + status.stderr
     capacity = json.loads(status.stdout)["capacity"]
     assert (capacity["pool"], capacity["overflow"]) == (3, 1), capacity
@@ -797,9 +773,7 @@ def test_a_workspaces_file_onevcs_refuses_leaves_the_installed_one_intact(
     `pool status` — the one read that loads the document whole — so a default that
     admits no session at all is refused before the live copy is touched.
     """
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    manifest, rules = _one_sibling(tmp_path)
     home = tmp_path / "home"
     home.mkdir()
     (home / "rules.yml").write_text(INSTALLED_RULES, encoding="utf-8")
@@ -811,7 +785,7 @@ def test_a_workspaces_file_onevcs_refuses_leaves_the_installed_one_intact(
         "version: 1\ndefault:\n  pool: 0\n  overflow: 0\nrules: []\n", encoding="utf-8"
     )
 
-    result = apply_registry(manifest, home, "--workspaces", str(invalid))
+    result = apply_registry(manifest, home, rules, "--workspaces", str(invalid))
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert f"{invalid} is not a valid onevcs workspaces file" in result.stderr
@@ -827,9 +801,7 @@ def test_an_override_onevcs_refuses_leaves_the_installed_one_intact(tmp_path: Pa
     the one verb that loads the document — so a malformed rung or a `default_target`
     naming no target is refused before the live copy is touched.
     """
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    manifest, rules = _one_sibling(tmp_path)
     home = tmp_path / "home"
     home.mkdir()
     (home / "rules.yml").write_text(INSTALLED_RULES, encoding="utf-8")
@@ -840,7 +812,7 @@ def test_an_override_onevcs_refuses_leaves_the_installed_one_intact(tmp_path: Pa
         "version: 1\ndefault:\n  adoption: bogus\nrepositories: []\n", encoding="utf-8"
     )
 
-    result = apply_registry(manifest, home, "--releases", str(invalid))
+    result = apply_registry(manifest, home, rules, "--releases", str(invalid))
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert f"{invalid} is not a valid onevcs release override" in result.stderr
@@ -860,24 +832,24 @@ def test_a_replacement_that_fails_after_validation_leaves_the_installed_copy_int
     are the first install, by `onevcs rules apply`, so that is where the run stops,
     naming it, with the release override behind it never touched.
     """
-    manifest = tmp_path / "checkouts"
-    manifest.write_text("", encoding="utf-8")
+    manifest = listed(tmp_path / "checkouts")
+    rules = write_rules(tmp_path / "rules.yml")
     home = tmp_path / "home"
     home.mkdir()
-    rules = home / "rules.yml"
-    rules.write_text(INSTALLED_RULES, encoding="utf-8")
+    installed_rules = home / "rules.yml"
+    installed_rules.write_text(INSTALLED_RULES, encoding="utf-8")
     installed = home / "releases.yml"
     installed.write_text(INSTALLED_RELEASES, encoding="utf-8")
     home.chmod(0o555)
     try:
-        result = apply_registry(manifest, home)
+        result = apply_registry(manifest, home, rules)
     finally:
         home.chmod(0o755)
 
     assert result.returncode == 1, result.stdout + result.stderr
-    assert f"installing the rules from {TRACKED_RULES} failed" in result.stderr, result.stderr
+    assert f"installing the rules from {rules} failed" in result.stderr, result.stderr
     assert f"cannot write {home}" in result.stderr, result.stderr
-    assert rules.read_text(encoding="utf-8") == INSTALLED_RULES
+    assert installed_rules.read_text(encoding="utf-8") == INSTALLED_RULES
     assert installed.read_text(encoding="utf-8") == INSTALLED_RELEASES
     assert "releases   installed" not in result.stdout
     assert sorted(path.name for path in home.iterdir()) == ["releases.yml", "rules.yml"]
@@ -887,161 +859,92 @@ def test_resolve_accepts_registered_spellings_and_refuses_bare_owner_name(
     applied: Applied,
 ) -> None:
     """Plans may name registry identities, aliases, origins, or checkout paths."""
-    identity = IDENTITIES[0]
     registry: RegistryDocument = json.loads(
         (applied.home / "registry.json").read_text(encoding="utf-8")
     )
     alias, checkout_record = next(
         (alias, record)
         for alias, record in registry["checkouts"].items()
-        if record["identity"] == identity.key
+        if record["identity"] == SIBLING
     )
-    accepted = (
-        identity.key,
-        alias,
-        identity.origin,
-        checkout_record["path"],
-    )
-    for spelling in accepted:
+    for spelling in (SIBLING, alias, f"https://{SIBLING}.git", checkout_record["path"]):
         resolved = onevcs(applied.home, "resolve", spelling)
         assert resolved.returncode == 0, resolved.stdout + resolved.stderr
-        assert identity.key in resolved.stdout
+        assert SIBLING in resolved.stdout
 
-    owner_name = identity.key.removeprefix("github.com/")
+    owner_name = SIBLING.removeprefix("github.com/")
     refused = onevcs(applied.home, "resolve", owner_name)
     assert refused.returncode != 0, refused.stdout
     assert owner_name in refused.stderr
 
 
-@pytest.mark.parametrize("identity", IDENTITIES, ids=lambda identity: identity.key)
-def test_each_identity_publishes_the_way_it_did(applied: Applied, identity: Identity) -> None:
-    checked = onevcs(applied.home, "rules", "check", identity.key)
-    assert checked.returncode == 0, checked.stdout + checked.stderr
-
-    assert reported(checked.stdout, "publication") == identity.publication
-    assert reported(checked.stdout, "approvals") == identity.approvals
-    assert reported(checked.stdout, "matched").startswith("rule ")
-
-
-def test_the_team_repository_still_needs_a_review(applied: Applied) -> None:
-    """The one identity where a wrong answer merges unreviewed work into a team's base.
-
-    Its rule is the host overlay's, so what is asserted beside the policy is the rule
-    that decided — the overlay's, ahead of every tracked rule — because `default:`
-    resolves the same reviewed pair and a policy read alone could not tell them apart.
-    """
-    checked = onevcs(applied.home, "rules", "check", STILLWATER)
-    assert checked.returncode == 0, checked.stdout + checked.stderr
-    assert reported(checked.stdout, "publication") == "change-open"
-    assert reported(checked.stdout, "approvals") == "required"
-    host, owner, name = STILLWATER.split("/")
-    position = OVERLAY_POLICY[STILLWATER].position
-    expected = f"rule {position} {{host: {host}, owner: {owner}, name: {name}}}"
-    assert reported(checked.stdout, "matched") == expected, checked.stdout
-
-
-@pytest.mark.parametrize(
-    "identity",
-    (
-        "github.com/nickderobertis/ai-orchestrator",
-        "github.com/nickderobertis/spanish-language-tutor",
-    ),
-)
-def test_local_direct_repositories_publish_locally(ruled: Path, identity: str) -> None:
-    """Local-first identities open no change request and merge in place."""
-    checked = onevcs(ruled, "rules", "check", identity)
-    assert reported(checked.stdout, "publication") == "local-direct"
-    assert reported(checked.stdout, "approvals") == "none"
-
-
 @pytest.mark.parametrize("identity", sorted(OVERLAY_POLICY))
 def test_each_overlay_identity_resolves_the_overlays_rule_and_is_private(
-    overlaid: Path, identity: RepoIdentity
+    applied: Applied, identity: RepoIdentity
 ) -> None:
     """A private identity is routed by the host overlay alone, and the host is never asked.
 
     Read back through the installed `onevcs rules check`, so what is asserted is the
     composed file the recipe installed: the overlay's rule decides, at its own position
-    ahead of the tracked rules, with the publication and approvals it declares — a
+    ahead of the base rules, with the publication and approvals it declares — a
     local-first private repository included — and `onevcs boundary inspect` answers
     `private` off the overlay's `visibility` rather than off a host it would have to ask.
     """
     publication, approvals, position = OVERLAY_POLICY[identity]
-    checked = onevcs(overlaid, "rules", "check", identity)
+    checked = onevcs(applied.home, "rules", "check", identity)
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert reported(checked.stdout, "publication") == publication, checked.stdout
     assert reported(checked.stdout, "approvals") == approvals, checked.stdout
     host, owner, name = identity.split("/")
     expected = f"rule {position} {{host: {host}, owner: {owner}, name: {name}}}"
     assert reported(checked.stdout, "matched") == expected, checked.stdout
-    assert reported(checked.stdout, "rules") == str(overlaid / "rules.yml"), checked.stdout
-    assert visibility(overlaid, identity) == "private"
+    assert reported(checked.stdout, "rules") == str(applied.home / "rules.yml"), checked.stdout
+    assert visibility(applied.home, identity) == "private"
 
 
-def test_the_overlay_leaves_a_local_and_a_sibling_tracked_rule_as_the_file_states_them(
-    overlaid: Path,
-) -> None:
-    """Composition adds the host's rules and moves neither tracked policy kind.
+def test_the_overlay_leaves_each_base_rule_as_the_base_states_it(applied: Applied) -> None:
+    """Composition adds the host's rules and moves neither base policy kind.
 
-    One identity of each policy the tracked file states — this repository's local one and
-    a sibling's change-request one — keeps that policy, matched from its own tracked rule
-    shifted by exactly the overlay's rules.
+    One identity of each policy the base states — a local one and a change-request one —
+    keeps that policy, matched from its own base rule shifted by exactly the overlay's
+    rules.
     """
-    for identity in (THIS_REPOSITORY, "github.com/nickderobertis/onevcs"):
-        checked = onevcs(overlaid, "rules", "check", identity)
+    for index, (identity, policy) in enumerate(BASE_POLICY.items()):
+        checked = onevcs(applied.home, "rules", "check", identity)
         assert checked.returncode == 0, checked.stdout + checked.stderr
-        resolved = (reported(checked.stdout, "publication"), reported(checked.stdout, "approvals"))
-        assert resolved == POLICY_EXCEPTIONS.get(identity, SIBLING_POLICY), checked.stdout
-        position = ruled_identities().index(identity) + 1 + len(OVERLAY_POLICY)
+        resolved = Policy(
+            reported(checked.stdout, "publication"), reported(checked.stdout, "approvals")
+        )
+        assert resolved == policy, checked.stdout
+        position = index + 1 + len(OVERLAY_POLICY)
         assert reported(checked.stdout, "matched").startswith(f"rule {position} "), checked.stdout
-
-
-# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Keeps shared fixture ownership.
-def test_the_host_uses_the_shipped_base_merge_defaults(
-    ruled: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The installed rules resolve base-merge defaults through the pinned CLI."""
-    monkeypatch.delenv("ONEVCS_CHECKS_TIMEOUT_SECONDS", raising=False)
-    observer = onevcs(ruled, "rules", "check", PRINTOBSERVER)
-    assert observer.returncode == 0, observer.stderr
-    assert reported(observer.stdout, "base merge") == "on-conflict"
-    local = onevcs(ruled, "rules", "check", THIS_REPOSITORY)
-    assert local.returncode == 0, local.stderr
-    assert reported(local.stdout, "base merge") == "always"
 
 
 def test_the_optional_base_merge_and_wait_keys_are_accepted_and_validated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The header's optional keys work through the CLI, and malformed policy is refused.
+    """A rule's optional keys work through the CLI, and malformed policy is refused.
 
     Each candidate goes through the real recipe as its base rules file, because the
     verb it installs with is the one that validates it: a malformed `base_merge` is
     refused by name and leaves the configured install resolving exactly as before.
     """
     monkeypatch.delenv("ONEVCS_CHECKS_TIMEOUT_SECONDS", raising=False)
-    observer = checkout(tmp_path / "printobserver", f"https://{PRINTOBSERVER}.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{observer}\n", encoding="utf-8")
+    manifest, _ = _one_sibling(tmp_path)
     home = tmp_path / "onevcs"
     configured = tmp_path / "configured.yml"
     configured.write_text(
-        re.sub(
-            r"^    checks: \{wait_seconds: \d+\}.*\n",
-            "",
-            TRACKED_RULES.read_text(encoding="utf-8"),
-            flags=re.MULTILINE,
-        ).replace(
-            "    publication: change-auto",
+        rules_naming(BASE_POLICY).replace(
+            "    publication: change-auto\n",
             "    publication: change-auto\n"
             "    base_merge: always\n"
-            "    checks: {wait_seconds: 7200}",
+            "    checks: {wait_seconds: 7200}\n",
         ),
         encoding="utf-8",
     )
-    applied = apply_registry(manifest, home, "--rules", str(configured))
-    assert applied.returncode == 0, applied.stdout + applied.stderr
-    resolved = onevcs(home, "rules", "check", PRINTOBSERVER)
+    applied_once = apply_registry(manifest, home, configured)
+    assert applied_once.returncode == 0, applied_once.stdout + applied_once.stderr
+    resolved = onevcs(home, "rules", "check", SIBLING)
     assert resolved.returncode == 0, resolved.stderr
     assert reported(resolved.stdout, "base merge") == "always"
     assert reported(resolved.stdout, "checks wait") == "7200 s"
@@ -1051,138 +954,29 @@ def test_the_optional_base_merge_and_wait_keys_are_accepted_and_validated(
         configured.read_text(encoding="utf-8").replace("base_merge: always", "base_merge: invalid"),
         encoding="utf-8",
     )
-    refused = apply_registry(manifest, home, "--rules", str(invalid))
+    refused = apply_registry(manifest, home, invalid)
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert "invalid" in refused.stderr
     assert f"{invalid} is not a valid onevcs rules composition" in refused.stderr
     assert (home / "rules.yml").read_bytes() == installed
-    recovered = onevcs(home, "rules", "check", PRINTOBSERVER)
+    recovered = onevcs(home, "rules", "check", SIBLING)
     assert recovered.returncode == 0, recovered.stderr
     assert reported(recovered.stdout, "checks wait") == "7200 s"
 
 
-class DraftLifecycle(NamedTuple):
-    """What `onevcs rules check` resolves for one identity's draft lifecycle."""
-
-    #: Whether a publication opens its change request as a draft: `on` or `off`.
-    drafts: str
-    #: What a green draft becomes: `lift`, `keep for review`, or `not applicable`.
-    green_draft: str
-
-
-#: What the pinned `onevcs` resolves the installed rules into, per kind of identity.
-#: One identity of each publication they route — a single-owner `change-auto` sibling
-#: and this repository from the tracked file, and a team repository from the host
-#: overlay composed over it.
-DRAFT_LIFECYCLE: dict[RepoIdentity, DraftLifecycle] = {
-    "github.com/nickderobertis/onevcs": DraftLifecycle("on", "lift"),
-    STILLWATER: DraftLifecycle("on", "keep for review"),
-    "github.com/nickderobertis/ai-orchestrator": DraftLifecycle("on", "not applicable"),
-}
-
-
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - llmlint reads a directive's rule list off one line
-# Every journey of `just repos-apply` lives in this module, in the tier it already runs in,
-# and shares its `overlaid` fixture, as the module's file-scoped reason says; giving them
-# a project of their own is one change to the project graph for all of them at once, not
-# one more journey's to make.
-@pytest.mark.parametrize(("key", "expected"), sorted(DRAFT_LIFECYCLE.items()))
-def test_each_identity_resolves_the_intended_draft_lifecycle(
-    overlaid: Path, key: RepoIdentity, expected: DraftLifecycle
-) -> None:
-    """A green change is lifted, kept for its user's review, or never a change at all.
-
-    The publication lifecycle itself is the engines' to prove, against their own
-    testing hosts; what this host owns is that the rules file it installs reads into
-    the behaviour the user asked for. A team repository's green draft has to stay a
-    draft until its own user has looked at it, a sibling that merges automatically has
-    to be lifted so it can, and a `local-direct` identity opens no change request to
-    draft. An `onevcs` that predates the lifecycle prints neither line, so this fails
-    there rather than passing on a silence.
-    """
-    checked = onevcs(overlaid, "rules", "check", key)
-    assert checked.returncode == 0, checked.stdout + checked.stderr
-
-    resolved = DraftLifecycle(
-        drafts=reported(checked.stdout, "drafts"),
-        green_draft=reported(checked.stdout, "green draft"),
-    )
-    assert resolved == expected, checked.stdout
-
-
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501
-
-
-def test_the_tracked_rules_declare_the_migrated_schema_and_name_no_gate() -> None:
-    """The file itself: version 3, and no `gate:` anywhere in it.
-
-    Asserted on the tracked bytes as well as on what `onevcs` resolves, because the two
-    fail differently. A `gate:` reintroduced under `version: 3` is refused by the
-    engine and shows up as a broken apply; one reintroduced together with a *downgrade*
-    to `version: 2` resolves perfectly well, prints one deprecation nobody reads, and
-    silently returns this host to running a verifier beside the real one.
-    """
-    text = TRACKED_RULES.read_text(encoding="utf-8")
-    declared = [line for line in text.splitlines() if line.startswith("version:")]
-
-    assert declared == [f"version: {RULES_SCHEMA_VERSION}"], declared
-    named = [
-        line for line in text.splitlines() if not line.lstrip().startswith("#") and "gate" in line
-    ]
-    assert not named, (
-        "config/onevcs.rules.yml names a gate again; onevcs 0.11.0 removed the concept "
-        f"and the merge path is the verifier: {named}"
-    )
-
-
-@pytest.mark.parametrize("key", sorted(frozenset(ruled_identities())))
-def test_the_resolved_policy_is_publication_and_approvals_and_nothing_else(
-    ruled: Path, key: RepoIdentity
-) -> None:
-    """Contract A, read off the engine: `rules check` reports no `gate:` line at all.
-
-    The reading that matters is the tool's rather than the file's. A rules file this
-    host writes could be silent about a gate while the engine still resolved one from
-    a default, which is exactly the shape of the two wrong diagnoses this repository
-    records — so what is asserted is the policy a publication would really run under.
-
-    And that it is the policy this file *declares*, matched from a rule rather than
-    fallen through to `default:`. An identity added since the migration has no row in
-    the golden to check it against, so a rule written a notch wider — or one the
-    engine never matched at all — would otherwise reach a publication before anything
-    disagreed with it.
-    """
-    checked = onevcs(ruled, "rules", "check", key)
-    assert checked.returncode == 0, checked.stdout + checked.stderr
-
-    fields = {
-        line.partition(": ")[0].strip() for line in checked.stdout.splitlines() if ": " in line
-    }
-    assert "gate" not in fields, checked.stdout
-    assert {"publication", "approvals"} <= fields, checked.stdout
-    assert reported(checked.stdout, "matched").startswith("rule ")
-
-    resolved = (reported(checked.stdout, "publication"), reported(checked.stdout, "approvals"))
-    assert resolved == POLICY_EXCEPTIONS.get(key, SIBLING_POLICY), checked.stdout
-
-
 def test_a_gate_at_the_migrated_schema_version_is_refused_by_name(tmp_path: Path) -> None:
-    """The half of Contract A that keeps this file from drifting back.
+    """At `version: 3` a rule is `{publication, approvals}`, and `gate:` an unknown field.
 
-    At `version: 3` a rule is `{publication, approvals}` — with an optional `drafts:`
-    since onevcs 0.36.0 — and `gate:` is an unknown field, so a rules file carrying one
-    does not load. Driven through the real recipe because that is where an operator
-    meets it: an apply that installed a file
-    the engine cannot read would leave every publication resolving the previous rules.
+    So a rules file carrying one does not load. Driven through the real recipe because
+    that is where an operator meets it: an apply that installed a file the engine cannot
+    read would leave every publication resolving the previous rules.
     """
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    manifest, _ = _one_sibling(tmp_path)
     gated = tmp_path / "gated.yml"
     gated.write_text(
         f"version: {RULES_SCHEMA_VERSION}\n"
         "rules:\n"
-        "  - match: {host: github.com, owner: nickderobertis, name: onevcs}\n"
+        "  - match: {host: github.com, owner: scratchowner, name: sibling}\n"
         "    publication: change-auto\n"
         "    approvals: none\n"
         '    gate: {command: ["just", "gate"]}\n'
@@ -1192,7 +986,7 @@ def test_a_gate_at_the_migrated_schema_version_is_refused_by_name(tmp_path: Path
         encoding="utf-8",
     )
 
-    result = apply_registry(manifest, tmp_path / "home", "--rules", str(gated))
+    result = apply_registry(manifest, tmp_path / "home", gated)
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert f"{gated} is not a valid onevcs rules composition" in result.stderr
@@ -1205,12 +999,11 @@ def test_a_gate_at_the_migrated_schema_version_is_refused_by_name(tmp_path: Path
 def test_a_gate_at_an_older_schema_version_is_accepted_ignored_and_reported(
     tmp_path: Path,
 ) -> None:
-    """The other half: an unmigrated host keeps publishing, and is told why once.
+    """An unmigrated host keeps publishing, and is told why once.
 
-    This is the measurement that makes the removal real rather than nominal on this
-    host. The same `gate: ["false"]` that an `onevcs` before 0.11.0 would have run and
-    been refused by is now read, dropped, and named on stderr — so the *engine*, not
-    just this repository's file, is what stopped running a tier of its own.
+    The same `gate: ["false"]` that an `onevcs` before 0.11.0 would have run and been
+    refused by is now read, dropped, and named on stderr — so the *engine* is what
+    stopped running a tier of its own.
 
     The unmigrated file is the one a host already has installed, which is where the
     engine meets it: written at the registry's own rules reference after a real
@@ -1218,14 +1011,12 @@ def test_a_gate_at_an_older_schema_version_is_accepted_ignored_and_reported(
     answers it by refusing the gate by name and installing nothing, so the recipe
     never installs a gate even at a schema the engine still reads.
     """
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    manifest, rules = _one_sibling(tmp_path)
     legacy = tmp_path / "legacy.yml"
     legacy.write_text(
         "version: 2\n"
         "rules:\n"
-        "  - match: {host: github.com, owner: nickderobertis, name: onevcs}\n"
+        "  - match: {host: github.com, owner: scratchowner, name: sibling}\n"
         "    publication: change-auto\n"
         "    approvals: none\n"
         '    gate: {command: ["false"]}\n'
@@ -1235,10 +1026,10 @@ def test_a_gate_at_an_older_schema_version_is_accepted_ignored_and_reported(
         encoding="utf-8",
     )
     home = tmp_path / "home"
-    result = apply_registry(manifest, home)
+    result = apply_registry(manifest, home, rules)
     assert result.returncode == 0, result.stdout + result.stderr
 
-    refused = apply_registry(manifest, home, "--rules", str(legacy))
+    refused = apply_registry(manifest, home, legacy)
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert "gate" in refused.stderr, refused.stderr
     assert f"{legacy} is not a valid onevcs rules composition" in refused.stderr
@@ -1246,7 +1037,7 @@ def test_a_gate_at_an_older_schema_version_is_accepted_ignored_and_reported(
 
     # An unmigrated host: the installed file is the older schema, gate and all.
     shutil.copyfile(legacy, home / "rules.yml")
-    checked = onevcs(home, "rules", "check", "github.com/nickderobertis/onevcs")
+    checked = onevcs(home, "rules", "check", SIBLING)
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert "gate" not in {
         line.partition(": ")[0].strip() for line in checked.stdout.splitlines() if ": " in line
@@ -1257,7 +1048,7 @@ def test_a_gate_at_an_older_schema_version_is_accepted_ignored_and_reported(
 
 
 #: The fields `onevcs` stamps on an identity's record when it observes the identity's
-#: visibility — off a rule's `visibility`, for an identity the host overlay rules.
+#: visibility — off a rule's `visibility`, which every rule here declares.
 OBSERVATION_FIELDS = ("visibility", "observation", "observed_at")
 
 
@@ -1276,8 +1067,8 @@ def test_reapplying_the_configuration_changes_nothing(applied: Applied) -> None:
     Every identity and checkout the first run registered is registered again exactly as
     it was. The one movement is `onevcs`'s own: a re-registration of an identity whose
     rule declares its `visibility` records that observation, stamped with when it was
-    made, so the private identity's record gains the observation on the second run and
-    re-stamps only its time on every run after; everything else is byte for byte.
+    made, and re-stamps only its time on every run after; everything else is byte for
+    byte.
     """
     document = applied.home / "registry.json"
     before = document.read_bytes()
@@ -1286,15 +1077,19 @@ def test_reapplying_the_configuration_changes_nothing(applied: Applied) -> None:
     override_installed_at = override.stat().st_mtime_ns
     rules_before = (applied.home / "rules.yml").read_bytes()
     config_home = applied.manifest.parent / "xdg"
-    again = apply_registry(applied.manifest, applied.home, config_home=config_home)
+    again = apply_registry(applied.manifest, applied.home, applied.rules, config_home=config_home)
     assert again.returncode == 0, again.stdout + again.stderr
     second = document.read_bytes()
-    assert registry_without(second, OBSERVATION_FIELDS) == json.loads(before)
+    assert registry_without(second, OBSERVATION_FIELDS) == registry_without(
+        before, OBSERVATION_FIELDS
+    )
     observed = json.loads(second)["identities"]
-    stamped = {key for key, record in observed.items() if "observed_at" in record}
-    assert stamped == set(OVERLAY_POLICY) & {identity.key for identity in IDENTITIES}, observed
-    assert {observed[key]["visibility"] for key in stamped} == {"private"}, observed
-    third = apply_registry(applied.manifest, applied.home, config_home=config_home)
+    expected = {
+        **dict.fromkeys(BASE_POLICY, "public"),
+        **dict.fromkeys(OVERLAY_POLICY, "private"),
+    }
+    assert {key: record.get("visibility") for key, record in observed.items()} == expected
+    third = apply_registry(applied.manifest, applied.home, applied.rules, config_home=config_home)
     assert third.returncode == 0, third.stdout + third.stderr
     assert registry_without(document.read_bytes(), ("observed_at",)) == registry_without(
         second, ("observed_at",)
@@ -1313,17 +1108,17 @@ def test_reapplying_the_configuration_changes_nothing(applied: Applied) -> None:
     assert (applied.home / "workspaces.yml").read_bytes() == TRACKED_WORKSPACES.read_bytes()
 
 
-def test_dry_run_parses_comments_whitespace_and_tilde_without_writing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_home = tmp_path / "operator-home"
-    present = checkout(fake_home / "checkout", "https://github.com/nickderobertis/onevcs.git")
+def test_dry_run_parses_comments_whitespace_and_tilde_without_writing(tmp_path: Path) -> None:
+    registry_home = tmp_path / "registry"
+    # The sandboxed `HOME` the recipe expands `~` against, as `sandbox` names it.
+    user_home = tmp_path / "registry-user"
+    present = checkout(user_home / "checkout", f"https://{SIBLING}.git")
     manifest = tmp_path / "checkouts"
     manifest.write_text("  # comment\n  ~/checkout   # local clone\n", encoding="utf-8")
-    registry_home = tmp_path / "registry"
-    monkeypatch.setenv("HOME", str(fake_home))
 
-    result = apply_registry(manifest, registry_home, "--dry-run")
+    result = apply_registry(
+        manifest, registry_home, write_rules(tmp_path / "rules.yml"), "--dry-run"
+    )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"would register  {present}" in result.stdout
@@ -1344,19 +1139,26 @@ def test_dry_run_parses_comments_whitespace_and_tilde_without_writing(
         (("--workspaces", "/does/not/exist"), "does not exist"),
         (("--unknown",), "unknown argument"),
         (("--checkouts", "/does/not/exist"), "does not exist"),
+        (("--rules", "/does/not/exist"), "does not exist"),
         (("--releases", "/does/not/exist"), "does not exist"),
     ],
 )
 def test_invalid_cli_input_is_rejected(
     tmp_path: Path, arguments: tuple[str, ...], message: str
 ) -> None:
-    result = apply_registry(tmp_path / "unused", tmp_path / "home", *arguments)
-    assert result.returncode == 2
+    manifest = listed(tmp_path / "checkouts")
+    result = apply_registry(
+        manifest, tmp_path / "home", write_rules(tmp_path / "rules.yml"), *arguments
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
     assert message in result.stderr
 
 
 def test_help_is_successful(tmp_path: Path) -> None:
-    result = apply_registry(tmp_path / "unused", tmp_path / "home", "--help")
+    manifest = listed(tmp_path / "checkouts")
+    result = apply_registry(
+        manifest, tmp_path / "home", write_rules(tmp_path / "rules.yml"), "--help"
+    )
     assert result.returncode == 0
     assert "usage: apply-repo-registry.sh" in result.stderr
 
@@ -1366,10 +1168,8 @@ def test_malformed_existing_registry_is_rejected(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     (home / "registry.json").write_text("not json", encoding="utf-8")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text("", encoding="utf-8")
 
-    result = apply_registry(manifest, home)
+    result = apply_registry(listed(tmp_path / "checkouts"), home, write_rules(tmp_path / "r.yml"))
 
     assert result.returncode == 1
     assert f"the registry at {home / 'registry.json'}" in result.stderr, result.stderr
@@ -1395,9 +1195,7 @@ def test_invalid_rules_do_not_replace_the_installed_rules(tmp_path: Path) -> Non
     the bare `version: 2` / `rules: []` of earlier releases fails the recipe one step
     before the refusal this journey is about, and proves nothing about replacement.
     """
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    manifest, _ = _one_sibling(tmp_path)
     home = tmp_path / "home"
     home.mkdir()
     installed = home / "rules.yml"
@@ -1408,7 +1206,7 @@ def test_invalid_rules_do_not_replace_the_installed_rules(tmp_path: Path) -> Non
     invalid = tmp_path / "invalid.yml"
     invalid.write_text("not: [valid", encoding="utf-8")
 
-    result = apply_registry(manifest, home, "--rules", str(invalid))
+    result = apply_registry(manifest, home, invalid)
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert f"{invalid} is not a valid onevcs rules composition" in result.stderr
@@ -1421,16 +1219,14 @@ def test_an_invalid_host_rules_overlay_installs_nothing_and_registers_nothing(
 ) -> None:
     """A host overlay the verb refuses is refused by name before anything moves.
 
-    The overlay is composed and validated with the tracked base by `onevcs rules
-    apply --dry-run` before the first registration, so an overlay that cannot be read
-    — or one naming a field its schema does not admit — leaves the installed rules
-    exactly as they were and the registry holding no checkout at all. The host's
-    workspaces overlay beside it has been composed into a scratch file by then, and the
-    refusal leaves nothing in the temporary directory it was handed.
+    The overlay is composed and validated with the base by `onevcs rules apply
+    --dry-run` before the first registration, so an overlay that cannot be read — or
+    one naming a field its schema does not admit — leaves the installed rules exactly as
+    they were and the registry holding no checkout at all. The host's workspaces overlay
+    beside it has been composed into a scratch file by then, and the refusal leaves
+    nothing in the temporary directory it was handed.
     """
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    manifest, rules = _one_sibling(tmp_path)
     home = tmp_path / "home"
     home.mkdir()
     installed = home / "rules.yml"
@@ -1445,11 +1241,11 @@ def test_an_invalid_host_rules_overlay_installs_nothing_and_registers_nothing(
         temporary = tmp_path / "temporary"
         temporary.mkdir(exist_ok=True)
 
-        result = apply_registry(manifest, home, config_home=config_home, temporary=temporary)
+        result = apply_registry(manifest, home, rules, config_home=config_home, temporary=temporary)
 
         assert result.returncode == 1, result.stdout + result.stderr
         assert (
-            f"{TRACKED_RULES} overlaid by {config_home / HOST_RULES} is not a valid onevcs "
+            f"{rules} overlaid by {config_home / HOST_RULES} is not a valid onevcs "
             "rules composition"
         ) in result.stderr, result.stderr
         assert installed.read_text(encoding="utf-8") == INSTALLED_RULES
@@ -1462,39 +1258,40 @@ def test_an_invalid_host_rules_overlay_installs_nothing_and_registers_nothing(
 
 
 def test_invalid_rules_are_rejected_with_no_present_checkout(tmp_path: Path) -> None:
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{tmp_path / 'not-cloned'}\n", encoding="utf-8")
+    manifest = listed(tmp_path / "checkouts", tmp_path / "not-cloned")
     invalid = tmp_path / "invalid.yml"
     invalid.write_text("not: [valid", encoding="utf-8")
 
-    result = apply_registry(manifest, tmp_path / "home", "--rules", str(invalid))
+    result = apply_registry(manifest, tmp_path / "home", invalid)
 
     assert result.returncode == 1
     assert f"{invalid} is not a valid onevcs rules composition" in result.stderr
     assert not (tmp_path / "home" / "rules.yml").exists()
 
 
-def test_empty_onevcs_home_is_rejected(tmp_path: Path) -> None:
-    result = subprocess.run(
-        ["just", "repos-apply"],
+def _recipe_with_onevcs_home(tmp_path: Path, onevcs_home: str) -> subprocess.CompletedProcess[str]:
+    """The real recipe on scratch inputs, under a sandbox whose `ONEVCS_HOME` is ``onevcs_home``."""
+    manifest = listed(tmp_path / "checkouts")
+    rules = write_rules(tmp_path / "rules.yml")
+    environment = {**sandbox(tmp_path / "home", tmp_path / "xdg"), "ONEVCS_HOME": onevcs_home}
+    return subprocess.run(
+        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules)],
         cwd=REPO_ROOT,
-        env={**os.environ, "ONEVCS_HOME": ""},
+        env=environment,
         text=True,
         capture_output=True,
     )
+
+
+def test_empty_onevcs_home_is_rejected(tmp_path: Path) -> None:
+    result = _recipe_with_onevcs_home(tmp_path, "")
     assert result.returncode == 2
     assert "ONEVCS_HOME is set but empty" in result.stderr
 
 
 @pytest.mark.parametrize("onevcs_home", ["relative/registry", "/"])
 def test_unsafe_onevcs_home_is_rejected(tmp_path: Path, onevcs_home: str) -> None:
-    result = subprocess.run(
-        ["just", "repos-apply"],
-        cwd=REPO_ROOT,
-        env={**os.environ, "ONEVCS_HOME": onevcs_home},
-        text=True,
-        capture_output=True,
-    )
+    result = _recipe_with_onevcs_home(tmp_path, onevcs_home)
     assert result.returncode == 2
     assert "must name an absolute directory other than /" in result.stderr
 
@@ -1508,11 +1305,9 @@ def test_rules_are_installed_at_the_rules_file_the_registry_references(tmp_path:
     it, and `onevcs rules check` reads the policy out of it — so the recipe can never
     install a file the registry then ignores.
     """
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n", encoding="utf-8")
+    manifest, rules = _one_sibling(tmp_path)
     home = tmp_path / "home"
-    first = apply_registry(manifest, home)
+    first = apply_registry(manifest, home, rules)
     assert first.returncode == 0, first.stdout + first.stderr
     document = home / "registry.json"
     registry = json.loads(document.read_text(encoding="utf-8"))
@@ -1524,13 +1319,13 @@ def test_rules_are_installed_at_the_rules_file_the_registry_references(tmp_path:
     document.write_text(json.dumps(registry), encoding="utf-8")
     beside = (home / "rules.yml").read_bytes()
 
-    result = apply_registry(manifest, home)
+    result = apply_registry(manifest, home, rules)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"rules      the rules composed from 1 file(s) are at {elsewhere}" in result.stdout
     assert "trailer_prefix: Orchestrator-" in elsewhere.read_text(encoding="utf-8")
     assert (home / "rules.yml").read_bytes() == beside
-    checked = onevcs(home, "rules", "check", "github.com/nickderobertis/onevcs")
+    checked = onevcs(home, "rules", "check", SIBLING)
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert reported(checked.stdout, "rules") == str(elsewhere), checked.stdout
     assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
@@ -1539,32 +1334,31 @@ def test_rules_are_installed_at_the_rules_file_the_registry_references(tmp_path:
 def test_checkout_registration_failure_is_reported(tmp_path: Path) -> None:
     not_a_checkout = tmp_path / "not-a-checkout"
     not_a_checkout.mkdir()
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{not_a_checkout}\n", encoding="utf-8")
 
-    result = apply_registry(manifest, tmp_path / "home")
+    result = apply_registry(
+        listed(tmp_path / "checkouts", not_a_checkout),
+        tmp_path / "home",
+        write_rules(tmp_path / "rules.yml"),
+    )
 
     assert result.returncode == 1
     assert "registering" in result.stderr
     assert "failed" in result.stderr
 
 
-def test_work_preserved_before_the_adoption_is_still_recognized(tmp_path: Path) -> None:
-    """The provenance prefix is part of the registry's data, and stranding it is silent.
+def test_work_preserved_under_the_configured_trailer_prefix_is_recognized(tmp_path: Path) -> None:
+    """The provenance prefix is part of the rules' data, and stranding it is silent.
 
-    `onevcs` spells its trailer keys `Onevcs-` when nothing configures one, and every
-    branch this host preserved — plus every recovery attestation already on a base
-    branch — carries `Orchestrator-`. A marker under an unconfigured prefix is
-    neither read nor ignored: it is listed as unrecoverable and refused publication,
-    so a rules file that dropped `trailer_prefix` would strand every preserved
-    branch that predates the adoption while still reporting a green apply.
+    `onevcs` spells its trailer keys `Onevcs-` when nothing configures one, and a branch
+    preserved under another prefix is neither read nor ignored: it is listed as
+    unrecoverable and refused publication. So the `trailer_prefix` a rules file declares
+    has to reach the installed rules, and a marker under it read as the provenance it is.
     """
-    preserved = checkout(tmp_path / "preserved", "https://github.com/nickderobertis/onevcs.git")
-    committer = ["-c", "user.email=t@example.com", "-c", "user.name=Test"]
+    preserved = checkout(tmp_path / "preserved", f"https://{SIBLING}.git")
 
     def commit(message: str) -> None:
         subprocess.run(["git", "add", "-A"], cwd=preserved, check=True)
-        subprocess.run(["git", *committer, "commit", "-qm", message], cwd=preserved, check=True)
+        subprocess.run(["git", *COMMITTER, "commit", "-qm", message], cwd=preserved, check=True)
 
     (preserved / "file").write_text("base\n", encoding="utf-8")
     commit("chore: base")
@@ -1573,17 +1367,17 @@ def test_work_preserved_before_the_adoption_is_still_recognized(tmp_path: Path) 
     commit("chore: orchestrated change (incomplete step)\n\nOrchestrator-Status: incomplete")
     subprocess.run(["git", "checkout", "-q", "main"], cwd=preserved, check=True)
 
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{preserved}\n", encoding="utf-8")
     home = tmp_path / "home"
-    applied = apply_registry(manifest, home)
-    assert applied.returncode == 0, applied.stdout + applied.stderr
+    applied_once = apply_registry(
+        listed(tmp_path / "checkouts", preserved), home, write_rules(tmp_path / "rules.yml")
+    )
+    assert applied_once.returncode == 0, applied_once.stdout + applied_once.stderr
 
-    listed = onevcs(home, "recoverable")
-    assert "preserved/work" in listed.stdout
-    assert "incomplete step (provenance marker)" in listed.stdout
-    assert "not configured to read" not in listed.stdout, listed.stdout
-    checked = onevcs(home, "rules", "check", "github.com/nickderobertis/onevcs")
+    found = onevcs(home, "recoverable")
+    assert "preserved/work" in found.stdout
+    assert "incomplete step (provenance marker)" in found.stdout
+    assert "not configured to read" not in found.stdout, found.stdout
+    checked = onevcs(home, "rules", "check", SIBLING)
     assert reported(checked.stdout, "trailer_prefix") == "Orchestrator-"
 
 
@@ -1592,24 +1386,24 @@ def test_a_publication_checkout_and_its_safety_clone_register_as_one_identity(
 ) -> None:
     """Two checkouts of one repository, through the real recipe, under one policy.
 
-    That the pair collapses to one identity is `onevcs`'s doing rather than the tracked
-    file's — it resolves an identity from a checkout's own `origin`, not from its path —
-    so it is driven rather than read: neither checkout can end up a notch wider than the
-    other.
+    That the pair collapses to one identity is `onevcs`'s doing rather than the list's —
+    it resolves an identity from a checkout's own `origin`, not from its path — so it is
+    driven rather than read: neither checkout can end up a notch wider than the other.
     """
-    origin = "https://github.com/nickderobertis/printobserver.git"
-    publication = checkout(tmp_path / "checkouts" / "nickderobertis__printobserver", origin)
-    execution = checkout(tmp_path / "checkouts" / "nickderobertis__printobserver-isolated", origin)
-    manifest = tmp_path / "checkouts.list"
-    manifest.write_text(f"{publication}\n{execution}\n", encoding="utf-8")
+    origin = f"https://{SIBLING}.git"
+    publication = checkout(tmp_path / "checkouts" / "scratchowner__sibling", origin)
+    execution = checkout(tmp_path / "checkouts" / "scratchowner__sibling-isolated", origin)
     home = tmp_path / "home"
 
-    result = apply_registry(manifest, home)
+    result = apply_registry(
+        listed(tmp_path / "checkouts.list", publication, execution),
+        home,
+        write_rules(tmp_path / "rules.yml"),
+    )
     assert result.returncode == 0, result.stdout + result.stderr
 
     registry: RegistryDocument = json.loads((home / "registry.json").read_text(encoding="utf-8"))
-    identity = "github.com/nickderobertis/printobserver"
-    assert set(registry["identities"]) == {identity}
+    assert set(registry["identities"]) == {SIBLING}
     assert {record["path"] for record in registry["checkouts"].values()} == {
         str(publication),
         str(execution),
@@ -1619,10 +1413,10 @@ def test_a_publication_checkout_and_its_safety_clone_register_as_one_identity(
     # name, and both have to land on one identity and one policy: a safety clone resolving
     # a notch wider is how work executed in one checkout comes to publish differently from
     # work executed in the other.
-    for alias in ("nickderobertis__printobserver", "nickderobertis__printobserver-isolated"):
+    for alias in ("scratchowner__sibling", "scratchowner__sibling-isolated"):
         resolved = onevcs(home, "resolve", alias)
         assert resolved.returncode == 0, resolved.stdout + resolved.stderr
-        assert identity in resolved.stdout
+        assert SIBLING in resolved.stdout
 
         checked = onevcs(home, "rules", "check", alias)
         assert checked.returncode == 0, checked.stdout + checked.stderr
@@ -1631,97 +1425,33 @@ def test_a_publication_checkout_and_its_safety_clone_register_as_one_identity(
         assert reported(checked.stdout, "matched").startswith("rule ")
 
 
-def tracked_checkouts_of(repository: str) -> tuple[str, ...]:
-    """Every entry of the tracked checkout list that is a checkout of `repository`.
-
-    Read out of the file rather than restated beside it, because the tracked list is
-    half of what the journey below evaluates: an entry dropped from it is a checkout
-    this registration no longer has, and the count asserted there is what says so.
-    """
-    return tuple(
-        entry
-        for line in TRACKED_CHECKOUTS.read_text(encoding="utf-8").splitlines()
-        if (entry := line.partition("#")[0].strip()) and which_checkout(entry) == repository
-    )
-
-
-def test_the_tracked_registration_routes_printobserver_through_its_own_rule(
-    tmp_path: Path,
-) -> None:
-    """The tracked configuration alone, asked what it routes — nothing of this host's.
-
-    Routing is an answer a resolver gives rather than a field a file contains: first
-    match wins, so a rule reading exactly as intended proves nothing while a broader
-    one above it could be deciding instead. Asking a resolver on this host would prove
-    no more, since it answers out of a registry any earlier registration could have
-    filled, so the registry here is a scratch one holding only what these files install.
-    """
-    entries = tracked_checkouts_of("printobserver")
-    assert len(entries) == 2, entries
-
-    # The scratch checkouts stand in for this host's own clones, which a test may not
-    # register from; each keeps its listed directory name, because that name is what
-    # `onevcs` derives the alias a plan node would name it by.
-    origin = f"https://{PRINTOBSERVER}.git"
-    paths = [checkout(tmp_path / "checkouts" / Path(entry).name, origin) for entry in entries]
-    manifest = tmp_path / "checkouts.list"
-    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
-    home = tmp_path / "onevcs"
-
-    applied = apply_registry(manifest, home)
-    assert applied.returncode == 0, applied.stdout + applied.stderr
-
-    ruled = ruled_identities()
-    assert ruled.count(PRINTOBSERVER) == 1, ruled
-    host, owner, name = PRINTOBSERVER.split("/")
-    matched = f"{{host: {host}, owner: {owner}, name: {name}}}"
-    expected_rule = f"rule {ruled.index(PRINTOBSERVER) + 1} {matched}"
-
-    # The identity itself and either alias, because a lifecycle node names a checkout
-    # and a landing verb names the identity, and both have to reach the same rule.
-    for argument in (PRINTOBSERVER, *(Path(entry).name for entry in entries)):
-        checked = onevcs(home, "rules", "check", argument)
-        assert checked.returncode == 0, checked.stdout + checked.stderr
-        assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
-        assert reported(checked.stdout, "approvals") == "none", checked.stdout
-        assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
-
-
 def test_a_host_overlay_routes_a_private_team_identity_through_its_own_rule(
     tmp_path: Path,
 ) -> None:
-    """The team half of the journey above: a private identity, and the overlay rule it reaches.
+    """A private team identity, and the overlay rule it reaches.
 
     A team identity is where reading the resolved policy alone proves the least. Its
     rule and `default:` resolve the same `change-open` / `approvals: required` pair, so
     a policy read answers identically whether the rule matched or the checkout fell
-    through to the fallthrough — and a checkout that falls through is one
-    `just repos-apply` refuses rather than registers, which is a routing install broken
-    for every other manager on this host rather than one repository publishing wrongly.
-    So what is asserted here is the rule that decided, by its position in the installed
-    composition.
-
-    The identity is private, so neither tracked file names it: its checkout is listed
-    by the host and its rule is the host overlay's, under a scratch XDG configuration
-    home. Without that overlay the same registration falls through and is refused,
-    which is the proof that the overlay's rule, and nothing tracked, routes it.
+    through — and a checkout that falls through is one `just repos-apply` refuses rather
+    than registers. So what is asserted here is the rule that decided, by its position in
+    the installed composition. Without the overlay the same registration falls through
+    and is refused, which is the proof that the overlay's rule, and nothing in the base,
+    routes it.
     """
-    assert tracked_checkouts_of("quietharbor") == ()
-    assert QUIETHARBOR not in ruled_identities()
-
     path = checkout(tmp_path / "checkouts" / "quietharbor", f"https://{QUIETHARBOR}.git")
-    manifest = tmp_path / "checkouts.list"
-    manifest.write_text(f"{path}\n", encoding="utf-8")
+    manifest = listed(tmp_path / "checkouts.list", path)
+    rules = write_rules(tmp_path / "rules.yml")
 
-    unruled = apply_registry(manifest, tmp_path / "bare")
+    unruled = apply_registry(manifest, tmp_path / "bare", rules)
     assert unruled.returncode == 1, unruled.stdout + unruled.stderr
     assert "no rule in" in unruled.stderr and "quietharbor" in unruled.stderr, unruled.stderr
 
     home = tmp_path / "onevcs"
     config_home = host_config(tmp_path / "xdg")
-    applied = apply_registry(manifest, home, config_home=config_home)
-    assert applied.returncode == 0, applied.stdout + applied.stderr
-    assert f"(from {TRACKED_RULES} overlaid by {config_home / HOST_RULES})" in applied.stdout
+    applied_once = apply_registry(manifest, home, rules, config_home=config_home)
+    assert applied_once.returncode == 0, applied_once.stdout + applied_once.stderr
+    assert f"(from {rules} overlaid by {config_home / HOST_RULES})" in applied_once.stdout
 
     registry: RegistryDocument = json.loads((home / "registry.json").read_text(encoding="utf-8"))
     assert set(registry["identities"]) == {QUIETHARBOR}
@@ -1739,229 +1469,12 @@ def test_a_host_overlay_routes_a_private_team_identity_through_its_own_rule(
     assert visibility(home, QUIETHARBOR) == "private"
 
 
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - llmlint reads a directive's rule list off one line
-# A sibling of the printobserver and quietharbor routing journeys beside it: every journey
-# of `just repos-apply` lives in this module, in the tier it already runs in, as the
-# module's file-scoped reason says, and a project of their own is one change to the
-# project graph for all of them at once, not one more journey's to make.
-def test_the_tracked_registration_routes_onebudgetspec_and_names_the_wheel_its_row_installs(
-    tmp_path: Path,
-) -> None:
-    """A producer registered ahead of its first release and since adopted, by the tracked files.
-
-    Its rule has to decide its publication — `change-auto` with no approvals, by its own
-    position in the file rather than the reviewed default — and the release override has
-    to answer, as its default target, the wheel the table's row now installs, because a
-    `published` node depending on it names no `consumes` and would otherwise wait on a
-    target nothing resolves. The scratch checkout carries the producer's origin and a
-    scratch declaration of the target the override names for it, committed at its base,
-    where `onevcs` reads it.
-    """
-    row = by_producer(ONEBUDGETSPEC)
-    assert row is not None
-    assert (row.target, row.artifact) == (ONEBUDGETSPEC_TARGET, ONEBUDGETSPEC_ARTIFACT)
-    assert ONEBUDGETSPEC not in AWAITING_FIRST_ADOPTION
-    entries = tracked_checkouts_of("onebudgetspec")
-    assert len(entries) == 1, entries
-
-    path = declaring_checkout(
-        tmp_path / "checkouts" / Path(entries[0]).name,
-        f"https://{ONEBUDGETSPEC}.git",
-        {ONEBUDGETSPEC_TARGET: ONEBUDGETSPEC_ARTIFACT},
-    )
-    manifest = tmp_path / "checkouts.list"
-    manifest.write_text(f"{path}\n", encoding="utf-8")
-    home = tmp_path / "onevcs"
-
-    applied = apply_registry(manifest, home)
-    assert applied.returncode == 0, applied.stdout + applied.stderr
-    assert (home / "releases.yml").read_bytes() == TRACKED_RELEASES.read_bytes()
-
-    ruled = ruled_identities()
-    assert ruled.count(ONEBUDGETSPEC) == 1, ruled
-    host, owner, name = ONEBUDGETSPEC.split("/")
-    expected_rule = (
-        f"rule {ruled.index(ONEBUDGETSPEC) + 1} {{host: {host}, owner: {owner}, name: {name}}}"
-    )
-    for argument in (ONEBUDGETSPEC, Path(entries[0]).name):
-        checked = onevcs(home, "rules", "check", argument)
-        assert checked.returncode == 0, checked.stdout + checked.stderr
-        assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
-        assert reported(checked.stdout, "approvals") == "none", checked.stdout
-        assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
-
-    answer = release_targets(home, ONEBUDGETSPEC)
-    assert answer["default_target"] == ONEBUDGETSPEC_TARGET, answer
-    assert answer["adoption"] == GLOBAL_RUNG, answer
-    declared = {target["name"]: target["probe"]["args"][0] for target in answer["targets"]}
-    assert declared[ONEBUDGETSPEC_TARGET] == ONEBUDGETSPEC_ARTIFACT, declared
-    # The resolution `tests/e2e/publish_and_landing/test_release_adoption_in_force_e2e.py`
-    # reads off this host, taken here off a real one: the resolved default target is the
-    # row's.
-    assert (
-        default_target_complaint(
-            ONEBUDGETSPEC,
-            answer.get("default_target"),
-            override_default_targets(TRACKED_RELEASES.read_text(encoding="utf-8")),
-        )
-        is None
-    )
-
-
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501
-
-
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - llmlint reads a directive's rule list off one line
-# A sibling of the routing journeys above, for the reason their directive states: every
-# journey of `just repos-apply` lives in this module, in the tier it already runs in.
-@pytest.mark.parametrize(
-    "identity",
-    [PRUNER, GRAPHQL_NODE_COUNT, BUDGET_ONEVCS, BUDGET_ACTION, TASK_UI, ONEFOLLOWUP],
-    ids=[
-        "pruner",
-        "graphql-node-count",
-        "budget-onevcs",
-        "budget-action",
-        "task-ui",
-        "onefollowup",
-    ],
-)
-def test_the_tracked_registration_routes_a_sibling_through_its_own_rule(
-    tmp_path: Path, identity: RepoIdentity, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Both tracked spellings of the sibling's checkout, registered, reach its own rule.
-
-    `change-auto` with no approvals by a rule rather than `default:`, read off the real
-    `onevcs rules check` for the identity and for each alias a node could name.
-    """
-    monkeypatch.delenv("ONEVCS_CHECKS_TIMEOUT_SECONDS", raising=False)
-    host, owner, name = identity.split("/")
-    entries = tracked_checkouts_of(name)
-    assert len(entries) == 2, entries
-
-    origin = f"https://{identity}.git"
-    paths = [checkout(tmp_path / "checkouts" / Path(entry).name, origin) for entry in entries]
-    manifest = tmp_path / "checkouts.list"
-    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
-    home = tmp_path / "onevcs"
-
-    applied = apply_registry(manifest, home)
-    assert applied.returncode == 0, applied.stdout + applied.stderr
-
-    ruled = ruled_identities()
-    assert ruled.count(identity) == 1, ruled
-    expected_rule = (
-        f"rule {ruled.index(identity) + 1} {{host: {host}, owner: {owner}, name: {name}}}"
-    )
-
-    for argument in (identity, *(Path(entry).name for entry in entries)):
-        checked = onevcs(home, "rules", "check", argument)
-        assert checked.returncode == 0, checked.stdout + checked.stderr
-        assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
-        assert reported(checked.stdout, "approvals") == "none", checked.stdout
-        assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
-        if identity in (BUDGET_ONEVCS, BUDGET_ACTION, TASK_UI, ONEFOLLOWUP):
-            assert reported(checked.stdout, "checks wait") == "3600 s", checked.stdout
-
-
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501
-
-
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - llmlint reads a directive's rule list off one line
-# A sibling of the routing journeys above, for the reason their directive states: every
-# journey of `just repos-apply` lives in this module, in the tier it already runs in.
-def test_the_tracked_registration_names_the_onefollowup_wheel_ahead_of_its_first_adoption(
-    tmp_path: Path,
-) -> None:
-    """A producer registered ahead of its first release resolves `pypi` with no row.
-
-    The release override installed by `just repos-apply` has to answer `pypi` as its
-    default target, because a `published` node of this repository adopting the
-    `onefollowup-cli` wheel names no `consumes`. The scratch checkout's base declares
-    that target, as the producer's own declaration will once it is bootstrapped.
-    """
-    assert by_producer(ONEFOLLOWUP) is None
-    assert ONEFOLLOWUP in AWAITING_FIRST_ADOPTION
-    entries = tracked_checkouts_of("onefollowup")
-    assert len(entries) == 2, entries
-
-    path = declaring_checkout(
-        tmp_path / "checkouts" / Path(entries[0]).name,
-        f"https://{ONEFOLLOWUP}.git",
-        {ONEFOLLOWUP_TARGET: ONEFOLLOWUP_ARTIFACT},
-    )
-    manifest = tmp_path / "checkouts.list"
-    manifest.write_text(f"{path}\n", encoding="utf-8")
-    home = tmp_path / "onevcs"
-
-    applied = apply_registry(manifest, home)
-    assert applied.returncode == 0, applied.stdout + applied.stderr
-    assert (home / "releases.yml").read_bytes() == TRACKED_RELEASES.read_bytes()
-
-    answer = release_targets(home, ONEFOLLOWUP)
-    assert answer["default_target"] == ONEFOLLOWUP_TARGET, answer
-    assert answer["adoption"] == GLOBAL_RUNG, answer
-    declared = {target["name"]: target["probe"]["args"][0] for target in answer["targets"]}
-    assert declared[ONEFOLLOWUP_TARGET] == ONEFOLLOWUP_ARTIFACT, declared
-    assert (
-        default_target_complaint(
-            ONEFOLLOWUP,
-            answer.get("default_target"),
-            override_default_targets(TRACKED_RELEASES.read_text(encoding="utf-8")),
-        )
-        is None
-    )
-
-
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501
-
-
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - llmlint reads a directive's rule list off one line
-# A sibling of the routing journeys above, for the reason their directive states: every
-# journey of `just repos-apply` lives in this module, in the tier it already runs in.
-def test_the_tracked_registration_routes_cloud_agent_dev_env_through_its_own_rule(
-    tmp_path: Path,
-) -> None:
-    """The public sibling the tracked list and rules carry, registered, reaches its own rule.
-
-    `change-auto` with no approvals by an explicit rule rather than `default:`, read off
-    the real `onevcs rules check` for the identity and for the alias a node could name.
-    """
-    entries = tracked_checkouts_of("cloud-agent-dev-env")
-    assert len(entries) == 1, entries
-
-    origin = f"https://{CLOUD_AGENT_DEV_ENV}.git"
-    path = checkout(tmp_path / "checkouts" / Path(entries[0]).name, origin)
-    manifest = tmp_path / "checkouts.list"
-    manifest.write_text(f"{path}\n", encoding="utf-8")
-    home = tmp_path / "onevcs"
-
-    applied = apply_registry(manifest, home)
-    assert applied.returncode == 0, applied.stdout + applied.stderr
-
-    ruled = ruled_identities()
-    assert ruled.count(CLOUD_AGENT_DEV_ENV) == 1, ruled
-    host, owner, name = CLOUD_AGENT_DEV_ENV.split("/")
-    matched = f"{{host: {host}, owner: {owner}, name: {name}}}"
-    expected_rule = f"rule {ruled.index(CLOUD_AGENT_DEV_ENV) + 1} {matched}"
-    for argument in (CLOUD_AGENT_DEV_ENV, Path(entries[0]).name):
-        checked = onevcs(home, "rules", "check", argument)
-        assert checked.returncode == 0, checked.stdout + checked.stderr
-        assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
-        assert reported(checked.stdout, "approvals") == "none", checked.stdout
-        assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
-
-
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501
-
-
 def test_a_checkout_this_host_does_not_have_is_skipped(tmp_path: Path) -> None:
-    """A second machine holds a subset of these checkouts, and still registers it."""
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{present}\n{tmp_path / 'never-cloned'}\n", encoding="utf-8")
+    """A second machine holds a subset of a list's checkouts, and still registers it."""
+    present = checkout(tmp_path / "sibling", f"https://{SIBLING}.git")
+    manifest = listed(tmp_path / "checkouts", present, tmp_path / "never-cloned")
 
-    result = apply_registry(manifest, tmp_path / "home")
+    result = apply_registry(manifest, tmp_path / "home", write_rules(tmp_path / "rules.yml"))
     assert result.returncode == 0, result.stdout + result.stderr
     assert "skip       not on this host" in result.stdout
     assert "1 checkout(s) registered, 1 skipped" in result.stdout
@@ -1974,112 +1487,9 @@ def test_a_repository_no_rule_names_fails_the_apply(tmp_path: Path) -> None:
     publication as a change request against a repository that wanted a local merge.
     """
     unlisted = checkout(tmp_path / "unlisted", "https://github.com/someone/unlisted.git")
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{unlisted}\n", encoding="utf-8")
+    manifest = listed(tmp_path / "checkouts", unlisted)
 
-    result = apply_registry(manifest, tmp_path / "home")
+    result = apply_registry(manifest, tmp_path / "home", write_rules(tmp_path / "rules.yml"))
     assert result.returncode == 1, result.stdout + result.stderr
     assert "no rule in" in result.stderr
     assert "unlisted" in result.stderr
-
-
-#: The suffix a safety clone's directory carries, with the optional ordinal a host
-#: holding more than one of them appends. A safety clone is a second checkout of the
-#: repository it is named after — `~/ai-orchestrator-isolated` is a checkout of
-#: `ai-orchestrator` — so which repository it belongs to is the name without it.
-SAFETY_CLONE = re.compile(r"-isolated(-\d+)?$")
-
-
-def which_checkout(path: str) -> str:
-    """Which repository a checkout path names, whichever host's layout spelled it.
-
-    The hosts this list serves lay the same checkouts out differently — one keeps
-    this repository's clones at the top of `$HOME` and the engine repositories under
-    `~/projects`, the other keeps everything under `~/projects` and lets the
-    dispatcher clone the engines into `~/.ai-orchestrator/repos/<owner>__<name>` —
-    so two spellings of one checkout agree on nothing but their last component, with
-    that owner prefix removed. `onevcs` reads the same component to derive an alias.
-
-    A safety clone's suffix comes off too, because the repository it is a checkout of
-    is the one whose rule governs it: registration resolves an identity from the
-    checkout's own `origin`, so `<name>-isolated` and `<name>` are one identity and
-    one policy. The pre-adoption registry happens to name this repository's own
-    safety clones, which is why the caller below covered them without this; a
-    repository registered *since* has no such row, so its safety clone would read as
-    a checkout no rule names while the rule matching it sits in the file.
-    """
-    return SAFETY_CLONE.sub("", Path(path).name.rpartition("__")[2])
-
-
-def ruled_repositories() -> set[str]:
-    """Every repository `config/onevcs.rules.yml` names outright.
-
-    Each rule's `match:` is a one-line flow mapping ending in the repository name, so
-    this reads the tracked file rather than depending on a YAML parser this package
-    does not ship. A `match:` spelled any other way is simply not found here, which
-    fails the caller below rather than passing it — the safe direction, since what
-    that assertion is protecting is that no checkout is registered without a rule.
-    """
-    return set(re.findall(r"name:\s*([\w.-]+)\s*}", TRACKED_RULES.read_text(encoding="utf-8")))
-
-
-def test_the_tracked_checkout_list_holds_every_pre_adoption_checkout() -> None:
-    """The recipe's default input, against the registry it was built to reproduce.
-
-    Two claims, because the list is longer than that registry and has to be: a
-    checkout a host does not have is skipped by design, so both layouts' spellings
-    are tracked here and each host registers the ones it holds. So every public
-    pre-adoption checkout must still be listed under the spelling it was migrated
-    from — dropping one silently unregisters a repository on the host that has it —
-    and everything listed beside them must be a checkout `config/onevcs.rules.yml`
-    states a publication path for: another spelling of one the migration covered, or
-    a repository registered since under a rule of its own. A checkout of anything
-    else has only the reviewed default to fall through to, which `just repos-apply`
-    refuses rather than registers.
-
-    A private pre-adoption checkout is the third claim: the tracked list names public
-    repositories only, so it must *not* be listed, its registration being the host's
-    own list's and its rule the host overlay's (`OVERLAY_POLICY`).
-
-    Nothing here reads this host's own `$HOME`: the fixture's paths are absolute
-    under the home of the host the registry was captured on, and rendering them
-    against any other one produces spellings that could never match.
-    """
-    listed = {
-        entry
-        for line in TRACKED_CHECKOUTS.read_text(encoding="utf-8").splitlines()
-        if (entry := line.partition("#")[0].strip())
-    }
-    private = {entry for entry in CHECKOUTS if BY_URL[entry.identity].key in OVERLAY_POLICY}
-    assert private, "the pre-adoption fixture no longer holds a private checkout"
-    public = set(CHECKOUTS) - private
-    migrated = {entry.path.replace(PRE_ADOPTION_HOME, "~", 1) for entry in public}
-    covered = {which_checkout(entry.path) for entry in public} | ruled_repositories()
-
-    assert all(entry.startswith("~/") for entry in listed), listed
-    assert migrated <= listed, migrated - listed
-    unruled = {entry for entry in listed if which_checkout(entry) not in covered}
-    assert not unruled, unruled
-    leaked = {entry.path for entry in private} & {
-        entry.replace("~", PRE_ADOPTION_HOME, 1) for entry in listed
-    }
-    assert not leaked, leaked
-
-
-def test_the_tracked_configuration_names_no_identity_the_host_overlay_rules() -> None:
-    """The tracked list and rules are public-only: every private identity is the host's.
-
-    Read off both tracked files, so a private repository's checkout or rule written back
-    into either fails here, and the identities the overlay journeys route are each one
-    the tracked configuration says nothing about.
-    """
-    ruled = set(ruled_identities())
-    names = {key.rpartition("/")[2] for key in OVERLAY_POLICY}
-    listed = {
-        which_checkout(entry)
-        for line in TRACKED_CHECKOUTS.read_text(encoding="utf-8").splitlines()
-        if (entry := line.partition("#")[0].strip())
-    }
-    assert not ruled & set(OVERLAY_POLICY), ruled & set(OVERLAY_POLICY)
-    assert not listed & names, listed & names
-    assert {key.split("/")[1] for key in ruled} == {"nickderobertis"}, ruled

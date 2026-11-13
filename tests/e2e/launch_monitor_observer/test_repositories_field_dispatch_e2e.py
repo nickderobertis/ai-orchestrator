@@ -40,8 +40,7 @@ form is only a value `repositories` can hold for a hosted identity, and this hos
 checkouts may never be registered or dispatched against by a test. Its publication alias
 sorts before its execution alias, as this host's `ai-orchestrator` sorts before
 `ai-orchestrator-isolated`: `onevcs resolve <origin>` selects the first registered
-checkout of the identity by alias order, which is the fact
-`tests/test_registry_resolution.py` gates on this host's live registry.
+checkout of the identity by alias order.
 """
 
 # The finding these answer is about which Nx project owns this file. It sits beside

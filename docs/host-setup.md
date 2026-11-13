@@ -598,10 +598,7 @@ Always pass the path, which is what `config/onevcs.checkouts` holds.
 ### What the migration off `repos.json` could not carry
 
 This host ran on a pre-adoption registry at `~/.ai-orchestrator/repos.json` before
-`onevcs` owned it. `tests/fixtures/pre-adoption-repos.json` is that registry, and
-`tests/e2e/test_repo_registry_apply_e2e.py` holds `config/onevcs.rules.yml` to
-reproducing every identity's publication behaviour from it. Three things changed
-shape on the way across, none of them silently:
+`onevcs` owned it. Three things changed shape on the way across, none of them silently:
 
 | Was | Is | Why |
 | --- | --- | --- |

@@ -814,6 +814,11 @@ def _override(root: Path, adoption: str) -> subprocess.CompletedProcess[str]:
     )
     manifest = root / "checkouts"
     manifest.write_text("", encoding="utf-8")
+    rules = root / "onevcs.rules.yml"
+    rules.write_text(
+        "version: 3\nrules: []\ndefault:\n  publication: change-open\n  approvals: required\n",
+        encoding="utf-8",
+    )
     return subprocess.run(
         [
             "just",
@@ -821,7 +826,7 @@ def _override(root: Path, adoption: str) -> subprocess.CompletedProcess[str]:
             "--checkouts",
             str(manifest),
             "--rules",
-            str(REPO_ROOT / "config" / "onevcs.rules.yml"),
+            str(rules),
             "--releases",
             str(releases),
         ],

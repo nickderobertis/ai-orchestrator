@@ -11,7 +11,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from registered_checkouts import listed_checkout_paths
+from registered_checkouts import discover_checkouts
 
 from orchestrator import design_approval
 from orchestrator.root import REPO_ROOT
@@ -23,12 +23,12 @@ ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 def _engine_checkout() -> Path:
     """A registered checkout of the engine, or a failure naming the remedy, and never a skip."""
-    for path in listed_checkout_paths():
-        if path.name.split("__")[-1] == "onepipeline" and (path / ".git").exists():
-            return path
+    for path in discover_checkouts().held.get("github.com/nickderobertis/onepipeline", []):
+        return path
     raise AssertionError(
         "no registered checkout of onepipeline on this host, so nothing here can reconcile "
-        "what this repository states about it; clone it where config/onevcs.checkouts names"
+        "what this repository states about it; clone it and register the clone with "
+        "`onevcs register <path>`"
     )
 
 

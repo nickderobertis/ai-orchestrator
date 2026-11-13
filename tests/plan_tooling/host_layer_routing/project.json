@@ -26,8 +26,6 @@
       "{workspaceRoot}/config/onemessagebus.yaml",
       "{workspaceRoot}/config/onetaskgraph.user-layer.example.yaml",
       "{workspaceRoot}/config/onetaskgraph.version",
-      "{workspaceRoot}/config/onevcs.checkouts",
-      "{workspaceRoot}/config/onevcs.rules.yml",
       "{workspaceRoot}/config/onevcs.version",
       "{workspaceRoot}/config/plan-checklist.llmlint.yml",
       "{workspaceRoot}/config/plan-review-verdict.schema.json",

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import warnings
 from collections.abc import Callable, Iterator
@@ -32,7 +33,7 @@ import pytest
 from persona_identifiers import identifiers_at, undefined_identifiers
 from persona_recipes import persona_at, undefined_recipes
 from persona_stand_in import stand_in_for
-from registered_checkouts import discover_checkouts
+from registered_checkouts import discover_checkouts, registry_listing, scratch_registry
 from sibling_facts import (
     REGISTRATION_FILES,
     SiblingDrift,
@@ -136,11 +137,11 @@ def test_a_named_comparison_base_is_the_one_the_change_is_measured_against(
 ) -> None:
     """The base the publication names decides, not the one discovery would pick."""
     clone = _clone_of_a_published_base(tmp_path)
-    commit_change(clone, "config/onevcs.rules.yml")
+    commit_change(clone, "config/onevcs.releases.yml")
     _git(clone, "push", "-q", "origin", "work")
     commit_change(clone, "README.md")
 
-    assert registration_changes(clone, {}) == ("config/onevcs.rules.yml",)
+    assert registration_changes(clone, {}) == ("config/onevcs.releases.yml",)
     assert registration_changes(clone, {"ONEVCS_COMPARISON_BASE": "work"}) == ()
 
 
@@ -195,13 +196,13 @@ def test_a_persona_reconciliation_fails_a_change_editing_a_registration_file(
     tmp_path: Path, reconciliation: str, drift: str
 ) -> None:
     clone = _clone_of_a_published_base(tmp_path)
-    commit_change(clone, "config/onevcs.checkouts")
+    commit_change(clone, "config/onevcs.releases.yml")
     report = _persona_report(tmp_path, reconciliation)
 
     with pytest.raises(pytest.fail.Exception) as failed:
         settle_drift([report], root=clone, comparison={})
 
-    assert "this change edits config/onevcs.checkouts" in str(failed.value)
+    assert "this change edits config/onevcs.releases.yml" in str(failed.value)
     assert drift in str(failed.value)
 
 
@@ -304,7 +305,7 @@ def test_a_recipe_dump_of_an_unknown_shape_is_settled_as_drift_rather_than_raise
         settle_drift([report], root=persona_only, comparison={})
 
     registering = published_clone(tmp_path / "registering", (PERSONA,))
-    commit_change(registering, "config/onevcs.checkouts")
+    commit_change(registering, "config/onevcs.releases.yml")
     with pytest.raises(pytest.fail.Exception, match="could not parse the recipes"):
         settle_drift([report], root=registering, comparison={})
 
@@ -315,7 +316,7 @@ ODD_NAME = os.fsdecode(b"src/odd-\xff.rs")
 
 
 @pytest.mark.parametrize(
-    ("changed", "settles"), [("config/onevcs.checkouts", "fails"), (PERSONA, "reports")]
+    ("changed", "settles"), [("config/onevcs.releases.yml", "fails"), (PERSONA, "reports")]
 )
 def test_a_tracked_name_that_is_not_utf_8_is_read_and_settled_rather_than_raised(
     tmp_path: Path, changed: str, settles: str
@@ -451,22 +452,44 @@ def test_a_declaration_that_is_not_utf_8_is_named_though_every_field_is_still_de
     _settle_for_change(tmp_path, [report], f"{SECOND_DECLARATION} is not UTF-8", changed)
 
 
-#: A second registered identity, so a listed checkout that cannot be read sits beside one
-#: that can, and a path listed for a host layout this host does not have.
+#: A second registered identity, so a registered checkout that cannot be read sits beside
+#: one that can, and a registered checkout this host no longer has.
 OTHER = "github.com/nickderobertis/oneharness"
-ABSENT = "not-on-this-host"
+ABSENT = "github.com/nickderobertis/oneagentgraph"
 
 
-def _listed(tmp_path: Path, *paths: Path) -> Path:
-    manifest = tmp_path / "checkouts"
-    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
-    return manifest
+def test_the_checkouts_found_are_exactly_the_registrys_in_its_order(tmp_path: Path) -> None:
+    """Two checkouts of one identity and one of another, as the real `onevcs` registered them.
+
+    Registered in an order other than the one `onevcs repos` lists them in, so the order
+    returned is the registry's rather than the order they were handed in; an identity the
+    registry does not hold is found nowhere, and a registered checkout this host no longer
+    has is skipped rather than reported.
+    """
+    later = scratch_checkout(tmp_path / "onejudge-isolated", PRODUCER, {"README.md": "x\n"})
+    first = scratch_checkout(tmp_path / "onejudge", PRODUCER, {"README.md": "x\n"})
+    other = scratch_checkout(tmp_path / "oneharness", OTHER, {"README.md": "x\n"})
+    home = scratch_registry(tmp_path / "onevcs", (later, other, first))
+
+    listed = registry_listing(home)
+    discovered = discover_checkouts(home)
+
+    assert listed == {PRODUCER: [first, later], OTHER: [other]}
+    assert discovered.held == {PRODUCER: [first, later], OTHER: [other]}
+    assert list(listed) == list(discovered.held) == [OTHER, PRODUCER]
+    assert discovered.unreadable == ()
+    assert ABSENT not in discovered.held
+    assert held_checkouts(home) == discovered.held
+
+    shutil.rmtree(later)
+
+    assert discover_checkouts(home) == ({PRODUCER: [first], OTHER: [other]}, ())
 
 
 def _held_settled(
-    tmp_path: Path, manifest: Path, said: str, changed: str
+    tmp_path: Path, home: Path, said: str, changed: str
 ) -> dict[str, list[Path]] | None:
-    """`held_checkouts` over ``manifest``, settled for a change editing ``changed``.
+    """`held_checkouts` over the registry at ``home``, settled for a change editing ``changed``.
 
     None where the change edits a registration file and the finding failed it.
     """
@@ -474,87 +497,80 @@ def _held_settled(
     commit_change(clone, changed)
     if changed in REGISTRATION_FILES:
         with pytest.raises(pytest.fail.Exception, match=f"this change edits {changed}") as failed:
-            held_checkouts(manifest, root=clone, comparison={})
+            held_checkouts(home, root=clone, comparison={})
         assert said in str(failed.value)
         return None
     with pytest.warns(SiblingDrift, match=re.escape(said)):
-        return held_checkouts(manifest, root=clone, comparison={})
+        return held_checkouts(home, root=clone, comparison={})
 
 
 @pytest.mark.parametrize("changed", PUSHES)
-def test_a_listed_checkout_this_host_cannot_enter_is_named_and_the_readable_ones_kept(
+def test_a_registered_checkout_this_host_cannot_enter_is_named_and_the_readable_ones_kept(
     tmp_path: Path, changed: str
 ) -> None:
     """Discovery keeps every readable checkout, names the unreadable, and skips the absent."""
     readable = scratch_checkout(tmp_path / "onejudge", PRODUCER, {"README.md": "x\n"})
     blocked = scratch_checkout(tmp_path / "oneharness", OTHER, {"README.md": "x\n"})
-    manifest = _listed(tmp_path, tmp_path / ABSENT, blocked, readable)
+    gone = scratch_checkout(tmp_path / "oneagentgraph", ABSENT, {"README.md": "x\n"})
+    home = scratch_registry(tmp_path / "onevcs", (gone, blocked, readable))
+    shutil.rmtree(gone)
 
     with _unenterable(blocked):
-        discovered = discover_checkouts(manifest)
-        declaring = declaring_identities(manifest)
-        held = _held_settled(tmp_path, manifest, f"{blocked} cannot be read", changed)
+        discovered = discover_checkouts(home)
+        declaring = declaring_identities(home)
+        held = _held_settled(tmp_path, home, f"{blocked}, a registered checkout", changed)
 
     assert discovered.held == {PRODUCER: [readable]}
     assert len(discovered.unreadable) == 1, discovered.unreadable
-    assert f"{blocked} cannot be read" in discovered.unreadable[0]
-    assert ABSENT not in discovered.unreadable[0]
-    assert any(f"{blocked} cannot be read" in finding for finding in declaring.unreadable)
+    assert (
+        f"{blocked}, a registered checkout of {OTHER}, cannot be read" in (discovered.unreadable[0])
+    )
+    assert str(gone) not in discovered.unreadable[0]
+    assert any(f"{blocked}, a registered checkout" in finding for finding in declaring.unreadable)
     assert held in (None, {PRODUCER: [readable]})
 
 
-@pytest.mark.parametrize("changed", PUSHES)
-def test_a_git_that_cannot_start_is_named_for_every_listed_checkout_rather_than_raised(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
-) -> None:
-    checkout = scratch_checkout(tmp_path / "onejudge", PRODUCER, {"README.md": "x\n"})
-    manifest = _listed(tmp_path, checkout)
-    nowhere = tmp_path / "no-git-here"
-    nowhere.mkdir()
-
-    with monkeypatch.context() as patched:
-        patched.setenv("PATH", str(nowhere))
-        discovered = discover_checkouts(manifest)
-
-    assert discovered.held == {}
-    assert len(discovered.unreadable) == 1, discovered.unreadable
-    assert (
-        f"{checkout} cannot be read: `git remote` could not run there" in (discovered.unreadable[0])
-    )
-    _settle_for_change(tmp_path, list(discovered.unreadable), f"{checkout} cannot be read", changed)
-
-
-#: Origins a listed checkout may carry that name no identity, each with what discovery
-#: says of it: bytes that are not UTF-8, no origin at all, and one with no host or owner.
-UNREADABLE_ORIGINS = {
-    "not-utf-8": (b"onejudge-\xff.git", "is not UTF-8"),
-    "no-origin": (None, "answered no origin"),
-    "no-identity": (b"just-a-name", "names no host/owner/name identity"),
+#: `onevcs` stand-ins, one per way a registry listing cannot be read, each with what the
+#: finding says. `None` is a CLI present but not executable, which no process can run.
+UNREADABLE_LISTINGS = {
+    "os-error": (None, "`onevcs repos` could not run"),
+    "refused": ("echo 'registry locked' >&2; exit 1", "could not list this host's registry"),
+    "not-utf-8": ("printf 'github.com/a/b\\t\\377\\n'", "not UTF-8"),
+    "unknown-shape": ("echo 'repositories: a, b'", "a line of no known shape"),
 }
 
 
 @pytest.mark.parametrize("changed", PUSHES)
-@pytest.mark.parametrize(("origin", "said"), UNREADABLE_ORIGINS.values(), ids=UNREADABLE_ORIGINS)
-def test_an_origin_naming_no_identity_is_named_with_its_checkout_rather_than_guessed(
-    tmp_path: Path, origin: bytes | None, said: str, changed: str
+@pytest.mark.parametrize(("body", "said"), UNREADABLE_LISTINGS.values(), ids=UNREADABLE_LISTINGS)
+def test_a_registry_that_cannot_be_listed_is_settled_rather_than_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str | None, said: str, changed: str
 ) -> None:
-    readable = scratch_checkout(tmp_path / "oneharness", OTHER, {"README.md": "x\n"})
-    odd = scratch_checkout(tmp_path / "onejudge", PRODUCER, {"README.md": "x\n"})
-    config = odd / ".git" / "config"
-    if origin is None:
-        _git(odd, "remote", "remove", "origin")
+    """Each way `onevcs repos` fails to answer is one finding, and nothing is held."""
+    home = scratch_registry(
+        tmp_path / "onevcs",
+        (scratch_checkout(tmp_path / "onejudge", PRODUCER, {"README.md": "x\n"}),),
+    )
+    stand_in = tmp_path / "bin" / "onevcs"
+    stand_in.parent.mkdir()
+    if body is None:
+        # A process searches past a file it cannot execute, so the PATH holds no other
+        # `onevcs` to find.
+        stand_in.write_text("#!/bin/sh\n", encoding="utf-8")
+        stand_in.chmod(0o644)
+        path = str(stand_in.parent)
     else:
-        url = f"https://{PRODUCER}.git".encode()
-        config.write_bytes(config.read_bytes().replace(url, origin))
-    manifest = _listed(tmp_path, odd, readable)
+        stand_in.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        stand_in.chmod(0o755)
+        path = f"{stand_in.parent}:{os.environ['PATH']}"
 
-    discovered = discover_checkouts(manifest)
+    with monkeypatch.context() as patched:
+        patched.setenv("PATH", path)
+        discovered = discover_checkouts(home)
 
-    assert discovered.held == {OTHER: [readable]}
+    assert discovered.held == {}
     assert len(discovered.unreadable) == 1, discovered.unreadable
-    assert str(odd) in discovered.unreadable[0] and said in discovered.unreadable[0]
-    held = _held_settled(tmp_path, manifest, said, changed)
-    assert held in (None, {OTHER: [readable]})
+    assert said in discovered.unreadable[0], discovered.unreadable
+    _settle_for_change(tmp_path, list(discovered.unreadable), said, changed)
 
 
 def _settled_under_the_gate_environment(

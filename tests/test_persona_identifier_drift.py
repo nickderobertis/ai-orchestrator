@@ -93,7 +93,7 @@ def test_the_catalog_still_holds_a_repo_specific_persona_that_names_an_identifie
 # workspace and a memo keyed on this workspace would replay what that checkout said when it was
 # recorded. Settled rather than asserted because ai-orchestrator#1529 rules, and this check's task
 # states as a criterion, that a check whose subject is a sibling's live state refuses only a push
-# changing one of the five registration files and reports the drift otherwise;
+# changing one of the registration files and reports the drift otherwise;
 # `tests/sibling_facts.py`'s `settle_drift` is the one place that is decided, and
 # `tests/test_sibling_drift.py` drives both pushes through it.
 @pytest.mark.reads_checkouts

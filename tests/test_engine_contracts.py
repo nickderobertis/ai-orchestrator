@@ -41,7 +41,7 @@ So the prose is reconciled rather than trusted, in six shapes:
 These gates are why the surrounding prose may state any of this at all.
 
 The engines' source lives outside the workspace, in checkouts
-`config/onevcs.checkouts` registers, so a memoized verdict would describe whatever
+this host's onevcs registry holds, so a memoized verdict would describe whatever
 they looked like when it was recorded — the one thing worse than no gate. Hence the
 module marker: this runs in the uncached tier.
 
@@ -71,6 +71,7 @@ import jsonschema
 import onejudge_bundle
 import probe_run_root
 import pytest
+from registered_checkouts import discover_checkouts
 from test_linked_libraries import _linked_version
 
 from orchestrator import follow_up_drafts, npm_installs, spike_flow
@@ -78,11 +79,9 @@ from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_checkouts
 
-#: The tracked list of checkouts this host registers, which is where the engines'
-#: own source is found. Both of this host layout's spellings are in it and only the
-#: ones that exist are registered, so this reads it the same way `just repos-apply`
-#: does rather than hard-coding one machine's paths.
-TRACKED_CHECKOUTS = REPO_ROOT / "config" / "onevcs.checkouts"
+#: The owner the engines are registered under on this host: an engine's identity is
+#: `github.com/<owner>/<crate>`, and its checkout is the one this host's registry holds.
+ENGINE_OWNER = "github.com/nickderobertis"
 
 LIFECYCLE = REPO_ROOT / "docs" / "repo-lifecycle.md"
 TELEMETRY = REPO_ROOT / "docs" / "telemetry.md"
@@ -298,7 +297,7 @@ class Engine(NamedTuple):
     failure the module docstring is about.
     """
 
-    #: The crate name, which is also the tail of its checkout directory.
+    #: The crate name, which is also the name its identity ends in.
     crate: str
     #: The git ref its adopted source is read at.
     ref: str
@@ -1122,26 +1121,20 @@ PRESENT_SYMBOLS: dict[Path, tuple[tuple[Engine, str], ...]] = {
 def _checkout(engine: Engine) -> Path:
     """A registered checkout of the engine, or a failure naming how to get one.
 
-    **A failure and never a skip.** `config/onevcs.checkouts` tolerates a host that
-    does not have every checkout, and it is right to — but a drift gate that answers
+    **A failure and never a skip.** A host need not register every repository, and it
+    is right not to — but a drift gate that answers
     "no checkout, nothing to say" is a gate the whole quality tier can pass while
     reconciling nothing, which is the shape this module exists to remove rather than
     reproduce. The engines are the subject of the documents being gated, so a host
     that maintains them has their source, and one that does not is told where it
     comes from.
     """
-    for line in TRACKED_CHECKOUTS.read_text("utf-8").splitlines():
-        candidate = line.split("#", 1)[0].strip()
-        if not candidate or Path(candidate).name.split("__")[-1] != engine.crate:
-            continue
-        path = Path(os.path.expanduser(candidate))
-        if (path / ".git").exists():
-            return path
+    for path in discover_checkouts().held.get(f"{ENGINE_OWNER}/{engine.crate}", []):
+        return path
     raise AssertionError(
         f"no registered checkout of {engine.crate} on this host, so nothing here can "
-        f"reconcile what this repository's prose says about it. {TRACKED_CHECKOUTS} "
-        "lists every path `just repos-apply` registers, under both of this host "
-        f"family's layouts; clone {engine.crate} into one of the ones it names"
+        "reconcile what this repository's prose says about it; clone "
+        f"{engine.crate} and register the clone with `onevcs register <path>`"
     )
 
 
@@ -3217,7 +3210,7 @@ CHECKPOINT_RESTATEMENTS = (
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is
 # not a narrower key inside a memoized tier: it moves this test out of every memoized
 # tier into the uncached `orchestrator:test-checkouts`, because its subject — the
-# adopted engine's own source, in a checkout `config/onevcs.checkouts` registers — is
+# adopted engine's own source, in a checkout this host's onevcs registry holds — is
 # outside this workspace and no `nx.json` glob hashes it. That target declares
 # `cache: false` and no `inputs`, so it runs over every project every time; a project
 # of its own is what would give it an affected edge to be skipped by and a key to be
@@ -3382,7 +3375,7 @@ MARKER_DECLARATIONS = {
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves
 # these three out of every memoized tier into the uncached `orchestrator:test-checkouts`,
 # because their subject — the adopted engine's own source, in a checkout
-# `config/onevcs.checkouts` registers — is outside this workspace and no `nx.json` glob
+# this host's onevcs registry holds — is outside this workspace and no `nx.json` glob
 # hashes it; a project of their own would give them a key to be replayed from across the
 # very engine upgrade they exist to catch.
 #: Where an idle driver asks its executor for room before it starts a sweep, which is
@@ -4541,7 +4534,7 @@ GRAPH_OVERRIDE_RULES = (
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves
 # this into the uncached `orchestrator:test-checkouts` for the reason the checkpoint gate
 # above states: its subject is the pinned engine's `docs/contract.md`, read at its tag from
-# the checkout `config/onevcs.checkouts` registers, outside this workspace.
+# the checkout this host's onevcs registry holds, outside this workspace.
 def test_the_graph_override_method_is_spelled_as_the_pinned_engine_publishes_it() -> None:
     """Every field, op, variable and precedence the host's method names is the engine's.
 
@@ -4655,7 +4648,7 @@ def _written_as_literal(shipped: str, interlock: InterlockWord) -> bool:
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves
 # this into the uncached `orchestrator:test-checkouts` for the reason every gate above in
 # that tier states: its subject is the pinned engine's own source, read at its tag from the
-# checkout `config/onevcs.checkouts` registers, outside this workspace.
+# checkout this host's onevcs registry holds, outside this workspace.
 @pytest.mark.parametrize("interlock", INTERLOCK_WORDS, ids=lambda item: item.word)
 def test_the_interlock_words_this_host_relies_on_are_the_engines_own(
     interlock: InterlockWord,

@@ -22,7 +22,6 @@
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/onetaskgraph.yaml",
       "{workspaceRoot}/config/onetaskgraph.version",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/scripts/session-setup.sh",
       "{workspaceRoot}/scripts/workspace-install.sh",
       "{workspaceRoot}/scripts/install-lock.sh",

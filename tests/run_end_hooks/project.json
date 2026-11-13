@@ -42,7 +42,6 @@
       "{workspaceRoot}/config/onepipeline-ui.version",
       "{workspaceRoot}/config/onetaskgraph.version",
       "{workspaceRoot}/config/onevcs.version",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/templates/follow-up-task.md.j2",
       "{workspaceRoot}/templates/follow-up-task/**/*",

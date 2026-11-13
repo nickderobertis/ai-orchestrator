@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from registered_checkouts import scratch_registry
 from sibling_facts import (
     RELEASES,
     advance,
@@ -56,8 +57,7 @@ def _siblings(tmp_path: Path) -> Path:
         CONTRADICTING,
         {"release-targets.toml": declaration({"cli": "pypi:onejudge-cli"})},
     )
-    manifest = tmp_path / "checkouts"
-    manifest.write_text(f"{quiet}\n{grown}\n{contradicting}\n", encoding="utf-8")
+    home = scratch_registry(tmp_path / "onevcs", (quiet, grown, contradicting))
     advance(
         grown,
         {
@@ -72,16 +72,16 @@ def _siblings(tmp_path: Path) -> Path:
         },
     )
     advance(contradicting, {"release-targets.toml": declaration({"crate": "crate:onejudge"})})
-    return manifest
+    return home
 
 
 def test_the_declaring_set_is_derived_from_the_siblings_as_they_now_stand(
     tmp_path: Path,
 ) -> None:
     """A sibling declaring nothing is left out; one that grew is counted as it now is."""
-    manifest = _siblings(tmp_path)
+    home = _siblings(tmp_path)
 
-    declaring = declaring_identities(manifest)
+    declaring = declaring_identities(home)
 
     assert declaring.counts == {GROWN: 3, CONTRADICTING: 1}
     assert declaring.unreadable == []
@@ -89,9 +89,9 @@ def test_the_declaring_set_is_derived_from_the_siblings_as_they_now_stand(
 
 def test_only_the_sibling_contradicting_the_tracked_override_is_named(tmp_path: Path) -> None:
     """Growing fails nothing; dropping the override's default target is named, with it."""
-    manifest = _siblings(tmp_path)
+    home = _siblings(tmp_path)
     declarations = {
-        identity: declared_targets(paths[0]) for identity, paths in held_checkouts(manifest).items()
+        identity: declared_targets(paths[0]) for identity, paths in held_checkouts(home).items()
     }
     defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
 

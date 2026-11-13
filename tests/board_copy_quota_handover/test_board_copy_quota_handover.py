@@ -32,7 +32,7 @@ from sibling_facts import registered_checkouts
 
 from orchestrator.root import REPO_ROOT
 
-#: The plan store's repository identity, as `config/onevcs.checkouts` registers it.
+#: The plan store's repository identity, as this host's onevcs registry files it.
 ONETASKGRAPH = "github.com/nickderobertis/onetaskgraph"
 #: Where the store registers its GitHub board journeys' budgets.
 STORE_BUDGETS = "crates/onetaskgraph-github-projects-e2e/budgets.yaml"

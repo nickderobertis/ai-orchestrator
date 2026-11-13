@@ -18,7 +18,6 @@
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/config/onetaskgraph.version",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/tests/e2e/board_copy_approval/budgets.yaml",
       "{workspaceRoot}/tests/board_copy_quota_handover/**/*"

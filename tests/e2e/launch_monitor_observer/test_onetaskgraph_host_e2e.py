@@ -4591,8 +4591,8 @@ def test_the_projected_words_the_board_journey_feeds_are_the_engines_own() -> No
     """
     checkout = registered_checkouts().get(ONEPIPELINE_IDENTITY)
     assert checkout is not None, (
-        f"no registered checkout of {ONEPIPELINE_IDENTITY} on this host; clone it into a "
-        "path config/onevcs.checkouts lists"
+        f"no registered checkout of {ONEPIPELINE_IDENTITY} on this host; clone it and "
+        "register the clone with `onevcs register <path>`"
     )
     pinned = f"v{(REPO_ROOT / 'config' / 'onepipeline.version').read_text('utf-8').strip()}"
     shown = subprocess.run(

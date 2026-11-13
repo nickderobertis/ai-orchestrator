@@ -909,8 +909,7 @@ checkout as the node's publication repository, only fast-forwarded after integra
 A node names this repository once, in its task record's own `repositories` as the
 normalized origin `github.com/nickderobertis/ai-orchestrator` — never by alias on
 `onepipeline.repo` — and sets `execution_checkout` on each lifecycle node to the
-registered alias; `tests/test_registry_resolution.py` holds the resolution to the
-canonical checkout. Confirm `git config core.bare` is `false` before trusting a
+registered alias. Confirm `git config core.bare` is `false` before trusting a
 self-dispatch result.
 
 ## Stack and composition

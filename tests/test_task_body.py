@@ -499,9 +499,8 @@ def _plugin_source(source: Path = PLUGIN_SOURCE) -> PluginSource | None:
     checkout = registered_checkouts().get(PLUGIN_REPOSITORY)
     if checkout is None:
         pytest.skip(
-            f"{PLUGIN_REPOSITORY} has no checkout on this host among those "
-            f"`config/onevcs.checkouts` lists, so the slot's delimiters cannot be "
-            f"reconciled here"
+            f"{PLUGIN_REPOSITORY} has no checkout this host's onevcs registry holds, so "
+            "the slot's delimiters cannot be reconciled here"
         )
     return plugin_source_at(checkout, f"v{adopted_release()}", source)
 
@@ -543,7 +542,7 @@ def test_the_slot_delimiters_and_composition_are_the_ones_the_plugin_spells() ->
         return
     # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
     # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
-    # refuses only a push changing one of the five registration files and reports the drift
+    # refuses only a push changing one of the registration files and reports the drift
     # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and this module's
     # fixture tests drive both pushes through it.
     settle_drift(composition_findings(found))
@@ -614,7 +613,7 @@ def test_the_keys_the_measurement_leaves_out_are_the_ones_the_plugin_adds_or_dro
         read[source] = found
     # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
     # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
-    # refuses only a push changing one of the five registration files and reports the drift
+    # refuses only a push changing one of the registration files and reports the drift
     # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and this module's
     # fixture tests drive both pushes through it.
     settle_drift(
@@ -779,7 +778,7 @@ def test_a_document_s_body_is_composed_by_the_plugin_exactly_as_a_task_s_is() ->
         read[source] = found
     # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
     # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
-    # refuses only a push changing one of the five registration files and reports the drift
+    # refuses only a push changing one of the registration files and reports the drift
     # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and this module's
     # fixture tests drive both pushes through it.
     settle_drift(document_composition_findings(read))
@@ -803,12 +802,12 @@ def test_a_plugin_file_gone_from_an_untagged_head_fails_a_registration_change(
 ) -> None:
     checkout = _plugin_fixture(tmp_path, {"README.md": "moved\n"})
     clone = published_clone(tmp_path / "gated")
-    commit_change(clone, "config/onevcs.checkouts")
+    commit_change(clone, "config/onevcs.releases.yml")
 
     with pytest.raises(pytest.fail.Exception) as failed:
         plugin_source_at(checkout, FIXTURE_TAG, PLUGIN_SOURCE, root=clone, comparison={})
 
-    assert "this change edits config/onevcs.checkouts" in str(failed.value)
+    assert "this change edits config/onevcs.releases.yml" in str(failed.value)
     assert f"has not fetched {FIXTURE_TAG}" in str(failed.value)
     assert PLUGIN_SOURCE.as_posix() in str(failed.value)
     assert str(checkout) in str(failed.value)
@@ -839,7 +838,7 @@ def test_a_plugin_file_present_at_an_untagged_head_is_read_as_live(tmp_path: Pat
 #: The two changes every reading of the plugin's checkout is settled for below: one editing
 #: a registration file, which fails, and one editing only a persona, which is reported.
 PERSONA = "personas/crozier/crozier-corpus.yaml"
-PUSHES = ("config/onevcs.checkouts", PERSONA)
+PUSHES = ("config/onevcs.releases.yml", PERSONA)
 
 
 def _pinned_fixture(tmp_path: Path, files: Mapping[str, str | bytes]) -> Path:
@@ -946,7 +945,7 @@ NOT_UTF_8 = "\n".join(COMPOSITION).encode() + b"\n// \xff\xfe\n"
 
 @pytest.mark.parametrize(
     ("changed", "settles"),
-    [("config/onevcs.checkouts", "fails"), ("personas/crozier/crozier-corpus.yaml", "reports")],
+    [("config/onevcs.releases.yml", "fails"), ("personas/crozier/crozier-corpus.yaml", "reports")],
 )
 def test_a_plugin_head_that_is_not_utf_8_is_settled_though_every_line_is_intact(
     tmp_path: Path, changed: str, settles: str
@@ -985,7 +984,7 @@ def test_a_pinned_release_whose_file_is_not_utf_8_is_settled_by_what_the_change_
 
 @pytest.mark.parametrize(
     ("changed", "settles"),
-    [("config/onevcs.checkouts", "fails"), ("personas/crozier/crozier-corpus.yaml", "reports")],
+    [("config/onevcs.releases.yml", "fails"), ("personas/crozier/crozier-corpus.yaml", "reports")],
 )
 def test_a_plugin_head_that_cannot_be_read_is_settled_rather_than_raised(
     tmp_path: Path, changed: str, settles: str

@@ -16,7 +16,6 @@
   "namedInputs": {
     "releaseAdoptionWorkspace": [
       "{workspaceRoot}/config/onevcs.releases.yml",
-      "{workspaceRoot}/config/onevcs.rules.yml",
       "{workspaceRoot}/config/onevcs.version",
       "{workspaceRoot}/config/onevcs.workspaces.yml",
       "{workspaceRoot}/justfile",

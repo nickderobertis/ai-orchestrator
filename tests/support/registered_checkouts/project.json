@@ -11,8 +11,7 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/registered_checkouts.py",
-      "{workspaceRoot}/config/onevcs.checkouts",
-      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/config/onevcs.version",
       "{projectRoot}/project.json"
     ]
   },

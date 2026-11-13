@@ -36,7 +36,6 @@
       "{workspaceRoot}/config/onemessagebus.yaml",
       "{workspaceRoot}/config/onepipeline.maintenance.yaml",
       "{workspaceRoot}/config/onepipeline.version",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/config/plan-review-verdict.schema.json",
       "{workspaceRoot}/graphs/node-scope.yaml",
       "{workspaceRoot}/graphs/pr-author.yaml",

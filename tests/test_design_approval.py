@@ -2259,7 +2259,7 @@ def test_the_served_records_key_is_the_one_the_pinned_plan_store_declares() -> N
 
     The schema the locked CLI prints carries the record's shape but not the metadata key it
     sits under, so the key is read from the plugin API's own declaration at the tag
-    `config/onetaskgraph.version` names, in the checkout `config/onevcs.checkouts` registers.
+    `config/onetaskgraph.version` names, in the checkout this host's onevcs registry holds.
     """
     checkouts = discover_checkouts().held.get(PLAN_STORE_REPOSITORY, [])
     assert checkouts, f"no checkout of {PLAN_STORE_REPOSITORY} is registered on this host"

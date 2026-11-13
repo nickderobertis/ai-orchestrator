@@ -170,10 +170,9 @@ INSTALLED_OVERRIDE_NAMED = (
 #: an `unreadable` declaration and is read as one below.
 DEFAULT_TARGET_UNREADABLE = "naming default_target"
 
-#: How `onevcs` refuses a repository its registry does not hold. `config/onevcs.checkouts`
-#: is what this host *will* register and the registry is what it *has*, and the two part
-#: company from the moment a registration lands in `config/` until `just repos-apply`
-#: installs it — so a listed identity can be one no `onevcs` verb can resolve at all.
+#: How `onevcs` refuses a repository its registry does not hold. The identities are read
+#: from the registry's copy the suite took, so one the live registry has since dropped
+#: is one no `onevcs` verb can resolve at all.
 NOT_REGISTERED = "is not a registered repository"
 
 
@@ -383,12 +382,9 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
     that makes a `published` node of this repository able to finish — is the next
     journey's, because it is inside the claim only once the override is in force here.
 
-    "Registered here" is the `onevcs` registry rather than `config/onevcs.checkouts`,
-    and the difference is load-bearing between a registration landing in `config/` and
-    `just repos-apply` installing it: the tracked list names the identity, the registry
-    cannot resolve it, and no plan can dispatch against it either. Such an identity is
-    outside the claim, *proven* against the registry's own listing below rather than
-    assumed from a refusal.
+    "Registered here" is the `onevcs` registry, the one the identities are read from; an
+    identity a verb nonetheless refuses as unregistered is outside the claim, *proven*
+    against the registry's own listing below rather than assumed from a refusal.
 
     The live `onevcs` answer is cross-checked against the declarations at each fetched
     base, which keeps the half a git read cannot give — that the surface really does
@@ -401,8 +397,7 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
     identities = registered_checkouts()
     assert identities, (
         "no registered checkout resolved, so this journey would assert the claim over "
-        "an empty set; run `just repos-apply` so the host holds the identities "
-        "`config/onevcs.checkouts` lists"
+        "an empty set; register this host's checkouts with `onevcs register <path>`"
     )
 
     held = _registry_identities()
@@ -436,9 +431,9 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
 
     answered = sorted(set(identities) - set(unregistered))
     assert answered, (
-        f"this host's `onevcs` registry holds none of the {len(identities)} identities "
-        "`config/onevcs.checkouts` names, so the claim would be asserted over an empty "
-        f"set; run `just repos-apply`. Awaiting registration: {sorted(unregistered)}"
+        f"this host's `onevcs` registry resolves none of the {len(identities)} identities "
+        "it lists, so the claim would be asserted over an empty set. Refused as "
+        f"unregistered: {sorted(unregistered)}"
     )
 
     assert THIS_REPOSITORY_IDENTITY not in declaring, (

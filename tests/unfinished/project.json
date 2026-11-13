@@ -21,7 +21,6 @@
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/config/onemessagebus.yaml",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/config/onevcs.version",
       "{workspaceRoot}/config/onepipeline.version",
       "{workspaceRoot}/.claude/settings.json",

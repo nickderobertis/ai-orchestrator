@@ -246,7 +246,7 @@ def crozier_stand_in(tmp_path: Path) -> Path:
 # recorded. Not expensive: it takes under a second (`pytest --durations`) and spends no paid turn,
 # no launch and no network. Settled rather than asserted because ai-orchestrator#1529 rules, and
 # this check's task states as a criterion, that a check whose subject is a sibling's live state
-# refuses only a push changing one of the five registration files and reports the drift otherwise;
+# refuses only a push changing one of the registration files and reports the drift otherwise;
 # `tests/sibling_facts.py`'s `settle_drift` is the one place that is decided, and
 # `tests/test_sibling_drift.py` drives both pushes through it.
 @pytest.mark.reads_checkouts

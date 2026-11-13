@@ -10,16 +10,13 @@
   "implicitDependencies": [
     "support-conftest",
     "support-registered-checkouts",
-    "support-ruled-registry",
     "support-scratch-identity",
     "support-sibling-facts"
   ],
   "namedInputs": {
     "e2eRootWorkspace": [
       "{projectRoot}/project.json",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/config/onevcs.releases.yml",
-      "{workspaceRoot}/config/onevcs.rules.yml",
       "{workspaceRoot}/config/onevcs.version",
       "{workspaceRoot}/config/onevcs.workspaces.yml",
       "{workspaceRoot}/justfile",
@@ -32,7 +29,6 @@
       "{workspaceRoot}/scripts/apply-repo-registry.sh",
       "{workspaceRoot}/scripts/registered-checkouts.sh",
       "{workspaceRoot}/scripts/require-provisioned.sh",
-      "{workspaceRoot}/tests/fixtures/pre-adoption-repos.json",
       "{workspaceRoot}/uv.lock",
       "{projectRoot}/test_repo_registry_apply_e2e.py"
     ]

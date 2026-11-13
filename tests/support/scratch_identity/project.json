@@ -7,7 +7,7 @@
   ],
   "implicitDependencies": [
     "support-conftest",
-    "support-ruled-registry",
+    "support-sibling-facts",
     "support-waits"
   ],
   "namedInputs": {

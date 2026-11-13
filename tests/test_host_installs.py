@@ -26,7 +26,7 @@ import warnings
 from pathlib import Path
 
 import pytest
-from registered_checkouts import RepoIdentity
+from registered_checkouts import RepoIdentity, scratch_registry
 from sibling_facts import (
     RELEASE_RULE,
     SiblingDrift,
@@ -568,24 +568,22 @@ def _scratch_producers(root: Path, defaults: dict[RepoIdentity, str] | None = No
         )
         for producer, target in (defaults or _override_default_targets()).items()
     ]
-    manifest = root / "checkouts.list"
-    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
-    return manifest
+    return scratch_registry(root / "onevcs", paths)
 
 
 def _contradictions(
-    manifest: Path,
+    home: Path,
     defaults: dict[RepoIdentity, str] | None = None,
     awaiting: frozenset[RepoIdentity] = AWAITING_FIRST_ADOPTION,
     consumers: frozenset[RepoIdentity] = CONSUMER_DEFAULTS,
 ) -> list[str]:
-    """What the readers find, over the checkouts ``manifest`` lists, against the tracked files.
+    """What the readers find, over the registry at ``home``, against the tracked files.
 
     ``defaults``, ``awaiting`` and ``consumers`` default to the tracked override and sets; a
     journey about a defective registration names a copy holding the defect.
     """
     declarations = {
-        identity: declared_targets(paths[0]) for identity, paths in held_checkouts(manifest).items()
+        identity: declared_targets(paths[0]) for identity, paths in held_checkouts(home).items()
     }
     return release_contradictions(
         defaults if defaults is not None else _override_default_targets(),
@@ -596,27 +594,27 @@ def _contradictions(
     )
 
 
-def _checkout(manifest: Path, producer: RepoIdentity) -> Path:
-    return held_checkouts(manifest)[producer][0]
+def _checkout(home: Path, producer: RepoIdentity) -> Path:
+    return held_checkouts(home)[producer][0]
 
 
 def test_producers_declaring_what_this_repository_decides_contradict_nothing(
     tmp_path: Path,
 ) -> None:
-    manifest = _scratch_producers(tmp_path)
+    home = _scratch_producers(tmp_path)
 
-    assert set(held_checkouts(manifest)) == set(_override_default_targets())
-    assert _contradictions(manifest) == []
+    assert set(held_checkouts(home)) == set(_override_default_targets())
+    assert _contradictions(home) == []
 
 
 def test_a_producer_gaining_targets_and_a_language_since_registration_contradicts_nothing(
     tmp_path: Path,
 ) -> None:
     """Normal development in the producer's own repository fails no check here."""
-    manifest = _scratch_producers(tmp_path)
+    home = _scratch_producers(tmp_path)
     row = INSTALLED[0]
     advance(
-        _checkout(manifest, row.producer),
+        _checkout(home, row.producer),
         {
             "release-targets.toml": declaration(
                 {row.target: row.artifact, "crate": "crate:scratch", "pypi": "pypi:scratch-cli"}
@@ -625,28 +623,28 @@ def test_a_producer_gaining_targets_and_a_language_since_registration_contradict
         },
     )
 
-    assert declared_targets(_checkout(manifest, row.producer)) == {
+    assert declared_targets(_checkout(home, row.producer)) == {
         row.target: row.artifact,
         "crate": "crate:scratch",
         "pypi": "pypi:scratch-cli",
     }
-    assert _contradictions(manifest) == []
+    assert _contradictions(home) == []
     with warnings.catch_warnings():
         warnings.simplefilter("error", SiblingDrift)
-        settle_drift(_contradictions(manifest))
+        settle_drift(_contradictions(home))
 
 
 def test_a_producer_dropping_the_overrides_default_target_contradicts_it_by_name(
     tmp_path: Path,
 ) -> None:
-    manifest = _scratch_producers(tmp_path)
+    home = _scratch_producers(tmp_path)
     row = next(row for row in INSTALLED if row.target == "cli")
     advance(
-        _checkout(manifest, row.producer),
+        _checkout(home, row.producer),
         {"release-targets.toml": declaration({"crate": "crate:onejudge", "sdk": "pypi:onejudge"})},
     )
 
-    assert _contradictions(manifest) == [
+    assert _contradictions(home) == [
         f"{row.producer} no longer declares the default target 'cli' "
         "config/onevcs.releases.yml names for it; it declares ['crate', 'sdk']"
     ]
@@ -655,14 +653,14 @@ def test_a_producer_dropping_the_overrides_default_target_contradicts_it_by_name
 def test_a_producer_renaming_the_artifact_a_row_installs_contradicts_the_table(
     tmp_path: Path,
 ) -> None:
-    manifest = _scratch_producers(tmp_path)
+    home = _scratch_producers(tmp_path)
     row = INSTALLED[1]
     advance(
-        _checkout(manifest, row.producer),
+        _checkout(home, row.producer),
         {"release-targets.toml": declaration({row.target: "pypi:renamed-cli"})},
     )
 
-    assert _contradictions(manifest) == [
+    assert _contradictions(home) == [
         f"{row.producer} declares its {row.target!r} target as 'pypi:renamed-cli', and "
         f"orchestrator/host_installs.py says this host installs {row.artifact!r} under it"
     ]
@@ -671,12 +669,12 @@ def test_a_producer_renaming_the_artifact_a_row_installs_contradicts_the_table(
 def test_an_installed_producer_declaring_no_release_target_contradicts_the_override(
     tmp_path: Path,
 ) -> None:
-    manifest = _scratch_producers(tmp_path)
+    home = _scratch_producers(tmp_path)
     row = INSTALLED[2]
-    advance(_checkout(manifest, row.producer), {"release-targets.toml": None})
+    advance(_checkout(home, row.producer), {"release-targets.toml": None})
 
-    assert declared_targets(_checkout(manifest, row.producer)) is None
-    assert _contradictions(manifest) == [
+    assert declared_targets(_checkout(home, row.producer)) is None
+    assert _contradictions(home) == [
         f"{row.producer} declares no release targets at its base, and "
         f"config/onevcs.releases.yml names {row.target!r} as its default target"
     ]
@@ -691,12 +689,12 @@ def test_a_producer_awaiting_its_first_adoption_passes_with_no_row(tmp_path: Pat
     producer, target = UNRELEASED, "pypi"
     defaults = {**_override_default_targets(), producer: target}
     awaiting = AWAITING_FIRST_ADOPTION | {producer}
-    manifest = _scratch_producers(tmp_path, defaults)
+    home = _scratch_producers(tmp_path, defaults)
     assert by_producer(producer) is None
-    assert _contradictions(manifest, defaults, awaiting) == []
+    assert _contradictions(home, defaults, awaiting) == []
 
     advance(
-        _checkout(manifest, producer),
+        _checkout(home, producer),
         {
             "release-targets.toml": declaration(
                 {"crate": "crate:unreleased", target: "pypi:unreleased-cli"}
@@ -704,10 +702,10 @@ def test_a_producer_awaiting_its_first_adoption_passes_with_no_row(tmp_path: Pat
             "Cargo.toml": '[workspace]\nmembers = ["crates/*"]\n',
         },
     )
-    assert _contradictions(manifest, defaults, awaiting) == []
+    assert _contradictions(home, defaults, awaiting) == []
 
-    advance(_checkout(manifest, producer), {"release-targets.toml": None})
-    assert _contradictions(manifest, defaults, awaiting) == []
+    advance(_checkout(home, producer), {"release-targets.toml": None})
+    assert _contradictions(home, defaults, awaiting) == []
 
 
 def test_onefollowup_declaring_nothing_before_its_bootstrap_contradicts_nothing(
@@ -719,12 +717,12 @@ def test_onefollowup_declaring_nothing_before_its_bootstrap_contradicts_nothing(
     the set the same checkout is a producer declaring nothing that the override names a
     default for.
     """
-    manifest = _scratch_producers(tmp_path)
-    advance(_checkout(manifest, ONEFOLLOWUP), {"release-targets.toml": None})
+    home = _scratch_producers(tmp_path)
+    advance(_checkout(home, ONEFOLLOWUP), {"release-targets.toml": None})
 
-    assert declared_targets(_checkout(manifest, ONEFOLLOWUP)) is None
-    assert _contradictions(manifest) == []
-    assert _contradictions(manifest, awaiting=AWAITING_FIRST_ADOPTION - {ONEFOLLOWUP}) == [
+    assert declared_targets(_checkout(home, ONEFOLLOWUP)) is None
+    assert _contradictions(home) == []
+    assert _contradictions(home, awaiting=AWAITING_FIRST_ADOPTION - {ONEFOLLOWUP}) == [
         f"config/onevcs.releases.yml names {ONEFOLLOWUP}'s default target 'pypi', and neither "
         "a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it",
         f"{ONEFOLLOWUP} declares no release targets at its base, and "
@@ -737,13 +735,13 @@ def test_a_producer_awaiting_its_first_adoption_still_contradicts_by_dropping_it
 ) -> None:
     producer, target = UNRELEASED, "pypi"
     defaults = {**_override_default_targets(), producer: target}
-    manifest = _scratch_producers(tmp_path, defaults)
+    home = _scratch_producers(tmp_path, defaults)
     advance(
-        _checkout(manifest, producer),
+        _checkout(home, producer),
         {"release-targets.toml": declaration({"crate": "crate:unreleased"})},
     )
 
-    assert _contradictions(manifest, defaults, AWAITING_FIRST_ADOPTION | {producer}) == [
+    assert _contradictions(home, defaults, AWAITING_FIRST_ADOPTION | {producer}) == [
         f"{producer} no longer declares the default target {target!r} "
         "config/onevcs.releases.yml names for it; it declares ['crate']"
     ]
@@ -751,24 +749,24 @@ def test_a_producer_awaiting_its_first_adoption_still_contradicts_by_dropping_it
 
 def test_a_repository_the_override_names_no_default_for_is_never_judged(tmp_path: Path) -> None:
     """A registered repository declaring targets the override says nothing of is its business."""
-    manifest = _scratch_producers(tmp_path)
+    home = _scratch_producers(tmp_path)
     unruled = "github.com/nickderobertis/unruled-sibling"
     other = scratch_checkout(
         tmp_path / "unruled-sibling",
         unruled,
         {"release-targets.toml": declaration({"crate": "crate:unruled-sibling"})},
     )
-    manifest.write_text(manifest.read_text(encoding="utf-8") + f"{other}\n", encoding="utf-8")
+    scratch_registry(home, (other,))
 
-    assert unruled in held_checkouts(manifest)
-    assert _contradictions(manifest) == []
+    assert unruled in held_checkouts(home)
+    assert _contradictions(home) == []
 
 
 def test_printobserver_declaring_its_default_and_more_contradicts_nothing(tmp_path: Path) -> None:
     """A consumer default has no row, so no artifact is compared: the target name is all."""
-    manifest = _scratch_producers(tmp_path)
+    home = _scratch_producers(tmp_path)
     advance(
-        _checkout(manifest, PRINTOBSERVER),
+        _checkout(home, PRINTOBSERVER),
         {
             "release-targets.toml": declaration(
                 {
@@ -780,7 +778,7 @@ def test_printobserver_declaring_its_default_and_more_contradicts_nothing(tmp_pa
         },
     )
 
-    assert _contradictions(manifest) == []
+    assert _contradictions(home) == []
 
 
 @pytest.mark.parametrize(
@@ -804,13 +802,13 @@ def test_a_consumer_default_its_base_does_not_declare_contradicts_the_override(
     tmp_path: Path, declared: dict[str, str] | None, complaint: str
 ) -> None:
     """The one contradiction a consumer default can have, over a real scratch checkout."""
-    manifest = _scratch_producers(tmp_path)
+    home = _scratch_producers(tmp_path)
     advance(
-        _checkout(manifest, PRINTOBSERVER),
+        _checkout(home, PRINTOBSERVER),
         {"release-targets.toml": None if declared is None else declaration(declared)},
     )
 
-    assert _contradictions(manifest) == [complaint]
+    assert _contradictions(home) == [complaint]
 
 
 def test_the_readers_refuse_each_way_the_three_sets_can_miss_the_override(tmp_path: Path) -> None:
@@ -822,26 +820,26 @@ def test_the_readers_refuse_each_way_the_three_sets_can_miss_the_override(tmp_pa
     """
     unadopted = "github.com/nickderobertis/unadopted"
     defaults = {**_override_default_targets(), unadopted: "pypi"}
-    manifest = _scratch_producers(tmp_path, defaults)
+    home = _scratch_producers(tmp_path, defaults)
     tracked = _override_default_targets()
     no_rule = {
         producer: target for producer, target in tracked.items() if producer != PRINTOBSERVER
     }
 
-    assert _contradictions(manifest, tracked) == []
-    assert _contradictions(manifest, tracked, AWAITING_FIRST_ADOPTION | {PRINTOBSERVER}) == [
+    assert _contradictions(home, tracked) == []
+    assert _contradictions(home, tracked, AWAITING_FIRST_ADOPTION | {PRINTOBSERVER}) == [
         f"{PRINTOBSERVER} is in AWAITING_FIRST_ADOPTION and CONSUMER_DEFAULTS; a producer the "
         "override gives a default target is in exactly one of the three"
     ]
-    assert _contradictions(manifest, tracked, consumers=CONSUMER_DEFAULTS | {ONEBUDGETSPEC}) == [
+    assert _contradictions(home, tracked, consumers=CONSUMER_DEFAULTS | {ONEBUDGETSPEC}) == [
         f"{ONEBUDGETSPEC} is in a row of orchestrator/host_installs.py and CONSUMER_DEFAULTS; a "
         "producer the override gives a default target is in exactly one of the three"
     ]
-    assert _contradictions(manifest, no_rule) == [
+    assert _contradictions(home, no_rule) == [
         f"{PRINTOBSERVER} is in CONSUMER_DEFAULTS, and config/onevcs.releases.yml names no "
         "default target for it"
     ]
-    assert _contradictions(manifest, defaults) == [
+    assert _contradictions(home, defaults) == [
         f"config/onevcs.releases.yml names {unadopted}'s default target 'pypi', and neither a "
         "row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it"
     ]
@@ -864,7 +862,7 @@ def test_a_held_producers_contradiction_fails_only_a_change_editing_the_registra
     """
     # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
     # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
-    # refuses only a push changing one of the five registration files and reports the drift
+    # refuses only a push changing one of the registration files and reports the drift
     # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and
     # `tests/test_sibling_drift.py` drives both pushes through it.
     check_release_contradictions()

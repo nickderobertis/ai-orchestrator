@@ -29,7 +29,6 @@
       "{workspaceRoot}/config/oneharness.version",
       "{workspaceRoot}/config/onejudge.base.yaml",
       "{workspaceRoot}/config/onemessagebus.yaml",
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/config/onevcs.releases.yml",
       "{workspaceRoot}/config/plan-review-verdict.schema.json",
       "{workspaceRoot}/graphs/dag-scope.yaml",

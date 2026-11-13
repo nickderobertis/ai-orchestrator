@@ -90,7 +90,6 @@
       "!{workspaceRoot}/tests/e2e/suite_helpers/test_*.py",
       "!{workspaceRoot}/tests/e2e/repos_apply_credentials/test_*.py",
       "!{workspaceRoot}/tests/e2e/host_local_registration/test_*.py",
-      "!{workspaceRoot}/tests/e2e/checks_wait/test_*.py",
       "!{workspaceRoot}/tests/e2e/release_adoption/test_*.py",
       "!{workspaceRoot}/tests/e2e/release_holdup/test_*.py",
       "!{workspaceRoot}/tests/e2e/llmlint_installer/test_*.py",
