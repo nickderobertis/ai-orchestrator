@@ -202,6 +202,10 @@ ANSWERED = {"actor": "user:a", "on_behalf_of": None, "text": None, "reason": Non
             json.dumps({"item": {"item": {**ITEM, "resolution": {"text": 3}}}}),
             "whose text is 3",
         ),
+        (
+            json.dumps({"item": {"item": {**ITEM, "resolution": {"provenance": "planner"}}}}),
+            "whose provenance is 'planner'",
+        ),
         *(
             (json.dumps({"item": {"item": {**QUESTION, "choices": choices}}}), refusal)
             for choices, refusal in (
@@ -275,7 +279,13 @@ def test_a_receipt_is_read_into_the_fields_this_host_acts_on() -> None:
         **ITEM,
         "state": "dismissed",
         "approval": {"board_copy": "plans:x", "key": "k"},
-        "resolution": {"actor": "user:a", "on_behalf_of": None, "text": None, "reason": "gone"},
+        "resolution": {
+            "actor": "user:a",
+            "on_behalf_of": None,
+            "text": None,
+            "reason": "gone",
+            "provenance": "user",
+        },
     }
     item = human_items.receipt_item(json.dumps({"item": {"item": dismissed}}))
     assert item == human_items.Item(

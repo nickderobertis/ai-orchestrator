@@ -953,10 +953,10 @@ graph and entry, rather than reaching a dispatch.
 #### 3. Change it on a live run: two channel edits
 
 Each edit replaces a **whole ordered list**, and `[]` clears it. Send it with `just
-channel-reply <run-id>` as an edit envelope, which the engine reads at version 3:
+channel-reply <run-id>` as an edit envelope, which the engine reads at version 4:
 
 ```json
-{"version": 3, "commands": [
+{"version": 4, "commands": [
   {"op": "set-node-sets", "id": "build", "sets": ["members.worker.agent.oneharness_config=/abs/checkout/scratch/oneharness/worker-codex-first.toml"]},
   {"op": "set-run-node-sets", "sets": ["members.worker.judge.oneharness_config=/abs/checkout/scratch/oneharness/judge-claude.toml", "members.worker.judge.model=claude-opus-5"]}
 ]}

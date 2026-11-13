@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.109.0. The whole of that reasoning —
+onepipeline 0.110.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -708,7 +708,7 @@ It never writes the project's title, description or labels, and on an item it na
 the fields a projection changed — the status word, the engine's own `onepipeline.*` keys,
 and, where the node's definition moved, its title, body, `delivers` and `depends_on` — so
 a body somebody authored on the board survives every settlement of every run launched from
-it, re-read on the adopted onepipeline 0.109.0, and a person's edit to any field stands
+it, re-read on the adopted onepipeline 0.110.0, and a person's edit to any field stands
 until the run next changes that same field. Below the 0.16.3 that fixed it, it did not:
 the shadow project a copy wrote over the board was built with the body hardcoded to an
 empty string and the copy is a total replacement by contract, so every destination
@@ -730,7 +730,7 @@ is written, and the destination is left exactly as it was. A read that could fal
 a default is a read that can delete, so this is the property that makes the preservation
 above worth anything. It is held in onepipeline's own suite rather than here: since
 https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted onepipeline
-0.109.0 among them — reads and projects plans through the linked onetaskgraph crates and
+0.110.0 among them — reads and projects plans through the linked onetaskgraph crates and
 ignores `ONETASKGRAPH_BIN`, so no host seam can
 inject a refused read into the store in process any more, and
 `store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
@@ -743,7 +743,7 @@ prompt first retry to a one-minute ceiling instead of retrying about four times 
 resets that schedule once it recovers, and retries until the projection lands; stopping or
 settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.109.0, that schedule answers only the failures a retry can change. A projection the store
+0.110.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. A
@@ -1090,7 +1090,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.109.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.110.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -1270,7 +1270,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.109.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.110.0 by dumping both sides of a monitor member's whole
   environment on the suite's real launches, their paid model doubled: the judge side by
   the probe `tests/e2e/observer_environment.py` stands in for the judge command with, the
   agent side by the stand-in harness's monitor turn recording all of it.
@@ -1681,7 +1681,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.109.0 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.110.0 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1853,7 +1853,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.109.0**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.110.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -2134,7 +2134,7 @@ events stay the record of what an edit became, and are where a `queued` one is r
 **A `queued` receipt resolves even across a driver's death.** A driver claims an
 envelope — moves the channel's command cursor past it — before it answers it, so one
 that died between the two used to take the claimed edits and notes with it. On the
-adopted onepipeline 0.109.0 every record an envelope's effects leave — `edit-committed`,
+adopted onepipeline 0.110.0 every record an envelope's effects leave — `edit-committed`,
 `command-accepted`, `edit-rejected` and `note-shown` — names that `envelope`, and `just
 orchestrate --adopt` replays each envelope the dead driver claimed and never answered
 exactly once: one the journal already shows applied is answered from that record rather
@@ -2612,13 +2612,14 @@ awaits a reply.
 The raw reply schema remains available for edits and automation. A continuing
 reply is `{"completion":false,"message":"what to do next","reason":"why"}`;
 an approval is `{"completion":true,"reason":"what was verified"}`. Either may
-also contain `"version":3` plus a `"commands"` array using the operations below.
-That version is the engine's own `REPLY_ENVELOPE_VERSION`, and it reads **3** since
-`settle` grew the optional `landing` above; it read **2** from the manager-note
-collapse that removed `context` from the envelope until then. The move is additive
-and the engine still reads an envelope at the version before it, so a caller that
-sends `2` is accepted and simply cannot name a landing — which is why the examples
-below name the current one rather than the oldest that still works.
+also contain `"version":4` plus a `"commands"` array using the operations below.
+That version is the engine's own `REPLY_ENVELOPE_VERSION`, and it reads **4** since
+the adopted engine added the optional top-level `provenance`; it read **3** from
+`settle` growing the optional `landing` above, and **2** from the manager-note
+collapse that removed `context` from the envelope until then. Each move is additive
+and the engine still reads envelopes at 3 and 2, each as the manager's words, so a
+caller that sends `2` is accepted and simply cannot name a landing — which is why the
+examples below name the current one rather than the oldest that still works.
 The convenience recipes construct the common forms: `channel-approve` sends a
 completed verdict, `channel-reject` sends a continuing verdict whose reason and
 message are the supplied text, and `channel-continue` sends the same continuing
@@ -2660,7 +2661,7 @@ Send an edit envelope to `channel-reply`, at the version the reply schema above 
 
 ```sh
 just channel-reply RUN <<'JSON'
-{"version":3,"commands":[{"op":"reparent","id":"pending","deps":["slow_b"]},{"op":"drop","id":"slow_b","dependents":"detach"},{"op":"attest","ref":"approve"}]}
+{"version":4,"commands":[{"op":"reparent","id":"pending","deps":["slow_b"]},{"op":"drop","id":"slow_b","dependents":"detach"},{"op":"attest","ref":"approve"}]}
 JSON
 ```
 
@@ -2734,14 +2735,14 @@ A command-only envelope gets a synthesized continuing verdict. Commands can
 instead accompany either legacy verdict, for example:
 
 ```json
-{"completion":false,"message":"apply the replacement and continue","reason":"the failed node is retryable","version":3,"commands":[{"op":"retry","id":"failed","node":{"id":"retry","task":"No diff","expects_no_diff":true}}]}
+{"completion":false,"message":"apply the replacement and continue","reason":"the failed node is retryable","version":4,"commands":[{"op":"retry","id":"failed","node":{"id":"retry","task":"No diff","expects_no_diff":true}}]}
 ```
 
 `complete` is the versioned equivalent of a completion verdict and may share an
 envelope with graph edits:
 
 ```json
-{"version":3,"commands":[{"op":"complete","reason":"publication and follow-up triage verified"}]}
+{"version":4,"commands":[{"op":"complete","reason":"publication and follow-up triage verified"}]}
 ```
 
 Completion is decoupled from scheduling: the reconciler journals it for audit
@@ -2983,7 +2984,7 @@ separately again when this host could not ask.
 dispatches it through normal adoption:
 
 ```json
-{"version":3,"commands":[{"op":"requeue","id":"sweep","amend":{"max_turns":32}}]}
+{"version":4,"commands":[{"op":"requeue","id":"sweep","amend":{"max_turns":32}}]}
 ```
 
 An `amend` mapping is merged onto the node before it is redispatched, which is where
@@ -3951,7 +3952,7 @@ the contract.
 
 **A landing a manager starts is owed the same way, from before it acts until it closes.**
 `just publish-branch`, `just repo-recover` and `just integrate` run the engine's own landing
-verbs, which on the adopted onepipeline 0.109.0 register each landing as supervised work of the
+verbs, which on the adopted onepipeline 0.110.0 register each landing as supervised work of the
 session that started it — in the live flow of that session the verb runs inside, or in a
 flow registered for that landing alone — before drafting, preparing or pushing anything,
 and print it:
@@ -4311,7 +4312,7 @@ After doing a reported action, attest it explicitly, over the live channel:
 
 ```sh
 just channel-reply RUN <<'JSON'
-{"version":3,"commands":[{"op":"attest","ref":"HUMAN_ID"},{"op":"attest","ref":"NODE_ID/STEP_ID"}]}
+{"version":4,"commands":[{"op":"attest","ref":"HUMAN_ID"},{"op":"attest","ref":"NODE_ID/STEP_ID"}]}
 JSON
 ```
 
@@ -4550,7 +4551,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.109.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.110.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and four optional fields: a `criterion`; a `deliver` of `live`, `turn-end` or
@@ -4708,7 +4709,7 @@ outcome` — is answered by that next driver before anything it claims itself, s
 lost.
 
 **A `cancel` does not wait behind a note its node never answers.** On the adopted
-onepipeline 0.109.0 a `cancel` its envelope would apply refuses, in its node's
+onepipeline 0.110.0 a `cancel` its envelope would apply refuses, in its node's
 conversation's place, each note to that node still outstanding — offered or waiting
 behind another — with a reason naming the cancelling envelope, so no turn is presented
 with it; each such refusal is the note's own `edit-rejected` record, and the notes'

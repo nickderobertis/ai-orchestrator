@@ -53,8 +53,12 @@ from orchestrator.envelope_review import (
     ADDITIONAL_INFO_HEADING,
     AMENDMENT_PRECEDENCE,
     BAR_FINGERPRINT_FLAG,
+    MANAGER_ATTRIBUTION,
+    MANAGER_REFERENCE_ATTRIBUTION,
     REFUSED,
     UNJUDGED,
+    USER_AMENDMENT_PRECEDENCE,
+    USER_ATTRIBUTION,
     Judge,
     ReviewUnanswered,
     amended,
@@ -62,6 +66,7 @@ from orchestrator.envelope_review import (
     bar_in_force,
     main,
     reviewables,
+    split_attribution,
     structural_refusal,
 )
 from orchestrator.plan_review import Finding, Verdict
@@ -577,6 +582,48 @@ def test_an_amendments_clauses_are_shaped_as_the_engine_shapes_them() -> None:
     assert rendered.count("## Acceptance criteria") == 1, rendered
     last = amended("## What\nship it\n\n## Acceptance criteria\n- it ships\n", amendment)
     assert "- it ships\n\n### Amendment\n" in last and last.endswith("- #not a heading\n")
+
+
+def test_an_amendment_opening_with_whose_ruling_it_is_renders_under_that_attribution() -> None:
+    """onepipeline 0.110.0 records whose ruling an amendment is as its first line, and
+    renders that line above the precedence sentence, which names the user for a user's
+    ruling; the line is never one of the clauses. `tests/test_engine_contracts.py` holds
+    the sentences and the reading of the line to the engine's `src/ruling.rs`.
+    """
+    task = "## What\nship it\n\n## Acceptance criteria\n\n- it ships\n"
+    managers = MANAGER_REFERENCE_ATTRIBUTION.format(reference="c4.1")
+
+    assert amended(task, f"{USER_ATTRIBUTION}\nKeep the old flag.") == (
+        f"{task}\n{AMENDMENT_HEADING}\n{USER_ATTRIBUTION}\n{USER_AMENDMENT_PRECEDENCE}\n\n"
+        "- Keep the old flag.\n"
+    )
+    for attribution in (managers, MANAGER_ATTRIBUTION):
+        assert amended(task, f"{attribution}\nKeep the old flag.") == (
+            f"{task}\n{AMENDMENT_HEADING}\n{attribution}\n{AMENDMENT_PRECEDENCE}\n\n"
+            "- Keep the old flag.\n"
+        )
+    assert split_attribution(f"\n  {USER_ATTRIBUTION}\nKeep it.") == (USER_ATTRIBUTION, "Keep it.")
+    assert split_attribution(MANAGER_REFERENCE_ATTRIBUTION.format(reference="a7")) == (
+        MANAGER_REFERENCE_ATTRIBUTION.format(reference="a7"),
+        "",
+    )
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["c04.1", "c4", "a", "x4", "a07", f"a{2**64}", f"c{2**64}.1", f"c1.{2**32}", "a" + "9" * 5000],
+)
+def test_a_line_only_resembling_an_attribution_is_the_rulings_own_text(token: str) -> None:
+    """A reference the engine would not mint, or would write back differently, makes the
+    line one of the ruling's clauses under the manager's precedence, as the engine reads it."""
+    line = MANAGER_REFERENCE_ATTRIBUTION.format(reference=token)
+    text = f"{line}\nKeep the old flag."
+
+    assert split_attribution(text) == (None, text)
+    rendered = amended("## What\nship it\n", text)
+    assert f"{AMENDMENT_HEADING}\n{AMENDMENT_PRECEDENCE}\n\n- {line} Keep the old flag.\n" in (
+        rendered
+    ), rendered
 
 
 def test_a_node_stating_its_own_amendment_is_read_with_it_rendered_in() -> None:

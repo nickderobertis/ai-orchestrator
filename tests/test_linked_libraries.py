@@ -296,6 +296,17 @@ JOURNAL_FOLLOWING_ENGINE_FLOOR = Release(0, 106, 0)
 #: `resettable` on every surface read; from it on, a graph's own `reset_on` is the only
 #: reset, which for this host is graphs/dag-scope.yaml's `progress-report` note.
 BUILT_IN_RESET_REMOVED_ENGINE_FLOOR = Release(0, 108, 0)
+#: onevcs https://github.com/nickderobertis/onevcs/pull/667 (`28e0fe84`), first cut as
+#: 0.65.2 and linked by onepipeline 0.110.0 and onepipeline-api 0.81.1: `decisions::load`
+#: in crates/onevcs/src/decisions.rs keys each recorded recovery decision on its branch
+#: *and* the checkout holding it, so a warm host-wide recovery read reuses the decision
+#: for a branch whose worktree directory was pruned or whose checkouts hold it at
+#: different tips, rather than deriving every branch again. Below it `onepipeline
+#: unpublished --host` — the read `just unpublished` and the stop guard make — took 17-29 s
+#: on this host however little had changed. Held on the linked copy in both packages,
+#: because the engine's stop guard and the read API's views answer through the onevcs
+#: each links rather than through `config/onevcs.version`.
+WARM_HOST_READS_ONEVCS_FLOOR = Release(0, 65, 2)
 
 
 #: The three sibling releases carrying https://github.com/nickderobertis/ai-orchestrator/issues/1004's
@@ -604,6 +615,22 @@ def test_the_linked_onevcs_merges_bases_on_conflict_and_arms_elapsed_check_waits
     )
 
 
+@pytest.mark.parametrize("distribution", [ENGINE_DISTRIBUTION, "onepipeline-api-cli"])
+def test_the_linked_onevcs_answers_a_warm_host_wide_read_without_rederiving(
+    distribution: str,
+) -> None:
+    """Both packages carrying an engine link the onevcs whose warm host reads are reused."""
+    document = json.loads(npm_sbom(distribution).read_text("utf-8"))
+    declared = {c["version"] for c in document["components"] if c["name"] == "onevcs"}
+    assert len(declared) == 1, f"{distribution}'s SBOM declares onevcs at {sorted(declared)}"
+    linked = Release.parse(declared.pop(), f"{distribution}'s SBOM")
+    assert linked >= WARM_HOST_READS_ONEVCS_FLOOR, (
+        f"{distribution} links onevcs {linked}, below the {WARM_HOST_READS_ONEVCS_FLOOR} "
+        "that reuses a recovery decision per branch and checkout; every host-wide "
+        "unpublished read would derive every branch again"
+    )
+
+
 def test_the_linked_onevcs_lets_a_session_open_its_own_draft() -> None:
     """Above the floor, the carve-out a task grants names a verb the dispatch can run.
 
@@ -829,7 +856,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.13.0", core="0.29.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.23.1", core="0.29.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.109.0", core="0.29.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.110.0", core="0.29.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source

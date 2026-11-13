@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.109.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.110.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -468,9 +468,9 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.80.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.81.1**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 28 on the envelope, as 0.79.0
+   what re-opens this paragraph: `telemetry_schema_version` 28 on the envelope, as 0.80.0 and 0.79.0
    served, where 0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
    0.48.1 served 24, 0.44.0 served 21, 0.13.0 served 20 and
    0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15 — 26 reads every

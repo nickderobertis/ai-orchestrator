@@ -105,7 +105,89 @@ AMENDMENT_PRECEDENCE = (
     "operational note below, the clause here wins and the contradicted one no longer "
     "binds."
 )
+#: :data:`AMENDMENT_PRECEDENCE` for an amendment whose attribution line says it is the
+#: user's words, relayed by the manager: the same authority, naming that party.
+USER_AMENDMENT_PRECEDENCE = (
+    "The user amended this node's bar. Every clause below is an acceptance criterion "
+    "of this node and takes precedence over the whole task: where a clause here "
+    "contradicts a criterion above it, anything the task says elsewhere, or an "
+    "operational note below, the clause here wins and the contradicted one no longer "
+    "binds."
+)
 ADDITIONAL_INFO_HEADING = "## Additional info"
+
+#: How the engine attributes a ruling stored in a string — `onepipeline`'s `src/ruling.rs`,
+#: whose `attribution` writes the sentence and whose `split_attribution` reads an
+#: amendment's first line as one only where it is byte for byte a sentence `attribution`
+#: writes. Such a line opens the amendment block and decides its precedence sentence, and
+#: is never one of its clauses; `tests/test_engine_contracts.py` holds these to the source.
+ATTRIBUTION_OPENING = "Ruling from the "
+USER_ATTRIBUTION = (
+    f"{ATTRIBUTION_OPENING}user, relayed by the manager: it binds. Follow it as "
+    "written; a user's ruling cannot be declined."
+)
+MANAGER_ATTRIBUTION = (
+    f"{ATTRIBUTION_OPENING}manager: a strong default you may decline with your reason "
+    "through `onepipeline decline-ruling`."
+)
+#: The manager's attribution naming its ruling reference, `{reference}` its token.
+MANAGER_REFERENCE_ATTRIBUTION = (
+    f"{ATTRIBUTION_OPENING}manager (ruling reference `{{reference}}`): a strong default "
+    "you may decline with your reason. To decline it, run `onepipeline decline-ruling "
+    '"$ONEPIPELINE_RUN_ID" --ruling {reference}` with the reason on standard input; '
+    "the manager is told, and may take it to the user."
+)
+#: The widths the engine reads a ruling reference's numbers at: an envelope or a reply is
+#: a `u64`, a command's index within its envelope a `u32`.
+_U64 = 2**64
+_U32 = 2**32
+#: The most digits either width spells, so a longer run is refused before it is converted.
+_DIGITS = len(str(_U64 - 1))
+_MANAGER_REFERENCE_OPENING = MANAGER_REFERENCE_ATTRIBUTION.split("{reference}", 1)[0]
+
+
+def _number(text: str, bound: int) -> int | None:
+    """``text`` as the engine reads one number of a reference: ASCII digits, below ``bound``."""
+    if not 0 < len(text) <= _DIGITS or any(digit not in "0123456789" for digit in text):
+        return None
+    if int(text) >= bound:
+        return None
+    return int(text)
+
+
+def _minted(token: str) -> bool:
+    """Whether ``token`` is a ruling reference the engine mints and writes back as itself:
+    a command's `c<envelope>.<index>` or an answer's `a<reply>`."""
+    if token.startswith("a"):
+        reply = _number(token[1:], _U64)
+        return reply is not None and token == f"a{reply}"
+    envelope_text, dot, index_text = token.removeprefix("c").partition(".")
+    envelope, index = _number(envelope_text, _U64), _number(index_text, _U32)
+    return (
+        token.startswith("c")
+        and bool(dot)
+        and envelope is not None
+        and index is not None
+        and token == f"c{envelope}.{index}"
+    )
+
+
+def _attribution(line: str) -> str | None:
+    """``line`` where it is exactly an attribution the engine writes, else ``None``."""
+    if line in (USER_ATTRIBUTION, MANAGER_ATTRIBUTION):
+        return line
+    token = line.removeprefix(_MANAGER_REFERENCE_OPENING).split("`", 1)[0]
+    if _minted(token) and line == MANAGER_REFERENCE_ATTRIBUTION.format(reference=token):
+        return line
+    return None
+
+
+def split_attribution(text: str) -> tuple[str | None, str]:
+    """``text``'s attribution line, if it opens with one, and the ruling after it."""
+    first, _, rest = text.lstrip().partition("\n")
+    attribution = _attribution(first)
+    return (attribution, rest) if attribution is not None else (None, text)
+
 
 #: The field a node carries its binding amendment in: the correction an `amend` set, or
 #: one an `add` or `retry` states outright.
@@ -254,7 +336,12 @@ def amended(task: str, amendment: str | None) -> str:
     """
     if amendment is None or not amendment.strip():
         return task
-    block = f"{AMENDMENT_HEADING}\n{AMENDMENT_PRECEDENCE}\n\n{amendment_clauses(amendment.strip())}"
+    attribution, _ = split_attribution(amendment)
+    users = attribution == USER_ATTRIBUTION
+    precedence = USER_AMENDMENT_PRECEDENCE if users else AMENDMENT_PRECEDENCE
+    opening = "" if attribution is None else f"{attribution}\n"
+    clauses = amendment_clauses(amendment.strip())
+    block = f"{AMENDMENT_HEADING}\n{opening}{precedence}\n\n{clauses}"
     end = _criteria_section_end(task)
     if end is not None:
         bar, rest = task[:end], task[end:]
@@ -276,8 +363,10 @@ def amendment_clauses(amendment: str) -> str:
 
     Every word is kept and only the shape changes: a bullet or numbered item is one
     clause, a paragraph is one clause with its lines joined, and a heading becomes a bold
-    label, because a heading inside the criteria section would end it.
+    label, because a heading inside the criteria section would end it. An attribution
+    line opening it says whose ruling it is and is never a clause.
     """
+    _, amendment = split_attribution(amendment)
     lines: list[str] = []
     clause: str | None = None
     for line in amendment.split("\n"):

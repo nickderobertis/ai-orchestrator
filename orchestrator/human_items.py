@@ -62,7 +62,11 @@ CHOICE_TITLE_LENGTH = 80
 CHOICE_FIELDS = frozenset({"id", "title", "description"})
 
 #: Every field the engine's `HumanItemResolution` declares; it declares no other.
-RESOLUTION_FIELDS = frozenset({"actor", "on_behalf_of", "text", "choice", "reason"})
+RESOLUTION_FIELDS = frozenset({"actor", "on_behalf_of", "text", "choice", "reason", "provenance"})
+
+#: Whose words a resolution is (onepipeline's `Provenance`), from onepipeline 0.110.0: the
+#: manager's own or the user's relayed; omitted while it is the manager's.
+PROVENANCES = ("manager", "user")
 
 #: The document version a task stored: opaque to the engine, and for a design review the
 #: approval key `orchestrator/design_approval.py` computes.
@@ -166,6 +170,9 @@ class Item:
             raise OSError(f"the engine answered an item whose reason is {reason!r}")
         if answer is not None and not isinstance(answer, str):
             raise OSError(f"the engine answered an item whose text is {answer!r}")
+        provenance = held.get("provenance")
+        if provenance is not None and provenance not in PROVENANCES:
+            raise OSError(f"the engine answered an item whose provenance is {provenance!r}")
         choices = _choices(fields.get("choices"))
         if choices and kind != "question":
             raise OSError(

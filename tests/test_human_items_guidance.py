@@ -300,6 +300,8 @@ def test_the_item_vocabulary_this_host_parses_is_the_engines_whole_schema() -> N
     resolution = item["$defs"]["HumanItemResolution"]
     assert set(resolution["properties"]) == human_items.RESOLUTION_FIELDS
     assert resolution["additionalProperties"] is False
+    provenance = item["$defs"]["Provenance"]
+    assert tuple(member["const"] for member in provenance["oneOf"]) == human_items.PROVENANCES
     labels = schema["priority_labels"]
     assert [labels[priority] for priority in human_items.PRIORITIES] == [
         "Critical",

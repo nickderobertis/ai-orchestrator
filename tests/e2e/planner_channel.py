@@ -75,7 +75,7 @@ def just(
 
 def ruling(message: str) -> str:
     """One reply envelope carrying a decision, as a manager's answer is spelled."""
-    return json.dumps({"version": 3, "completion": True, "message": message})
+    return json.dumps({"version": 4, "completion": True, "message": message})
 
 
 #: The surface a run raises about *itself*: its settlement write-back could not reach
