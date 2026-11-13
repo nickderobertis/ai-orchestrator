@@ -59,31 +59,25 @@ EOF
 done
 
 [ -n "$run" ] || { echo "follow-up-draft: no run is named: pass --run RUN-ID, or draft from inside a dispatch, whose ONEPIPELINE_RUN_ID names it; usage: $usage" >&2; exit 2; }
-# The run and the node are written into the transcript stamp's command, so each is held to an
-# identifier's grammar: one word of letters, digits, '_' and '-'.
-#: The grammar of a run id, which a node id and a public id share; the same in every script
-#: that holds one to it, as `tests/family_scans/test_follow_up_ownership.py` holds them.
-RUN_ID='^[A-Za-z0-9_-]+$'
-# llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
-[[ "$run" =~ $RUN_ID ]] || { echo "follow-up-draft: the run '$run' is not a run id: one word of letters, digits, '_' and '-'; name it as 'just runs' prints it; usage: $usage" >&2; exit 2; }
+# The run, the node and the member are passed through as the engine and the bus name them:
+# each is shell-quoted into the transcript stamp's command, so any value reads back as itself.
+run_word=$(printf %q "$run")
 
 stamps=()
 case "$author" in
     node)
         node=${ONEPIPELINE_NODE_ID:-}
-        # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
-        [ -z "$node" ] || [[ "$node" =~ $RUN_ID ]] || { echo "follow-up-draft: ONEPIPELINE_NODE_ID '$node' is not a node id: one word of letters, digits, '_' and '-'; draft from the dispatch the engine started, which sets it; usage: $usage" >&2; exit 2; }
         label="node${node:+:$node}"
-        stamps=(--stamp "transcript=onepipeline transcript $run${node:+ $node}")
+        node_word=""
+        [ -z "$node" ] || node_word=" $(printf %q "$node")"
+        stamps=(--stamp "transcript=onepipeline transcript $run_word$node_word")
         ;;
     monitor)
         [ -n "$member" ] || { echo "follow-up-draft: --as monitor names its member with --member; usage: $usage" >&2; exit 2; }
-        # The member is written into the stamp's JSON filter, so it is held to a member name's
-        # grammar rather than quoted: one word of letters, digits, '_', '.' and '-'.
-        # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
-        [[ "$member" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "follow-up-draft: --member '$member' is not a member name: one word of letters, digits, '_', '.' and '-'; usage: $usage" >&2; exit 2; }
         label="monitor:$member"
-        stamps=(--stamp "transcript=onepipeline monitor $run --filter '{\"include\":[{\"member\":\"$member\"}]}'")
+        # The filter is JSON jq builds from the member, so any member name stays valid JSON.
+        filter=$(jq -nc --arg member "$member" '{include: [{member: $member}]}')
+        stamps=(--stamp "transcript=onepipeline monitor $run_word --filter $(printf %q "$filter")")
         ;;
     manager) label=manager ;;
     *) echo "follow-up-draft: --as is node, monitor or manager, not '$author'; usage: $usage" >&2; exit 2 ;;
@@ -93,9 +87,9 @@ for tool in "$engine" "$onefollowup"; do
     [ -x "$tool" ] || { echo "follow-up-draft: $tool is not installed; provision this checkout with 'just bootstrap', then retry" >&2; exit 2; }
 done
 
-# The batch is the run's public id as the engine reads it: one word, as a run id is.
+# The batch is the run's public id as the engine reads it, any non-empty string.
 # llmlint: ignore[changed_behavior_has_e2e] The engine names a public id other than the run id only for a run whose id carries a private repository's term, and a draft into such a run carries that id in its transcript stamp, which the store refuses on the drafts source this host declares no visibility for (the onefollowup gap drafted upstream); no journey can land one until that is fixed, and the journeys hold this read where the two ids agree.
-batch=$("$engine" status "$run" --json | jq -er --arg grammar "$RUN_ID" '.public_id | select(type == "string" and test($grammar))') || {
+batch=$("$engine" status "$run" --json | jq -er '.public_id | select(type == "string" and length > 0)') || {
     echo "follow-up-draft: the engine named no public id for run '$run', so there is no batch to draft into; check the run with 'just status $run', then retry" >&2
     exit 2
 }

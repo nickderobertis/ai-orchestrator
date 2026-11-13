@@ -697,9 +697,6 @@ def test_the_monitor_drafts_as_its_member_with_the_read_of_its_own_turns(
     """A monitor's draft names its member and the stream read that shows the turns it saw."""
     if "-failed-" in verified.run:
         pytest.skip("drafted once, into the success-hook case's batch")
-    refused = _monitor_draft(verified, 'monitor"],"x":["')
-    assert refused.returncode == 2, refused.stdout + refused.stderr
-    assert "is not a member name" in refused.stderr, refused.stderr
 
     drafted = _monitor_draft(verified, "monitor")
 
@@ -709,9 +706,16 @@ def test_the_monitor_drafts_as_its_member_with_the_read_of_its_own_turns(
     record = front["metadata"]["orchestrator.follow-up-draft"]
     assert record["run"] == verified.run
     assert record["author"] == {"kind": "monitor", "node": None, "member": "monitor"}
-    assert record["transcript"] == (
-        f'onepipeline monitor {verified.run} --filter \'{{"include":[{{"member":"monitor"}}]}}\''
-    )
+    # The stamp is a command line whose filter word is the member's JSON filter.
+    transcript = record["transcript"]
+    assert isinstance(transcript, str), record
+    assert shlex.split(transcript) == [
+        "onepipeline",
+        "monitor",
+        verified.run,
+        "--filter",
+        '{"include":[{"member":"monitor"}]}',
+    ], transcript
 
 
 def _drafted_from(

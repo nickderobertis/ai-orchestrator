@@ -276,7 +276,7 @@ def test_a_file_outside_the_list_that_touches_the_loop_is_named(tmp_path: Path) 
 
 
 #: The scripts that hold a run id to a grammar, each declaring it once as `RUN_ID`.
-RUN_ID_HOLDERS = (RUN_ENDED, "scripts/follow-up-draft.sh", "scripts/follow-up-budget-inputs.sh")
+RUN_ID_HOLDERS = (RUN_ENDED, "scripts/follow-up-budget-inputs.sh")
 #: A run-id-shaped grammar literal, wherever it is spelled.
 RUN_ID_LITERAL = re.compile(r"\^\[A-Za-z0-9_-\]\+\$")
 
