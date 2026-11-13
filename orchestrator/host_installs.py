@@ -192,8 +192,7 @@ INSTALLED: tuple[Installed, ...] = (
 #: ``consumes``, so without the override's rule its hold would wait on a target it never
 #: resolves and never release. A producer stands here instead of in ``INSTALLED`` — never
 #: in both — and the node that adopts its release moves it into a row, with the pin and
-#: the dependency, emptying its entry. None waits today: `onefollowup`, the last to stand
-#: here, has its row since its first release was adopted.
+#: the dependency, emptying its entry.
 #: `tests/test_host_installs.py` holds the override to the three sets together.
 # llmlint: ignore-block[modern_domain_modeling] Each entry is an `Installed.producer` value
 # waiting to become one, compared against that `str` field and against the identity text

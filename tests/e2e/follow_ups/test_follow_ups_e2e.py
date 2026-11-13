@@ -770,3 +770,30 @@ def test_a_draft_from_another_directory_reads_this_checkouts_configuration_unles
 
     assert overridden["draft"].startswith("follow-up-runs:"), overridden
     assert Path(overridden["path"]).is_relative_to(verified.store.plans), overridden
+
+
+@pytest.mark.xdist_group("follow-ups")
+def test_a_node_draft_with_no_node_named_reads_the_whole_runs_turns(verified: Verified) -> None:
+    """Drafted as a node where the engine named none, the draft points at the run's transcript."""
+    if "-failed-" in verified.run:
+        pytest.skip("drafted once, into the success-hook case's batch")
+    environment = {
+        name: value for name, value in verified.environment.items() if name != "ONEPIPELINE_NODE_ID"
+    }
+    drafted = subprocess.run(  # noqa: S603 - the drafting command a dispatch is handed
+        [str(REPO_ROOT / "scripts" / "follow-up-draft.sh"), "--run", verified.run]
+        + ["--title", "Drafted by an unnamed node", "--repository", ABOUT],
+        cwd=REPO_ROOT,
+        env=environment,
+        input=DRAFT_BODY,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert drafted.returncode == 0, drafted.stdout + drafted.stderr
+
+    record = _draft_record(verified, "Drafted by an unnamed node")
+    # onefollowup records a node author whose node is not named as an unresolved one.
+    assert record["author"] == {"kind": "node", "node": "unresolved", "member": None}
+    assert record["transcript"] == f"onepipeline transcript {verified.run}"

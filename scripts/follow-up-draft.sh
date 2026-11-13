@@ -92,6 +92,7 @@ for tool in "$engine" "$onefollowup"; do
 done
 
 # The batch is the run's public id as the engine reads it: one word, as a run id is.
+# llmlint: ignore[changed_behavior_has_e2e] The engine names a public id other than the run id only for a run whose id carries a private repository's term, and a draft into such a run carries that id in its transcript stamp, which the store refuses on the drafts source this host declares no visibility for (the onefollowup gap drafted upstream); no journey can land one until that is fixed, and the journeys hold this read where the two ids agree.
 batch=$("$engine" status "$run" --json | jq -er '.public_id | select(type == "string" and test("^[A-Za-z0-9_-]+$"))') || {
     echo "follow-up-draft: the engine named no public id for run '$run', so there is no batch to draft into; check the run with 'just status $run', then retry" >&2
     exit 2

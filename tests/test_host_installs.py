@@ -336,8 +336,7 @@ def _override_default_targets() -> dict[RepoIdentity, str]:
 
 
 #: The producers whose override rule precedes their first adoption, stated here in full
-#: for the reason `EXPECTED_ROWS` is: none, since `onefollowup`, the last to wait, has its
-#: row, pin and dependency.
+#: for the reason `EXPECTED_ROWS` is.
 ONEFOLLOWUP: RepoIdentity = "github.com/nickderobertis/onefollowup"
 EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset()
 #: The producers whose override default is the artifact a consumer outside this repository
