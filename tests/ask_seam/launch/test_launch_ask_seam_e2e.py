@@ -1392,8 +1392,11 @@ def test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under(
     assert given.strip(), f"{RUN_ID.name} reached the dispatch blank, and it is {RUN_ID.why}"
 
     root = Path(dispatch.environment["ONEPIPELINE_RUNS_DIR"])
+    # The follow-up run the success hook launches once the run ends is not this launch's.
     created = sorted(
-        child.name for child in root.iterdir() if child.is_dir() and child.name != ITEM_STORE
+        child.name
+        for child in root.iterdir()
+        if child.is_dir() and child.name != ITEM_STORE and not child.name.endswith("-follow-ups")
     )
     assert created == [given], (
         f"a dispatch was told it is under run '{given}', but this launch's runs root "
