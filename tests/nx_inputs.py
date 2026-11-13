@@ -902,6 +902,9 @@ class JourneyProject(NamedTuple):
 #: target keyed on the whole workspace, which only `workspace-copies` declares.
 E2E_JOURNEYS: tuple[JourneyProject, ...] = (
     JourneyProject("release-holdup", f"{E2E_ROOT}/release_holdup", "releaseHoldupWorkspace"),
+    # The two journeys that prove this host's follow-up wiring over onefollowup, and the
+    # budget-inputs hook's, keyed on the recipes, templates, configs and hooks they drive.
+    JourneyProject("follow-ups", f"{E2E_ROOT}/follow_ups", "followUpsWorkspace"),
     JourneyProject(
         "pooled-server-session", f"{E2E_ROOT}/pooled_server_session", "pooledServerSessionWorkspace"
     ),

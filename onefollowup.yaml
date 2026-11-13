@@ -1,0 +1,5 @@
+destination: followups
+drafts_source: drafts
+hooks:
+  batch_preparing: [scripts/follow-up-budget-inputs.sh]
+  batch_settled: [onepipeline, human-items, raise, --phase, follow-up-review]

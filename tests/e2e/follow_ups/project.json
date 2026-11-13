@@ -1,0 +1,46 @@
+{
+  "name": "follow-ups",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/follow_ups",
+  "tags": [
+    "scope:follow-ups",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest"
+  ],
+  "namedInputs": {
+    "followUpsWorkspace": [
+      "{workspaceRoot}/onefollowup.yaml",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/budgets.yaml",
+      "{workspaceRoot}/config/onebudgetspec.version",
+      "{workspaceRoot}/config/onefollowup.version",
+      "{workspaceRoot}/config/onepipeline.version",
+      "{workspaceRoot}/config/onevcs.version",
+      "{workspaceRoot}/scripts/budget-cycle-time.sh",
+      "{workspaceRoot}/scripts/follow-up-budget-inputs.sh",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{projectRoot}/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/follow_ups -n 4 --dist loadgroup --no-cov",
+      "parallelism": false,
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "followUpsWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}
