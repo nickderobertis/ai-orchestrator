@@ -201,7 +201,8 @@ resolves no `default_target`, naming no `consumes`, as `onevcs`'s `published-no-
 this repository's own check is handed the plan, and a `consumes` naming a target the producer
 does not resolve as its `consumes-undeclared-target`.
 The adoption after that moves the engine to 0.111.0, the read API to 0.82.0, the release
-linking it, and onevcs to 0.67.0, the release both link: a repository declares its own
+linking it, whose first screen of a large run answers from a selective read of the journal in
+under a second, and onevcs to 0.67.0, the release both link: a repository declares its own
 default publication policy in the `[policy]` table of its `onevcs.toml`, a host-overlay rule
 overrides it field by field, and `onevcs rules check` names the declaration as a field's
 source and says on its `declaration:` line whether one was read.

@@ -64,8 +64,8 @@ fix86-llmlint  WALL 50m22s
 ```
 
 `WALL` is the run's elapsed time, not summed work. The **eight buckets are a closed
-set and sum exactly to it** — re-taken on the adopted engine over this host's own
-runs root on 2026-08-27, where all **207** recorded runs balance to the millisecond,
+set and sum exactly to it** — re-taken on `onepipeline` 0.111.0 over this host's own
+runs root, where all **971** recorded runs balance to the millisecond,
 which is worth saying because it is an invariant the crate documented before it upheld it:
 onepipeline 0.12.1 is the release that made emitted bucket totals match wall time in
 both directions, and beneath it this sentence was a claim about the contract rather
@@ -470,7 +470,7 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    view. Measured against real runs on
    **`onepipeline-api` 0.82.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 29 on the envelope, where 0.81.1, 0.81.0, 0.80.0 and 0.79.0
+   what re-opens this paragraph: `telemetry_schema_version` 29 on the envelope, as 0.81.2 served, where 0.81.1, 0.81.0, 0.80.0 and 0.79.0
    served 28, 0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
    0.48.1 served 24, 0.44.0 served 21, 0.13.0 served 20 and
    0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15 — 26 reads every
@@ -495,7 +495,8 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
    runs read here. On 0.80.0, ten of this host's own recent runs served telemetry 28
    and timeline 15, and 0.81.0 and 0.81.1 declare the same two in their own `src/contract.rs`;
-   0.81.2 and 0.82.0 declare telemetry 29 and timeline 15 there.
+   0.81.2 and 0.82.0 declare telemetry 29 and timeline 15 there, and on 0.82.0 ten of this
+   host's own recent runs served telemetry 29 and timeline 15.
    On 0.12.1 this was re-read against the recorded runs under
    `tests/fixtures/timeline-runs/`, which serve both schema numbers, every phase above,
    and every span kind but `human-wait`, which none of those runs records.
