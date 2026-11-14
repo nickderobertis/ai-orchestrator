@@ -128,9 +128,9 @@ just repos-bootstrap
 
 It runs each registered checkout's **own** `just bootstrap` — every target repository
 defines one, and each is idempotent by that repository's design — reading the checkouts
-from the same list `just repos-apply` registers — this host's own complete
-`${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts` when it exists, the
-tracked `config/onevcs.checkouts` otherwise — through the same reader, and skipping a path this host does not have the same way. Two
+from the same list `just repos-apply` registers — this host's own
+`${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, refused by name
+when missing — through the same reader, and skipping a path this host does not have the same way. Two
 kinds of checkout are skipped on purpose: a checkout of this repository, because the
 session setup calling it is one of this repository's own and running
 `workspace-install.sh --force` in a checkout another manager is working in would
@@ -430,36 +430,45 @@ session once the binary is on `PATH`, and the log line above stops appearing.
 
 The registry lives under `~/.onevcs` (override the whole state root with
 `ONEVCS_HOME`) and is **per-machine and untracked**, so a new host starts with none
-of it and no lifecycle dispatch can resolve a repository. What it should hold *is*
-tracked, in four files, and one recipe applies them:
+of it and no lifecycle dispatch can resolve a repository. What it should hold comes
+from three places — the host's own checkout list and rules overlay, each repository's
+own declaration, and the tracked rules, release and workspaces files here — and one
+recipe applies them:
 
 ```sh
 just repos-apply
 ```
 
-- **`config/onevcs.checkouts`** — every public checkout to register, one path per line.
-  `onevcs register` resolves each path's own `origin` to a repository identity, so
-  several checkouts of one origin (this repository's publication checkout and its
-  two safety clones) share one identity and therefore one policy. **A host that also
-  works in private repositories keeps its own complete list** at
+- **The host's checkout list**,
   `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, outside every
-  checkout: when it exists the recipe — and `just repos-bootstrap`, session setup's call
-  included — reads it in place of the tracked one, whole, so it repeats the public
-  entries it wants (`scripts/registered-checkouts.sh` makes the one choice for both).
-- **`config/onevcs.rules.yml`** — the base rules file, installed to
-  `$ONEVCS_HOME/rules.yml` by `onevcs rules apply --base config/onevcs.rules.yml`, with
-  this host's overlay `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml`
-  laid over it as `--overlay` when that file exists. The verb composes, validates and
-  installs atomically at the registry's own rules reference; a private repository's rule
-  lives only in the overlay, declaring the identity's `visibility: private` so the host
-  is never asked. First match wins; each rule names a repository and sets
-  how it publishes (`publication`), whether somebody else has to approve
-  (`approvals`), and what verifies it (`gate`). Its `trailer_prefix` is separate
-  from the rules and applies to all of them: `Orchestrator-` is the prefix every
-  provenance trailer on this host is spelled under, and a preserved branch whose
-  marker uses a prefix the rules file does not name is reported unrecognized and
-  refused publication — so dropping that key strands every branch preserved before
-  the adoption. `just recoverable` is where you would see it.
+  checkout — every checkout this host works in, one `~/path` or absolute path per line,
+  `#` comments allowed. Nothing tracked stands in for it: when it is missing, `just
+  repos-apply` and `just repos-bootstrap` (session setup's call included) refuse naming
+  that path, and `--checkouts FILE` reads another file alone
+  (`scripts/registered-checkouts.sh` is the one reader for both). `onevcs register`
+  resolves each path's own `origin` to a repository identity, so several checkouts of
+  one origin (this repository's publication checkout and its safety clones) share one
+  identity and therefore one policy.
+- **Each repository's own `onevcs.toml`** — the `[policy]` at its root declares its
+  default `publication` and `approvals`, and optionally `base_merge`, `[policy.drafts]`
+  and `[policy.checks] wait_seconds`, each spelled as a rule spells it, at
+  `schema_version = 2`. `onevcs` reads it from the checkout, so a registration needs no
+  edit here; this repository's declares `local-direct` / `none`.
+- **`config/onevcs.rules.yml`** — the base rules file, holding no rule: only its
+  `trailer_prefix` and the reviewed `default:` (`change-open` / `required`). It is
+  installed to `$ONEVCS_HOME/rules.yml` by `onevcs rules apply --base
+  config/onevcs.rules.yml`, with the host's overlay
+  `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml` laid over it as
+  `--overlay` when that file exists. The verb composes, validates and installs
+  atomically at the registry's own rules reference. A host rule overrides a declaration
+  field by field — first match wins, and a rule may set one field alone — so the overlay
+  holds rules only to override a declaration or for a repository that declares
+  nothing, every private one among them, declaring its `visibility: private` so the
+  host is never asked. The `trailer_prefix` applies to every repository:
+  `Orchestrator-` is the prefix every provenance trailer on this host is spelled under,
+  and a preserved branch whose marker uses a prefix the rules file does not name is
+  reported unrecognized and refused publication — so dropping that key strands every
+  branch preserved before the adoption. `just recoverable` is where you would see it.
 - **`config/onevcs.releases.yml`** — the release override, installed to
   `$ONEVCS_HOME/releases.yml`. It decides how a node waits on another repository's
   release: this repository's nodes resolve the `published` rung, so one that depends
@@ -516,19 +525,23 @@ just repos-apply
 
 The recipe is re-runnable and idempotent — registration is keyed by alias and the
 rules file, the override and the workspaces file are each replaced whole, so a second
-run leaves the registry a first one did. Run it again after editing any of the four
-files or the host's workspaces overlay, and after cloning a repository onto the host. A path this host does not have is
-reported as skipped rather than failing, so a machine holding a subset of these
-checkouts still registers what it has. `--dry-run` reports what would change and
+run leaves the registry a first one did. Run it again after editing the host's list or
+either overlay, after a repository's declaration changes, and after cloning a repository
+onto the host. A listed path this host does not have is reported as skipped rather than
+failing. `--dry-run` reports what would change and
 changes nothing; `--rules FILE`, `--releases FILE` and `--workspaces FILE` install a
 different candidate in place of the tracked one, which is how a journey seeds a
 scratch registry — a journey about run roots installs one pooling nothing.
 
 It finishes by resolving every checkout it registered and printing the policy each
-one landed on, and it **fails** if any of them matched no rule. That is not
-pedantry: an unmatched repository falls through to the file's `default`, which is
-the reviewed path — safe, but nobody's configured policy, and a silent pass there
-is how a mistyped `owner` goes unnoticed. Below that table it prints one line per
+one landed on, with the source that decided its `publication` and its `approvals` — `rule
+N`, `declaration` or `default` — and it **fails** naming every checkout and field that fell
+to the default, and any checkout whose `onevcs.toml` cannot be read. Coverage is read off
+each field's own source, never off whether a declaration exists, because a `[policy]`
+left empty or holding only `[policy.checks]` is declared and still decides nothing. That
+is not pedantry: the default is the reviewed path — safe, but nobody's configured
+policy, and a silent pass there is how a mistyped `owner` or a forgotten declaration
+goes unnoticed. Below that table it prints one line per
 producer this host installs — `orchestrator/host_installs.py` is the list — naming
 the `default target` and `adoption` that producer resolves, read back through
 `onevcs release targets` rather than composed from the file, so what an operator
@@ -537,6 +550,79 @@ reads is what a consumer will get. A producer this registry does not hold reads
 right now — on another manager's branch, or with no fetched base — reads
 `unresolved:` with `onevcs`'s own reason, because that is the checkout's momentary
 state rather than a fault in the file: `onevcs sync` puts it back.
+
+### Register an existing repository
+
+A host step, done directly by the manager before the brief — never a plan node or a
+separate plan:
+
+1. Clone it, and a safety clone where its lifecycle executes in one.
+2. Add each checkout's path to the host's checkout list.
+3. Run `just repos-apply`, and read its row: both fields should read `(declaration)`.
+4. Only when the repository declares nothing, or declares a policy this host must not
+   use, add a host rule (below).
+
+### Create a repository a plan needs
+
+`gh repo create <owner>/<name>` first, then register it as above. A new repository
+declares nothing until its first change lands an `onevcs.toml`, so either commit one
+before registering or give it a host rule until it does.
+
+### Override a declaration
+
+Add a rule to `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml`
+naming the repository and setting only the fields to override, then re-run `just
+repos-apply`; every other field stays the declaration's:
+
+```yaml
+version: 4
+rules:
+  - match: {host: github.com, owner: someone, name: something}
+    publication: change-open
+```
+
+### A repository that declares nothing
+
+Every private repository, and any public one with no `onevcs.toml` `[policy]`, gets its
+whole policy from a host rule naming both `publication` and `approvals` (and its
+`visibility`); without one `just repos-apply` fails naming it. No tracked file names a
+private repository.
+
+### Bootstrap a new host, this repository included
+
+The host's checkout list is the host's own, in its own layout, and no host's list is
+tracked: write it before the first `just repos-apply`. It names this repository's
+canonical checkout and its safety clone from [step 3](#3-clone-both-checkouts-then-bootstrap)
+beside every other checkout the host works in:
+
+```text
+# ${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts
+~/projects/ai-orchestrator
+~/projects/ai-orchestrator-isolated
+```
+
+Then copy or write the host's rules overlay for any repository that declares nothing,
+run `just repos-apply`, and `just repos-bootstrap`.
+
+### Move a host off the tracked registration
+
+A host that registered through the old tracked `config/onevcs.checkouts` and tracked
+rules moves without any repository's policy changing:
+
+1. Record what every identity resolves now, before anything moves — for each alias
+   `just repos` lists, `just repo-policy <alias> > <scratch>/before-<alias>`.
+2. Sync and bootstrap this checkout (`just sync`, `just bootstrap`).
+3. Make sure the host's checkout list names every checkout this host works in, at its
+   own paths — the old tracked list's entries included, where this host has them.
+4. Fast-forward each publication checkout with `onevcs sync` inside it, so each carries
+   its repository's own `onevcs.toml`.
+5. Run `just repos-apply`.
+6. Compare each identity's `just repo-policy` with its recording. Its resolved
+   `publication`, `approvals`, drafts (`drafts`, `green draft`, `early-lift warning`),
+   `base merge` and `checks wait` must be identical before and after; restore any
+   difference — a checks wait a deleted tracked rule carried, a repository whose
+   declaration has not landed — with a host-overlay rule and re-run `just repos-apply`.
+   The migration is done only when every identity compares identical.
 
 ### `just repos` lists; `just repo-policy` reports the routing
 
@@ -548,7 +634,7 @@ stored fields, `workflow` and `repo_type`, derived from whether the origin had a
 and unsettable by any surface; onevcs 0.21.0 removed them, because two verbs *did*
 read them — `integrate` and `recover` refused every hosted identity on their strength,
 this repository's own `local-direct` one included — and what a change actually does
-has to come from the rules file alone. So `just repos` answers *which repositories and
+has to come from the policy resolution alone. So `just repos` answers *which repositories and
 checkouts exist*, and this answers what one of them will do:
 
 ```sh
@@ -558,13 +644,14 @@ just repo-policy ai-orchestrator     # an alias, identity, origin, or path
 ```
 repo: ai-orchestrator
 identity: github.com/nickderobertis/ai-orchestrator
-matched: rule 1 {host: github.com, owner: nickderobertis, name: ai-orchestrator}
-publication: local-direct (from rule 1)
-approvals: none (from rule 1)
-gate: command: just gate (from rule 1)
+matched: no rule; the default applies
+declaration: declared in ~/projects/ai-orchestrator/onevcs.toml
+publication: local-direct (from the repository declaration ~/projects/ai-orchestrator/onevcs.toml)
+approvals: none (from the repository declaration ~/projects/ai-orchestrator/onevcs.toml)
 ```
 
-Change the routing by editing the rule and re-running `just repos-apply`. Nothing
+Change the routing in the repository's `onevcs.toml`, or override it with a host rule,
+and re-run `just repos-apply`. Nothing
 here runs a gate before the merge path does, so every check a repository requires is
 one only its merge path runs and every one of them can refuse a merge: `just repos
 --audit-gate-coverage` names them per identity, read off that repository's own branch
@@ -593,7 +680,7 @@ git clone https://github.com/local/ai-orchestrator.git ... failed (exit 128): re
 
 The dangerous case is the one where such an owner and name *do* exist: the alias
 would then register a genuinely unrelated repository under the name you wanted.
-Always pass the path, which is what `config/onevcs.checkouts` holds.
+Always pass the path, which is what the host's checkout list holds.
 
 ### What the migration off `repos.json` could not carry
 
@@ -698,7 +785,13 @@ just gate
 - [ ] canonical checkout **and** isolated safety clone; `just bootstrap` in the canonical one
 - [ ] all seven harness identities logged in
 - [ ] allowlister installed and its codex hook wired
-- [ ] registry rebuilt with checkout **paths**; `just repos --audit-gate-coverage` reviewed
+- [ ] host checkout list written, naming this repository's checkouts and every other
+      checkout this host works in; host rules overlay for every repository that declares
+      nothing
+- [ ] registry rebuilt with `just repos-apply`, every row decided by a rule or a
+      declaration; `just repos --audit-gate-coverage` reviewed
+- [ ] a host moving off the tracked registration: every identity's `just repo-policy`
+      compared identical before and after
 - [ ] `just repos-bootstrap` reports every present sibling `ran` or `unchanged`, none
       `failed` or `refused`
 - [ ] `record-existing-tickets` run once, listing the follow-up tickets this host holds

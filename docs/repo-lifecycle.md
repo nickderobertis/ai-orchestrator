@@ -13,8 +13,8 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.110.2**
-(`config/onepipeline.version`) and **`onevcs` 0.66.0**, read from the SBOM the installed engine's npm platform package ships. That is the copy a dispatched lifecycle node publishes through
+that source on every `just check` rather than restated: **`onepipeline` v0.111.0**
+(`config/onepipeline.version`) and **`onevcs` 0.67.0**, read from the SBOM the installed engine's npm platform package ships. That is the copy a dispatched lifecycle node publishes through
 and the copy `just publish-branch`, `just repo-recover` and `just integrate` land
 through, since all three run the engine's own landing verbs, each supervised as its
 manager's work. The other manager verbs — `just recoverable`, `just work-status` — run
@@ -200,6 +200,11 @@ can ever complete, so `just check-plan` refuses a `published` node behind a prod
 resolves no `default_target`, naming no `consumes`, as `onevcs`'s `published-no-target` before
 this repository's own check is handed the plan, and a `consumes` naming a target the producer
 does not resolve as its `consumes-undeclared-target`.
+The adoption after that moves the engine to 0.111.0, the read API to 0.82.0, the release
+linking it, and onevcs to 0.67.0, the release both link: a repository declares its own
+default publication policy in the `[policy]` table of its `onevcs.toml`, a host-overlay rule
+overrides it field by field, and `onevcs rules check` names the declaration as a field's
+source and says on its `declaration:` line whether one was read.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole
@@ -571,7 +576,8 @@ each carrying its `origin` and the `gate` `register` guessed, and nothing else �
 alias-to-path records separately under `checkouts`. Thus GitHub/SSH URL spellings,
 canonical clones, safety clones, linked worktrees, and auxiliary clones resolve to one
 identity even when several aliases share the origin, and one *policy*, because the
-policy is the rules file's and lives on no record. Versions 2 through 5 migrate lazily
+policy resolves from the repository's own `onevcs.toml` declaration and the rules, and
+lives on no record. Versions 2 through 5 migrate lazily
 in one atomic replacement, on the first contact of any verb, and the replacement is
 one an older release cannot read: version 5 carried `workflow` and `repo_type`, which
 `register` inferred from whether the origin had a host — `remote` / `team` for every
@@ -588,13 +594,13 @@ and holds only until the next 0.21.0 contact.
 
 Type is not a command option on any of these verbs, and there is no verb left that
 takes one: `just register-repo` forwards only `--origin`, and every other `onevcs` verb
-resolves the policy from the rules file the identity matches. A plan node may still
+resolves the policy from the repository's own declaration and the rule the identity
+matches. A plan node may still
 spell `repo_type` and `workflow` — schema-3 fields the engine keeps so a plan that wrote
 one still loads and still round-trips through a task's metadata — and **nothing reads
 either**: a node carrying one publishes exactly as one carrying none. Change the
-resolved policy by editing the rule that matches the repository in the rules file;
-`onevcs rules check` reports which rule a repository matches and the policy that
-follows.
+resolved policy in the repository's `onevcs.toml`, or override a field with a host-overlay
+rule; `onevcs rules check` names the source of every field it resolves.
 
 Each run cuts a **private clone** from the execution checkout and hands out a **git
 worktree per branch** from that clone, under
@@ -830,8 +836,8 @@ that it is unproven.
 **This stored gate is not the retired rules gate, and confusing the two is easy.**
 It is the registry's own *detection* of what a checkout verifies with — a
 description of that repository, available to agents and to recovery metadata, and
-never a command `onevcs` runs before publishing. Nothing resolves it from
-`config/onevcs.rules.yml`, so there is no rule to correct it in; re-register the
+never a command `onevcs` runs before publishing. Nothing resolves it from a rule or a
+declaration, so there is no rule to correct it in; re-register the
 checkout to change it. It is still read where it matters: `onevcs recover`'s
 `attests_nothing` refuses a recovery when the stored gate is `<no-op>` **and** the
 merge path covers nothing, because an attestation with nothing behind it attests
@@ -945,7 +951,7 @@ the merge left in progress**, and reports it as the session's `conflict` (`paths
 the refusal at open that used to be the only answer, and nothing on this host asks for
 it. A publication over a merge nobody concluded is refused as a
 sync conflict before anything is committed or pushed, and a session's teardown aborts
-the merge and keeps every commit. onepipeline 0.110.2 dispatches the worker into that
+the merge and keeps every commit. onepipeline 0.111.0 dispatches the worker into that
 session — a node's first step, a pinned continuation, or the re-dispatch after a
 `sync-conflict` — with the conflict under `## Planner context` and one engine-written
 criterion under `### Merge resolution` at the end of `## Acceptance criteria`, so the
@@ -1008,7 +1014,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.110.2 and is refused **by its own name**, at every schema version and on a live
+v0.111.0 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -1020,18 +1026,11 @@ A `checks-unsettled` whose wait onevcs left armed is re-read toward landing unde
 engine's merge-path read budget: the host has its merge armed, so it is not a
 stranded draft.
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The checks-wait record and the rules' waits are retired by aio-repo-declared-routing; the gate reconciling them was removed first, in aio-drop-registration-tests, so the two stand unreconciled only until that node removes both and this marker. -->
-That bound is the identity's `checks: {wait_seconds}` in `config/onevcs.rules.yml`,
-onevcs's 3600 s when its rule names none. A remote identity whose required checks
-routinely outlast that default would end every publication `checks-unsettled`, so each
-one whose slowest run — creation to last required check, queue time included — across
-its ten most recent pull-request CI runs exceeds 3600 s once a 25% margin is added
-carries a wait sized from that figure, with the recorded maximum and margin beside it;
-every other identity stays on the default. The runs, the cutoff they were read at and
-each run's timing are `config/onevcs.checks-wait.yml`. A repository whose CI gets
-slower — or a newly ruled one — is re-sized by re-reading its runs into that record and
-its rule's wait together.
-<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+That bound is the resolved `checks wait`: a host rule's `checks: {wait_seconds}`, else
+the repository's own `[policy.checks] wait_seconds` in its `onevcs.toml`, else onevcs's
+3600 s. A repository whose required checks routinely outlast that default declares a
+wait of its own, so it would not end every publication `checks-unsettled`; `onevcs
+rules check <repo>` prints the resolved wait and its source.
 
 `just integrate` runs no gate per candidate either — it has none to run. Each
 candidate fast-forwards the *local* base before the single optional push, and what
@@ -1395,7 +1394,7 @@ split at those seams rather than at convenient ones:
   few its own gates open by path.
 - **The journey projects under `tests/e2e/`** — `publish-and-landing`,
   `launch-monitor-observer`, `budget-gate`, `registry-and-recipes`, `workspace-copies`,
-  `suite-helpers`, `repos-apply-credentials`, `host-local-registration` and `checks-wait`, beside the narrower ones that predate them — each own one
+  `suite-helpers`, `repos-apply-credentials` and `host-local-registration`, beside the narrower ones that predate them — each own one
   directory of journeys, and `e2e-root` the few modules left directly under
   `tests/e2e/`, and each `test` target is keyed on what that family reads,
   child processes included, plus the units its modules import. So an edit to one
@@ -1612,7 +1611,8 @@ lands it after a reconcile.
   review — and settles `change-open` or `change-review-draft`; red, under any policy,
   leaves the draft and settles `checks-failed`. A required check concluded `skipped`
   is never read as passed: a publication it let through records `checks-settled`
-  with the verdict `passed-with-skipped`, naming it. `drafts: {disabled: true}` in the rules file opens
+  with the verdict `passed-with-skipped`, naming it. `drafts: {disabled: true}` in a rule, or `[policy.drafts]` `disabled = true`
+in a repository's declaration, opens
   the change request ready instead, as before the lifecycle. After the grace window,
   an absent or skipped required check permits an early lift only when nothing on the
   head commit is still running. Workflows that run on drafts need no
@@ -2070,7 +2070,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.110.2.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.111.0.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -2146,8 +2146,8 @@ goes when the session does.
 
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
-`onevcs` 0.66.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.110.2 settles the node that
+`onevcs` 0.67.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
+… which cannot land while it is one"*, and `onepipeline` v0.111.0 settles the node that
 made one `complete-but-draft` where a release is awaited — so "no notion of one" is no
 longer why. A draft is a **publication** outcome, reached once the last step has settled and
 the publication starts, because a release the node adopted early has not happened yet,
@@ -2902,7 +2902,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.110.2 — so every number in it was a
+journey it named are absent from `onepipeline` v0.111.0 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

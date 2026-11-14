@@ -298,6 +298,41 @@ def _starts(flow: Flow) -> list[dict[str, object]]:
     return [json.loads(line) for line in flow.log.read_text(encoding="utf-8").splitlines()]
 
 
+def _committed_as_its_base(checkout: Path) -> None:
+    """Commit ``checkout``'s tree once on its base, `main`, unless it already has a commit."""
+    born = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        cwd=checkout,
+        capture_output=True,
+        check=False,
+    )
+    if born.returncode == 0:
+        return
+    subprocess.run(
+        ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=checkout, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=journey",
+            "-c",
+            "user.email=journey@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "the copied tree",
+        ],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+    )
+
+
 def _runs_started(flow: Flow) -> list[str]:
     return [str(start["run"]) for start in _starts(flow)]
 
@@ -729,6 +764,10 @@ def test_resume_spikes_finds_kept_branches_in_another_registered_repository(
         repository="github.com/nickderobertis/onevcs",
     )
     onevcs = str(flow.checkout / ".venv" / "bin" / "onevcs")
+    # onevcs reads a registered checkout's own `onevcs.toml` declaration on its base, and
+    # the copy carries this tree's declaration but no history, so it is given the one
+    # commit any real registered checkout has: this tree, declaration included.
+    _committed_as_its_base(flow.checkout)
     registered = subprocess.run(
         [onevcs, "register", str(flow.checkout)],
         cwd=flow.checkout,

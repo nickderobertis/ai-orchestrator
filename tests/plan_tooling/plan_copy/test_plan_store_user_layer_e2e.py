@@ -190,7 +190,8 @@ def test_the_sandbox_holds_back_the_hosts_checkout_list_and_rules_overlay(
     """ai-orchestrator's two host layers stay out; its other entries are the user's own.
 
     Read through `scripts/registered-checkouts.sh`, the selection `just repos-apply` and `just
-    repos-bootstrap` make: with the host's own list held back it answers the tracked one, and
+    repos-bootstrap` make: with the host's own list held back it answers the sandbox's own
+    path, where no list exists — so both recipes refuse rather than read this host's — and
     the user's home is left as it was found.
     """
     config_home = tmp_path / "config"
@@ -211,7 +212,7 @@ def test_the_sandbox_holds_back_the_hosts_checkout_list_and_rules_overlay(
     assert sorted(entry.name for entry in held.iterdir()) == ["workspaces.yml"]
     assert (held / "workspaces.yml").resolve() == (orchestrator / "workspaces.yml").resolve()
     selected = subprocess.run(
-        ["bash", "-c", 'source scripts/registered-checkouts.sh && default_checkouts_file "$PWD"'],
+        ["bash", "-c", "source scripts/registered-checkouts.sh && default_checkouts_file"],
         cwd=REPO_ROOT,
         env=dict(os.environ),
         text=True,
@@ -219,7 +220,9 @@ def test_the_sandbox_holds_back_the_hosts_checkout_list_and_rules_overlay(
         timeout=e2e_timeout(60),
         check=True,
     )
-    assert selected.stdout.strip() == str(REPO_ROOT / "config" / "onevcs.checkouts")
+    selected_list = held / "onevcs.checkouts"
+    assert selected.stdout.strip() == str(selected_list)
+    assert not selected_list.exists()
     assert {path: path.read_bytes() for path in config_home.rglob("*") if path.is_file()} == (
         before
     )

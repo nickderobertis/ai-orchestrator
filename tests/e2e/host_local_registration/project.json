@@ -23,13 +23,13 @@
   ],
   "namedInputs": {
     "hostLocalRegistrationWorkspace": [
-      "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/config/onevcs.releases.yml",
       "{workspaceRoot}/config/onevcs.rules.yml",
       "{workspaceRoot}/config/onevcs.version",
       "{workspaceRoot}/config/onevcs.workspaces.yml",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/onevcs.toml",
       "{workspaceRoot}/orchestrator/host_installs.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/orchestrator/workspaces_overlay.py",

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Bring this host's `onevcs` registry up to the tracked repository configuration.
+# Bring this host's `onevcs` registry up to its repository configuration.
 #
-# Four tracked files describe it: `config/onevcs.checkouts` lists every checkout to
-# register — unless this host keeps its own complete list at
-# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, which then replaces
-# it whole (`scripts/registered-checkouts.sh` makes that choice for this script and for
-# `scripts/repos-bootstrap.sh` alike) — `config/onevcs.rules.yml` is the base rules file
-# that decides how each resulting identity publishes and what verifies it, installed by
-# `onevcs rules apply` with this host's overlay at
-# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml` laid over it when
-# that file exists, so a private identity's rule never sits in a tracked file,
+# The checkout list is the host's own,
+# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, naming every
+# checkout this host works in (`scripts/registered-checkouts.sh` names that file for this
+# script and for `scripts/repos-bootstrap.sh` alike, and both refuse when it is missing).
+# How each resulting identity publishes is first the repository's own declaration — the
+# `[policy]` of the `onevcs.toml` at its root, which `onevcs` reads — and a host rule only
+# overrides it field by field: `config/onevcs.rules.yml` is the base rules file, holding
+# the reviewed `default:` and no rule, installed by `onevcs rules apply` with this host's
+# overlay at `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml` laid over
+# it when that file exists, so a rule for a private identity never sits in a tracked file.
 # `config/onevcs.releases.yml`
 # is the release override that decides which rung a node of each repository adopts a
 # dependency's release on and which of a producer's targets a consumer naming none
@@ -18,18 +19,18 @@
 # shared default, which this script composes with the host's own overlay at
 # `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/workspaces.yml` when that file
 # exists, because the pool a host can afford is the host's to say and never a tracked
-# file's. This script installs the last three and registers the first, then proves
-# that every registered checkout resolves to a rule rather than falling through to
-# the reviewed default, and reports what each producer this host installs resolves
-# out of the override.
+# file's. This script installs those three and registers the listed checkouts, then
+# proves that every registered checkout's `publication` and `approvals` are each decided
+# by a rule or by its repository declaration rather than falling through to the reviewed
+# default, and reports what each producer this host installs resolves out of the override.
 #
 # It is the reproducible form of the migration off the pre-adoption
 # `~/.ai-orchestrator/repos.json` registry, and it is re-runnable: registration is
 # keyed by alias and each installed file is a whole-file replacement, so a second run
 # leaves the same registrations and policy a first one did — only the visibility
 # observation `onevcs` stamps on each identity it re-registers moves. Run it after
-# editing any tracked file or this host's overlay,
-# and on a new host after cloning the checkouts.
+# editing any of those files, the host's list or a repository's declaration, and on a
+# new host after cloning the checkouts.
 #
 # Registration goes through `onevcs register`, never through the registry document
 # itself: what that command writes is what `onevcs` considers valid, and a document
@@ -64,7 +65,8 @@ valid_alias() {
     [[ $1 =~ ^[A-Za-z0-9._-]+$ ]]
 }
 
-checkouts_file=$(default_checkouts_file "$repo_root")
+checkouts_file=$(default_checkouts_file)
+checkouts_named=false
 rules_file="$repo_root/config/onevcs.rules.yml"
 releases_file="$repo_root/config/onevcs.releases.yml"
 workspaces_file="$repo_root/config/onevcs.workspaces.yml"
@@ -76,8 +78,8 @@ usage: apply-repo-registry.sh [--dry-run] [--checkouts FILE] [--rules FILE] [--r
 
   --dry-run         Report what would change and change nothing.
   --checkouts FILE  Read the checkout list from FILE (default: this host's
-                    ${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts when
-                    it exists, else config/onevcs.checkouts).
+                    ${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts,
+                    which must exist; see docs/host-setup.md).
   --rules FILE      Use FILE as the base rules file (default config/onevcs.rules.yml).
   --releases FILE   Install FILE as the release override (default config/onevcs.releases.yml).
   --workspaces FILE Install FILE as the workspaces file (default config/onevcs.workspaces.yml).
@@ -95,7 +97,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run) dry_run=true; shift ;;
-        --checkouts) [[ $# -ge 2 ]] || { usage; exit 2; }; checkouts_file=$2; shift 2 ;;
+        --checkouts) [[ $# -ge 2 ]] || { usage; exit 2; }; checkouts_file=$2; checkouts_named=true; shift 2 ;;
         --rules) [[ $# -ge 2 ]] || { usage; exit 2; }; rules_file=$2; shift 2 ;;
         --releases) [[ $# -ge 2 ]] || { usage; exit 2; }; releases_file=$2; shift 2 ;;
         --workspaces) [[ $# -ge 2 ]] || { usage; exit 2; }; workspaces_file=$2; shift 2 ;;
@@ -104,6 +106,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ $checkouts_named == false && ! -f $checkouts_file ]]; then
+    missing_checkouts_list apply-repo-registry "$checkouts_file"
+    exit 2
+fi
 for file in "$checkouts_file" "$rules_file" "$releases_file" "$workspaces_file"; do
     if [[ ! -f $file ]]; then
         echo "apply-repo-registry: $file does not exist" >&2
@@ -396,17 +402,36 @@ else
 fi
 
 # One reported field of `onevcs rules check`, without the `(from rule 1)` provenance
-# it annotates each one with — that belongs to the explanation the command gives,
-# not to the table this prints.
+# it annotates each one with — that is read separately, by `field_source` below.
 field() {
     awk -v key="$1:" '$1 == key { $1 = ""; sub(/^ /, ""); sub(/ \(from [^)]*\)$/, ""); print; exit }'
 }
 
-# The verification, and the reason the default policy is not a fallback here: a
-# checkout that matched no rule publishes under `change-open`/`required`, which is
-# safe but is nobody's configured policy. Reporting it as a pass would hide a rule
-# that was never written or whose owner or name was mistyped.
-unmatched=()
+# The provenance `onevcs rules check` annotates field $1 with — `rule 1`, `the repository
+# declaration <path>`, `the default` — or nothing when the line carries none.
+field_source() {
+    sed -n "s/^$1: .* (from \(.*\))\$/\1/p" | head -n 1
+}
+
+# What the table prints for a source: the rule by its position, the declaration by
+# name, the default as itself, so a reader sees which side decided each field.
+source_label() {
+    case $1 in
+        rule\ *) printf '%s' "$1" ;;
+        "the repository declaration "*) printf 'declaration' ;;
+        "the default") printf 'default' ;;
+        *) printf '%s' "${1:-unknown}" ;;
+    esac
+}
+
+# The verification, and the reason the default policy is not a fallback here: a field
+# no rule and no repository declaration sets resolves to `change-open`/`required`, which
+# is safe but is nobody's configured policy. Reporting it as a pass would hide a rule or a
+# declaration that was never written, a mistyped owner or name, or a `[policy]` left
+# empty. Coverage is read off each field's own provenance, never off the `declaration:`
+# line, because a declaration may hold an empty `[policy]` or only `[policy.checks]`.
+uncovered=()
+unreadable=()
 echo "apply-repo-registry: resolved policy"
 for alias_name in ${aliases[@]+"${aliases[@]}"}; do
     if ! resolved=$(repo_recipe repo-policy "$alias_name" 2>&1); then
@@ -414,8 +439,9 @@ for alias_name in ${aliases[@]+"${aliases[@]}"}; do
         echo "apply-repo-registry: resolving the policy for $alias_name failed" >&2
         exit 1
     fi
-    if [[ $(field matched <<<"$resolved") != rule\ * ]]; then
-        unmatched+=("$alias_name")
+    if [[ $(field declaration <<<"$resolved") == unreadable:* ]]; then
+        unreadable+=("$alias_name: $(field declaration <<<"$resolved")")
+        continue
     fi
     identity=$(field identity <<<"$resolved")
     publication=$(field publication <<<"$resolved")
@@ -429,14 +455,37 @@ for alias_name in ${aliases[@]+"${aliases[@]}"}; do
         echo "apply-repo-registry: policy output for $alias_name is incomplete or invalid" >&2
         exit 1
     fi
-    printf '  %-28s %-44s %-13s %s\n' \
-        "$alias_name" "$identity" "$publication" "$approvals"
+    publication_source=$(field_source publication <<<"$resolved")
+    approvals_source=$(field_source approvals <<<"$resolved")
+    fell=()
+    for pair in "publication:$publication_source" "approvals:$approvals_source"; do
+        case ${pair#*:} in
+            rule\ * | "the repository declaration "*) ;;
+            *) fell+=("${pair%%:*}") ;;
+        esac
+    done
+    if [[ ${#fell[@]} -gt 0 ]]; then
+        joined="${fell[*]}"
+        uncovered+=("$alias_name: ${joined// /, } from the default")
+    fi
+    printf '  %-28s %-44s %-13s %-14s %-9s %s\n' \
+        "$alias_name" "$identity" \
+        "$publication" "($(source_label "$publication_source"))" \
+        "$approvals" "($(source_label "$approvals_source"))"
 done
 
-if [[ ${#unmatched[@]} -gt 0 ]]; then
-    echo "apply-repo-registry: no rule in $rules_source matches ${unmatched[*]}," >&2
-    echo "  so each would publish under the reviewed default instead of this host's policy." >&2
-    echo "  Add a rule naming its host, owner, and name, then re-run." >&2
+if [[ ${#unreadable[@]} -gt 0 ]]; then
+    echo "apply-repo-registry: these checkouts' own onevcs.toml cannot be read, so no policy resolves for them:" >&2
+    printf '  %s\n' "${unreadable[@]}" >&2
+    echo "  Fix the document each names, then re-run." >&2
+    exit 1
+fi
+if [[ ${#uncovered[@]} -gt 0 ]]; then
+    echo "apply-repo-registry: these fields fall to the reviewed default, set by neither a rule in" >&2
+    echo "  $rules_source nor the repository's own onevcs.toml:" >&2
+    printf '  %s\n' "${uncovered[@]}" >&2
+    echo "  Declare each under [policy] in that repository's onevcs.toml, or add a host-overlay" >&2
+    echo "  rule naming its host, owner and name, then re-run." >&2
     exit 1
 fi
 
@@ -483,4 +532,4 @@ while IFS= read -r producer; do
     fi
 done <<<"$producers"
 
-echo "apply-repo-registry: ${present} checkout(s) registered, ${skipped} skipped, every one matched a rule"
+echo "apply-repo-registry: ${present} checkout(s) registered, ${skipped} skipped, every one decided by a rule or its declaration"

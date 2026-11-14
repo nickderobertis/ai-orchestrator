@@ -57,10 +57,12 @@ checkout**, which is what keeps concurrent orchestrators from racing one worktre
 registry; and let the repository's **own merge path** verify the change before it
 lands.
 
-**Routing lives in the rules file.** `config/onevcs.rules.yml` matches an identity to its
-`workflow`, `repo_type`, publication policy and approvals; `just repos-apply` installs it
-with `config/onevcs.checkouts`, idempotently, so re-run it after an edit, and `onevcs rules
-check <repo>` shows the resolved policy. The four `merge_policy` names are `local-direct`,
+**Routing is the repository's own declaration.** The `[policy]` of a repository's
+`onevcs.toml` declares its publication policy and approvals; a rule in the host overlay
+`${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml` overrides it field by
+field, and `config/onevcs.rules.yml` holds only the reviewed default. `just repos-apply`
+registers the host's checkout list and installs the rules, idempotently, so re-run it after
+an edit, and `onevcs rules check <repo>` names each resolved field's source. The four `merge_policy` names are `local-direct`,
 `change-open`, `change-auto` and `change-direct`; `change-open` forces open-PR publication
 for one run without changing stored workflow.
 
@@ -251,6 +253,14 @@ them reach you; `manager` names the session role and is never a command.
    plan project, and is run by passing its qualified `source:project` id to `just
    orchestrate`.
 
+   <!-- llmlint: ignore-block[agents_md_durable_and_terse, determinism_vs_judgment] The task that moved registration onto the host requires this paragraph to name the clone, checkout-list, apply and override steps so a manager does them before the brief instead of planning them, and forbids any recipe or script writing the host checkout list or overlay, which is the command this rule would otherwise point at; the procedure itself lives in docs/host-setup.md section 7. -->
+   **Registering a repository, or creating one a plan needs (`gh repo create` first), is a
+   host step you do directly before the brief**, never a plan node or a separate plan:
+   clone it, add its path to the host checkout list beside the overlay, run `just
+   repos-apply`, and write a host rule only to override its declaration or for a
+   repository that declares none ([host setup](docs/host-setup.md), section 7).
+   <!-- llmlint: ignore-end[agents_md_durable_and_terse, determinism_vs_judgment] -->
+
    <!-- llmlint: ignore-block[changed_behavior_has_e2e] This paragraph is judgment a manager session reads, not code any process executes, so there is no journey to drive: what a test can hold is that the rule is stated once and in the manager's own document, which `tests/manager_guidance/test_decomposition_guidance.py` anchors on "no direct large operations". -->
    One direct-tweak rule: **no direct large operations**. Anything that would distract
    you from the run you are supervising or bloat your context — a change you would
@@ -366,8 +376,8 @@ them reach you; `manager` names the session role and is never a command.
    lever over an engineer node's review bar except its own `task`: amend the bar there.
 6. **Launch and supervise.** Before a lifecycle run, confirm the identity and its
    checkout aliases with `just repos` and its resolved routing with `onevcs rules
-   check <repo>`; a routing change is an edit to `config/onevcs.rules.yml` plus `just
-   repos-apply`, never a run-only override. Start with `just orchestrate
+   check <repo>`; a routing change is the repository's `onevcs.toml` or a host-overlay
+   rule plus `just repos-apply`, never a run-only override. Start with `just orchestrate
    <source:project>` from the repository root (the graph paths resolve there), arm a
    bare `just watch <run>` before you turn to anything else, then review each settled
    node and mid-run

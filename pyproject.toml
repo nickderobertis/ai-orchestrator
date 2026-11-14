@@ -13,7 +13,7 @@ dependencies = [
     "oneharness-cli==0.26.1",
     "onejudge==0.23.1",
     "onemessagebus-cli==0.11.1",
-    "onevcs-cli==0.66.0",
+    "onevcs-cli==0.67.0",
     # A library rather than a producer's wheel: the one YAML reader this package has,
     # for composing the workspaces file `just repos-apply` installs. Pinned exactly like
     # the wheels so the lock and this list agree; `tests/test_host_installs.py` states

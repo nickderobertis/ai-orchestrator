@@ -1,21 +1,21 @@
 """A host's own checkout list and rules overlay are what session startup's selection reads.
 
-A host that also works in private repositories keeps their checkouts and rules outside
-every checkout: a complete checkout list at
-`${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, which replaces the
-tracked `config/onevcs.checkouts` whole, and a rules overlay at
-`.../ai-orchestrator/onevcs.rules.yml`, which `onevcs rules apply` composes over the
-tracked `config/onevcs.rules.yml`. Nothing names either file to the recipes: session
-startup runs `just repos-bootstrap --detach` with no list, and an operator runs `just
-repos-apply` with none, so the selection is the recipes' own and is what is driven here.
+Every host keeps its checkout list outside every checkout, at
+`${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, and no tracked list
+stands in for it; each repository declares its own default publication policy in its
+`onevcs.toml`, and the host's rules overlay at `.../ai-orchestrator/onevcs.rules.yml`
+holds rules only to override a declaration or for a repository that declares nothing.
+Nothing names either file to the recipes: session startup runs `just repos-bootstrap
+--detach` with no list, and an operator runs `just repos-apply` with none, so the
+selection is the recipes' own and is what is driven here.
 
-So the journey sandboxes `HOME` and `XDG_CONFIG_HOME` around a complete host-local list
-and overlay over synthetic identities, runs both recipes exactly as session startup
-invokes them — `just --justfile <root>/justfile --working-directory <root> ...`, with no
-checkouts argument and `ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS` removed from the
-environment — and reads what they did back through the installed `onevcs` and the marks
-each stand-in's own `just bootstrap` leaves. Then it removes the override and runs the
-same invocations again, which must select the tracked list instead.
+So the journey sandboxes `HOME` and `XDG_CONFIG_HOME` around a host list and overlay over
+synthetic identities and a stand-in of this tree carrying its own `onevcs.toml`, runs both
+recipes exactly as session startup invokes them — `just --justfile <root>/justfile
+--working-directory <root> ...`, with no checkouts argument and
+`ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS` removed from the environment — and reads what they
+did back through the installed `onevcs` and the marks each stand-in's own `just bootstrap`
+leaves. With the host list gone, both refuse naming where it belongs.
 
 llmlint: ignore-file[e2e_not_mocked] The stand-in checkouts are real git repositories
 under a scratch `HOME`, standing in for this host's own clones, which a test may not
@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import NamedTuple
@@ -69,8 +68,8 @@ class Checkout(NamedTuple):
     policy: Policy | None = None
 
 
-#: The synthetic private identities the host's list and overlay name. Neither tracked file
-#: names either.
+#: The synthetic private identities the host's list and overlay name, declaring nothing,
+#: so the overlay's rule is the whole of each one's policy.
 QUIETHARBOR = "github.com/hiddenco/quietharbor"
 PEBBLECRAFT = "github.com/nickderobertis/pebblecraft"
 PRIVATE = {
@@ -79,13 +78,15 @@ PRIVATE = {
     ),
     PEBBLECRAFT: Checkout(PEBBLECRAFT, "projects/pebblecraft", Policy("local-direct", "none", 2)),
 }
-#: A public checkout the host's list repeats from the tracked list, at the spelling the
-#: tracked list gives it, so the composed rules route it by its tracked rule.
-REPEATED = Checkout(
-    "github.com/nickderobertis/crozier", ".ai-orchestrator/repos/nickderobertis__crozier"
+#: A public checkout no rule names, whose own `onevcs.toml` declares its policy.
+DECLARED = Checkout("github.com/scratchowner/declared", "projects/declared")
+DECLARATION = 'schema_version = 2\n\n[policy]\npublication = "change-auto"\napprovals = "none"\n'
+#: A stand-in of this tree: this repository's identity, carrying this tree's own
+#: `onevcs.toml` byte for byte, so what resolves is what this repository declares.
+THIS_TREE = Checkout(
+    "github.com/nickderobertis/ai-orchestrator", ".ai-orchestrator/repos/ai-orchestrator"
 )
-#: A tracked-list entry the host's list omits: present on disk, and neither registered nor
-#: bootstrapped while the override is there.
+#: A checkout on disk that the host's list does not name: neither registered nor bootstrapped.
 OMITTED = Checkout("github.com/nickderobertis/onevcs", "projects/onevcs")
 
 HOST_RULES_OVERLAY = (
@@ -106,11 +107,12 @@ def _git(*args: str, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
 
-def _stand_in(home: Path, relative: str, identity: str) -> Path:
+def _stand_in(home: Path, relative: str, identity: str, declaration: str | None = None) -> Path:
     """A committed checkout of ``identity`` at ``~/relative`` whose bootstrap leaves a mark.
 
     A producer the tracked override names declares its default target, as every real one
-    does, because the installed `onevcs` refuses the configuration otherwise.
+    does, because the installed `onevcs` refuses the configuration otherwise; a
+    ``declaration`` is committed as the checkout's `onevcs.toml`.
     """
     checkout = home / relative
     checkout.mkdir(parents=True)
@@ -121,6 +123,8 @@ def _stand_in(home: Path, relative: str, identity: str) -> Path:
     _git("remote", "add", "origin", f"https://{identity}.git", cwd=checkout)
     if (declared := override_declaration(f"https://{identity}.git")) is not None:
         (checkout / "release-targets.toml").write_text(declared, encoding="utf-8")
+    if declaration is not None:
+        (checkout / "onevcs.toml").write_text(declaration, encoding="utf-8")
     _git("add", "-A", cwd=checkout)
     _git(
         "-c",
@@ -160,14 +164,20 @@ class Host:
             identity: _stand_in(self.home, relative, identity)
             for identity, (_, relative, _) in PRIVATE.items()
         }
-        self.repeated = _stand_in(self.home, REPEATED.path, REPEATED.identity)
+        self.declared = _stand_in(self.home, DECLARED.path, DECLARED.identity, DECLARATION)
+        self.this_tree = _stand_in(
+            self.home,
+            THIS_TREE.path,
+            THIS_TREE.identity,
+            (REPO_ROOT / "onevcs.toml").read_text(encoding="utf-8"),
+        )
         self.omitted = _stand_in(self.home, OMITTED.path, OMITTED.identity)
         (self.config / HOST_RULES).parent.mkdir(parents=True)
         (self.config / HOST_RULES).write_text(HOST_RULES_OVERLAY, encoding="utf-8")
         (self.config / HOST_CHECKOUTS).write_text(
-            "# This host's complete list: its private checkouts and the public one it keeps.\n"
+            "# This host's complete list: its private checkouts and the public ones it keeps.\n"
             + "".join(f"~/{checkout.path}\n" for checkout in PRIVATE.values())
-            + f"~/{REPEATED.path}\n",
+            + f"~/{DECLARED.path}\n~/{THIS_TREE.path}\n",
             encoding="utf-8",
         )
 
@@ -287,18 +297,23 @@ def _reported(output: str, key: str) -> str:
     raise AssertionError(f"no {key!r} in:\n{output}")
 
 
-def test_session_startups_selection_reads_the_host_local_list_and_overlay(
+def _row(output: str, identity: str) -> list[str]:
+    """The resolved-policy table's row for ``identity``, split on whitespace."""
+    table = output.split("apply-repo-registry: resolved policy", 1)[1]
+    return next(line for line in table.splitlines() if f" {identity} " in line).split()
+
+
+def test_session_startups_selection_reads_the_host_list_overlay_and_declarations(
     tmp_path: Path,
 ) -> None:
     host = Host(tmp_path)
-    private = set(host.private.values())
-    selected = {*private, host.repeated}
+    selected = {*host.private.values(), host.declared, host.this_tree}
 
     applied = host.recipe("repos-apply")
 
     assert applied.returncode == 0, applied.stdout + applied.stderr
     identities, paths = host.registered()
-    assert identities == {*PRIVATE, REPEATED.identity}, applied.stdout
+    assert identities == {*PRIVATE, DECLARED.identity, THIS_TREE.identity}, applied.stdout
     assert paths == {str(path) for path in selected}, applied.stdout
     assert str(host.omitted) not in applied.stdout
     rules = host.registry / "rules.yml"
@@ -307,9 +322,9 @@ def test_session_startups_selection_reads_the_host_local_list_and_overlay(
         f"{REPO_ROOT / 'config' / 'onevcs.rules.yml'} overlaid by {host.config / HOST_RULES})"
     ) in applied.stdout, applied.stdout
 
-    # The routing and publication policy the overlay declares, read back through the
-    # installed `onevcs rules check`, decided by the overlay's own rule ahead of every
-    # tracked one; and the host never asked, since the overlay states each is private.
+    # The routing and publication policy the overlay declares for each private identity,
+    # read back through the installed `onevcs rules check`, decided by the overlay's own
+    # rule; and the host never asked, since the overlay states each is private.
     for identity, checkout in PRIVATE.items():
         assert checkout.policy is not None
         publication, approvals, position = checkout.policy
@@ -326,40 +341,49 @@ def test_session_startups_selection_reads_the_host_local_list_and_overlay(
         )
         assert inspected.returncode == 0, inspected.stdout + inspected.stderr
         assert json.loads(inspected.stdout) == {"visibility": "private"}
-    repeated = host.onevcs("rules", "check", REPEATED.identity)
-    assert repeated.returncode == 0, repeated.stdout + repeated.stderr
-    assert _reported(repeated.stdout, "publication") == "change-auto", repeated.stdout
-    assert _reported(repeated.stdout, "approvals") == "none", repeated.stdout
-    assert _reported(repeated.stdout, "matched").startswith("rule "), repeated.stdout
 
-    bootstrapped = host.bootstrap_until_settled(selected)
+    # A public checkout and this tree are routed by their own declarations, no rule
+    # naming either: both fields from the document, in `rules check` and in the table.
+    for checkout, path, expected in (
+        (DECLARED, host.declared, ("change-auto", "none")),
+        (THIS_TREE, host.this_tree, ("local-direct", "none")),
+    ):
+        checked = host.onevcs("rules", "check", checkout.identity)
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        document = path / "onevcs.toml"
+        source = f"(from the repository declaration {document})"
+        assert _reported(checked.stdout, "matched") == "no rule; the default applies"
+        assert f"publication: {expected[0]} {source}" in checked.stdout, checked.stdout
+        assert f"approvals: {expected[1]} {source}" in checked.stdout, checked.stdout
+        row = _row(applied.stdout, checkout.identity)
+        assert row[2:] == [expected[0], "(declaration)", expected[1], "(declaration)"], row
 
-    assert host.marked() == sorted(path.name for path in selected)
+    # Every listed sibling is bootstrapped; the stand-in of this tree is the repository
+    # running the recipe, which `repos-bootstrap` skips by identity rather than nests.
+    siblings = selected - {host.this_tree}
+    bootstrapped = host.bootstrap_until_settled(siblings)
+
+    assert host.marked() == sorted(path.name for path in siblings)
+    assert _kind(bootstrapped, host.this_tree) == "skip", bootstrapped.stdout
     assert _kind(bootstrapped, host.omitted) is None, bootstrapped.stdout
 
-    # With the override gone, the very same invocations select the tracked list: the
-    # omitted public checkout is registered and bootstrapped, the private ones are not.
-    (host.config / HOST_CHECKOUTS).unlink()
-    shutil.rmtree(host.registry)
-    shutil.rmtree(host.cache)
-    host.cache.mkdir()
-    host.marks.unlink()
-    tracked = {host.repeated, host.omitted}
 
-    reapplied = host.recipe("repos-apply")
+def test_with_no_host_checkout_list_both_recipes_refuse_naming_where_it_belongs(
+    tmp_path: Path,
+) -> None:
+    """No tracked list stands in: each recipe names the host's path and the setup doc."""
+    host = Host(tmp_path)
+    expected = host.config / HOST_CHECKOUTS
+    expected.unlink()
 
-    assert reapplied.returncode == 0, reapplied.stdout + reapplied.stderr
-    identities, paths = host.registered()
-    assert identities == {REPEATED.identity, OMITTED.identity}, reapplied.stdout
-    assert paths == {str(path) for path in tracked}, reapplied.stdout
-    for path in private:
-        assert str(path) not in reapplied.stdout
+    for arguments in (("repos-apply",), ("repos-bootstrap", "--detach")):
+        refused = host.recipe(*arguments)
 
-    rebootstrapped = host.bootstrap_until_settled(tracked)
-
-    assert host.marked() == sorted(path.name for path in tracked)
-    for path in private:
-        assert _kind(rebootstrapped, path) is None, rebootstrapped.stdout
+        assert refused.returncode != 0, refused.stdout + refused.stderr
+        assert f"this host has no checkout list at {expected}" in refused.stderr, refused.stderr
+        assert "docs/host-setup.md" in refused.stderr, refused.stderr
+    assert not host.registry.exists()
+    assert host.marked() == []
 
 
 @pytest.mark.parametrize("xdg", ["unset", "relative-config"])
@@ -368,24 +392,28 @@ def test_with_no_absolute_xdg_config_home_the_host_files_are_read_under_home(
 ) -> None:
     """Unset or relative, `XDG_CONFIG_HOME` gives way to `$HOME/.config` for both files.
 
-    A relative value is not honoured: were it read, its list would not exist and the
-    tracked one would be selected, registering the omitted checkout and not the private ones.
+    A relative value is not honoured: were it read, no list would be found there and both
+    recipes would refuse rather than register the host's checkouts.
     """
     host = Host(tmp_path, xdg)
-    selected = {*host.private.values(), host.repeated}
+    selected = {*host.private.values(), host.declared, host.this_tree}
 
     applied = host.recipe("repos-apply")
 
     assert applied.returncode == 0, applied.stdout + applied.stderr
     identities, paths = host.registered()
-    assert identities == {*PRIVATE, REPEATED.identity}, applied.stdout
+    assert identities == {*PRIVATE, DECLARED.identity, THIS_TREE.identity}, applied.stdout
     assert paths == {str(path) for path in selected}, applied.stdout
     assert f"overlaid by {host.config / HOST_RULES})" in applied.stdout, applied.stdout
     checked = host.onevcs("rules", "check", QUIETHARBOR)
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert _reported(checked.stdout, "publication") == "change-open", checked.stdout
 
-    bootstrapped = host.bootstrap_until_settled(selected)
+    # Every listed sibling is bootstrapped; the stand-in of this tree is the repository
+    # running the recipe, which `repos-bootstrap` skips by identity rather than nests.
+    siblings = selected - {host.this_tree}
+    bootstrapped = host.bootstrap_until_settled(siblings)
 
-    assert host.marked() == sorted(path.name for path in selected)
+    assert host.marked() == sorted(path.name for path in siblings)
+    assert _kind(bootstrapped, host.this_tree) == "skip", bootstrapped.stdout
     assert _kind(bootstrapped, host.omitted) is None, bootstrapped.stdout

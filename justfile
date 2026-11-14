@@ -757,7 +757,7 @@ follow-ups-answer-comments *args:
     @./scripts/follow-ups-answer-comments.sh "$@"
 
 # Register a repository checkout alias. Publication policy and approvals come from
-# the rules file the identity matches rather than from flags here; `onevcs` detects
+# the repository's own `onevcs.toml` and any host rule overriding it, never from flags here; `onevcs` detects
 # the gate the checkout itself carries, which is a different thing and not the routing.
 register-repo *args: _provisioned
     @uv run onevcs register "$@"
@@ -776,17 +776,22 @@ repos *args:
 #
 # This is the routing answer, and `just repos` is not: that listing prints the gate
 # `onevcs register` guessed from the checkout, while what a publication actually does
-# comes from the rules file — see `docs/host-setup.md`.
+# comes from the repository's own `onevcs.toml` declaration and the host rule that
+# overrides it, each line naming its source — see `docs/host-setup.md`.
 # llmlint: ignore[tool_output_is_signal] the matched rule and the policy that followed are this viewing command's product.
 repo-policy *args: _provisioned
     @uv run onevcs rules check "$@"
 
-# Bring this host's registry up to the tracked repository configuration: register
-# every checkout in `config/onevcs.checkouts`, install `config/onevcs.rules.yml` as
-# the rules file and `config/onevcs.releases.yml` as the release override, prove every
-# registered checkout matched a rule, and report what each producer this host installs
-# resolves out of the override. Re-runnable — run it after editing any of the three
-# files, and on a new host. `--dry-run` changes nothing.
+# Bring this host's registry up to its repository configuration: register every
+# checkout in the host's own list,
+# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts` (refused naming
+# that path when missing), install `config/onevcs.rules.yml` overlaid by the host's
+# `onevcs.rules.yml` beside that list as the rules file and `config/onevcs.releases.yml`
+# as the release override, prove every registered checkout's `publication` and
+# `approvals` are each decided by a rule or by its repository's own `onevcs.toml`, and
+# report what each producer this host installs resolves out of the override.
+# Re-runnable — run it after editing the list, an overlay or a declaration, and on a
+# new host. `--dry-run` changes nothing.
 # llmlint: ignore[tool_output_is_signal] the per-checkout resolved policy and per-producer release adoption this prints are what an operator applies the configuration to read.
 repos-apply *args:
     @./scripts/apply-repo-registry.sh "$@"

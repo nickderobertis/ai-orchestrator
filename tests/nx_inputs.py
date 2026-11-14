@@ -60,9 +60,9 @@ RECIPE_WORKSPACE = "recipeWorkspace"
 #: or `config/**/*`: the journey runs the real `scripts/session-setup.sh`, which
 #: re-provisions the project environment from the lock, so every glob wider than the
 #: script, the lock and the one pin it reads makes an unrelated edit pay for that. The
-#: last step that script runs — `just repos-bootstrap`, over the tracked checkout list —
-#: is in the key as its script, the list reader it sources and the list itself, because
-#: what the journey asserts about the siblings is decided by those three files. The one
+#: last step that script runs — `just repos-bootstrap`, over the checkout list the journey
+#: names — is in the key as its script and the list reader it sources, because what the
+#: journey asserts about the siblings is decided by those two files. The one
 #: module of `orchestrator/` it names is `orchestrator/root.py`, which the journey imports
 #: `REPO_ROOT` from: session setup runs no other orchestrator code. The modules
 #: `tests/conftest.py` imports reach the key through the `support-conftest` unit, as they
@@ -943,8 +943,8 @@ E2E_JOURNEYS: tuple[JourneyProject, ...] = (
         "llmlint-installer", f"{E2E_ROOT}/llmlint_installer", "llmlintInstallerWorkspace"
     ),
     # The journey modules left directly under `tests/e2e/`, which the families above leave
-    # alone: today the registry installer's, kept at its path because the rules file
-    # `config/onevcs.rules.yml` names it there. The nested projects own their own
+    # alone: today the registry installer's, kept at its path because the docs and the
+    # scripts it covers name it there. The nested projects own their own
     # directories, so this one collects its modules by name and keys on them alone, with
     # the registry files, scripts and `orchestrator/` modules the installer journeys read
     # rather than either whole tree, so an unrelated change to the package or `config/`

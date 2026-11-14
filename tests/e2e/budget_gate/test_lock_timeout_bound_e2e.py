@@ -1,6 +1,6 @@
 """How long a waiter queues for this host's merge-queue lock, measured end to end.
 
-`config/onevcs.rules.yml` routes this repository through `local-direct`, whose
+This repository's own `onevcs.toml` declares `local-direct`, whose
 publication runs the complete pre-push gate inside a clone it holds under `onevcs`'s
 merge-queue lock. `onevcs` bounds a queued wait at 900 seconds and names
 `ONEVCS_LOCK_TIMEOUT_SECONDS` as the lever; nothing here exported it, so a gate that took

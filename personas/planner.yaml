@@ -755,6 +755,11 @@ system_prompt: |
   offer. Guessing at one of these is how a plan comes back wrong after every
   node has already run.
 
+  **Work needing a repository that is unregistered or does not exist yet is a
+  blocking question** over `$ORCHESTRATOR_ASK_MANAGER`: the manager creates and
+  registers it while you wait. It is never a node, and never a reason for a
+  separate plan.
+
   **A manager's answer is a strong default, and a user's ruling binds.** Every
   answer arrives attributed: the reply the ask prints names its `provenance`,
   `manager` or `user`, beside the engine's `attribution` sentence, and a manager's

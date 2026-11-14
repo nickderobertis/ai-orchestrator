@@ -20,12 +20,11 @@ exactly what it read before; the one entry it does not link is the plan store's 
 directory, which it holds empty, so neither the user layer nor the store's `secrets.env`
 reaches a test. The same holds for ai-orchestrator's own host layers, its complete checkout
 list and its rules overlay (`HOST_LAYERS`), which `just repos-apply` and `just repos-bootstrap`
-select in place of the tracked files and which would make either answer for this host's
-private registrations instead of the tracked tree: that directory is linked entry by entry
-with those two left out. A test that exercises a user layer writes one under a configuration home
-it names itself, which overrides this one in the environment it composes; a test that
-redirects `HOME` to sandbox a program deriving its configuration from it names
-`XDG_CONFIG_HOME` beside it, because this export would otherwise win over that derivation.
+read and which would make either answer for this host's own registrations: that directory is
+linked entry by entry with those two left out. A test that exercises a user layer writes one
+under a configuration home it names itself, which overrides this one in the environment it
+composes; a test that redirects `HOME` to sandbox a program deriving its configuration from it
+names `XDG_CONFIG_HOME` beside it, because this export would otherwise win over that derivation.
 
 Bun is the one tool that reads a file at the configuration home's root rather than a
 directory in it: its `.npmrc` is `$XDG_CONFIG_HOME/.npmrc` once that variable is set, and
@@ -75,7 +74,7 @@ USER_DOCUMENT = "config.yaml"
 #: No tool reads it.
 HOST_CONFIG_HOME_ENV = "ORCHESTRATOR_TEST_HOST_CONFIG_HOME"
 #: ai-orchestrator's directory under a configuration home, and the host layers in it that
-#: `scripts/registered-checkouts.sh` and `just repos-apply` read in place of tracked files.
+#: `scripts/registered-checkouts.sh` and `just repos-apply` read.
 ORCHESTRATOR_DIRECTORY = "ai-orchestrator"
 HOST_LAYERS = ("onevcs.checkouts", "onevcs.rules.yml")
 #: The prefix of every setting the store reads for one source from the environment.

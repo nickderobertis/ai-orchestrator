@@ -2677,7 +2677,7 @@ def _consumer(**fields: object) -> dict[str, object]:
 PRODUCER = {"id": "producer", "title": "feat: release the library", "repo": "library"}
 
 #: How `just check-plan` prefixes a refusal the adopted engine's loader made under a rule
-#: of the `onevcs` it links (`onepipeline` 0.110.2, linking `onevcs` 0.66.0): the source
+#: of the `onevcs` it links (`onepipeline` 0.111.0, linking `onevcs` 0.67.0): the source
 #: is `onevcs` and the node is the consumer, followed by the plan field to change.
 ONEVCS_REFUSED = "check-plan: onevcs: consumer: "
 #: What the recipe says of this repository's own check when the loader refused first.

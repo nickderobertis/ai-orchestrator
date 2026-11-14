@@ -392,7 +392,7 @@ def rules_for_hosted(
     `local-direct` for the reason :data:`RULES` is: it keeps the publication off `gh`,
     which a scratch identity has no change request on and this machine no credential
     for. A hosted identity cannot be matched by `path`, so the rule names the two halves
-    of its origin the way `config/onevcs.rules.yml` names this host's own.
+    of its origin the way a host-overlay rule names one.
     """
     rules = RULES.replace('match: {path: "*"}', f"match: {{host: {host}, owner: {owner}}}")
     rules = rules.replace("version: 3", "version: 4")
