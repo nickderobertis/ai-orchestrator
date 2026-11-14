@@ -3,7 +3,7 @@
 The flow is **draft → spikes → finalize → review → design doc**, each launch its own run:
 the draft planner as `<name>`, the plan's spikes as `<name>-spikes`, the finalize planner as
 `<name>-finalize`, and the design document as `<name>-design` in `scripts/finish-plan.sh`.
-Between them sit four questions only this host can answer, each a subcommand here:
+Between them sit five questions only this host can answer, each a subcommand here:
 
 * ``prepare <spikes project> <run>`` — whether the draft wrote spikes at all, and if it did,
   readying their project to launch: named for the run it launches as, since the engine mints
@@ -23,7 +23,12 @@ Between them sit four questions only this host can answer, each a subcommand her
   independently of session labels, and refused when missing or ambiguous;
 * ``note <plan project> <run>`` — the finalize planner's instructions: every spike's report
   and branch, the spikes above each in its stacking chain, and what the plan's budget
-  answers owe.
+  answers owe;
+* ``listed --status <status> <branch>...`` — which of those kept branches a row of the
+  engine's host listing names, read from the listing document `onepipeline unpublished
+  --host --format json` wrote to standard input and the status it exited with. A branch no
+  row names is owed by nobody, so the flow carries on past it rather than acknowledging it;
+  a listing that did not answer stops the flow, because then nothing says who owes what.
 
 **A spike may build on a spike.** Where several spikes need one measurement harness, the
 draft authors it as a harness spike the others depend on, and the engine starts each
@@ -62,6 +67,7 @@ from orchestrator import (
     record_shapes,
     spike_branches,
     spike_plan,
+    unfinished,
 )
 from orchestrator.plan_store import NodeId, QualifiedProjectId
 from orchestrator.spike_plan import Branch
@@ -96,6 +102,17 @@ SUPERSEDED_BY = "superseded_by"
 
 #: The project metadata key the engine mints a run id from.
 NAME_KEY = "onepipeline.name"
+
+
+#: The host listing's answered verdicts, each with the exit status it answers under: `none`
+#: and `owed`, while `unanswered` and a refusal answer nothing. The statuses are
+#: :mod:`orchestrator.unfinished`'s declaration of the engine's, and
+#: `tests/test_engine_contracts.py` reconciles every pair against onepipeline's
+#: `docs/contract-divergences.md` at the pinned release.
+#: A verdict is read only together with its own status, and compared by equality, never
+#: hashed, so a verdict a malformed document spells as a list or a map is refused as
+#: unanswered rather than raising.
+ANSWERED = {"none": unfinished.NOTHING_OWED, "owed": unfinished.UNPUBLISHED}
 
 
 class Stop(Exception):
@@ -430,6 +447,53 @@ def branches(run: RunId) -> dict[NodeId, Branch]:
     return kept
 
 
+# llmlint: ignore-block[changed_behavior_has_e2e] Manager ruling c2.0: the pinned real engine cannot
+# realistically write unreadable listing JSON, a verdict under another verdict's status or a
+# malformed row, so no journey seam or fake engine is built for them; tests/test_spike_flow.py
+# drives each through this module's `listed` verb, and
+# tests/plan_tooling/plan_flow/test_plan_spike_flow_e2e.py the real-tools journeys: nothing owed
+# carried on past, an owed refusal stopping, and an unanswered listing stopping then resuming.
+def listed(document: str, status: int, kept: Sequence[Branch]) -> list[Branch]:
+    """Each of ``kept`` a row of the host listing ``document`` names, matched on `branch` alone.
+
+    ``status`` is what the listing exited with. Anything but an answered verdict under its
+    own answered status is a :class:`Stop` naming the status and the listing's own unresolved
+    lines, because a listing that did not answer says nothing about which branch is owed; a
+    document that is not the listing's shape is refused rather than read as naming nothing.
+    """
+    try:
+        listing = json.loads(document)
+    except ValueError as exc:
+        raise Stop(
+            f"the host listing of preserved branches exited {status} with no readable "
+            f"document ({exc}), so whether each spike branch is owed is unanswered"
+        ) from exc
+    verdict = listing.get("verdict") if isinstance(listing, dict) else None
+    unresolved = listing.get("unresolved") if isinstance(listing, dict) else None
+    lines = [str(line) for line in unresolved] if isinstance(unresolved, list) else []
+    if not any(verdict == word and status == code for word, code in ANSWERED.items()):
+        raise Stop(
+            f"the host listing of preserved branches exited {status} with the verdict "
+            f"{verdict!r}, so whether each spike branch is owed is unanswered"
+            + (f": {'; '.join(lines)}" if lines else "")
+        )
+    rows = listing.get("rows") if isinstance(listing, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError("the host listing of preserved branches records no list of rows")
+    named: set[str] = set()
+    for row in rows:
+        branch = row.get("branch") if isinstance(row, dict) else None
+        if not isinstance(branch, str) or not branch:
+            raise ValueError(
+                f"the host listing of preserved branches holds a row naming no branch: {row!r}"
+            )
+        named.add(branch)
+    return [branch for branch in kept if branch in named]
+
+
+# llmlint: ignore-end[changed_behavior_has_e2e]
+
+
 def note(
     project: QualifiedProjectId,
     kept: Mapping[NodeId, Branch],
@@ -494,7 +558,7 @@ def note(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """The four subcommands `scripts/plan.sh` runs, named in the module docstring."""
+    """The five subcommands `scripts/plan.sh` runs, named in the module docstring."""
     parser = argparse.ArgumentParser(prog="python -m orchestrator.spike_flow")
     verbs = parser.add_subparsers(dest="verb", required=True)
     prepared = verbs.add_parser("prepare")
@@ -508,8 +572,18 @@ def main(argv: list[str] | None = None) -> int:
     noted = verbs.add_parser("note")
     noted.add_argument("project")
     noted.add_argument("run")
+    owing = verbs.add_parser("listed")
+    owing.add_argument("--status", type=int, required=True)
+    owing.add_argument("branches", nargs="*")
     args = parser.parse_args(argv)
     try:
+        if args.verb == "listed":
+            print(
+                "\n".join(
+                    listed(sys.stdin.read(), args.status, [Branch(one) for one in args.branches])
+                )
+            )
+            return 0
         run = _run_id(args.run)
         match args.verb:
             case "prepare":

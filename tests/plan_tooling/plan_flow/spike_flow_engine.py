@@ -17,7 +17,11 @@ leaves behind when it settles:
   `onepipeline.name`, and for each spike renders the launch's `--branch-template`, opens a
   real `onevcs` session cutting that branch labelled with the run and the node, commits a
   harness, preserves the branch on its origin, closes the session, and writes the spike's
-  report into the plan's project from the `spike-report` template. It places them as the
+  report into the plan's project from the `spike-report` template. A spike the scenario names
+  `unowed` is left as a final attempt leaves a branch an earlier attempt had already put on
+  the origin: published by that earlier session as a draft change request, continued by a
+  second that commits nothing, and answered `already on origin` by its `preserve`, so it is on
+  the origin and on no row of the engine's host listing. It places them as the
   adopted engine does: a spike depending on spikes waits for them, and its session is
   opened with its **base dependency**'s kept branch as its base — the dependency whose own
   chain holds every other, read off the spikes project's own edges — while a spike behind
@@ -115,6 +119,12 @@ class Scenario(TypedDict):
     retried: NotRequired[list[str]]
     #: A spikes run settling `preserved` with no branch `onevcs` recorded.
     unrecorded: NotRequired[bool]
+    #: Spikes whose kept branch is on the origin and owed by nobody: an earlier attempt
+    #: published it as a draft change request, and the final one found it already there.
+    unowed: NotRequired[list[str]]
+    #: Whether the spikes run, once settled, leaves `onevcs`'s session records unreadable, so
+    #: the engine's host listing can no longer answer while the branches themselves still can.
+    unanswered_listing: NotRequired[bool]
     #: A spikes launch the engine refuses before a run exists.
     refuse_spikes: NotRequired[bool]
     #: A finalize run settling `failed`.
@@ -345,6 +355,8 @@ def _kept(scenario: Scenario, template: str, run: str, node: str, base: str | No
     branch_name = template.replace("{{ node.id }}", node)
     if scenario.get("unrecorded"):
         return {"id": node, "status": "done", "outcome": "preserved", "branch": branch_name}
+    if node in scenario.get("unowed", []):
+        return _already_on_origin(scenario, run, node, branch_name)
     opened = json.loads(
         _run(
             [onevcs, "session", "open", repository, "--branch-name", branch_name]
@@ -367,6 +379,47 @@ def _kept(scenario: Scenario, template: str, run: str, node: str, base: str | No
         "branch": opened["branch"],
         "head": head,
         "remote": "pushed",
+    }
+
+
+def _already_on_origin(scenario: Scenario, run: str, node: str, branch_name: str) -> Node:
+    """Leave ``node``'s branch as a final attempt finding it already on the origin does.
+
+    An earlier attempt's session cut it, committed its harness and published it as a draft
+    change request; the final attempt's session continues it, commits nothing, and its
+    `preserve` answers that the origin already carries it. Every step is a real `onevcs`
+    verb, the change request opened through the `gh` the journey names in `ONEVCS_GH`, and a
+    branch carrying a change request is on no row of the engine's host listing.
+    """
+    onevcs, repository = os.environ[ONEVCS], scenario["repository"]
+    labels = ["--label", f"run={run}", "--label", f"node={node}"]
+    earlier = json.loads(
+        _run([onevcs, "session", "open", repository, "--branch-name", branch_name, *labels])
+    )
+    worktree = Path(earlier["worktree"])
+    (worktree / f"{node}.sh").write_text(f"echo measuring {node}\n", encoding="utf-8")
+    _run(["git", "add", "-A"], cwd=worktree)
+    _run(["git", *COMMITTER, "commit", "-qm", f"feat: {node} harness"], cwd=worktree)
+    _run(
+        [onevcs, "publish", earlier["token"], "--draft", "--policy", "change-open"]
+        + ["--title", f"feat: {node} harness"]
+    )
+    _run([onevcs, "session", "close", earlier["token"]])
+    final = json.loads(
+        _run([onevcs, "session", "open", repository, "--branch", earlier["branch"], *labels])
+    )
+    head = _run(["git", "rev-parse", "HEAD"], cwd=Path(final["worktree"])).strip()
+    said = _run([onevcs, "preserve", "--repo", repository, final["branch"]])
+    if not said.startswith("already on origin"):
+        raise SystemExit(f"stand-in engine: {final['branch']} was not already on origin: {said}")
+    _run([onevcs, "session", "close", final["token"]])
+    return {
+        "id": node,
+        "status": "done",
+        "outcome": "preserved",
+        "branch": final["branch"],
+        "head": head,
+        "remote": "already-on-origin",
     }
 
 
@@ -731,6 +784,10 @@ def start(arguments: list[str]) -> int:
         "nodes": nodes,
     }
     (root / "result.json").write_text(json.dumps(ledger), encoding="utf-8")
+    if run == f"{flow}-spikes" and scenario.get("unanswered_listing"):
+        # The registry's session records, unreadable once the run has settled: the recovery
+        # read the host listing makes fails, and the journey restores the mode afterwards.
+        (Path(os.environ["ONEVCS_HOME"]) / "sessions").chmod(0)
     if detached:
         print(json.dumps({"run_id": run, "pid": os.getpid()}))
         return 0

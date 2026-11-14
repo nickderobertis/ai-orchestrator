@@ -45,6 +45,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, cast
 
+import fake_gh
 import github_board
 import plan_fixture_source
 import pytest
@@ -57,7 +58,7 @@ from nx_workspace import (
     double_the_engine,
     share_this_checkouts_install,
 )
-from project_fixtures import no_budgets
+from project_fixtures import helper, no_budgets
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from spike_flow_engine import REAL_STARTS, Node
 from test_plan_flow_e2e import (
@@ -96,6 +97,8 @@ SpikeId = NewType("SpikeId", str)
 
 #: The doubled engine, installed over the copy's own.
 STAND_IN = Path(__file__).with_name("spike_flow_engine.py")
+#: The remote host's decisioning, the program `onevcs` runs for `gh`.
+FAKE_GH = helper("fake_gh.py")
 
 FIXTURE_SOURCE = plan_fixture_source.SOURCE
 LAUNCHING_SESSION = "e2e-plan-spike-flow"
@@ -1019,6 +1022,116 @@ def test_a_spike_branch_that_cannot_be_acknowledged_stops_before_finalize(
     assert "could not be acknowledged (status 2)" in stopped.stderr, stopped.stderr
     assert "--resume spikes" in stopped.stderr
     assert f"{flow.run}-finalize" not in _runs_started(flow)
+
+
+def _listed_branches(flow: Flow) -> list[str]:
+    """The branch of every row the engine's host listing answers, which must answer."""
+    listed = _just(flow, "unpublished", "--host", "--format", "json")
+    assert listed.returncode in (0, 7), listed.stdout + listed.stderr
+    return [str(row["branch"]) for row in json.loads(listed.stdout)["rows"]]
+
+
+def _origin(flow: Flow) -> Path:
+    """The bare origin `scratch_identity.seeded` made beside ``flow``'s registry."""
+    return Path(flow.environment["ONEVCS_HOME"]).parent / "origin.git"
+
+
+def _on_origin(flow: Flow, branch: str) -> bool:
+    heads = subprocess.run(
+        ["git", "ls-remote", "--heads", str(_origin(flow)), branch],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return bool(heads.stdout.strip())
+
+
+@pytest.mark.parametrize(
+    ("entry", "unowed_topics"),
+    [("whole", ("quota",)), ("resumed-finalize", ("quota",)), ("whole", ("listing", "quota"))],
+    ids=["whole", "resumed-finalize", "every-branch-unowed"],
+)
+def test_a_spike_branch_nobody_owes_is_carried_on_past_to_the_finalize(
+    workspace: Workspace, tmp_path: Path, entry: str, unowed_topics: tuple[str, ...]
+) -> None:
+    """A final attempt that found its branch already on the origin leaves it on no listing row."""
+    key = f"unowed-{entry}-{len(unowed_topics)}"
+    flow = _flow(workspace, tmp_path, key, unowed=[f"spike-{key}-{one}" for one in unowed_topics])
+    # The earlier attempt's draft change request is opened by the real `onevcs` through the
+    # remote host's decisioning at its `ONEVCS_GH` seam; its branch is pushed with real git.
+    # llmlint: ignore[e2e_not_mocked] Only the remote host's decisioning, at onevcs's seam.
+    flow.environment["ONEVCS_GH"] = str(FAKE_GH)
+    flow.environment[fake_gh.STATE_ENV] = str(tmp_path / "gh-state")
+    flow.environment[fake_gh.CALLS_ENV] = str(tmp_path / "gh-calls.jsonl")
+    flow.environment[fake_gh.ORIGINS_ENV] = json.dumps(
+        {PLANNING_FLOW_ORIGIN.partition("/")[2]: str(_origin(flow))}
+    )
+    unowed = [branch for branch in _branches(flow) if branch.endswith(unowed_topics)]
+    ordinary = [branch for branch in _branches(flow) if branch not in unowed]
+
+    if entry == "whole":
+        done = _plan(flow)
+    else:
+        drafted = _plan(flow, "--detach")
+        assert drafted.returncode == 0, drafted.stdout + drafted.stderr
+        spiked = _resumed(flow, drafted)
+        assert spiked.returncode == 0, spiked.stdout + spiked.stderr
+        assert _runs_started(flow) == [flow.run, f"{flow.run}-spikes"]
+        done = _plan(flow, "--resume", "finalize")
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert _runs_started(flow) == _stage_runs(flow)
+    listed = _listed_branches(flow)
+    acknowledged = _acknowledged(flow)
+    for branch in unowed:
+        assert _on_origin(flow, branch), f"{branch} is not on the origin"
+        assert branch not in listed, listed
+        assert branch not in acknowledged, acknowledged
+    for branch in ordinary:
+        assert flow.plan in acknowledged[branch], acknowledged
+    finalize = f"plan: wrote authoring:{flow.run}-finalize "
+    (receipt,) = [line for line in done.stderr.splitlines() if line.startswith(finalize)]
+    if ordinary:
+        assert f"acknowledged the spike branches {' '.join(ordinary)}, kept until" in receipt
+    else:
+        assert "acknowledged the spike branches" not in receipt, receipt
+    carried = f"carried on past the spike branches {' '.join(unowed)} without acknowledging them"
+    assert carried in receipt, receipt
+
+
+def test_a_host_listing_that_cannot_answer_stops_before_finalize(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    """The listing's recovery read failing leaves nothing to say which spike branch is owed."""
+    flow = _flow(workspace, tmp_path, "unanswered", unanswered_listing=True)
+    sessions = Path(flow.environment["ONEVCS_HOME"]) / "sessions"
+
+    try:
+        stopped = _plan(flow)
+    finally:
+        sessions.chmod(0o755)
+
+    assert stopped.returncode == 1, stopped.stdout + stopped.stderr
+    assert "exited 1 with the verdict 'unanswered'" in stopped.stderr, stopped.stderr
+    assert "the recovery read failed" in stopped.stderr, stopped.stderr
+    assert "answered status 1, so no spike branch was acknowledged or carried on past" in (
+        stopped.stderr
+    )
+    assert "--resume spikes" in stopped.stderr.rsplit("answered status 1", 1)[1]
+    assert "carried on past the spike branches" not in stopped.stderr
+    assert _acknowledged(flow) == {}
+    assert set(_branches(flow)) <= set(_listed_branches(flow))
+    assert f"{flow.run}-finalize" not in _runs_started(flow)
+
+    # With the recovery read repaired, the command the stop printed carries the flow on: the
+    # listing answers, each spike branch is acknowledged, and the finalize planner runs.
+    again = _resumed(flow, stopped)
+    assert again.returncode == 0, again.stdout + again.stderr
+    acknowledged = _acknowledged(flow)
+    assert _branches(flow), "the spikes kept no branch to acknowledge"
+    for branch in _branches(flow):
+        assert flow.plan in acknowledged.get(branch, ""), f"{branch} was not acknowledged"
+    assert f"{flow.run}-finalize" in _runs_started(flow)
 
 
 def test_a_finalize_that_did_not_settle_stops_and_its_resume_does_not_relaunch_it(

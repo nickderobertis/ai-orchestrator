@@ -16,6 +16,7 @@ these lines out of the measurement the floor is held to.
 
 from __future__ import annotations
 
+import io
 import itertools
 import json
 import os
@@ -757,3 +758,100 @@ def test_branches_refuses_a_settled_run_launched_from_a_non_spikes_project(
     launch.write_text(json.dumps({"project": "authoring:ordinary-plan"}), encoding="utf-8")
     assert spike_flow.main(["branches", "flow-spikes"]) == 2
     assert "authoring:ordinary-plan is not a plan's spikes project" in capsys.readouterr().err
+
+
+def _host_listing(verdict: str, *branches: str, unresolved: tuple[str, ...] = ()) -> str:
+    """A host listing document in the shape `onepipeline unpublished --format json` writes."""
+    rows = [{"identity": "github.com/o/r", "branch": branch} for branch in branches]
+    return json.dumps(
+        {"target": {"kind": "host"}, "verdict": verdict, "rows": rows, "unresolved": unresolved}
+    )
+
+
+def _listed(monkeypatch: pytest.MonkeyPatch, document: str, status: int, *kept: str) -> int:
+    monkeypatch.setattr("sys.stdin", io.StringIO(document))
+    return spike_flow.main(["listed", "--status", str(status), *kept])
+
+
+@pytest.mark.parametrize(("verdict", "status"), [("owed", 7), ("none", 0)])
+def test_the_kept_branches_a_host_listing_row_names_are_answered_and_no_other(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], verdict: str, status: int
+) -> None:
+    document = _host_listing(verdict, "p/spike-a", "elsewhere/other")
+
+    assert _listed(monkeypatch, document, status, "p/spike-a", "p/spike-b") == 0
+    assert capsys.readouterr().out.splitlines() == ["p/spike-a"]
+
+
+@pytest.mark.parametrize(
+    ("document", "status", "said"),
+    [
+        (
+            _host_listing("unanswered", unresolved=("the recovery read failed",)),
+            1,
+            "exited 1 with the verdict 'unanswered', so whether each spike branch is owed is "
+            "unanswered: the recovery read failed",
+        ),
+        (
+            _host_listing("owed", "p/spike-a"),
+            2,
+            "exited 2 with the verdict 'owed', so whether each spike branch is owed is "
+            "unanswered\n",
+        ),
+        (
+            _host_listing("unanswered", "p/spike-a"),
+            7,
+            "exited 7 with the verdict 'unanswered'",
+        ),
+        (
+            _host_listing("none", "p/spike-a"),
+            7,
+            "exited 7 with the verdict 'none'",
+        ),
+        (
+            _host_listing("owed", "p/spike-a"),
+            0,
+            "exited 0 with the verdict 'owed'",
+        ),
+        ("", 1, "exited 1 with no readable document"),
+        ("[]", 0, "exited 0 with the verdict None"),
+    ],
+    ids=[
+        "unanswered",
+        "refused",
+        "unanswered-verdict",
+        "none-under-owed-status",
+        "owed-under-none-status",
+        "no-document",
+        "not-an-object",
+    ],
+)
+def test_a_host_listing_that_did_not_answer_stops_naming_its_status_and_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    document: str,
+    status: int,
+    said: str,
+) -> None:
+    assert _listed(monkeypatch, document, status, "p/spike-a") == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert said in captured.err, captured.err
+
+
+@pytest.mark.parametrize(
+    ("rows", "said"),
+    [
+        (None, "records no list of rows"),
+        ([{"identity": "github.com/o/r"}], "holds a row naming no branch"),
+        (["p/spike-a"], "holds a row naming no branch"),
+    ],
+    ids=["no-rows", "row-without-branch", "row-not-an-object"],
+)
+def test_an_answered_host_listing_not_in_its_shape_is_refused_rather_than_read_as_naming_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], rows: object, said: str
+) -> None:
+    document = json.dumps({"verdict": "owed", "rows": rows, "unresolved": []})
+
+    assert _listed(monkeypatch, document, 7, "p/spike-a") == 2
+    assert said in capsys.readouterr().err

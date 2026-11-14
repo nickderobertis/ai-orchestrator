@@ -3763,7 +3763,7 @@ def test_what_this_host_reads_of_the_unpublished_verdict_is_the_engines_declared
     declares, so a release that moved any of them fails here rather than as a manager whose
     acknowledgements stopped standing.
     """
-    from orchestrator import unfinished
+    from orchestrator import spike_flow, unfinished
 
     declared = UNPUBLISHED_CONTRACT.search(_source(ONEPIPELINE_DOCS, "contract-divergences.md"))
     assert declared is not None, (
@@ -3777,6 +3777,8 @@ def test_what_this_host_reads_of_the_unpublished_verdict_is_the_engines_declared
         "unanswered": unfinished.UNANSWERED,
         "refused": unfinished.REFUSED,
     }, contract["exit"]
+    # The plan flow's read of the host listing carries on only under these answered pairs.
+    assert spike_flow.ANSWERED.items() <= contract["exit"].items(), spike_flow.ANSWERED
     assert "rows" in contract["document_fields"]
     assert {"branch", "identity", "counted", "in_flight", "land_command", "acknowledgement"} <= set(
         contract["row_fields"]

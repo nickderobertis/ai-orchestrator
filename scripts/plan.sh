@@ -890,8 +890,32 @@ if [ "$spikes_launched" -eq 1 ] || [ -e "$runs_root/$spikes_run" ]; then
     spikes_ran=1
     kept=$("$python" -m orchestrator.spike_flow branches "$spikes_run") ||
         stop "the branches run $spikes_run kept could not be read; the line above names why" spikes
+    # Which kept branches anybody owes is the engine's host listing's to say, read once: a
+    # branch on none of its rows is owed by nobody, so there is nothing to acknowledge and the
+    # flow carries on past it, while a listing that did not answer stops here, because then
+    # nothing says which branch is owed. Matched on `branch` alone, as `--acknowledge` without
+    # `--repo` matches, by `orchestrator/spike_flow.py`'s `listed`.
+    kept_branches=()
+    while IFS=$'\t' read -r _ branch; do
+        kept_branches+=("$branch")
+    done <<<"$kept"
+    listing_status=0
+    listing=$(recipe unpublished --host --format json) || listing_status=$?
+    listed_status=0
+    named=$(printf '%s' "$listing" | "$python" -m orchestrator.spike_flow listed --status "$listing_status" "${kept_branches[@]}") || listed_status=$?
+    [ "$listed_status" -eq 0 ] ||
+        stop "the host listing of preserved branches answered status $listing_status, so no spike branch was acknowledged or carried on past; the line above names why" spikes "$listed_status"
+    declare -A listed_branches=()
+    while IFS= read -r branch; do
+        [ -z "$branch" ] || listed_branches["$branch"]=1
+    done <<<"$named"
     acknowledged_branches=()
+    unowed_branches=()
     while IFS=$'\t' read -r spike branch; do
+        if [ -z "${listed_branches["$branch"]+listed}" ]; then
+            unowed_branches+=("$branch")
+            continue
+        fi
         # The engine's `onepipeline unpublished --acknowledge` answers 0 or 7 once the
         # acknowledgement is recorded — 7 saying some other branch still counts, which is every
         # spike after this one until each is reached — and 1 unanswered or 2 refused when it
@@ -904,8 +928,14 @@ if [ "$spikes_launched" -eq 1 ] || [ -e "$runs_root/$spikes_run" ]; then
         esac
         acknowledged_branches+=("$branch")
     done <<<"$kept"
-    # Said on the finalize planner's receipt rather than on a line of its own.
-    acknowledgement="; acknowledged the spike branches ${acknowledged_branches[*]}, kept until the main run of $declared_project succeeds"
+    # Said on the finalize planner's receipt rather than on a line of its own, the branches no
+    # row names in a clause of their own, so the record says which were not acknowledged.
+    if [ "${#acknowledged_branches[@]}" -ne 0 ]; then
+        acknowledgement="; acknowledged the spike branches ${acknowledged_branches[*]}, kept until the main run of $declared_project succeeds"
+    fi
+    if [ "${#unowed_branches[@]}" -ne 0 ]; then
+        acknowledgement+="; carried on past the spike branches ${unowed_branches[*]} without acknowledging them, since no row of the host listing names them and so nobody owes them"
+    fi
 fi
 
 # 3. The finalize: a planner reworks the plan from every report, unless its run exists.
