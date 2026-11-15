@@ -32,6 +32,7 @@ from typing import Any, NamedTuple, get_type_hints
 import follow_up_boundary
 import follow_up_variables
 import pytest
+from follow_up_ticket_shape import comment_sources
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_comments as comments
@@ -302,7 +303,9 @@ def test_each_persons_comment_goes_to_the_run_owning_its_issue_and_to_no_other(
     others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
     _next_second()
     marked = _commented(
-        others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None
+        others,
+        tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence.", comment_sources(RUN)),
+        None,
     )
     _next_second()
     on_own = _commented(own, "The examples still miss page 9 — see ```listing.py```.\n")
@@ -367,7 +370,9 @@ def test_a_comment_any_runs_marker_owns_is_never_selected_whatever_its_kind(
     tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
     person = _commented(own, "The one person's comment.\n")
     for body in (
-        tickets.render_comment(OTHER_RUN, CAUSE, "Another run's evidence."),
+        tickets.render_comment(
+            OTHER_RUN, CAUSE, "Another run's evidence.", comment_sources(OTHER_RUN)
+        ),
         tickets.render_reply(
             RUN,
             CAUSE,
@@ -564,7 +569,9 @@ def test_a_run_scoped_gathering_launches_nothing_of_another_runs_item_a_legacy_b
     _bound(drafts_root, RUN, "bound-to-another-runs-item", _native_of(others))
     _next_second()
     marked = _commented(
-        others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None
+        others,
+        tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence.", comment_sources(RUN)),
+        None,
     )
     _next_second()
     asked = _commented(own, "Ours.\n")
@@ -610,7 +617,9 @@ def test_a_run_scoped_gathering_names_none_of_the_comments_on_its_item_another_r
     assert tickets.issue_owner(plan_store.task_record(taken)) == OTHER_RUN
     _next_second()
     marked = _commented(
-        taken, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None
+        taken,
+        tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence.", comment_sources(RUN)),
+        None,
     )
     _next_second()
     asked = _commented(own, "Ours.\n")
@@ -649,9 +658,15 @@ def test_a_comment_written_after_the_first_gathering_is_selected_whatever_respon
     _next_second()
     _filed(drafts_root, RUN, CAUSE, "Copied again, answering the first question.")
     evidence = _commented(
-        others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None
+        others,
+        tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence.", comment_sources(RUN)),
+        None,
     )
-    _edited(others, evidence, tickets.render_comment(RUN, SHARED_CAUSE, "Evidence, edited."))
+    _edited(
+        others,
+        evidence,
+        tickets.render_comment(RUN, SHARED_CAUSE, "Evidence, edited.", comment_sources(RUN)),
+    )
     _replied(own, asked)
     before = _snapshot(board)
 
@@ -725,7 +740,11 @@ def test_a_computed_boundary_is_recorded_beside_the_runs_feedback_and_read_from_
     _next_second()
     _commented(own, "Answered by the evidence comment that follows.\n")
     _next_second()
-    _commented(others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None)
+    _commented(
+        others,
+        tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence.", comment_sources(RUN)),
+        None,
+    )
     (evidence,) = plan_store.sdk(plan_store.client().task_comment_list(others)).comments
     boundary = comments.moment(evidence.updated_at or evidence.created_at, "the evidence")
     path = comments.boundary_path(drafts_root, RUN)
@@ -761,7 +780,9 @@ def test_an_earliest_feedback_file_recording_no_boundary_falls_back_to_the_compu
     _commented(own, "Answered by the evidence comment that follows.\n")
     _next_second()
     evidence = _commented(
-        others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None
+        others,
+        tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence.", comment_sources(RUN)),
+        None,
     )
     (comment,) = plan_store.sdk(plan_store.client().task_comment_list(others)).comments
     listed = comment.model_dump(mode="json")
@@ -1929,7 +1950,11 @@ def test_a_first_gathering_scoped_to_a_run_quotes_again_what_its_evidence_elsewh
     _next_second()
     answered = _commented(own, "Answered by the evidence comment that follows.\n")
     _next_second()
-    _commented(others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None)
+    _commented(
+        others,
+        tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence.", comment_sources(RUN)),
+        None,
+    )
     (evidence,) = plan_store.sdk(plan_store.client().task_comment_list(others)).comments
     evidenced = comments.moment(evidence.updated_at or evidence.created_at, "the evidence")
 

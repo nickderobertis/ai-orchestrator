@@ -130,17 +130,38 @@ sources:
         high: High
         medium: Medium
         low: Low
-      # Projects the machine a follow-up ticket's verification ran on onto the board's `Host`
-      # text field, so the board filters by host the way it filters by origin; the record
-      # keeps it in its description's metadata slot, which stays its one home. `sources fields
-      # followups --apply` creates the field, and a copy onto a board without it is refused
-      # by name before anything is written. `tests/test_plan_source_roots.py` holds it to the
-      # CLI's resolved config and its `key` and `path` to the record's metadata key and its
-      # `host` key in `orchestrator/follow_up_tickets.py`.
+      # Projects a follow-up ticket's audit trail onto the board's text fields — the machine
+      # its verification ran on, its owning runs, basis, drafts' sources, transcripts,
+      # witnesses and verification time — so a person deciding on it reads a body free of it
+      # and the board filters and sorts by host, run or basis the way it does by origin. The
+      # record keeps every value whole in its description's metadata slot, which stays its one
+      # home and the one every check reads; a value over a text field's limit is shown
+      # shortened there. `sources fields followups --apply` creates the fields, and a copy onto
+      # a board without one is refused by name before anything is written.
+      # `tests/test_plan_source_roots.py` holds these entries to the CLI's resolved config and
+      # to `BOARD_FIELDS` in `orchestrator/follow_up_tickets.py`.
       metadata_fields:
         - field: Host
           key: orchestrator.follow-up
           path: [host]
+        - field: Owning runs
+          key: orchestrator.follow-up
+          path: [owning_runs]
+        - field: Basis
+          key: orchestrator.follow-up
+          path: [basis]
+        - field: Drafts
+          key: orchestrator.follow-up
+          path: [draft_sources]
+        - field: Transcripts
+          key: orchestrator.follow-up
+          path: [transcripts]
+        - field: Witnesses
+          key: orchestrator.follow-up
+          path: [witnesses]
+        - field: Verified at
+          key: orchestrator.follow-up
+          path: [verified_at]
       # The owners a create on this board may file a follow-up ticket's issue under: the
       # board's own owner, so a ticket naming a repository of anybody else is refused by the
       # store as `creation-owner` before anything is written — filing an issue in a third

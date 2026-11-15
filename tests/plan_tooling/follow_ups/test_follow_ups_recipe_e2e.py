@@ -71,7 +71,11 @@ import pytest
 import short_state
 import yaml
 from flow_engine_stand_in import give_flow_engine
-from follow_up_ticket_shape import QUALIFYING_RELATIONS, UNRELATED_CANDIDATES, impact_prose
+from follow_up_ticket_shape import (
+    QUALIFYING_RELATIONS,
+    UNRELATED_CANDIDATES,
+    impact_prose,
+)
 from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
@@ -580,6 +584,9 @@ def _ticket(
         owning_runs=(tickets.RunId(run),),
         drafts=tuple(tickets.QualifiedDraftId(draft) for draft in drafts),
         basis=(tickets.Basis(tickets.Origin(repository), tickets.Commit(COMMIT)),),
+        witnesses=(f"{repository} src/cursor.py:41 at {COMMIT}",),
+        # What `board-status` records of drafts the bench never wrote: none it could read.
+        draft_sources=() if estimated else None,
         verified_at=tickets.Timestamp(VERIFIED_AT),
         host=tickets.Host(host),
         body="\n\n".join(sections),
@@ -769,23 +776,51 @@ def _re_estimate(python: str, run: str, issue: str) -> list[str]:
     )
 
 
-def _commented(python: str, run: str, issue: str, body: Path) -> list[str]:
-    """The evidence comment the task prescribes on another run's issue: the module's `comment`,
-    which refuses a body that is not ``run``'s comment shape and receipts the store's answer,
-    never a bare `task comment add`."""
-    return _from_checkout(
-        python,
-        "-m",
-        "orchestrator.follow_up_tickets",
-        "comment",
-        "--board",
-        BOARD,
-        "--run",
-        run,
-        issue,
-        "--body-file",
-        str(body),
-    )
+class Commented(NamedTuple):
+    """An evidence comment the agent writes from its parts: what it observed, the issue's root
+    cause it names, and, for a budget question, the question."""
+
+    root_cause: str
+    evidence: str
+    question: str | None = None
+
+
+def _comment_words(bench: Bench, python: str, run: str, name: str, said: Commented) -> list[str]:
+    """`comment`'s words for ``said``, its parts staged as files the agent writes: the sources
+    as a ticket record holds them, naming ``run``'s draft — or none for a budget question."""
+    sources = {
+        "host": HOST,
+        "basis": {REPOSITORY: COMMIT},
+        "drafts": [] if said.question is not None else [f"{tickets.SOURCE}:{run}/drafts/a-draft"],
+        "witnesses": [f"{REPOSITORY} src/cursor.py:41 at {COMMIT}"],
+    }
+    words = [python, "-m", "orchestrator.follow_up_tickets", "comment", "--board", BOARD]
+    words += ["--run", run, "--root-cause", said.root_cause]
+    words += ["--evidence-file", str(_staged(bench, f"{name}-evidence.md", said.evidence))]
+    words += ["--sources-file", str(_staged(bench, f"{name}-sources.json", json.dumps(sources)))]
+    if said.question is not None:
+        words += ["--question-file", str(_staged(bench, f"{name}-question.md", said.question))]
+    return words
+
+
+def _commented(  # noqa: PLR0913 - the comment and where it goes
+    bench: Bench, python: str, run: str, issue: str, name: str, said: Commented
+) -> list[str]:
+    """The evidence comment the task prescribes on another run's issue: the module's `comment`
+    from its parts, which refuses a part or sources that are not the comment's shape and
+    receipts the store's answer, never a bare `task comment add`."""
+    return _from_checkout(*_comment_words(bench, python, run, name, said), issue)
+
+
+def _carries(body: str, run: str, said: Commented) -> None:
+    """``body`` is ``run``'s evidence comment as `comment` writes ``said``: its metadata block
+    opening it, then what was observed and any question, then its marker last."""
+    lines = [line for line in body.splitlines() if line.strip()]
+    assert lines[:2] == ["<details>", f"<summary>{tickets.comment_summary(run)}</summary>"], body
+    assert lines[-1] == tickets.comment_marker(run, said.root_cause), body
+    assert said.evidence in body, body
+    assert said.question is None or body.index(said.evidence) < body.index(said.question)
+    assert tickets.run_comment_problems(run, body) == [], body
 
 
 def _refused_shapes(python: str, witness: Path, shaped: dict[str, Path]) -> list[str]:
@@ -870,11 +905,13 @@ def _with_first_estimate(body: str) -> str:
     """``body`` as `board-status` writes it for a `medium`, intermittent, first occurrence.
 
     What a ticket the agent wrote with :data:`FULL_SEVERITY` reaches the board as, its host
-    read from `hostname`.
+    read from `hostname` and its plain parts in the blocks `board-status` writes.
     """
     medium, intermittent = tickets.Severity.MEDIUM, tickets.Frequency.INTERMITTENT
-    return tickets.with_estimate_line(
-        body.replace(READ_FROM_HOSTNAME, HOST), tickets.estimate_line(medium, intermittent, 1)
+    return tickets.collapsed(
+        tickets.with_estimate_line(
+            body.replace(READ_FROM_HOSTNAME, HOST), tickets.estimate_line(medium, intermittent, 1)
+        )
     )
 
 
@@ -1149,7 +1186,7 @@ class Followed(NamedTuple):
     later_after: list[dict[str, object]]
     new_ticket_after_later: str
     edited_body: str
-    edited_comment: str
+    edited_comment: Commented
     unsound: subprocess.CompletedProcess[str]
     unsound_ticket: Path
     omitted: subprocess.CompletedProcess[str]
@@ -1437,9 +1474,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         )
         # The same ticket under the slug its draft's file suggested, before the search.
         invented = dataclasses.replace(shared, root_cause=tickets.RootCause(INVENTED_SHARED_CAUSE))
-        comment = tickets.render_comment(
-            main, SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12`."
-        )
+        comment = Commented(SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12`.")
         _script(
             bench,
             main,
@@ -1543,12 +1578,13 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 # shell had: the older plan store first and this checkout's `.venv/bin`
                 # absent. The helper says what it records and why.
                 _validated_older_first(bench, python, shared_ticket, bench.tmp / VALIDATE_SERVED),
-                ["rm", str(new_draft), str(shared_draft), str(related_draft)],
                 _decided_and_copied(python, new_ticket),
                 _decided_and_copied(python, related_ticket),
-                _commented(python, main, other_issue, _staged(bench, "comment.md", comment)),
+                _commented(bench, python, main, other_issue, "comment", comment),
                 # The re-estimate the task prescribes after every evidence comment.
                 _re_estimate(python, main, other_issue),
+                # Each ticket copied or its evidence on the board: the drafts it consumed go.
+                ["rm", str(new_draft), str(shared_draft), str(related_draft)],
                 # Where the turn runs its commands, written down there by the programs
                 # themselves: `pwd` says which directory, git whether a repository holds it.
                 ["sh", "-c", f"pwd -P > {TURN_DIRECTORY_WITNESS}"],
@@ -1674,8 +1710,8 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             creating=as_copied.creating,
             board_estimate=as_copied.board_estimate,
         )
-        edited_comment = tickets.render_comment(
-            main, SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12` and `:40`."
+        edited_comment = Commented(
+            SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12` and `:40`."
         )
         feedback = _staged(bench, "feedback.md", FEEDBACK)
         # The agent finds its own comment by the marker the module recognises, and edits it.
@@ -1688,11 +1724,11 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             f"mine = [c['id'] for c in comments if t.may_change_comment({main!r}, c['body'])]\n"
             "print(mine[0])\n",
         )
-        edited_file = _staged(bench, "comment-edited.md", edited_comment)
         edit = (
             f"set -euo pipefail\ncd {shlex.quote(str(REPO_ROOT))}\n"
             f"id=$({store} task comment list {other_issue} --json | {python} {pick})\n"
-            f'{store} task comment edit {other_issue} "$id" --body-file {edited_file}\n'
+            + shlex.join(_comment_words(bench, python, main, "comment-edited", edited_comment))
+            + f' --edit "$id" {shlex.quote(other_issue)}\n'
         )
         rederive_witness = bench.tmp / REDERIVE_WITNESS
         _script(
@@ -1746,7 +1782,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             found_again = _ticket(
                 later, NEW_CAUSE, (_draft_id(later, later_draft),), title, "Seen again"
             )
-            later_comment = tickets.render_comment(later, NEW_CAUSE, f"Run {later} hit it too.")
+            later_comment = Commented(NEW_CAUSE, f"Run {later} hit it too.")
             _script(
                 bench,
                 later,
@@ -1756,14 +1792,11 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                         _staged(bench, f"later-{at}.md", tickets.render(found_again)), later_ticket
                     ),
                     _estimated_and_validated(python, later_ticket),
-                    ["rm", str(later_draft)],
                     _commented(
-                        python,
-                        later,
-                        new_issue,
-                        _staged(bench, f"later-{at}-comment.md", later_comment),
+                        bench, python, later, new_issue, f"later-{at}-comment", later_comment
                     ),
                     _re_estimate(python, later, new_issue),
+                    ["rm", str(later_draft)],
                     _accounting(
                         bench,
                         python,
@@ -2931,7 +2964,8 @@ def test_the_task_carries_every_instruction_and_both_contracts(
         "rather than filing it quietly as a ticket",
         "**Group what stands by root cause**",
         "-m orchestrator.follow_up_tickets validate <path of the ticket>",
-        "Then delete the draft files that ticket consumed",
+        "Once a ticket is copied, or its evidence is on another run's item, delete the draft "
+        "files it consumed",
         f"-m orchestrator.follow_up_tickets board-items --board {BOARD} {ON_ITS_BOARD} "
         "--search <text>`, asked in this order: - **first, in the words of the invariant and "
         "its symptom**",
@@ -2945,13 +2979,15 @@ def test_the_task_carries_every_instruction_and_both_contracts(
         "**judge from the original evidence whether the root cause fires consistently**",
         "record that as the ticket's `frequency`",
         "the estimate and the priority themselves are never yours to write",
-        f"-m orchestrator.follow_up_tickets comment --board {BOARD} --run {main} <that item's "
-        "id> --body-file <the comment>`",
+        "copy nothing: post this run's one comment to that item, or edit the comment this run "
+        "already left there, with",
+        'from its parts as "Ownership on the board" below states, `--root-cause` naming that '
+        "item's `root_cause`",
         "**after every such comment, re-estimate that item**",
         f"-m orchestrator.follow_up_tickets re-estimate --board {BOARD} --run {main} <that "
         "item's id>`",
-        "Run `hostname` on the machine you run on and write exactly what it prints, both as "
-        "`host` and in the `## Evidence` section, never a value you type or recall",
+        "Run `hostname` on the machine you run on and write exactly what it prints as `host`, "
+        "never a value you type or recall",
     ):
         assert instruction in flat, instruction
     steps = task.split("## What to do, in order", 1)[1].split("## The verified ticket", 1)[0]
@@ -3014,11 +3050,17 @@ def test_a_verified_ticket_lands_on_the_board_with_its_shape_its_one_repository_
     metadata = landed["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["onetaskgraph.origin"] == tickets.qualified_id(followed.main, NEW_CAUSE)
+    # Its drafts were a manager's, which record no transcript: `board-status` read where each
+    # came from off the draft itself, and wrote no `transcripts`.
     assert set(metadata[tickets.KEY]) == {
         *tickets.RECORD_KEYS,
         tickets.FREQUENCY_FIELD,
         tickets.BOARD_ESTIMATE_FIELD,
-    }
+    } - {tickets.TRANSCRIPTS_FIELD}
+    assert metadata[tickets.KEY][tickets.DRAFT_SOURCES_FIELD] == dict.fromkeys(
+        ticket.drafts, "author manager"
+    )
+    assert ticket.drafts, "the landed ticket names no draft"
     # Its estimate, read back off the board: the narrowed severity with the workaround, `low`,
     # an intermittent root cause and its one occurrence; the board held no item, so the
     # priority is the estimate, which the copy records as the one the card received.
@@ -3053,7 +3095,9 @@ def test_another_runs_open_issue_gets_one_marked_comment_and_is_otherwise_untouc
     assert before["priority"] == after["priority"] == HELD_PRIORITY
     (comment,) = followed.comments_after_first
     body = str(comment["body"])
-    assert body.splitlines()[0] == f"Additional evidence from follow-up run `{followed.main}`."
+    _carries(
+        body, followed.main, Commented(SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12`.")
+    )
     assert tickets.comment_owner(body) == tickets.CommentOwner(
         tickets.RunId(followed.main), tickets.RootCause(SHARED_CAUSE)
     )
@@ -3158,7 +3202,7 @@ def test_a_re_copy_keeps_the_status_a_person_moved_the_board_item_to(
     assert followed.new_after_second["content"] != followed.new_after_move["content"]
     (comment,) = followed.comments_after_second
     assert comment["id"] == followed.comments_after_first[0]["id"]
-    assert str(comment["body"]).strip() == followed.edited_comment.strip()
+    _carries(str(comment["body"]), followed.main, followed.edited_comment)
     # The earlier run's issue moved only in what this run's two re-estimates write, and its
     # comment's edit counted no second occurrence.
     other, before = followed.other_after_second, followed.other_before
@@ -3231,17 +3275,17 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
             "Examples",
             "Suggested fix",
             "Rejected fixes",
-            "Owning runs",
             "Evidence",
         ], headings
-        fix = ticket.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
+        plain = tickets.expanded(ticket.body)
+        fix = plain.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
         assert fix == f"{ONE_FIX}\n\n{LOCATIONS}\n\n{UNIT}"
         assert REJECTED in ticket.body.split(f"## {tickets.REJECTED_FIXES}\n\n", 1)[1]
         assert ticket.host == HOST, "the rewritten ticket's host is not what `hostname` printed"
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 14
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 15
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -3788,7 +3832,10 @@ def test_a_ticket_narrowed_by_an_accepted_fix_lands_depending_on_it_with_the_url
     assert _severity_lines(impact) == NARROWED_SEVERITY, "the narrowed severity did not land"
     cause = landed.body.split("## Root cause\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert NARROWED_CAUSE in cause, "the narrowed root cause did not land"
-    fix = landed.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
+    # Read as the plain part it was written as, from inside the block `board-status` wrote.
+    assert f"<summary>{tickets.CONTRIBUTING_LOCATIONS}</summary>" in landed.body
+    plain = tickets.expanded(landed.body)
+    fix = plain.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
     # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling-follow-ups` is
     # already the Nx project edge this repository keeps for follow-up journeys that launch the
     # installed engine, keyed on `planToolingFollowUpsWorkspace`, which covers every file this
@@ -5481,17 +5528,13 @@ def test_real_follow_ups_disposes_of_open_cancelled_and_changed_budget_causes(
         commands.append(_placed(source, target))
         commands.append([python, "-m", "orchestrator.follow_up_tickets", "validate", str(target)])
     for i in (0, 1):
-        evidence = _staged(
-            bench,
-            f"evidence-{i}",
-            tickets.render_comment(
-                main,
-                causes[i],
-                "Cycle 20 seconds, budget 10 seconds. Publication is not measured. "
-                + ("Should the budget change?" if i == 1 else "Repeated delivery cost."),
-            ),
+        measured = "Cycle 20 seconds, budget 10 seconds. Publication is not measured."
+        said = (
+            Commented(causes[i], measured, "Should the budget change?")
+            if i == 1
+            else Commented(causes[i], f"{measured} Repeated delivery cost.")
         )
-        commands.append(_commented(python, main, items[i], evidence))
+        commands.append(_commented(bench, python, main, items[i], f"evidence-{i}", said))
     commands.append(_re_estimate(python, main, items[0]))
     commands.append(_decided_and_copied(python, staged[1][1]))
     commands.append([python, str(update)])

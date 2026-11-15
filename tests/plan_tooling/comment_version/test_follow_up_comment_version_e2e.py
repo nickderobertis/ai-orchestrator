@@ -136,6 +136,7 @@ def _ticket(run: str) -> tickets.Ticket:
         owning_runs=(tickets.RunId(run),),
         drafts=(tickets.QualifiedDraftId(f"drafts:{run}/drafts/a-consumed-draft"),),
         basis=(tickets.Basis(tickets.Origin(REPOSITORY), tickets.Commit(COMMIT)),),
+        witnesses=(f"{REPOSITORY} src/cursor.py:41 at {COMMIT}",),
         verified_at=tickets.Timestamp("2026-01-01T00:00:00Z"),
         host=tickets.Host(socket.gethostname()),
         body="\n\n".join(sections),

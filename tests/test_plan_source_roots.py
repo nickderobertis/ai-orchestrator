@@ -400,23 +400,36 @@ def test_the_follow_ups_board_maps_every_priority_and_the_plans_board_maps_none(
     )
 
 
-#: The board text field each follow-up ticket's record value is projected onto, per
-#: source. Stated here for the reason :data:`FOLLOWUPS_PRIORITIES` is: the other party is the
-#: live board, so what is held is the projection the installed CLI resolves. The tracked
-#: document declares no other board; a host's own follow-up trackers are its user layer's.
-FOLLOWUPS_METADATA_FIELDS = [
-    {"field": "Host", "key": follow_up_tickets.KEY, "path": [follow_up_tickets.HOST_FIELD]}
-]
+#: The board text fields each follow-up ticket's record values are projected onto: the
+#: record module's one declaration (`BOARD_FIELDS`), which the installed CLI's resolution of
+#: the tracked document is held to. The tracked document declares no other board; a host's own
+#: follow-up trackers are its user layer's.
+FOLLOWUPS_METADATA_FIELDS = follow_up_tickets.metadata_fields()
+
+
+def test_the_record_s_board_fields_name_its_own_keys() -> None:
+    """Each field the record is shown on reads a key the record writes, `Host` first."""
+    assert [field for field, _ in follow_up_tickets.BOARD_FIELDS] == [
+        "Host",
+        "Owning runs",
+        "Basis",
+        "Drafts",
+        "Transcripts",
+        "Witnesses",
+        "Verified at",
+    ]
+    for _, path in follow_up_tickets.BOARD_FIELDS:
+        assert len(path) == 1 and path[0] in follow_up_tickets.RECORD_KEYS, path
 
 
 @pytest.mark.reads_checkouts
-def test_the_follow_ups_board_projects_a_ticket_s_host_onto_its_host_field() -> None:
-    """`followups` projects the record's `host` onto `Host`, and no other source projects.
+def test_the_follow_ups_board_projects_a_ticket_s_record_onto_its_fields() -> None:
+    """`followups` projects the record's values onto its fields, and no other source projects.
 
     Read through the installed CLI's own resolution, because an entry the store does not
-    resolve is one no copy writes. Its `key` and `path` are this module's record constants,
-    so a record that renamed either would leave the board's field empty on every copy
-    rather than failing here.
+    resolve is one no copy writes. Its `key` and `path`s are the record module's own
+    declaration, so a record that renamed either would leave the board's field empty on every
+    copy rather than failing here.
     """
     resolved = _resolved_configuration()
     projections = {
@@ -714,6 +727,24 @@ def example_resolved(tmp_path_factory: pytest.TempPathFactory) -> dict[str, obje
     """Every setting the installed CLI resolves here with the example as the user layer."""
     home = onetaskgraph_user_layer.installed(tmp_path_factory.mktemp("example-layer"))
     return onetaskgraph_user_layer.resolved(home)
+
+
+@pytest.mark.reads_checkouts
+def test_every_linear_tracker_the_example_routes_follow_ups_to_shows_the_record_s_fields(
+    example_resolved: dict[str, object],
+) -> None:
+    """Every `linear` source the example layer's `followups` routes reach carries the record
+    module's `metadata_fields`, which the store shows as one collapsed `Fields` section at the
+    end of each issue's description; a route's GitHub board carries them as fields."""
+    routes = example_resolved.get("sources.followups.routes")
+    assert isinstance(routes, list) and routes, routes
+    reached = sorted({str(route["to"]) for route in routes if isinstance(route, dict)})
+    linear = [name for name in reached if example_resolved[f"sources.{name}.plugin"] == "linear"]
+    assert linear == [onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS], reached
+    for name in reached:
+        assert example_resolved.get(f"sources.{name}.config.metadata_fields") == (
+            follow_up_tickets.metadata_fields()
+        ), name
 
 
 @pytest.mark.reads_checkouts

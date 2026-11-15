@@ -23,16 +23,16 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import ClassVar, Literal, NamedTuple, NewType
+from typing import ClassVar, Literal, NamedTuple, NewType, NotRequired, TypedDict
 
 import follow_up_variables
 import onetaskgraph_user_layer
 import pytest
-from follow_up_ticket_shape import FIX, current_section, impact_prose
+from follow_up_ticket_shape import FIX, before_schema_15, current_section, impact_prose
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator import follow_up_tickets, plan_store
+from orchestrator import follow_up_drafts, follow_up_tickets, plan_store
 from orchestrator.root import REPO_ROOT
 
 #: The same project as every recipe here names it: qualified by the `authoring` source
@@ -202,6 +202,24 @@ ORIGIN_FIELD_NAME = "onetaskgraph.origin"
 #: once `sources fields followups --apply` has created it; the `plans` source projects
 #: nothing, so carrying it there changes nothing it writes.
 HOST_FIELD_NAME = "Host"
+#: The other board text fields the `followups` source projects a ticket's record onto, as the
+#: record module declares them, and the id each is answered under. Every board here carries
+#: them, as it carries `Host`, unless a journey takes one away.
+PROJECTED_FIELD_NAMES = tuple(
+    name for name, _ in follow_up_tickets.BOARD_FIELDS if name != HOST_FIELD_NAME
+)
+PROJECTED_FIELD_IDS = {
+    name: f"FIELD_text_{re.sub(r'[^a-z]+', '_', name.lower())}" for name in PROJECTED_FIELD_NAMES
+}
+#: The most a GitHub text field holds, in UTF-8 bytes, and GitHub's whole refusal of a value
+#: over it, as the sample-ticket spike measured on a live board: 1,024 accepted, 1,025 refused
+#: with nothing on the item changed.
+TEXT_FIELD_LIMIT = 1024
+TEXT_FIELD_REFUSAL = "Column value must be a valid value for text column"
+
+
+class TextTooLong(ValueError):
+    """A text field write over :data:`TEXT_FIELD_LIMIT`, which GitHub refuses whole."""
 
 
 class _BoardField(StrEnum):
@@ -356,6 +374,7 @@ class _RowState(NamedTuple):
     priority: str | None
     origin: str | None
     host: str | None
+    texts: tuple[tuple[str, str], ...] = ()
 
 
 class _Edge(NamedTuple):
@@ -417,6 +436,9 @@ class _Issue:
     #: left it — kept and answered back for the reason `origin` is, since the source sends a
     #: projected value again only when the row does not already hold it.
     host: str | None = None
+    #: The text each other projected field of this row holds, by field name, kept for the
+    #: reason `host` is.
+    texts: dict[str, str] = field(default_factory=dict)
     #: The Status option this row is at: where a person last moved it, or where the last
     #: write put it. Applied rather than only recorded, because a read-back is what the
     #: store's own `delivers` relation decides on — it computes a delivered ticket's status
@@ -477,7 +499,9 @@ class _Issue:
             self.sub_issues,
             self.repository,
         )
-        row = _RowState(self.status, self.priority, self.origin, self.host)
+        row = _RowState(
+            self.status, self.priority, self.origin, self.host, tuple(sorted(self.texts.items()))
+        )
         edges = frozenset(
             {_Edge("blocked-by", str(held)) for held in self.blocked_by}
             | {
@@ -545,7 +569,10 @@ class _Issue:
                     "field": {"id": _BoardField.HOST, "name": HOST_FIELD_NAME},
                 }
             ]
-        )
+        ) + [
+            {"text": text, "field": {"id": PROJECTED_FIELD_IDS[name], "name": name}}
+            for name, text in self.texts.items()
+        ]
         held = self.priority_value()
         priority = [] if held is None else [held]
         return {
@@ -840,6 +867,8 @@ class _Board:
         self.attachments: dict[str, bytes] = {}
         #: Whether the board carries the `Host` text field, which one journey takes away.
         self.has_host_field = True
+        #: The other projected text fields the board carries, which a journey may take away.
+        self.text_fields: set[str] = set(PROJECTED_FIELD_NAMES)
         #: How many of an issue's comments one page answers, or `None` for every one on the
         #: first page: GitHub pages an issue's comments, and a reader that reads past the first
         #: page reads an issue that can change between its pages.
@@ -907,6 +936,16 @@ class _Board:
                     ]
                     if self.has_host_field
                     else []
+                ),
+                *(
+                    {
+                        "__typename": "ProjectV2Field",
+                        "id": PROJECTED_FIELD_IDS[name],
+                        "name": name,
+                        "dataType": "TEXT",
+                    }
+                    for name in PROJECTED_FIELD_NAMES
+                    if name in self.text_fields
                 ),
                 *(
                     [
@@ -1390,10 +1429,30 @@ class _Board:
             case _BoardField.ORIGIN:
                 self._row(item_id).origin = self._text(value)
             case _BoardField.HOST:
-                self._row(item_id).host = self._text(value)
+                self._row(item_id).host = self._held_text(value)
             case _BoardField.PRIORITY:
                 self._row(item_id).priority = self._option_named(value, self.priorities)
+            case str(projected) if projected in PROJECTED_FIELD_IDS.values():
+                name = next(one for one, held in PROJECTED_FIELD_IDS.items() if held == projected)
+                self._row(item_id).texts[name] = self._held_text(value)
         return item_id
+
+    def _held_text(self, value: object) -> str:
+        """A projected text field's value, refused whole over the limit GitHub holds."""
+        text = self._text(value)
+        if len(text.encode("utf-8")) > TEXT_FIELD_LIMIT:
+            raise TextTooLong(TEXT_FIELD_REFUSAL)
+        return text
+
+    @staticmethod
+    def _refused_text(payloads: Sequence[object]) -> dict[str, object] | None:
+        """GitHub's whole refusal of a request writing any text value over the limit."""
+        for payload in payloads:
+            value = payload.get("value") if isinstance(payload, dict) else None
+            text = value.get("text") if isinstance(value, dict) else None
+            if isinstance(text, str) and len(text.encode("utf-8")) > TEXT_FIELD_LIMIT:
+                return {"data": None, "errors": [{"message": TEXT_FIELD_REFUSAL}]}
+        return None
 
     def _cleared(self, payload: object) -> object:
         """Clear one field value on a row: a priority of `none`, or a host no longer recorded."""
@@ -1405,12 +1464,19 @@ class _Board:
                 self._row(item_id).priority = None
             case _BoardField.HOST:
                 self._row(item_id).host = None
+            case str(projected) if projected in PROJECTED_FIELD_IDS.values():
+                name = next(one for one, held in PROJECTED_FIELD_IDS.items() if held == projected)
+                self._row(item_id).texts.pop(name, None)
             case _:
-                raise ValueError(f"only Priority and Host are cleared here, not {payload!r}")
+                raise ValueError(
+                    f"only Priority and the projected text fields are cleared here, not {payload!r}"
+                )
         return item_id
 
     def set_field(self, variables: dict[str, object]) -> dict[str, object]:
         """Set one field value on a row, keeping what an origin or a Status write puts there."""
+        if (refused := self._refused_text([variables.get("input")])) is not None:
+            return refused
         item_id = self._applied(variables.get("input"))
         return {
             "data": {
@@ -1439,6 +1505,11 @@ class _Board:
         when its `write…` flag is set, so only the writes it asked for are applied and only
         their aliases are answered, which is what GitHub does with an `@include(if:)`.
         """
+        sent = [
+            variables.get(write.variable) for write in BATCHED_WRITES if write.included(variables)
+        ]
+        if (refused := self._refused_text(sent)) is not None:
+            return refused
         answer: dict[str, object] = {}
         for write in BATCHED_WRITES:
             if write.included(variables):
@@ -1508,11 +1579,11 @@ class _Board:
         }
 
     def create_field(self, variables: dict[str, object]) -> dict[str, object]:
-        """Create the board's `Priority` field, or its missing `Host` text field.
+        """Create the board's `Priority` field, or a missing projected text field.
 
-        `Priority` takes the options the setup sends, in its order. `Host` is answered with
-        nothing, as GitHub answers a text field to a document selecting only a single-select
-        field's fragment.
+        `Priority` takes the options the setup sends, in its order. A text field is answered
+        with nothing, as GitHub answers a text field to a document selecting only a
+        single-select field's fragment.
         """
         match variables.get("input"):
             case {"dataType": "TEXT", "name": str(name)} if (
@@ -1520,11 +1591,16 @@ class _Board:
             ):
                 self.has_host_field = True
                 return {"data": {"createProjectV2Field": {"projectV2Field": {}}}}
+            case {"dataType": "TEXT", "name": str(name)} if (
+                name in PROJECTED_FIELD_NAMES and name not in self.text_fields
+            ):
+                self.text_fields.add(name)
+                return {"data": {"createProjectV2Field": {"projectV2Field": {}}}}
             case {"name": "Priority", "singleSelectOptions": list(options)} if not self.priorities:
                 pass
             case payload:
                 raise ValueError(
-                    f"only a missing Host text field or a Priority field with options is "
+                    f"only a missing projected text field or a Priority field with options is "
                     f"created here, once: {payload!r}"
                 )
         self.priorities = tuple(
@@ -1671,6 +1747,16 @@ class _Board:
         """
 
         def answered(variables: dict[str, object]) -> dict[str, object]:
+            # GitHub refuses a request carrying a text value over the limit whole, nothing on
+            # any item changed, so it is read before a slot is applied.
+            fields = [
+                variables[f"{part.prefix}{n}"]
+                for part in parts
+                if part.write is _Operation.UPDATE_FIELD
+                for n in part.sent(variables)
+            ]
+            if (refused := self._refused_text(fields)) is not None:
+                return refused
             answer: dict[str, object] = {}
             for part in parts:
                 for n in part.sent(variables):
@@ -3486,6 +3572,7 @@ def _follow_up_ticket(
         owning_runs=(follow_up_tickets.RunId(PROPOSED_RUN),),
         drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{PROPOSED_RUN}/drafts/noticed"),),
         basis=(follow_up_tickets.Basis(origin, follow_up_tickets.Commit("0" * 40)),),
+        witnesses=(f"{origin} src/cursor.py:41 at {'0' * 40}",),
         verified_at=follow_up_tickets.Timestamp("2026-01-01T00:00:00Z"),
         host=host,
         body="\n\n".join(
@@ -3502,6 +3589,68 @@ def _follow_up_ticket(
         ),
         frequency=frequency,
     )
+
+
+def as_schema(ticket: follow_up_tickets.Ticket, schema: int) -> follow_up_tickets.Ticket:
+    """``ticket`` as a record of ``schema`` holds it: before schema 15 with none of the keys that
+    schema added, and its body the shape schemas 12 to 14 share."""
+    if schema >= follow_up_tickets.FIELDS_AT:
+        return replace(ticket, schema=schema)
+    return replace(
+        ticket,
+        schema=schema,
+        body=before_schema_15(ticket.body),
+        draft_sources=None,
+        transcripts=(),
+        witnesses=(),
+    )
+
+
+class CommentParts(TypedDict):
+    """Authored comment inputs varied by the refusal journeys, before they become CLI files."""
+
+    evidence: str
+    cause: NotRequired[str]
+    question: NotRequired[str]
+    bears_on: NotRequired[str]
+    sources: NotRequired[Mapping[str, object]]
+
+
+def comment_parts(  # noqa: PLR0913 - every part of a comment is its own keyword
+    directory: Path,
+    run: str,
+    cause: str,
+    evidence: str,
+    *,
+    question: str | None = None,
+    bears_on: str | None = None,
+    sources: Mapping[str, object] | None = None,
+) -> tuple[str, ...]:
+    """`comment`'s words for ``run``'s evidence about ``cause``, its parts written as files under
+    ``directory`` the way the agent writes them: the sources as a ticket's record holds them,
+    naming one draft of ``run`` — none for a budget ``question`` — and a witness at the basis
+    commit :func:`_follow_up_ticket` verifies at."""
+    origin = _hosted(SIBLING_REPOSITORY)
+    held = sources or {
+        "host": "verifier.example",
+        "basis": {origin: "0" * 40},
+        "drafts": [] if question is not None else [f"drafts:{run}/drafts/noticed"],
+        "witnesses": [f"{origin} src/cursor.py:41 at {'0' * 40}"],
+    }
+    directory.mkdir(parents=True, exist_ok=True)
+    named = f"{run}-{cause}"
+    words = ["comment", "--board", follow_up_tickets.BOARD, "--run", run, "--root-cause", cause]
+    for flag, text in (
+        ("--evidence-file", evidence),
+        ("--sources-file", json.dumps(held)),
+        ("--question-file", question),
+        ("--bears-on-file", bears_on),
+    ):
+        if text is not None:
+            written = directory / f"{named}{flag.removesuffix('-file')}.txt"
+            written.write_text(text, encoding="utf-8")
+            words += [flag, str(written)]
+    return tuple(words)
 
 
 #: The body slot the adopted store keeps an item's metadata in, as it writes one.
@@ -3552,9 +3701,14 @@ def _seeded_item(  # noqa: PLR0913 - each is one fact about the item a board alr
         owning_runs=(follow_up_tickets.RunId(run),),
         drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{run}/drafts/noticed"),),
         priority_estimate=follow_up_tickets.estimate(medium, frequency, 1),
-        body=follow_up_tickets.with_estimate_line(
-            written.body, follow_up_tickets.estimate_line(medium, frequency, 1)
+        # As `board-status` left it before its copy: its parts in their blocks, and no source
+        # of a draft the store no longer holds.
+        body=follow_up_tickets.collapsed(
+            follow_up_tickets.with_estimate_line(
+                written.body, follow_up_tickets.estimate_line(medium, frequency, 1)
+            )
         ),
+        draft_sources=(),
     )
     metadata: dict[str, object] = {
         "onetaskgraph.item_kind": "task",
@@ -3587,6 +3741,31 @@ def _written_ticket(root: Path, ticket: follow_up_tickets.Ticket, text: str | No
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(follow_up_tickets.render(ticket) if text is None else text, encoding="utf-8")
     return path
+
+
+def written_drafts(root: Path, ticket: follow_up_tickets.Ticket) -> None:
+    """Write each draft ``ticket`` names under ``root`` as a node's draft record, the way
+    `"$ORCHESTRATOR_FOLLOW_UP_DRAFT"` leaves one, so `board-status` reads where it came from:
+    a run's drafts are still there when its ticket is first decided and copied."""
+    for draft in ticket.drafts:
+        run, _, name = draft.removeprefix(f"{follow_up_drafts.SOURCE}:").partition("/drafts/")
+        directory = root / "tasks" / run / follow_up_drafts.DRAFTS
+        directory.mkdir(parents=True, exist_ok=True)
+        body = "\n\n".join(f"## {heading}\n\nNoticed." for heading in follow_up_drafts.HEADINGS)
+        noticed = follow_up_drafts.Draft(
+            title="Noticed during the run",
+            run=run,
+            author=follow_up_drafts.Author("node", "verify", None),
+            dispatch=follow_up_drafts.DispatchStamp(None, None, str(root), None, None),
+            repository=ticket.repository,
+            paths=(),
+            drafted_at="2026-01-01T00:00:00Z",
+            body=body,
+        )
+        (directory / f"{name}.md").write_text(follow_up_drafts.render(noticed), encoding="utf-8")
+        projects = root / "projects"
+        projects.mkdir(exist_ok=True)
+        (projects / f"{run}.md").write_text(follow_up_drafts.render_project(run), "utf-8")
 
 
 def _rewritten_ticket(

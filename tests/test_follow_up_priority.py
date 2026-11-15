@@ -39,9 +39,12 @@ from follow_up_ticket_shape import (
     before_schema_10,
     before_schema_11,
     before_schema_12,
+    before_schema_15,
     brought_forward,
+    comment_sources,
     current_section,
     impact_prose,
+    to_schema_15,
 )
 
 from orchestrator import follow_up_comments as comments
@@ -115,6 +118,7 @@ def _ticket(
 ) -> tickets.Ticket:
     """A sound current ticket of ``run``, its estimate what its facts give one occurrence."""
     line = tickets.estimate_line(with_workaround, frequency, 1)
+    draft = tickets.QualifiedDraftId(f"drafts:{run}/drafts/a-draft")
     return tickets.Ticket(
         title=f"some-service: {cause}",
         status=tickets.Status.PROPOSED,
@@ -122,13 +126,16 @@ def _ticket(
         repository=tickets.Origin(REPOSITORY),
         created_by_run=tickets.RunId(run),
         owning_runs=(tickets.RunId(run),),
-        drafts=(tickets.QualifiedDraftId(f"drafts:{run}/drafts/a-draft"),),
+        drafts=(draft,),
         basis=(tickets.Basis(tickets.Origin(REPOSITORY), tickets.Commit(COMMIT)),),
         verified_at=tickets.Timestamp("2026-01-01T00:00:00Z"),
         host=tickets.Host(HOST),
-        body=_body(with_workaround, line, structured=structured),
+        body=tickets.collapsed(_body(with_workaround, line, structured=structured)),
         priority_estimate=tickets.estimate(with_workaround, frequency, 1),
         frequency=frequency,
+        draft_sources=((draft, "author node; node verify"),),
+        transcripts=((draft, f"onepipeline transcript {run} verify"),),
+        witnesses=(f"{REPOSITORY} src/cursor.py:41 at {COMMIT}",),
     )
 
 
@@ -140,8 +147,13 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
     """
     record = tickets.record(ticket)
     record["schema"] = schema
+    if schema < tickets.FIELDS_AT:
+        for key in tickets.FIELDS_KEYS:
+            record.pop(key, None)
     body = (
         ticket.body
+        if schema >= tickets.FIELDS_AT
+        else before_schema_15(ticket.body)
         if schema >= tickets.SEARCH_RETIRED_AT
         else before_schema_12(ticket.body)
         if schema >= tickets.PLAIN_AT
@@ -244,12 +256,33 @@ def _rewrite_last_receipt(root: Path, change: Callable[[dict[str, object]], None
 
 
 def _commented(issue: str, run: str, capsys: pytest.CaptureFixture[str]) -> None:
-    """``run``'s evidence on ``issue``, posted through `comment` as the agent posts it."""
-    body = tickets.render_comment(run, CAUSE, f"Run {run} saw it too.")
-    written = Path(os.environ[follow_up_variables.root_name()]).parent / f"comment-{run}.md"
-    written.write_text(body, encoding="utf-8")
+    """``run``'s evidence on ``issue``, posted through `comment` from its parts as the agent
+    posts it."""
+    scratch = Path(os.environ[follow_up_variables.root_name()]).parent
+    evidence, sources = scratch / f"evidence-{run}.md", scratch / f"sources-{run}.json"
+    evidence.write_text(f"Run {run} saw it too.", encoding="utf-8")
+    held = {
+        "host": HOST,
+        "basis": {REPOSITORY: COMMIT},
+        "drafts": [f"drafts:{run}/drafts/a-draft"],
+        "witnesses": [f"{REPOSITORY} src/cursor.py:41 at {COMMIT}"],
+    }
+    sources.write_text(json.dumps(held), encoding="utf-8")
     status = tickets.main(
-        ["comment", "--board", BOARD, "--run", run, "--body-file", str(written), issue]
+        [
+            "comment",
+            "--board",
+            BOARD,
+            "--run",
+            run,
+            "--root-cause",
+            CAUSE,
+            "--evidence-file",
+            str(evidence),
+            "--sources-file",
+            str(sources),
+            issue,
+        ]
     )
     assert status == tickets.SOUND, capsys.readouterr().err
     capsys.readouterr()
@@ -269,7 +302,10 @@ def _comment(qualified: str, body: str, author: str | None = None) -> str:
 
 
 def _evidence(qualified: str, run: str) -> str:
-    return _comment(qualified, tickets.render_comment(run, CAUSE, f"Run {run} saw it too."))
+    return _comment(
+        qualified,
+        tickets.render_comment(run, CAUSE, f"Run {run} saw it too.", comment_sources(run)),
+    )
 
 
 def _reply(qualified: str, run: str, verdict: tickets.Verdict) -> str:
@@ -490,7 +526,9 @@ def test_only_other_runs_evidence_and_confirming_replies_count_as_occurrences(
     _reply(issue, RUN, tickets.Verdict.DOES_NOT_CONFIRM)
     _comment(issue, "Me too!\n", author="a-person")  # unmarked, a person's
     # Another run's evidence and a confirming reply, each marked for another root cause.
-    _comment(issue, tickets.render_comment(RUN, "another-cause", "Something else."))
+    _comment(
+        issue, tickets.render_comment(RUN, "another-cause", "Something else.", comment_sources(RUN))
+    )
     _comment(
         issue,
         tickets.render_reply(
@@ -682,7 +720,8 @@ def test_a_schema_6_item_follows_only_while_its_priority_is_none(
     assert _decided(path, capsys) == "backlog\n", "a schema-6 ticket was not read"
     assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
     assert "carries no `frequency`" in capsys.readouterr().err
-    path.write_text(brought_forward(path.read_text(encoding="utf-8")), encoding="utf-8")
+    brought = brought_forward(path.read_text(encoding="utf-8"))
+    path.write_text(to_schema_15(brought, [f"{REPOSITORY} src/cursor.py:41 at {COMMIT}"]), "utf-8")
     _refacted(path, frequency=Frequency.INTERMITTENT)
     _copied(path, capsys)
 
@@ -1011,7 +1050,9 @@ def test_re_estimate_refuses_an_item_not_copied_from_the_ticket_its_record_descr
         record = _held(issue)
         native = issue.removeprefix(f"{BOARD}:")
         legacy = {
-            key: value for key, value in record.items() if key != tickets.BOARD_ESTIMATE_FIELD
+            key: value
+            for key, value in record.items()
+            if key not in (tickets.BOARD_ESTIMATE_FIELD, *tickets.FIELDS_KEYS)
         } | {"schema": tickets.BINDING_LAST_AT, tickets.BINDING_FIELD: native}
         plan_store.sdk(
             plan_store.client().task_metadata_set(issue, tickets.KEY, json.dumps(legacy))
@@ -1055,7 +1096,9 @@ def test_re_estimate_refuses_an_item_it_cannot_estimate(
     plan_store.sdk(plan_store.client().task_metadata_set(issue, tickets.KEY, '{"schema": 5}'))
     assert tickets.main(["re-estimate", "--board", BOARD, "--run", RUN, issue]) == tickets.UNSOUND
     refused = " ".join(capsys.readouterr().err.split())
-    assert "record of schema 5, and this reads schema 6, 7, 8, 9, 10, 11, 12, 13 or 14" in refused
+    assert (
+        "record of schema 5, and this reads schema 6, 7, 8, 9, 10, 11, 12, 13, 14 or 15" in refused
+    )
     plan_store.sdk(plan_store.client().task_metadata_set(issue, tickets.KEY, '{"schema": 7}'))
     assert tickets.main(["re-estimate", "--board", BOARD, "--run", RUN, issue]) == tickets.UNSOUND
     assert "no follow-up ticket this can estimate" in capsys.readouterr().err
@@ -1101,9 +1144,9 @@ def test_re_estimate_refuses_an_item_it_cannot_estimate(
         ),
         (
             lambda content, _line: re.sub(
-                r"## Owning runs\n.*", "## Owning runs\n", content, flags=re.DOTALL
+                r"## Evidence\n.*", "## Evidence\n", content, flags=re.DOTALL
             ),
-            "## Owning runs` section is empty",
+            "## Evidence` section is empty",
         ),
     ],
     ids=[

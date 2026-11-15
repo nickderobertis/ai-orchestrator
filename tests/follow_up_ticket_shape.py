@@ -11,6 +11,7 @@ written from here too, by the functions that take a current body back to them.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -134,9 +135,31 @@ def _join(sections: list[Section]) -> str:
     return "## " + _BREAK.join(f"{section.heading}\n\n{section.content}" for section in sections)
 
 
+#: What a body before schema 15 listed under `## Owning runs`.
+OWNING_RUNS = "Every run whose evidence this ticket carries."
+
+
+def before_schema_15(body: str) -> str:
+    """A current body as schemas 12 to 14 carried it: its parts plain and `## Owning runs`
+    before `## Evidence`, left as it is where it already is that shape."""
+    sections = _split(tickets.expanded(body))
+    if not any(section.heading == tickets.OWNING_RUNS for section in sections):
+        at = next(at for at, section in enumerate(sections) if section.heading == tickets.EVIDENCE)
+        sections.insert(at, Section(tickets.OWNING_RUNS, OWNING_RUNS))
+    return _join(sections)
+
+
+def after_schema_14(body: str) -> str:
+    """A schema-14 ``body`` brought to schema 15, as its run does when it rewrites it: its
+    `## Owning runs` removed and its parts put in their blocks, as `board-status` puts them."""
+    return tickets.collapsed(
+        _join([section for section in _split(body) if section.heading != tickets.OWNING_RUNS])
+    )
+
+
 def before_schema_12(body: str) -> str:
     """A current body as schema 11 carried it, with its historical search log."""
-    sections = _split(body)
+    sections = _split(before_schema_15(body))
     if not any(section.heading == tickets.DUPLICATE_SEARCH for section in sections):
         at = next(at for at, section in enumerate(sections) if section.heading == tickets.EVIDENCE)
         sections.insert(at, Section(tickets.DUPLICATE_SEARCH, DUPLICATE_SEARCH))
@@ -144,7 +167,7 @@ def before_schema_12(body: str) -> str:
 
 
 def after_schema_11(body: str) -> str:
-    """An own historical body brought forward by removing its retired search log."""
+    """An own historical body brought to schema 14 by removing its retired search log."""
     return _join(
         [section for section in _split(body) if section.heading != tickets.DUPLICATE_SEARCH]
     )
@@ -279,3 +302,39 @@ UNRELATED_CANDIDATES = tuple(
     Candidate(f"Unrelated candidate {at:02d}", f"https://github.com/o/s/issues/{100 + at}")
     for at in range(25)
 )
+
+
+#: The verification an evidence comment of these suites rests on: its host, its basis, and the
+#: one claim it verified there.
+COMMENT_HOST = "verifier-02.build.example"
+COMMENT_ORIGIN = "github.com/nickderobertis/some-service"
+COMMENT_COMMIT = "89abcdef0123456789abcdef0123456789abcdef"
+
+
+def comment_sources(run: str) -> tickets.CommentSources:
+    """The metadata of ``run``'s evidence comment in these suites, as `comment` reads it: one
+    node's draft, its transcript, and one witness at the basis commit."""
+    draft = tickets.QualifiedDraftId(f"drafts:{run}/drafts/20260101T000000Z-seen-again")
+    return tickets.CommentSources(
+        host=tickets.Host(COMMENT_HOST),
+        basis=(tickets.Basis(tickets.Origin(COMMENT_ORIGIN), tickets.Commit(COMMENT_COMMIT)),),
+        drafts=(draft,),
+        witnesses=(f"{COMMENT_ORIGIN} src/cursor.py:41 at {COMMENT_COMMIT}",),
+        draft_sources=((draft, "author node; node verify"),),
+        transcripts=((draft, f"onepipeline transcript {run} verify"),),
+    )
+
+
+def to_schema_15(text: str, witnesses: list[str]) -> str:
+    """A ticket file's ``text``, its record at schema 15 and its body schema 14's, brought the
+    rest of the way as its run's rewrite brings it: `## Owning runs` removed, its parts put in
+    their blocks, and its record carrying ``witnesses``."""
+    head, body = text.split("\n## ", 1)
+    lines = head.split("\n")
+    for at, line in enumerate(lines):
+        key = f'  "{tickets.KEY}": '
+        if line.startswith(key):
+            held = json.loads(line.removeprefix(key))
+            held[tickets.WITNESSES_FIELD] = witnesses
+            lines[at] = key + json.dumps(held)
+    return f"{chr(10).join(lines)}\n{after_schema_14(f'## {body}'.rstrip(chr(10)))}\n"

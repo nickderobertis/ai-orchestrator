@@ -36,7 +36,13 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from follow_up_ticket_shape import before_schema_10, before_schema_11, before_schema_12
+from follow_up_ticket_shape import (
+    before_schema_10,
+    before_schema_11,
+    before_schema_12,
+    before_schema_15,
+    comment_sources,
+)
 from github_board import _Operation
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_answer_comments_recipe_e2e import (
@@ -107,8 +113,10 @@ pytestmark = [pytest.mark.xdist_group("follow-ups-comment-answers")]
 #: invariant and contributing locations and which closes with `## Duplicate search` rather than
 #: `## Evidence`; and 11, whose plain root cause and fix locations close with the historical
 #: search log then Evidence; 12, the last whose record could carry the retired item binding,
-#: in today's shape; and 13, the last before a record could carry the estimate its card last
-#: received. Schemas 7–13 stay readable and advance when their own run rewrites them.
+#: in today's shape; 13, the last before a record could carry the estimate its card last
+#: received; and 14, the last whose body lists its owning runs and whose parts are plain, before
+#: schema 15 moved its audit trail to the record. Schemas 7–14 stay readable and advance when
+#: their own run rewrites them.
 PROPOSED_CAUSE = "listing-cursor-skips-last-page"
 UNSURE_CAUSE = "lock-file-left-after-crash"
 DEFERRED_CAUSE = "sweep-trailer-omits-a-family"
@@ -131,6 +139,7 @@ OLDER_CAUSES = dict(
             "download-skips-a-chunk",
             "timer-fires-twice",
             "invite-link-expires-early",
+            "thumbnail-loses-its-crop",
         ),
         strict=True,
     )
@@ -216,11 +225,19 @@ text = re.sub(
     rf"\\n*## {tickets.DUPLICATE_SEARCH}\\n\\n.*?(?=\\n\\n## |\\Z)", "", text, flags=re.DOTALL
 )
 text = text.replace("## Suggested fixes\\n", f"## {tickets.SUGGESTED_FIX}\\n", 1)
+# Schema 15: each verified claim is a witness of the record.
+record[tickets.WITNESSES_FIELD] = [
+    f"{origin} src/cursor.py:41 at {commit}" for origin, commit in record["basis"].items()
+]
 record[tickets.FREQUENCY_FIELD] = str(tickets.Frequency.INTERMITTENT)
 text = text.replace(line, prefix + json.dumps(record), 1)
 text = re.sub(
     rf"(## {tickets.SUGGESTED_FIX}\\n\\n).*?(\\n\\n## )", lambda held: held[1] + fix + held[2],
     text, count=1, flags=re.DOTALL,
+)
+# Schema 15: the owning runs are the record's, so the body's section of them goes.
+text = re.sub(
+    rf"\\n*## {tickets.OWNING_RUNS}\\n\\n.*?(?=\\n\\n## |\\Z)", "", text, flags=re.DOTALL
 )
 # Evidence closes the rewritten ticket.
 evidence = re.search(
@@ -539,7 +556,7 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
     ticket = dataclasses.replace(
         ticket,
         body=(
-            ticket.body
+            before_schema_15(ticket.body)
             if schema >= tickets.SEARCH_RETIRED_AT
             else before_schema_12(ticket.body)
             if schema >= tickets.PLAIN_AT
@@ -581,7 +598,12 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
             f"## {repository}\n\n{ticket.repository}\n\n## {following}\n",
             1,
         ).replace(f"## {tickets.SUGGESTED_FIX}\n", f"## {suggested}\n", 1)
-    dropped = {tickets.ESTIMATE_FIELD, tickets.FREQUENCY_FIELD, tickets.BINDING_FIELD}
+    dropped = {
+        tickets.ESTIMATE_FIELD,
+        tickets.FREQUENCY_FIELD,
+        tickets.BINDING_FIELD,
+        *tickets.FIELDS_KEYS,
+    }
     if schema < tickets.HOST_AT:
         dropped.add("host")
     record = {key: value for key, value in tickets.record(ticket).items() if key not in dropped}
@@ -652,8 +674,9 @@ def _brought_forward(bench: Bench, python: str, witness: Path, held: Filed) -> l
 
     What `validate` printed and exited with goes to ``witness`` — the refusal naming the older
     schema the task keys its rule on — and the ticket is then edited in place, filling what
-    its schema lacked: `host` from `hostname`, `repositories` from its record, and
-    ``held.impact`` as its `## Impact` section; `validate --pending` then reads the result,
+    its schema lacked: `host` from `hostname`, `repositories` from its record, a witness of
+    each repository its basis names, and ``held.impact`` as its `## Impact` section, with no
+    `## Owning runs`; `validate --pending` then reads the result,
     its exit going to ``witness`` too, before the pass's settle estimates and writes it.
     """
     ticket = held.ticket
@@ -745,7 +768,9 @@ def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:  # noqa: PLR
             _marked(
                 bench,
                 other_run.issue,
-                tickets.render_comment(run, OTHER_RUN_CAUSE, "Seen again in this run."),
+                tickets.render_comment(
+                    run, OTHER_RUN_CAUSE, "Seen again in this run.", comment_sources(run)
+                ),
             )
 
             # After the run last responded, so the snapshot selects each of these.
@@ -992,8 +1017,13 @@ def test_a_comment_correcting_an_older_ticket_brings_it_to_the_current_schema_wi
     assert isinstance(metadata, dict)
     assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA
     ticket = tickets.from_store_item(after)
-    fix = ticket.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
+    # Its locations in the block settle wrote, read back as the plain part the agent wrote.
+    assert f"<summary>{tickets.CONTRIBUTING_LOCATIONS}</summary>" in ticket.body
+    plain = tickets.expanded(ticket.body)
+    fix = plain.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert fix == REQUESTED_SECTION, ticket.body
+    assert f"## {tickets.OWNING_RUNS}" not in ticket.body
+    assert ticket.witnesses, "the rewrite recorded no witness"
     assert f"Filed at schema {schema} (Examples)." in ticket.body, "the rest of the ticket moved"
     assert not any(heading in ticket.body for heading in retired), ticket.body
     assert ticket.frequency is tickets.Frequency.INTERMITTENT
@@ -1003,7 +1033,7 @@ def test_a_comment_correcting_an_older_ticket_brings_it_to_the_current_schema_wi
     assert ticket.host == HOST
     assert f"Verified on `{HOST}`." in ticket.body, ticket.body
     assert after["repositories"] == [REPOSITORY]
-    impact = ticket.body.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0]
+    impact = plain.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert impact.startswith(older.impact), impact
     assert f"- {tickets.ESTIMATE_LINE}:" in impact, "settle wrote no estimate line"
     assert older.validated.returncode == OK, older.validated.stdout + older.validated.stderr
@@ -1088,8 +1118,8 @@ def test_from_its_launch_to_settle_the_dispatch_sends_the_board_nothing_but_its_
     batched read gives none a version. The first narrow status update is read once, by the
     update's own binding read: plan store 0.12.0 dropped the separate classification read
     its boundary's `admit_existing` used to make before it, and the remaining copies use
-    their known records. Writes move a field where
-    priority or status moves and the issue where text or metadata moves.
+    their known records. Writes move a field where priority, status or a projected record
+    value moves, and the issue where text or metadata moves.
     """
     _settled(answered)
     quoted = len(tickets.quoted_comments(answered.gathering.read_text(encoding="utf-8")))
@@ -1100,14 +1130,14 @@ def test_from_its_launch_to_settle_the_dispatch_sends_the_board_nothing_but_its_
         _Operation.UPDATE_ISSUE,
     )
     # onetaskgraph 0.14.12 sends a targeted write as its token twin, whose answer carries the
-    # issue's change token inline, so it reads no version back after any write here.
+    # issue's change token inline, so it reads no version back after any write here. Each older
+    # ticket settle brings to schema 15 moves the board fields its record now projects, which
+    # the store writes in the one batched field write it sends that item.
     assert answered.operations == (
         [_Operation.ADD_COMMENT_WHOLE] * quoted
         + [_Operation.ISSUE_DETAILS]
         + [read, field, issue]
-        + [read, fields, issue]
-        + [read, field, issue] * 6
-        + [read, issue] * 6
+        + [read, fields, issue] * 14
         + [read, field]
         + [read, issue]
     ), answered.operations

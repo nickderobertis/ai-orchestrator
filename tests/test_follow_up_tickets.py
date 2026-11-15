@@ -53,10 +53,13 @@ from follow_up_ticket_shape import (
     before_schema_10,
     before_schema_11,
     before_schema_12,
+    before_schema_15,
     brought_forward,
     brought_from_schema_10,
+    comment_sources,
     current_section,
     impact_prose,
+    to_schema_15,
 )
 from follow_up_ticket_shape import ROOT_CAUSE as PLAIN_ROOT_CAUSE
 from follow_up_ticket_shape import SCHEMA_10_ROOT_CAUSE as SHARED_ROOT_CAUSE
@@ -124,8 +127,20 @@ def _body(
     rejected: str | None = None,
     related: str | None = None,
 ) -> str:
-    """A body of every heading, with ``rejected`` as a `## Rejected fixes` after the fix and
-    ``related`` as a `## Related tickets` before Evidence."""
+    """:func:`_plain_body` as the store holds it: each sound plain part in the block `render`
+    writes, and a malformed one left plain for validation to name."""
+    return tickets.collapsed(_plain_body(host, impact, rejected, related))
+
+
+def _plain_body(
+    host: str = HOST,
+    impact: str = IMPACT_TEXT,
+    rejected: str | None = None,
+    related: str | None = None,
+) -> str:
+    """A body of every heading as the agent writes it, its parts plain, with ``rejected`` as a
+    `## Rejected fixes` after the fix and ``related`` as a `## Related tickets` before
+    Evidence."""
     sections = []
     for heading in tickets.HEADINGS:
         if heading == tickets.EVIDENCE and related is not None:
@@ -146,13 +161,16 @@ def _body(
     return "\n\n".join(sections)
 
 
-BODY = _body()
+#: The sound body as the agent writes it, its parts plain, and as the store holds it, its parts
+#: in the blocks `render` writes.
+PLAIN_BODY = _plain_body()
+BODY = tickets.collapsed(PLAIN_BODY)
 EVIDENCE_TEXT = f"What this ticket says under {tickets.EVIDENCE}. Verified on `{HOST}`."
 REJECTED_TEXT = "Paging by offset: it skips a page whenever an item is inserted mid-listing."
 FIX_TEXT = FIX
 
 #: A body as schema 4 wrote it: a `## Repository` section, and several suggested fixes.
-SCHEMA_4_BODY = BODY.replace(
+SCHEMA_4_BODY = PLAIN_BODY.replace(
     "## Examples", f"## Repository\n\n{REPOSITORY}, at `src/cursor.py`.\n\n## Examples"
 ).replace(
     f"## {tickets.SUGGESTED_FIX}\n\n{FIX_TEXT}",
@@ -162,28 +180,31 @@ SCHEMA_4_BODY = BODY.replace(
 #: Every way a body's fixes are refused, and what the refusal names.
 REJECTED_ELSEWHERE = "`## Rejected fixes` section is not directly after `## Suggested fix`"
 FIX_REFUSALS = [
-    (BODY.replace(f"## {tickets.SUGGESTED_FIX}\n\n{FIX_TEXT}\n\n", ""), "no `## Suggested fix`"),
-    (BODY.replace(FIX_TEXT, ""), "the body's `## Suggested fix` section is empty"),
+    (
+        PLAIN_BODY.replace(f"## {tickets.SUGGESTED_FIX}\n\n{FIX_TEXT}\n\n", ""),
+        "no `## Suggested fix`",
+    ),
+    (PLAIN_BODY.replace(FIX_TEXT, ""), "the body's `## Suggested fix` section is empty"),
     (_body(rejected="\n"), "the body's `## Rejected fixes` section is empty"),
     (
         _body(rejected=f"{REJECTED_TEXT}\n\n## Rejected fixes\n\n{REJECTED_TEXT}"),
         "the body carries `## Rejected fixes` 2 times; it is optional and appears at most once",
     ),
-    (BODY + f"\n\n## Rejected fixes\n\n{REJECTED_TEXT}", REJECTED_ELSEWHERE),
-    (f"## Rejected fixes\n\n{REJECTED_TEXT}\n\n" + BODY, REJECTED_ELSEWHERE),
+    (PLAIN_BODY + f"\n\n## Rejected fixes\n\n{REJECTED_TEXT}", REJECTED_ELSEWHERE),
+    (f"## Rejected fixes\n\n{REJECTED_TEXT}\n\n" + PLAIN_BODY, REJECTED_ELSEWHERE),
     (
-        BODY.replace(
+        PLAIN_BODY.replace(
             f"## {tickets.SUGGESTED_FIX}\n",
             f"## Rejected fixes\n\n{REJECTED_TEXT}\n\n## {tickets.SUGGESTED_FIX}\n",
         ),
         REJECTED_ELSEWHERE,
     ),
     (
-        BODY.replace("## Examples", "## Repository\n\nThe origin.\n\n## Examples"),
+        PLAIN_BODY.replace("## Examples", "## Repository\n\nThe origin.\n\n## Examples"),
         "carries `## Repository`, which schema 5 retired; bring the ticket to the current shape",
     ),
     (
-        BODY.replace(f"## {tickets.SUGGESTED_FIX}\n", "## Suggested fixes\n"),
+        PLAIN_BODY.replace(f"## {tickets.SUGGESTED_FIX}\n", "## Suggested fixes\n"),
         "carries `## Suggested fixes`, which schema 5 retired; bring the ticket to the current",
     ),
     (
@@ -191,33 +212,35 @@ FIX_REFUSALS = [
         "carries `## Repository` and `## Suggested fixes`, which schema 5 retired",
     ),
     (
-        BODY.replace(FIX_TEXT, "Page the listing by cursor."),
+        PLAIN_BODY.replace(FIX_TEXT, "Page the listing by cursor."),
         "`## Suggested fix` section carries no unit subsection; open it with one paragraph",
     ),
     (
-        BODY.replace(FIX_TEXT, FIX_TEXT.split("\n\n", 1)[1]),
+        PLAIN_BODY.replace(FIX_TEXT, FIX_TEXT.split("\n\n", 1)[1]),
         "`## Suggested fix` section does not open with a paragraph before its first unit",
     ),
     (
-        BODY.replace(
+        PLAIN_BODY.replace(
             "### Listing — `some-service` (`src/cursor.py`)", "### Listing in src/cursor.py"
         ),
         "`## Suggested fix` section's subsection '### Listing in src/cursor.py' is not headed "
         "`### <unit> — `<repository>``",
     ),
     (
-        BODY.replace(
+        PLAIN_BODY.replace(
             "### Listing — `some-service` (`src/cursor.py`)", "### Listing - `some-service`"
         ),
         "is not headed `### <unit> — `<repository>``",
     ),
     (
-        BODY.replace(FIX_TEXT, f"{FIX_TEXT}\n\n### Docs — `some-service`\n"),
+        PLAIN_BODY.replace(FIX_TEXT, f"{FIX_TEXT}\n\n### Docs — `some-service`\n"),
         "`## Suggested fix` section's subsection '### Docs — `some-service`' is empty",
     ),
     (
         # A heading-shaped line inside a fence is content, and no subsection.
-        BODY.replace(FIX_TEXT, "Page by cursor.\n\n```diff\n### Listing — `some-service`\n```"),
+        PLAIN_BODY.replace(
+            FIX_TEXT, "Page by cursor.\n\n```diff\n### Listing — `some-service`\n```"
+        ),
         "`## Suggested fix` section carries no unit subsection",
     ),
 ]
@@ -231,7 +254,10 @@ IMPACT_PARTS_ORDER = (
 #: Every way a body's `## Impact` section is refused, and what the refusal names.
 IMPACT_ORDER = "does not end with its three lines, in this order and with nothing between or after"
 IMPACT_REFUSALS = [
-    (BODY.replace(f"## Impact\n\n{IMPACT_TEXT}\n\n", ""), "no `## Impact` heading in its place"),
+    (
+        PLAIN_BODY.replace(f"## Impact\n\n{IMPACT_TEXT}\n\n", ""),
+        "no `## Impact` heading in its place",
+    ),
     (_body(impact="\n"), "the body's `## Impact` section is empty"),
     (_body(impact=_impact(prose="")), "`## Impact` section carries no prose before its lines"),
     (
@@ -364,6 +390,14 @@ IMPACT_REFUSALS = [
 ]
 
 
+#: The draft the sound ticket consumed, and the one claim it verified, at its basis commit.
+SOUND_DRAFT = tickets.QualifiedDraftId(f"drafts:{RUN}/drafts/20260101T000000Z-cursor")
+WITNESS = f"{REPOSITORY} src/cursor.py:41 at {COMMIT}"
+#: Where the sound ticket's draft came from, and the command that reads its turns, as
+#: `board-status` records both from a node's draft.
+SOURCE = "author node; node verify-cursor"
+TRANSCRIPT = f"onepipeline transcript {RUN} verify-cursor"
+
 #: A sound ticket, which each test below states only its departures from.
 SOUND_TICKET = tickets.Ticket(
     title="some-service: the listing cursor skips the last page",
@@ -372,7 +406,7 @@ SOUND_TICKET = tickets.Ticket(
     repository=tickets.Origin(REPOSITORY),
     created_by_run=tickets.RunId(RUN),
     owning_runs=(tickets.RunId(RUN),),
-    drafts=(tickets.QualifiedDraftId(f"drafts:{RUN}/drafts/20260101T000000Z-cursor"),),
+    drafts=(SOUND_DRAFT,),
     basis=(tickets.Basis(tickets.Origin(REPOSITORY), tickets.Commit(COMMIT)),),
     verified_at=tickets.Timestamp("2026-01-01T00:00:00Z"),
     host=tickets.Host(HOST),
@@ -380,12 +414,26 @@ SOUND_TICKET = tickets.Ticket(
     priority_estimate=tickets.Priority.MEDIUM,
     priority=tickets.Priority.MEDIUM,
     frequency=FREQUENCY,
+    draft_sources=((SOUND_DRAFT, SOURCE),),
+    transcripts=((SOUND_DRAFT, TRANSCRIPT),),
+    witnesses=(WITNESS,),
 )
 
 
 def _ticket(**departures: object) -> tickets.Ticket:
     # Negative fixtures deliberately put malformed values into dataclass fields so the
     # public validator, rather than the helper, decides which records it refuses.
+    # A departing draft or basis is one of the sound fields' own types, which the record keys
+    # derived from it follow, as `board-status` and the agent derive them.
+    if "drafts" in departures and "draft_sources" not in departures:
+        consumed = cast(tuple[tickets.QualifiedDraftId, ...], departures["drafts"])
+        departures["draft_sources"] = tuple((draft, SOURCE) for draft in consumed)
+        departures["transcripts"] = tuple((draft, TRANSCRIPT) for draft in consumed)
+    if "basis" in departures and "witnesses" not in departures:
+        verified = cast(tuple[tickets.Basis, ...], departures["basis"])
+        departures["witnesses"] = tuple(
+            f"{entry.origin} src/cursor.py:41 at {entry.commit}" for entry in verified
+        )
     return dataclasses.replace(SOUND_TICKET, **cast(Any, departures))
 
 
@@ -395,7 +443,12 @@ def _item(ticket: tickets.Ticket | None = None) -> dict[str, object]:
     return {
         "id": f"{RUN}/tickets/{held.root_cause}",
         "title": held.title,
-        "content": held.body,
+        # What a store item holds is what `render` wrote: its parts in their blocks.
+        "content": (
+            tickets.collapsed(held.body)
+            if tickets.written_at(held) >= tickets.FIELDS_AT
+            else held.body
+        ),
         "status": {"category": held.status.value, "name": held.status.value},
         "priority": held.priority.value,
         "labels": [],
@@ -421,7 +474,7 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
 def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
     held = tickets.record(_ticket())
 
-    assert held["schema"] == tickets.SCHEMA == 14
+    assert held["schema"] == tickets.SCHEMA == tickets.FIELDS_AT == 15
     keys = list(held)
     assert keys == [*tickets.RECORD_KEYS, tickets.FREQUENCY_FIELD]
     assert held[tickets.ESTIMATE_FIELD] == "medium"
@@ -453,7 +506,22 @@ def _legacy_record(key: str, value: object) -> Callable[[dict[str, object]], Non
     """Set ``key`` on a record of the last schema the retired binding was read at."""
 
     def change(item: dict[str, object]) -> None:
-        _record(item).update({"schema": tickets.BINDING_LAST_AT, key: value})
+        _older(tickets.BINDING_LAST_AT, PLAIN_BODY)(item)
+        _record(item)[key] = value
+
+    return change
+
+
+def _older(schema: int, body: str) -> Callable[[dict[str, object]], None]:
+    """Make the item one of ``schema``, before schema 15: its record without the keys that
+    schema added, and ``body`` in the shape schemas 12 to 14 carried."""
+
+    def change(item: dict[str, object]) -> None:
+        held = _record(item)
+        for key in tickets.FIELDS_KEYS:
+            held.pop(key, None)
+        held["schema"] = schema
+        item["content"] = before_schema_15(body)
 
     return change
 
@@ -508,23 +576,23 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_set_record("extra", 1), "carries keys this does not write: extra"),
         (
             _set_record("schema", 1),
-            "is schema 1, and this reads schema 7, 8, 9, 10, 11, 12, 13 or 14",
+            "is schema 1, and this reads schema 7, 8, 9, 10, 11, 12, 13, 14 or 15",
         ),
         (
             _set_record("schema", 2),
-            "is schema 2, and this reads schema 7, 8, 9, 10, 11, 12, 13 or 14",
+            "is schema 2, and this reads schema 7, 8, 9, 10, 11, 12, 13, 14 or 15",
         ),
         (
             _set_record("schema", 3),
-            "is schema 3, and this reads schema 7, 8, 9, 10, 11, 12, 13 or 14",
+            "is schema 3, and this reads schema 7, 8, 9, 10, 11, 12, 13, 14 or 15",
         ),
         (
             _set_record("schema", 4),
-            "is schema 4, and this reads schema 7, 8, 9, 10, 11, 12, 13 or 14",
+            "is schema 4, and this reads schema 7, 8, 9, 10, 11, 12, 13, 14 or 15",
         ),
         (
             _set_record("schema", 6),
-            "is schema 6, and this reads schema 7, 8, 9, 10, 11, 12, 13 or 14",
+            "is schema 6, and this reads schema 7, 8, 9, 10, 11, 12, 13, 14 or 15",
         ),
         (_drop_record("priority_estimate"), "record is missing priority_estimate; `priority"),
         (_set_record("priority_estimate", "critical"), "`priority_estimate` 'critical' is not"),
@@ -609,11 +677,11 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
             "the body's `## Evidence` section is empty",
         ),
         (
-            _set("content", _body("another-host")),
+            _older(tickets.OWNED_LAST_AT, _body("another-host")),
             f"`## Evidence` section does not name the host '{HOST}'",
         ),
-        *[(_set("content", body), reason) for body, reason in IMPACT_REFUSALS],
-        *[(_set("content", body), reason) for body, reason in FIX_REFUSALS],
+        *[(_set("content", tickets.collapsed(body)), reason) for body, reason in IMPACT_REFUSALS],
+        *[(_set("content", tickets.collapsed(body)), reason) for body, reason in FIX_REFUSALS],
     ],
 )
 def test_each_way_an_item_is_not_a_ticket_is_named(
@@ -657,7 +725,7 @@ def test_a_schema_4_ticket_is_refused_naming_its_schema_first() -> None:
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
     assert found[0].startswith(
-        "the record is schema 4, and this reads schema 7, 8, 9, 10, 11, 12, 13 or 14"
+        "the record is schema 4, and this reads schema 7, 8, 9, 10, 11, 12, 13, 14 or 15"
     ), found
     assert any(
         "carries `## Repository` and `## Suggested fixes`, which schema 5 retired; bring the "
@@ -935,9 +1003,14 @@ COMMENT_URL = "https://github.com/nickderobertis/some-service/issues/7#issuecomm
 
 
 def test_an_evidence_comment_is_owned_by_the_run_its_last_line_names() -> None:
-    comment = tickets.render_comment(RUN, CAUSE, "The cursor skipped page 9 too.")
+    comment = tickets.render_comment(
+        RUN, CAUSE, "The cursor skipped page 9 too.", comment_sources(RUN)
+    )
 
-    assert comment.splitlines()[0] == f"Additional evidence from follow-up run `{RUN}`."
+    assert comment.splitlines()[:2] == [
+        "<details>",
+        f"<summary>Additional evidence from follow-up run {RUN}.</summary>",
+    ]
     assert comment.rstrip("\n").splitlines()[-1] == EVIDENCE_MARKER
     owner = tickets.comment_owner(comment)
     assert owner == tickets.CommentOwner(tickets.RunId(RUN), tickets.RootCause(CAUSE))
@@ -949,12 +1022,16 @@ def test_an_evidence_comment_is_owned_by_the_run_its_last_line_names() -> None:
 
 
 def test_an_evidence_comment_already_on_the_board_still_reads_as_its_runs_evidence() -> None:
-    """A comment written before replies existed, byte for byte, is still its run's evidence."""
+    """A comment written before replies existed, byte for byte, is still its run's evidence,
+    and is this run's evidence comment exactly as one `comment` writes now is."""
     written_before = (
         f"Additional evidence from follow-up run `{RUN}`.\n\nPage 9 again.\n\n{EVIDENCE_MARKER}\n"
     )
+    written_now = tickets.render_comment(RUN, CAUSE, "Page 9 again.", comment_sources(RUN))
 
-    assert tickets.render_comment(RUN, CAUSE, "Page 9 again.") == written_before
+    assert tickets.run_comment_problems(RUN, written_before) == []
+    assert tickets.run_comment_problems(RUN, written_now) == []
+    assert tickets.comment_owner(written_now) == tickets.comment_owner(written_before)
     assert tickets.comment_marker(RUN, CAUSE) == EVIDENCE_MARKER
     assert tickets.comment_owner(written_before) == tickets.CommentOwner(
         tickets.RunId(RUN), tickets.RootCause(CAUSE), tickets.CommentKind.EVIDENCE, None, None
@@ -1071,8 +1148,12 @@ def test_a_run_changes_only_its_own_issues_and_comments_and_adds_evidence_only_o
     assert tickets.may_comment_on(RUN, own, reply), "a reply answers a person on its own issue"
     assert tickets.may_comment_on(RUN, other, reply)
     assert not tickets.may_comment_on(RUN, unowned, reply)
-    assert tickets.may_change_comment(RUN, tickets.render_comment(RUN, CAUSE, "x"))
-    assert not tickets.may_change_comment(RUN, tickets.render_comment(OTHER_RUN, CAUSE, "x"))
+    assert tickets.may_change_comment(
+        RUN, tickets.render_comment(RUN, CAUSE, "x", comment_sources(RUN))
+    )
+    assert not tickets.may_change_comment(
+        RUN, tickets.render_comment(OTHER_RUN, CAUSE, "x", comment_sources(OTHER_RUN))
+    )
     others_reply = tickets.render_reply(
         OTHER_RUN,
         CAUSE,
@@ -1543,7 +1624,7 @@ def test_the_tracked_template_carries_the_ticket_sequence_in_order() -> None:
     # One `board-status` per ticket before its copy, at the step that decides its status:
     # nothing earlier asks it or validates a ticket it has not yet estimated, and it runs
     # again only after a change to what it decides from.
-    written = steps.index("**Write each ticket, then delete the drafts it consumed.**")
+    written = steps.index("**Write each ticket.**")
     validated = f"`{VALIDATE} <path of the ticket>`"
     assert written < searched, steps
     assert steps.index(asked) > decided, "a step before the status decision asks `board-status`"
@@ -1551,8 +1632,9 @@ def test_the_tracked_template_carries_the_ticket_sequence_in_order() -> None:
     assert _flat(steps).count(_flat(asked)) == 1, "the steps ask `board-status` more than once"
     flat_steps = _flat(steps)
     assert (
-        "Leave its priority estimate, its estimate line and its priority to step 8's "
-        f"`{BOARD_STATUS}`, which writes them, and validate it only after that"
+        "Leave its priority estimate, its estimate line and its priority, and its "
+        f"`draft_sources` and `transcripts`, to step 8's `{BOARD_STATUS}`, which writes them, and "
+        "validate it only after that"
     ) in flat_steps
     assert (
         "Whenever you change a ticket's `## Impact`, `frequency` or `depends_on` after that, "
@@ -1596,7 +1678,9 @@ def test_the_task_asks_for_one_concrete_fix_and_optional_rejected_fixes() -> Non
         "section>",
         "<one paragraph: what changes overall, and why that removes the root cause. The one "
         "fix this ticket recommends, concrete enough that whoever picks it up has nothing left "
-        "to choose; never a list of options or alternatives to choose between>",
+        "to choose; never a list of options or alternatives to choose between. Write the "
+        "`**Contributing locations.**` part plain, as below: `board-status` puts it in a "
+        "collapsed `Contributing locations` block>",
         "### <unit> — `<repository>` (`<package or path>`)",
         "It opens with one paragraph saying what changes overall and why that removes the root "
         "cause, then its `**Contributing locations.**`, then one subsection per unit that "
@@ -1616,7 +1700,6 @@ def test_the_task_asks_for_one_concrete_fix_and_optional_rejected_fixes() -> Non
         "Examples",
         "Suggested fix",
         "Rejected fixes",
-        "Owning runs",
         "Related tickets",
         "Evidence",
     ], headings
@@ -2002,12 +2085,29 @@ SCHEMA_7_BODY = before_schema_10(
 )
 
 
+def _sections(body: str) -> list[tuple[str, str]]:
+    """``body``'s sections, each heading with its content, read with no blank line around it."""
+    return [(heading, content.strip()) for heading, content in drafts.sections(body)]
+
+
 def _at_schema(ticket: tickets.Ticket, schema: int) -> str:
-    """``ticket`` rendered with its record declaring ``schema``."""
-    rendered = tickets.render(ticket)
-    current = f'"schema": {tickets.SCHEMA},'
-    assert rendered.count(current) == 1
-    return rendered.replace(current, f'"schema": {schema},')
+    """``ticket`` rendered with its record declaring ``schema``: before schema 15 with none of
+    the keys that schema added, its parts plain and `## Owning runs` in its body as a body of
+    schemas 12 to 14 carried it, which the older shapes' own transforms leave as they are."""
+    if schema >= tickets.FIELDS_AT:
+        older = dataclasses.replace(ticket, schema=schema)
+    else:
+        older = dataclasses.replace(
+            ticket,
+            schema=schema,
+            body=before_schema_15(ticket.body),
+            draft_sources=None,
+            transcripts=(),
+            witnesses=(),
+        )
+    rendered = tickets.render(older)
+    assert rendered.count(f'"schema": {schema},') == 1
+    return rendered
 
 
 def test_a_schema_7_ticket_still_validates_and_the_same_ticket_at_schema_8_is_refused(
@@ -2101,7 +2201,7 @@ def test_the_approved_example_is_a_sound_ticket_and_reaches_the_task_verbatim(
     assert "decide" not in sections[tickets.IMPACT].lower()
     assert "- ai-orchestrator `scripts/follow-ups.sh`: " in sections[tickets.SUGGESTED_FIX]
     body = (
-        BODY.replace(PLAIN_ROOT_CAUSE, sections[tickets.ROOT_CAUSE].strip())
+        PLAIN_BODY.replace(PLAIN_ROOT_CAUSE, sections[tickets.ROOT_CAUSE].strip())
         .replace(IMPACT_TEXT.strip(), sections[tickets.IMPACT].strip())
         .replace(FIX_TEXT, sections[tickets.SUGGESTED_FIX].strip())
     )
@@ -2250,12 +2350,14 @@ def _legacy(
 ) -> tickets.Ticket:
     """``ticket`` as a record from before the binding retired: bound to ``destination``.
 
-    It is written at schema :data:`tickets.BINDING_LAST_AT`, carrying the store's link to
-    ``linked`` and its own origin ``origin`` where named, as the retired binding left them.
+    It is written at schema :data:`tickets.BINDING_LAST_AT`, its body that schema's shape,
+    carrying the store's link to ``linked`` and its own origin ``origin`` where named, as the
+    retired binding left them.
     """
     native = destination.removeprefix(f"{BOARD}:")
     return dataclasses.replace(
-        ticket,
+        _schema_14(ticket),
+        schema=tickets.BINDING_LAST_AT,
         retired=((tickets.BINDING_FIELD, native),),
         links=() if linked is None else _links(linked),
         origin=None if origin is None else plan_store.QualifiedTaskId(origin),
@@ -2464,7 +2566,7 @@ def test_no_record_carries_a_binding_and_a_legacy_one_reads_back_with_the_stores
 
     earlier = _legacy(_ticket(), destination, origin=destination)
     assert list(tickets.record(earlier)) == [
-        *tickets.RECORD_KEYS,
+        *(key for key in tickets.RECORD_KEYS if key not in tickets.FIELDS_KEYS),
         tickets.BINDING_FIELD,
         tickets.FREQUENCY_FIELD,
     ]
@@ -2749,7 +2851,7 @@ def test_a_legacy_binding_is_read_through_the_store_past_a_link_naming_another_c
         None,
         live.removeprefix(f"{BOARD}:"),
     )
-    assert f'"schema": {tickets.SCHEMA}' in ticket.read_text(encoding="utf-8")
+    assert f'"schema": {tickets.OWNED_LAST_AT}' in ticket.read_text(encoding="utf-8")
     assert tickets.BINDING_FIELD not in ticket.read_text(encoding="utf-8")
     assert _board_item(live)["title"] == title
     assert (_board_item(duplicate)["content"], _board_item(duplicate)["title"]) == before
@@ -2924,7 +3026,8 @@ def test_two_legacy_bindings_are_read_through_the_store_and_brought_forward_by_t
             assert (migrated.board_item, migrated.origin) == (None, None), cause
             assert migrated.link(BOARD) == live[cause].removeprefix(f"{BOARD}:"), cause
             text = path.read_text(encoding="utf-8")
-            assert f'"schema": {tickets.SCHEMA}' in text and tickets.BINDING_FIELD not in text
+            assert f'"schema": {tickets.OWNED_LAST_AT}' in text, cause
+            assert tickets.BINDING_FIELD not in text, cause
             assert migrated.board_estimate == migrated.priority_estimate, cause
             assert tickets.named_card(migrated, BOARD) == live[cause], cause
         after_copy = _legacy_board_files(board)
@@ -4400,18 +4503,53 @@ def _disposed(
     }
 
 
-def _comment(
-    issue: str, body: str, capsys: pytest.CaptureFixture[str], run: str = RUN, *extra: str
+def _sources(run: str, *, question: bool = False) -> dict[str, object]:
+    """The `--sources-file` of ``run``'s comment: as the sound ticket's record holds them, with
+    one draft of ``run``'s, or none for a budget ``question``."""
+    return {
+        "host": HOST,
+        "basis": {REPOSITORY: COMMIT},
+        "drafts": [] if question else [f"drafts:{run}/drafts/20260101T000000Z-cursor"],
+        "witnesses": [WITNESS],
+    }
+
+
+def _comment(  # noqa: PLR0913 - each part of a comment is its own keyword
+    issue: str,
+    evidence: str,
+    capsys: pytest.CaptureFixture[str],
+    run: str = RUN,
+    *extra: str,
+    root_cause: str = CAUSE,
+    bears_on: str | None = None,
+    question: str | None = None,
+    sources: object = None,
 ) -> tuple[int, str, str]:
-    """`comment` as the agent runs it, posting ``body`` on ``issue`` from a file: what it said."""
+    """`comment` as the agent runs it, writing ``run``'s comment on ``issue`` from its parts, each
+    a file: what it said."""
+    held = _sources(run, question=question is not None) if sources is None else sources
     with tempfile.TemporaryDirectory() as scratch:
-        written = Path(scratch) / "comment.md"
-        written.write_text(body, encoding="utf-8")
-        status = tickets.main(
-            ["comment", "--board", BOARD, "--run", run, *extra, "--body-file", str(written), issue]
-        )
+        parts = {"--evidence-file": evidence, "--sources-file": json.dumps(held)}
+        if bears_on is not None:
+            parts["--bears-on-file"] = bears_on
+        if question is not None:
+            parts["--question-file"] = question
+        words = ["comment", "--board", BOARD, "--run", run, "--root-cause", root_cause, *extra]
+        for flag, text in parts.items():
+            written = Path(scratch) / f"{flag.strip('-')}.md"
+            written.write_text(text, encoding="utf-8")
+            words += [flag, str(written)]
+        status = tickets.main([*words, issue])
     captured = capsys.readouterr()
     return status, captured.out, captured.err
+
+
+def _posted_body(run: str, root_cause: str, evidence: str, *, question: str | None = None) -> str:
+    """The comment `comment` writes from those parts, its drafts' sources read from the store."""
+    held = tickets.comment_sources(
+        run, _sources(run, question=question is not None), question=question is not None
+    )
+    return tickets.render_comment(run, root_cause, evidence, held, question=question)
 
 
 def test_open_dispositions_records_the_input_set_before_the_dispatch_and_only_ever_grows(
@@ -4647,8 +4785,9 @@ def test_a_filed_drafts_evidence_comment_on_a_matching_issue_satisfies_its_accou
     assert f"its disposition names ({issue}), so its evidence did not reach the board" in (
         " ".join(capsys.readouterr().err.split())
     )
-    comment = tickets.render_comment(RUN, CAUSE, "This run reproduced the same cause.")
-    status, printed, _ = _comment(issue, comment, capsys)
+    evidence = "This run reproduced the same cause."
+    status, printed, _ = _comment(issue, evidence, capsys)
+    comment = _posted_body(RUN, CAUSE, evidence)
     assert status == tickets.SOUND
     posted = json.loads(printed)
     assert posted["item"] == issue
@@ -5083,32 +5222,77 @@ def test_a_runs_receipts_that_are_not_its_own_well_formed_lines_refuse_its_accou
     assert tickets.read_receipts(drafts_root, "a-run-with-no-receipts") == ([], [])
 
 
-def test_comment_refuses_a_body_or_card_it_will_not_post_and_names_a_file_it_cannot_read(
+def test_comment_refuses_a_part_or_card_it_will_not_post_and_names_a_file_it_cannot_read(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every refusal of `comment` posts nothing and receipts nothing."""
+    """Every refusal of `comment`, by the real command over the store, posts nothing and
+    receipts nothing: a card outside the board's family, an empty evidence file, a part carrying
+    a ticket heading or a `<details>` line, a root cause outside the slug grammar, and sources
+    that do not validate as a record's — each named."""
     issue = _filed(drafts_root, OTHER_RUN, CAUSE, "the cursor skips the last page")
-    sound = tickets.render_comment(RUN, CAUSE, OCCURRENCE)
-
-    for card, body, said in (
+    elsewhere = f"github.com/nickderobertis/another-service src/cursor.py:41 at {COMMIT}"
+    stale = f"{REPOSITORY} src/cursor.py:41 at {'f' * 40}"
+    sources = _sources(RUN)
+    for card, evidence, departures, said in (
         (
             "elsewhere:an-item",
-            sound,
+            OCCURRENCE,
+            {},
             f"'elsewhere:an-item' is not an item of the board {BOARD!r} or a board it routes to",
         ),
-        (issue, "", "its opening line is '', where run listing-run's comment opens"),
+        (issue, "  \n", {}, "the evidence file is empty"),
+        (issue, f"{OCCURRENCE}\n\n## Impact\n\nPages.", {}, "the evidence carries the ticket "),
         (
             issue,
-            sound.replace(tickets.comment_opening(RUN), "Some evidence."),
-            "its opening line is 'Some evidence.', where run listing-run's comment opens",
+            OCCURRENCE,
+            {"bears_on": "## Suggested fix\n\nWiden it."},
+            "the bears-on part carries the ticket heading `## Suggested fix`",
         ),
         (
             issue,
-            sound.replace(tickets.comment_marker(RUN, CAUSE), "Thanks."),
-            "its last line is 'Thanks.', where run listing-run's comment ends with its marker",
+            f"<details>\n<summary>More</summary>\n\n{OCCURRENCE}\n\n</details>",
+            {},
+            "the evidence carries a `<details>` or `</details>` line",
         ),
+        (
+            issue,
+            OCCURRENCE,
+            {"question": "Should it change?\n</details>"},
+            "the question carries a `<details>` or `</details>` line",
+        ),
+        (issue, OCCURRENCE, {"root_cause": "Not_A_Slug"}, "'Not_A_Slug' is not a kebab-case slug"),
+        (issue, OCCURRENCE, {"sources": {"host": HOST}}, "the sources are not one JSON object"),
+        (
+            issue,
+            OCCURRENCE,
+            {"sources": sources | {"host": "not a host"}},
+            "`host` 'not a host' is not a hostname",
+        ),
+        (
+            issue,
+            OCCURRENCE,
+            {"sources": sources | {"witnesses": []}},
+            "`witnesses` is not a non-empty array of strings",
+        ),
+        (
+            issue,
+            OCCURRENCE,
+            {"sources": sources | {"witnesses": [elsewhere]}},
+            "which `basis` names no commit for",
+        ),
+        (issue, OCCURRENCE, {"sources": sources | {"witnesses": [stale]}}, "where `basis` holds"),
+        (
+            issue,
+            OCCURRENCE,
+            {"sources": sources | {"drafts": [f"drafts:{OTHER_RUN}/drafts/x"]}},
+            "belongs to a run `owning_runs` does not name",
+        ),
+        (issue, OCCURRENCE, {"sources": sources | {"drafts": []}}, "`drafts` is not a non-empty"),
+        (issue, OCCURRENCE, {"question": ""}, "the question file is empty"),
+        (issue, OCCURRENCE, {"question": " \n"}, "the question file is empty"),
     ):
-        status, printed, reported = _comment(card, body, capsys)
+        parts: dict[str, Any] = departures
+        status, printed, reported = _comment(card, evidence, capsys, RUN, **parts)
         assert (status, printed) == (tickets.UNSOUND, ""), reported
         assert f"{card}: refused, nothing posted" in reported
         assert said in " ".join(reported.split()), reported
@@ -5117,7 +5301,20 @@ def test_comment_refuses_a_body_or_card_it_will_not_post_and_names_a_file_it_can
 
     missing = drafts_root.parent / "no-such-comment.md"
     status = tickets.main(
-        ["comment", "--board", BOARD, "--run", RUN, "--body-file", str(missing), issue]
+        [
+            "comment",
+            "--board",
+            BOARD,
+            "--run",
+            RUN,
+            "--root-cause",
+            CAUSE,
+            "--evidence-file",
+            str(missing),
+            "--sources-file",
+            str(missing),
+            issue,
+        ]
     )
     assert status == tickets.UNRUNNABLE
     assert "refused:" in capsys.readouterr().err
@@ -5151,6 +5348,10 @@ OCCURRENCE = (
     "Bears on the ticket: the root cause also holds when the last page is full."
 )
 
+#: A budget question's two parts: what was measured, and what it asks.
+MEASURED = "budget cycle-time: actual 9 seconds. Cause: a long gate."
+ASKED = "Should the budget change?"
+
 #: The ticket re-rendered into a comment, as three evidence comments on onevcs#266 were.
 RE_RENDERED = "## Root cause\n\nThe cursor skips the last page.\n\n## Impact\n\nPages go missing."
 
@@ -5158,7 +5359,7 @@ RE_RENDERED = "## Root cause\n\nThe cursor skips the last page.\n\n## Impact\n\n
 def test_ticket_section_headings_are_derived_from_every_heading_a_ticket_carries() -> None:
     """One function names them, so a heading added to a ticket is refused in a comment too."""
     assert tickets.ticket_section_headings() == (
-        *tickets.HEADINGS,
+        *tickets.OWNED_HEADINGS,
         tickets.DUPLICATE_SEARCH,
         tickets.REJECTED_FIXES,
         tickets.RELATED_TICKETS,
@@ -5188,9 +5389,11 @@ def test_comment_refuses_this_runs_evidence_comment_re_rendering_the_ticket_befo
     account.write_text(
         json.dumps(_account(_disposed(detail=f"Evidence commented on {issue}."))), encoding="utf-8"
     )
-    third = tickets.render_comment("a-third-run", CAUSE, RE_RENDERED)
+    third = tickets.render_comment(
+        "a-third-run", CAUSE, RE_RENDERED, comment_sources("a-third-run")
+    )
     plan_store.sdk(plan_store.client().task_comment_add(issue, body=third))
-    status, _, _ = _comment(issue, tickets.render_comment(RUN, CAUSE, OCCURRENCE), capsys)
+    status, _, _ = _comment(issue, OCCURRENCE, capsys)
     assert status == tickets.SOUND
     assert tickets.main(["re-estimate", "--board", BOARD, "--run", RUN, issue]) == tickets.SOUND
     capsys.readouterr()
@@ -5201,15 +5404,13 @@ def test_comment_refuses_this_runs_evidence_comment_re_rendering_the_ticket_befo
     held = tickets.receipts_path(drafts_root, RUN).read_text(encoding="utf-8")
     bodies = _comment_bodies(issue)
 
-    status, printed, reported = _comment(
-        issue, tickets.render_comment(RUN, CAUSE, f"{OCCURRENCE}\n\n{RE_RENDERED}"), capsys
-    )
+    status, printed, reported = _comment(issue, f"{OCCURRENCE}\n\n{RE_RENDERED}", capsys)
 
     assert (status, printed) == (tickets.UNSOUND, "")
     refused = " ".join(reported.split())
     assert f"{issue}: refused, nothing posted" in refused
     for heading in ("Root cause", "Impact"):
-        assert f"it carries the ticket heading `## {heading}`" in refused, refused
+        assert f"the evidence carries the ticket heading `## {heading}`" in refused, refused
     assert _comment_bodies(issue) == bodies
     assert tickets.receipts_path(drafts_root, RUN).read_text(encoding="utf-8") == held
 
@@ -5241,8 +5442,8 @@ def test_check_budgets_on_the_board_holds_a_budget_question_to_this_runs_comment
     entry["disposition"] = [_budget_disposed(item, "budget-question")]
     _budget_account(drafts_root, entry)
     _standing_budget(publication, entry)
-    question = "budget cycle-time: actual 9 seconds. Cause: a long gate. Should the budget change?"
-    raw = tickets.render_comment(RUN, CAUSE, question)
+    question = f"{MEASURED} {ASKED}"
+    raw = tickets.render_comment(RUN, CAUSE, question, comment_sources(RUN))
     plan_store.sdk(plan_store.client().task_comment_add(item, body=raw))
 
     done = _budget_cli(drafts_root, RUN, "--board", BOARD)
@@ -5253,21 +5454,22 @@ def test_check_budgets_on_the_board_holds_a_budget_question_to_this_runs_comment
     ) in " ".join(done.stderr.split())
 
     status, _, reported = _comment(
-        item,
-        tickets.render_comment(RUN, CAUSE, f"{question}\n\n## Suggested fix\n\nRaise it."),
-        capsys,
+        item, MEASURED, capsys, question=f"{ASKED}\n\n## Suggested fix\n\nRaise it."
     )
     assert status == tickets.UNSOUND
-    assert "it carries the ticket heading `## Suggested fix`" in " ".join(reported.split())
+    assert "the question carries the ticket heading `## Suggested fix`" in (
+        " ".join(reported.split())
+    )
     assert _budget_cli(drafts_root, RUN, "--board", BOARD).returncode == tickets.UNSOUND
     # A comment of this run's on that card under another root cause asks about another one.
-    elsewhere = tickets.render_comment(RUN, "another-root-cause", question)
-    assert _comment(item, elsewhere, capsys)[0] == tickets.SOUND
+    elsewhere = _comment(item, MEASURED, capsys, root_cause="another-root-cause", question=ASKED)
+    assert elsewhere[0] == tickets.SOUND
     assert _budget_cli(drafts_root, RUN, "--board", BOARD).returncode == tickets.UNSOUND
 
-    assert _comment(item, tickets.render_comment(RUN, CAUSE, question), capsys)[0] == (
-        tickets.SOUND
-    )
+    assert _comment(item, MEASURED, capsys, question=ASKED)[0] == tickets.SOUND
+    posted = _comment_bodies(item)[-1]
+    assert posted.strip() == _posted_body(RUN, CAUSE, MEASURED, question=ASKED).strip()
+    assert posted.index(MEASURED) < posted.index(ASKED) < posted.index("<!-- orchestrator:")
     done = _budget_cli(drafts_root, RUN, "--board", BOARD)
     assert done.returncode == tickets.SOUND, done.stderr
 
@@ -6124,43 +6326,104 @@ def test_the_feedback_task_keeps_each_commented_ticket_right_without_an_explicit
 def test_both_modes_state_an_evidence_comments_body_as_only_the_new_occurrence(
     mode: tickets.Mode,
 ) -> None:
-    """An evidence comment's body, in order, and what it never repeats, in both modes.
+    """An evidence comment is written only from its parts by `comment`, in both modes.
 
     On onevcs#266 three evidence comments re-rendered the ticket's `## Root cause`, `## Impact`,
-    `## Examples` and `## Evidence`, hiding the one fact each added.
+    `## Examples` and `## Evidence`, hiding the one fact each added. The command writes the
+    comment's opening block and marker, so the task asks for neither, nor for a raw edit.
     """
     task = _feedback_task() if mode is tickets.Mode.FEEDBACK else _task(mode, redispatch=True)
     ownership = _flat(_section(task, "Ownership on the board"))
     ordered = [
-        f"and its first line is visible to a reader: `{tickets.comment_opening(RUN)}`",
+        f"one this run's `{COMMENT}` writes opens with one collapsed block summarised "
+        f"`{tickets.comment_summary(RUN)}`",
         "**It carries only this run's new occurrence**",
-        "1. the opening line above;",
-        "2. this run's occurrence: the host it was verified on, read with `hostname`; the basis "
-        "commit of each repository; what was observed; and the drafts or the budget entry it "
-        "rests on;",
-        "3. one short paragraph headed in plain text `Bears on the ticket:`, naming the section "
-        "of the issue the new evidence contradicts or extends (its root cause, impact or "
-        "suggested fix) and stating only the delta, since this run cannot edit another run's "
-        "ticket. It is optional, but **required where this run's evidence shows the root cause "
-        "broader than the issue states**, and then states only the widened root cause, in the "
-        "same plain words a ticket's `## Root cause` is written in, and names each location it "
-        "adds as a contributing location of the suggested fix. A run widens its own issue by "
-        "rewriting its ticket and copying it again instead;",
-        "4. the marker above, as the last line.",
-        "It never repeats what the issue already says — its root cause, impact, examples, "
-        "suggested fix, rejected fixes or owning runs — and never carries a ticket's level-2 "
-        "section heading, current or retired",
-        f"Post it with `{COMMENT} --board followups --run {RUN} <the issue's id> --body-file "
-        "<the comment>`, which refuses, before posting anything, a body whose first line is not "
-        "the opening above, whose last line is not this run's marker, or that carries one of "
-        "those headings as a level-2 heading.",
+        f"`{COMMENT} --board followups --run {RUN} --root-cause <the issue's root_cause> "
+        "--evidence-file <observed> --sources-file <sources> [--bears-on-file <bears on>] "
+        "[--question-file <question>] <the issue's id>`",
+        "so you never write an opening line, a block or a marker yourself",
+        "1. `--sources-file`: one JSON object holding exactly `host`, `basis`, `drafts`, "
+        "`witnesses`",
+        "2. `--evidence-file`: what was observed, in prose",
+        "3. `--bears-on-file`, optional: one short paragraph, which "
+        f"`{COMMENT}` writes after `{tickets.BEARS_ON}`",
+        "**required where this run's evidence shows the root cause broader than the issue states**",
+        "4. `--question-file`, for a budget question only",
+        "No part repeats what the issue already says — its root cause, impact, examples, "
+        "suggested fix, rejected fixes or owning runs",
+        f"edit it in place with the same `{COMMENT}` command and `--edit <that comment's id>`",
     ]
     at = [ownership.index(said) for said in ordered]
     assert at == sorted(at), ordered
     assert all(f"`{heading}`" in ownership for heading in tickets.ticket_section_headings()), (
         ownership
     )
-    assert tickets.comment_marker(RUN, "<root-cause>") in ownership
+    flat = _flat(task)
+    assert "--body-file <the comment>" not in flat
+    # No step asks the agent to write the parts the command writes, or to edit evidence raw.
+    for asked in (
+        "its first line is visible to a reader",
+        "1. the opening line above",
+        "the marker above, as the last line",
+        f"edit it in place with `{PLAN_STORE} task comment edit`",
+    ):
+        assert asked not in flat, asked
+    assert f"never edit it with a bare `{PLAN_STORE} task comment edit`" in flat
+
+
+@pytest.mark.parametrize("mode", list(tickets.Mode))
+def test_both_modes_keep_the_records_metadata_out_of_the_body_and_the_parts_plain(
+    mode: tickets.Mode,
+) -> None:
+    """The task the real render hands the agent: no `## Owning runs`, an `## Evidence` saying
+    only what happened, the witnesses its to supply, and every block `board-status`'s to write.
+    """
+    task = _feedback_task() if mode is tickets.Mode.FEEDBACK else _task(mode, redispatch=True)
+    flat = _flat(task)
+    initial = (
+        "**The body carries no `## Owning runs`**: the record's `owning_runs` holds them",
+        "You supply `witnesses`, one entry per verified claim as step 2 says, as you supply "
+        "`basis`; `draft_sources` — where each draft came from — and `transcripts` — each "
+        f"draft's transcript command — are `{BOARD_STATUS}`'s to write",
+        "**`## Evidence` closes the ticket, and says what happened**",
+        "It carries nothing the record holds — no `Host:` or `Basis:` line, no qualified draft "
+        "id, no 40-character commit and no transcript command",
+        "Write the `**Cost of the workaround.**` part and the three lines plain, as the example "
+        f"shows: `{BOARD_STATUS}` moves the `- Workaround:` line and the workaround's costs into "
+        "one collapsed `Cost of the workaround` block",
+        "and you never write a `<details>` block yourself",
+        f"Write the part plain, as the example shows: `{BOARD_STATUS}` puts it in one collapsed "
+        "`<details>` block summarised `Contributing locations`",
+        "exactly what it prints as `host`, never a value you type or recall",
+    )
+    feedback = (
+        "**The body carries no `## Owning runs`**, and `## Evidence` says what happened and "
+        "nothing the record holds — no `Host:` or `Basis:` line, no qualified draft id, no "
+        "40-character commit and no transcript command",
+        "the record's `witnesses` holds one entry per verified claim, `<origin> <path>:<line> "
+        "at <commit>`, which you supply as you do `basis`, while its `draft_sources` and "
+        "`transcripts` are this run's settle step's to write from the drafts",
+        "Write the `**Cost of the workaround.**` part, the three `## Impact` lines and the "
+        "`**Contributing locations.**` part plain, as the example shows: the settle step puts "
+        "them in their collapsed `Cost of the workaround`, `Priority calculation` and "
+        "`Contributing locations` blocks, and you never write a `<details>` block yourself",
+    )
+    for said in feedback if mode is tickets.Mode.FEEDBACK else initial:
+        assert said in flat, said
+    for asked in (
+        "both as `host` and in the `## Evidence` section",
+        "the qualified draft id, its run and node, the verified claim",
+        "<every run whose evidence this ticket carries>",
+    ):
+        assert asked not in flat, asked
+    example = tickets.ticket_example(RUN, BOARD)
+    head, body = example.split("\n---\n", 1)
+    assert re.findall(r"^## Owning runs$|^</?details>$", body, re.MULTILINE) == []
+    assert f"**{tickets.WORKAROUND_COST}.**" in body
+    assert f"**{tickets.CONTRIBUTING_LOCATIONS}.**" in body
+    for key in tickets.FIELDS_KEYS:
+        assert f'"{key}": ' in head, key
+    assert f'"schema": {tickets.SCHEMA}' in head
 
 
 #: The one file the older-schema rule is written in, which both modes include.
@@ -6208,7 +6471,7 @@ def test_the_older_schema_rule_is_one_source_rendered_into_both_tasks() -> None:
         _flat(bullet).split(",", 1)[0].lower()
         for bullet in re.split(r"(?m)^- ", written.split("-#}", 1)[1])[1:]
     ]
-    assert len(openings) == 4, openings
+    assert len(openings) == 5, openings
     sources = {
         path: _flat(path.read_text(encoding="utf-8")).lower()
         for pattern in ("orchestrator/*.py", "templates/**/*.j2")
@@ -7001,19 +7264,21 @@ def test_a_gathering_quoting_one_comment_twice_is_refused_as_unanswerable(
 def test_named_evidence_carriers_are_held_to_the_run_marker(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], named: str
 ) -> None:
-    """A comment ending in another run's marker is refused by `comment`, posting nothing.
-
-    So the run's receipts hold no comment on the carrier its disposition names, and the
-    account refuses it as evidence that never reached the board.
+    """Only `comment` makes this run's evidence: one ending in another run's marker, written
+    around it, leaves the run's receipts holding no comment on the carrier its disposition
+    names, and the account refuses it as evidence that never reached the board.
     """
     _drafted(drafts_root, RUN, "a-cursor-draft")
     _write(drafts_root, _carrying())
     issue = _filed(drafts_root, OTHER_RUN, CAUSE, "An earlier ticket")
-    comment = tickets.render_comment(
-        OTHER_RUN if named == "wrong-run" else RUN, CAUSE, "This run reproduced it."
-    )
-    status, _, reported = _comment(issue, comment, capsys)
-    assert status == (tickets.SOUND if named == "right-run" else tickets.UNSOUND), reported
+    if named == "right-run":
+        status, _, reported = _comment(issue, "This run reproduced it.", capsys)
+        assert status == tickets.SOUND, reported
+    else:
+        others = tickets.render_comment(
+            OTHER_RUN, CAUSE, "This run reproduced it.", comment_sources(OTHER_RUN)
+        )
+        plan_store.sdk(plan_store.client().task_comment_add(issue, body=others))
     assert tickets.main(["re-estimate", "--board", BOARD, "--run", RUN, issue]) == tickets.SOUND
     account = tickets.open_dispositions(drafts_root, RUN)
     account.write_text(json.dumps(_account(_disposed(detail=f"Evidence on `{issue}`."))), "utf-8")
@@ -7023,7 +7288,6 @@ def test_named_evidence_carriers_are_held_to_the_run_marker(
     )
     assert checked == (tickets.SOUND if named == "right-run" else tickets.UNSOUND)
     if named != "right-run":
-        assert "where run listing-run's comment ends with its marker" in " ".join(reported.split())
         assert f"evidence comment on an item of {BOARD} its disposition names ({issue})" in (
             " ".join(capsys.readouterr().err.split())
         )
@@ -7080,8 +7344,7 @@ def test_evidence_lands_on_another_runs_item_for_one_invariant_only_under_its_sl
     )
     _write(drafts_root, local)
     assert CURSOR_LOCATION in str(_board_item(issue)["content"])
-    comment = tickets.render_comment(RUN, cause, OCCURRENCE)
-    assert _comment(issue, comment, capsys)[0] == tickets.SOUND
+    assert _comment(issue, OCCURRENCE, capsys, root_cause=cause)[0] == tickets.SOUND
 
     assert tickets.re_estimate(BOARD, issue, RUN).occurrences == (2 if sound else 1)
     account = tickets.open_dispositions(drafts_root, RUN)
@@ -7128,8 +7391,7 @@ def test_another_runs_older_item_takes_evidence_found_by_the_invariant_and_keeps
             body=_located_at(EXPORT_LOCATION),
         ),
     )
-    comment = tickets.render_comment(RUN, EARLIER_CAUSE, OCCURRENCE)
-    assert _comment(issue, comment, capsys)[0] == tickets.SOUND
+    assert _comment(issue, OCCURRENCE, capsys, root_cause=EARLIER_CAUSE)[0] == tickets.SOUND
 
     status = tickets.main(["re-estimate", "--board", BOARD, "--run", RUN, issue])
     assert status == tickets.SOUND, capsys.readouterr().err
@@ -7162,12 +7424,13 @@ def test_a_schema_9_ticket_of_this_run_brought_forward_validates_at_the_current_
     assert f'"schema": {tickets.SCHEMA},' in path.read_text(encoding="utf-8")
 
     assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
-    assert "`## Root cause` section names 'src/cursor.py', a file path" in _flat(
-        capsys.readouterr().err
-    )
-    path.write_text(brought_forward(path.read_text(encoding="utf-8")), encoding="utf-8")
+    refused = _flat(capsys.readouterr().err)
+    assert "`witnesses` is not a non-empty array of strings" in refused, refused
+    assert "the body carries `## Owning runs`, which schema 15 moved" in refused, refused
+    brought = brought_forward(path.read_text(encoding="utf-8"))
+    path.write_text(to_schema_15(brought, [WITNESS]), encoding="utf-8")
     assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
-    assert tickets.read_ticket(path).body == BODY
+    assert _sections(tickets.read_ticket(path).body) == _sections(BODY)
 
 
 def test_a_schema_10_ticket_of_this_run_brought_forward_validates_at_schema_12(
@@ -7189,9 +7452,10 @@ def test_a_schema_10_ticket_of_this_run_brought_forward_validates_at_schema_12(
 
     assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
     assert "`## Duplicate search`, which schema 12 retired" in _flat(capsys.readouterr().err)
-    path.write_text(brought_from_schema_10(path.read_text(encoding="utf-8")), encoding="utf-8")
+    brought = brought_from_schema_10(path.read_text(encoding="utf-8"))
+    path.write_text(to_schema_15(brought, [WITNESS]), encoding="utf-8")
     assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
-    assert tickets.read_ticket(path).body == BODY
+    assert _sections(tickets.read_ticket(path).body) == _sections(BODY)
 
 
 #: A body as schema 10 wrote it: its `## Root cause` the invariant and its locations, its
@@ -7332,25 +7596,25 @@ def test_a_schema_11_root_cause_in_plain_product_terms_is_sound(
 #: Every way a schema-11 `## Suggested fix` does not carry its contributing locations.
 LOCATIONS_REFUSALS = [
     (
-        BODY.replace(FIX_TEXT, PRIOR_FIX),
+        PLAIN_BODY.replace(FIX_TEXT, PRIOR_FIX),
         "`## Suggested fix` section carries no `**Contributing locations.**` part; list there, "
         "after its opening paragraph and before its unit subsections",
     ),
     (
-        BODY.replace(CURSOR_LOCATION, "The cursor, and the export."),
+        PLAIN_BODY.replace(CURSOR_LOCATION, "The cursor, and the export."),
         "`## Suggested fix` section's `**Contributing locations.**` part carries no bullet",
     ),
     (
-        BODY.replace(CURSOR_LOCATION, "- the cursor stops one page early"),
+        PLAIN_BODY.replace(CURSOR_LOCATION, "- the cursor stops one page early"),
         "`## Suggested fix` section's `**Contributing locations.**` part carries no bullet",
     ),
     (
-        BODY.replace(FIX_TEXT, f"{PRIOR_FIX}\n\n{LOCATIONS}"),
+        PLAIN_BODY.replace(FIX_TEXT, f"{PRIOR_FIX}\n\n{LOCATIONS}"),
         "`## Suggested fix` section's `**Contributing locations.**` part comes after a unit "
         "subsection",
     ),
     (
-        BODY.replace(FIX_TEXT, FIX_TEXT.split("\n\n", 1)[1]),
+        PLAIN_BODY.replace(FIX_TEXT, FIX_TEXT.split("\n\n", 1)[1]),
         "`## Suggested fix` section does not open with a paragraph before its first unit",
     ),
 ]
@@ -7452,7 +7716,7 @@ def test_a_ticket_recorded_before_schema_10_validates_without_its_invariant_or_s
     path = _write(drafts_root, older, _at_schema(older, schema))
 
     assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
-    assert _record(_item(_ticket()))["schema"] == tickets.SCHEMA == 14
+    assert _record(_item(_ticket()))["schema"] == tickets.SCHEMA == 15
 
 
 #: Two well-formed `## Related tickets` entries, one of each relation.
@@ -7532,7 +7796,7 @@ def test_related_tickets_is_optional_and_sits_directly_before_evidence_once(
         "https://github.com/o/some-service/issues/42",
     )
     misplaced = BODY.replace(
-        "## Owning runs", f"## {tickets.RELATED_TICKETS}\n\n{RELATED}\n\n## Owning runs"
+        "## Examples", f"## {tickets.RELATED_TICKETS}\n\n{RELATED}\n\n## Examples"
     )
     twice = sound.replace(
         f"## {tickets.EVIDENCE}",
@@ -7596,12 +7860,10 @@ def test_an_evidence_comment_carrying_a_schema_10_heading_is_refused_before_it_i
     issue = _filed(drafts_root, OTHER_RUN, CAUSE, "the cursor skips the last page")
     evidence = f"{OCCURRENCE}\n\n## {heading}\n\nWhat the ticket already says."
 
-    status, printed, reported = _comment(
-        issue, tickets.render_comment(RUN, CAUSE, evidence), capsys
-    )
+    status, printed, reported = _comment(issue, evidence, capsys)
 
     assert (status, printed) == (tickets.UNSOUND, "")
-    assert f"it carries the ticket heading `## {heading}`" in _flat(reported)
+    assert f"the evidence carries the ticket heading `## {heading}`" in _flat(reported)
     assert _comment_bodies(issue) == []
     assert not tickets.receipts_path(drafts_root, RUN).exists()
 
@@ -8092,8 +8354,12 @@ def test_the_dispositions_check_and_a_re_estimate_read_a_spanning_ticket_where_i
     listed repository's commit is refused, since its record no longer covers that repository.
     """
     _drafted(drafts_root, RUN, "a-cursor-draft")
+    drafted = tickets.QualifiedDraftId(DRAFT)
     spanning = dataclasses.replace(
-        _spanning(*listed, filed_in=listed[0]), drafts=(tickets.QualifiedDraftId(DRAFT),)
+        _spanning(*listed, filed_in=listed[0]),
+        drafts=(drafted,),
+        draft_sources=((drafted, SOURCE),),
+        transcripts=((drafted, TRANSCRIPT),),
     )
     ticket = _write(drafts_root, spanning)
     tickets.open_dispositions(drafts_root, RUN).write_text(
@@ -8450,7 +8716,9 @@ def test_a_runs_markers_read_back_as_its_own_from_a_linear_comment_and_are_never
     an issue's description does not, which is why a ticket's body carries no marker: the same
     marker normalized as a description is no run's.
     """
-    evidence = tickets.render_comment(UNDERSCORED_RUN, CAUSE, "The listing skipped page 9.")
+    evidence = tickets.render_comment(
+        UNDERSCORED_RUN, CAUSE, "The listing skipped page 9.", comment_sources(UNDERSCORED_RUN)
+    )
     reply = tickets.render_reply(
         UNDERSCORED_RUN,
         CAUSE,
@@ -8682,8 +8950,8 @@ def test_budget_question_reads_the_budget_that_stands_and_this_runs_comment_rece
     done = _budget_cli(drafts_root, RUN, "--board", BOARD)
     assert done.returncode == tickets.UNSOUND
     assert "the run's receipts hold no evidence comment of its on that card" in done.stderr
-    question = tickets.render_comment(RUN, CAUSE, "Long gate again. Should the budget change?")
-    assert _comment(destination, question, capsys)[0] == tickets.SOUND
+    question = _comment(destination, "Long gate again.", capsys, question=ASKED)
+    assert question[0] == tickets.SOUND
     assert _budget_cli(drafts_root, RUN, "--board", BOARD).returncode == tickets.SOUND
     _standing_budget(checkout, entry, changed=True)
     done = _budget_cli(drafts_root)
@@ -8701,7 +8969,7 @@ def test_budget_record_round_trips_and_an_older_record_without_it_is_unchanged(
     assert read.budget == budget
     assert tickets.render(read) == tickets.render(ticket)
     assert tickets.record(read)["budget"] == budget.record()
-    held = _item(_ticket(body=before_schema_12(BODY)))
+    held = _item(_schema_14(_ticket(body=before_schema_12(BODY))))
     _record(held)["schema"] = tickets.SEARCH_RETIRED_AT - 1
     old = tickets.from_store_item(held)
     assert old.budget is None
@@ -9032,15 +9300,46 @@ def test_cycle_script_through_installed_budgetspec_reports_verdicts_and_failure_
         assert tickets._host_line(result["host"]).startswith("load=")
 
 
+def _schema_14(ticket: tickets.Ticket) -> tickets.Ticket:
+    """``ticket`` as schema 14 held it: none of schema 15's keys, its body that schema's shape."""
+    return dataclasses.replace(
+        ticket,
+        schema=tickets.OWNED_LAST_AT,
+        body=before_schema_15(ticket.body),
+        draft_sources=None,
+        transcripts=(),
+        witnesses=(),
+    )
+
+
 def test_budget_record_schema_fourteen_matches_the_checked_in_golden() -> None:
     budget = tickets.OverrunBudget(
         tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, Direction.MAX
     )
     golden = json.loads((CYCLE_DOCUMENT.parent / "ticket-v14.json").read_text())
-    copied = _ticket(budget=budget, board_estimate=tickets.Priority.MEDIUM)
+    copied = _schema_14(_ticket(budget=budget, board_estimate=tickets.Priority.MEDIUM))
     assert tickets.record(copied) == golden
     assert tickets.BINDING_FIELD not in golden
     assert tickets.from_store_item(_item(copied)).board_estimate is tickets.Priority.MEDIUM
+    assert tickets.problems(_item(copied)) == []
+
+
+def test_budget_record_schema_fifteen_matches_the_checked_in_golden() -> None:
+    """The record a schema-15 ticket is stored under: its audit trail as the record's own keys,
+    the drafts' sources and transcripts beside its drafts and its witnesses beside its basis."""
+    budget = tickets.OverrunBudget(
+        tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, Direction.MAX
+    )
+    golden = json.loads((CYCLE_DOCUMENT.parent / "ticket-v15.json").read_text())
+    copied = _ticket(budget=budget, board_estimate=tickets.Priority.MEDIUM)
+    assert tickets.record(copied) == golden
+    assert list(tickets.record(copied)) == list(golden)
+    assert {key: golden[key] for key in tickets.FIELDS_KEYS} == {
+        tickets.DRAFT_SOURCES_FIELD: {SOUND_DRAFT: SOURCE},
+        tickets.TRANSCRIPTS_FIELD: {SOUND_DRAFT: TRANSCRIPT},
+        tickets.WITNESSES_FIELD: [WITNESS],
+    }
+    assert tickets.from_store_item(_item(copied)) == copied
 
 
 def test_a_schema_13_golden_stays_readable_and_carries_no_board_estimate() -> None:
@@ -9049,7 +9348,7 @@ def test_a_schema_13_golden_stays_readable_and_carries_no_board_estimate() -> No
     budget = tickets.OverrunBudget(
         tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, Direction.MAX
     )
-    item = _item(_ticket(budget=budget))
+    item = _item(_schema_14(_ticket(budget=budget)))
     item["metadata"] = {tickets.KEY: golden}
     assert tickets.problems(item) == []
     assert tickets.from_store_item(item).board_estimate is None
@@ -9146,14 +9445,15 @@ def test_a_schema_12_golden_carrying_its_binding_stays_readable_and_valid() -> N
     budget = tickets.OverrunBudget(
         tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, Direction.MAX
     )
-    item = _item(_ticket(budget=budget))
+    item = _item(_schema_14(_ticket(budget=budget)))
     item["metadata"] = {tickets.KEY: golden | {tickets.BINDING_FIELD: "I_kwDOlegacy"}}
     assert tickets.problems(item) == []
     read = tickets.from_store_item(item)
     assert (read.budget, read.board_item) == (budget, "I_kwDOlegacy")
     assert tickets.record(read) == golden | {tickets.BINDING_FIELD: "I_kwDOlegacy"}
     item["metadata"] = {
-        tickets.KEY: golden | {"schema": tickets.SCHEMA, tickets.BINDING_FIELD: "I_kwDOlegacy"}
+        tickets.KEY: golden
+        | {"schema": tickets.OWNED_LAST_AT, tickets.BINDING_FIELD: "I_kwDOlegacy"}
     }
     assert any(f"carries `{tickets.BINDING_FIELD}`" in one for one in tickets.problems(item))
 
@@ -9369,8 +9669,7 @@ def test_budget_filed_entry_requires_a_sound_ticket_with_its_budget(
     _budget_account(drafts_root, entry)
     done = _budget_cli(drafts_root, RUN, "--board", BOARD)
     assert done.returncode == tickets.UNSOUND and "evidence did not reach" in done.stderr
-    evidence = tickets.render_comment(RUN, CAUSE, "The gate overran again.")
-    assert _comment(destination, evidence, capsys)[0] == tickets.SOUND
+    assert _comment(destination, "The gate overran again.", capsys)[0] == tickets.SOUND
     assert (
         tickets.main(["re-estimate", "--board", BOARD, "--run", RUN, destination]) == tickets.SOUND
     )
@@ -10494,7 +10793,7 @@ def test_schema_11_record_golden_stays_readable_with_its_historical_body() -> No
     budget = tickets.OverrunBudget(
         tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, Direction.MAX
     )
-    item = _item(_ticket(budget=budget, body=before_schema_12(BODY)))
+    item = _item(_schema_14(_ticket(budget=budget, body=before_schema_12(BODY))))
     item["metadata"] = {tickets.KEY: golden}
     assert tickets.from_store_item(item).budget == budget
 
@@ -10514,7 +10813,7 @@ def test_schema_11_record_golden_stays_readable_with_its_historical_body() -> No
             "`## Related tickets` 2 times",
         ),
         (
-            BODY.replace("## Owning runs", f"## Related tickets\n\n{RELATED}\n\n## Owning runs"),
+            BODY.replace("## Examples", f"## Related tickets\n\n{RELATED}\n\n## Examples"),
             "not directly before `## Evidence`",
         ),
         (BODY + f"\n\n## Related tickets\n\n{RELATED}", "`## Evidence` section is not its last"),
@@ -10953,3 +11252,537 @@ def test_record_existing_tickets_lists_the_root_it_is_named_and_writes_nowhere_e
     }
     assert tickets.existing_tickets(other) == frozenset({tickets.qualified_id(RUN, CAUSE)})
     assert tickets.existing_tickets(drafts_root) is None
+
+
+def _draft(root: Path, run: str, author: drafts.Author, title: str) -> tickets.QualifiedDraftId:
+    """A draft of ``run`` by ``author``, written as `"$ORCHESTRATOR_FOLLOW_UP_DRAFT"` writes one."""
+    body = "\n\n".join(f"## {heading}\n\nWhat the draft says." for heading in drafts.HEADINGS)
+    written, _ = drafts.write(
+        root,
+        drafts.Draft(
+            title=title,
+            run=run,
+            author=author,
+            dispatch=drafts.DispatchStamp(None, None, str(root), None, None),
+            repository=REPOSITORY,
+            paths=("src/cursor.py",),
+            drafted_at="2026-01-01T00:00:00Z",
+            body=body,
+        ),
+    )
+    return tickets.QualifiedDraftId(written)
+
+
+def _blocked(summary: str, text: str) -> str:
+    """The authored block whose summary is ``summary``, as `render` writes one."""
+    return f"<details>\n<summary>{summary}</summary>\n\n{text}\n\n</details>"
+
+
+def test_board_status_writes_the_blocks_and_the_drafts_sources_which_validate_then_holds(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The agent writes a schema-15 ticket's parts plain and supplies its witnesses; the real
+    `board-status` writes the three blocks — the `Workaround` line first in the cost block —
+    and reads each draft's source and transcript off the draft itself, a manager's recording
+    no transcript and a draft the store no longer holds recording neither; `validate` refuses
+    the plain ticket naming `board-status`, and holds the written one sound."""
+    node = _draft(drafts_root, RUN, drafts.Author("node", "verify-cursor", None), "A node's")
+    manager = _draft(drafts_root, RUN, drafts.Author("manager", None, None), "The manager's")
+    gone = tickets.QualifiedDraftId(f"drafts:{RUN}/drafts/20251231T000000Z-deleted-earlier")
+    written = _ticket(drafts=(node, manager, gone), draft_sources=None, transcripts=())
+    path = _write(drafts_root, written, tickets._rendered(written, PLAIN_BODY))
+
+    status = tickets.main(["validate", str(path)])
+    refused = _flat(capsys.readouterr().err)
+    assert status == tickets.UNSOUND
+    assert f"`{tickets.DRAFT_SOURCES_FIELD}` is written by `board-status`" in refused, refused
+    assert "carries its `**Cost of the workaround.**` part and its lines plain" in refused
+    assert "run `board-status`, which writes the blocks" in refused
+
+    assert _decided(path, capsys) == (tickets.SOUND, "backlog\n", "")
+    read = tickets.read_ticket(path)
+    assert read.schema == tickets.SCHEMA
+    assert dict(read.draft_sources or ()) == {
+        node: "author node; node verify-cursor",
+        manager: "author manager",
+    }
+    assert dict(read.transcripts) == {node: f"onepipeline transcript {RUN} verify-cursor"}
+    assert read.witnesses == (WITNESS,)
+    sections = dict(drafts.sections(read.body))
+    impact, fix = sections[tickets.IMPACT].strip(), sections[tickets.SUGGESTED_FIX]
+    cost = "\n".join(
+        (
+            f"- Workaround: {WORKAROUND}",
+            *(
+                f"- {label}: {text}"
+                for label, text in zip(tickets.WORKAROUND_COSTS, SHARED_COSTS, strict=True)
+            ),
+        )
+    )
+    assert impact.endswith(
+        f"{_blocked(tickets.WORKAROUND_COST, cost)}\n\n"
+        + _blocked(
+            tickets.PRIORITY_CALCULATION,
+            "- Severity: high\n- Severity with the workaround: medium\n"
+            + tickets.estimate_line(tickets.Severity.MEDIUM, FREQUENCY, 1),
+        )
+    ), impact
+    assert impact.startswith(f"**{tickets.IMPACT_PARTS[0]}.**")
+    assert f"**{tickets.WORKAROUND_COST}.**" not in impact
+    assert _blocked(tickets.CONTRIBUTING_LOCATIONS, LOCATION) in fix
+    assert fix.index(_blocked(tickets.CONTRIBUTING_LOCATIONS, LOCATION)) < fix.index("### ")
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    capsys.readouterr()
+
+    # Its drafts deleted once it is copied, a later `board-status` keeps what the record holds.
+    for draft in (node, manager):
+        (drafts_root / "tasks" / RUN / "drafts" / f"{draft.rsplit('/', 1)[1]}.md").unlink()
+    before = path.read_text(encoding="utf-8")
+    assert _decided(path, capsys) == (tickets.SOUND, "backlog\n", "")
+    assert path.read_text(encoding="utf-8") == before
+
+
+#: A sound schema-15 body's `## Impact` part costs, as the shared shape writes them.
+SHARED_COSTS = (
+    "a reader adds one request per listing.",
+    "none; the listing is complete.",
+    "free, because the failure names the workaround.",
+)
+#: The one contributing location the shared shape lists.
+LOCATION = "- some-service `src/cursor.py`: stops one page early when the count changes."
+
+_COST_OPEN = f"<details>\n<summary>{tickets.WORKAROUND_COST}</summary>\n\n- Workaround: "
+_CALCULATION_OPEN = f"<details>\n<summary>{tickets.PRIORITY_CALCULATION}</summary>\n\n"
+
+
+@pytest.mark.parametrize(
+    ("malformed", "reason"),
+    [
+        (
+            lambda body: body.replace(
+                f"**{tickets.IMPACT_PARTS[2]}.**",
+                f"**{tickets.WORKAROUND_COST}.** Small.\n**{tickets.IMPACT_PARTS[2]}.**",
+            ),
+            "carries `**Cost of the workaround.**` as a plain part, where its `Cost of the "
+            "workaround` block holds it",
+        ),
+        (
+            lambda body: re.sub(
+                r"(<details>\n<summary>Contributing locations</summary>\n\n[^\n]*\n\n</details>)"
+                r"\n\n(### [^\n]*\n\n[^\n]*)",
+                r"\2\n\n\1",
+                body,
+            ),
+            "`Contributing locations` block comes after a unit subsection",
+        ),
+        (
+            lambda body: body.replace(
+                _COST_OPEN, _COST_OPEN.replace("<details>", "<details open>")
+            ),
+            "carries '<details open>', '</details>', which is no authored block of a ticket",
+        ),
+        (
+            lambda body: body.replace(_CALCULATION_OPEN, _CALCULATION_OPEN[:-1]),
+            "which is no authored block of a ticket",
+        ),
+        (
+            lambda body: body.replace(
+                f"<summary>{tickets.PRIORITY_CALCULATION}</summary>", "<summary>Priority</summary>"
+            ),
+            "does not end with its two blocks, `Cost of the workaround` then `Priority "
+            "calculation`",
+        ),
+        (
+            lambda body: body.replace(
+                _CALCULATION_OPEN,
+                f"{_CALCULATION_OPEN}<details>\n<summary>Inner</summary>\n\nNested.\n\n"
+                "</details>\n\n",
+            ),
+            "which is no authored block of a ticket",
+        ),
+        (
+            lambda body: body.replace(f"\n\n{LOCATION}\n\n</details>", "\n\n\n\n</details>"),
+            "an empty `Contributing locations` block",
+        ),
+        (
+            lambda body: body.replace(
+                "## Examples\n\n",
+                "## Examples\n\n<details>\n<summary>More</summary>\n\nx\n\n</details>\n\n",
+            ),
+            "the body's `## Examples` carries a `<details>` or `</details>` line",
+        ),
+        (
+            lambda body: body.replace(f"- Workaround: {WORKAROUND}\n", "").replace(
+                f"**{tickets.IMPACT_PARTS[1]}.**",
+                f"- Workaround: {WORKAROUND}\n**{tickets.IMPACT_PARTS[1]}.**",
+            ),
+            "carries its `- Workaround:` line outside the `Cost of the workaround` block",
+        ),
+        (
+            lambda body: body.replace("- Severity: high\n", "").replace(
+                f"- Workaround: {WORKAROUND}\n", f"- Workaround: {WORKAROUND}\n- Severity: high\n"
+            ),
+            "carries its `- Severity:` line outside the `Priority calculation` block",
+        ),
+        (
+            lambda body: body.replace("- Severity with the workaround: medium\n", "").replace(
+                f"- Workaround: {WORKAROUND}\n",
+                f"- Workaround: {WORKAROUND}\n- Severity with the workaround: medium\n",
+            ),
+            "carries its `- Severity with the workaround:` line outside the `Priority calculation`",
+        ),
+        (
+            lambda body: re.sub(
+                r"\n(- Priority estimate:[^\n]*)\n\n</details>",
+                "\n\n</details>\n\n\\1",
+                body,
+            ),
+            "does not end with its two blocks",
+        ),
+        (
+            lambda body: body.replace("- Priority estimate:", "- Priority estimate:", 1).replace(
+                f"**{tickets.IMPACT_PARTS[2]}.**",
+                f"- {tickets.ESTIMATE_LINE}: high\n**{tickets.IMPACT_PARTS[2]}.**",
+            ),
+            "carries its `- Priority estimate:` line outside the `Priority calculation` block",
+        ),
+    ],
+    ids=[
+        "a-plain-cost-beside-its-blocks",
+        "locations-after-a-unit",
+        "an-attribute",
+        "no-blank-line-after-the-summary",
+        "a-wrong-summary",
+        "a-nested-block",
+        "an-empty-body",
+        "a-block-elsewhere",
+        "workaround-outside",
+        "severity-outside",
+        "severity-with-the-workaround-outside",
+        "estimate-after-the-blocks",
+        "estimate-outside",
+    ],
+)
+def test_validate_refuses_a_hand_malformed_block_or_a_line_outside_its_block(
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    malformed: Callable[[str], str],
+    reason: str,
+) -> None:
+    """A block is exactly the authored form, so one written by hand any other way is refused,
+    never re-wrapped, and so is a line of `## Impact` outside the block it belongs in."""
+    body = malformed(BODY)
+    assert body != BODY, "the departure changed nothing"
+    refused = _validated(drafts_root, capsys, tickets.render(_ticket(body=body)))
+    assert reason in refused, refused
+
+
+@pytest.mark.parametrize(
+    ("evidence", "carried"),
+    [
+        (f"Host: {HOST}", "a `Host:` line"),
+        (f"- **Basis:** {REPOSITORY} at the last release", "a `Basis:` line"),
+        (f"It rests on {SOUND_DRAFT}.", "a qualified draft id"),
+        (f"Seen at {COMMIT}.", "a 40-character commit"),
+        (f"Read `onepipeline transcript {RUN} verify-cursor`.", "a transcript command"),
+        (f"Read `onepipeline monitor {RUN} --filter x`.", "a transcript command"),
+    ],
+)
+def test_a_schema_15_evidence_carrying_what_the_record_holds_is_refused(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str], evidence: str, carried: str
+) -> None:
+    """`## Evidence` says what happened; the record holds the host, basis, drafts and commands."""
+    body = BODY.replace(EVIDENCE_TEXT, f"{EVIDENCE_TEXT}\n\n{evidence}")
+    refused = _validated(drafts_root, capsys, tickets.render(_ticket(body=body)))
+    assert f"the body's `## Evidence` section carries {carried}" in refused, refused
+    assert "which the record holds from schema 15" in refused
+
+
+@pytest.mark.parametrize(
+    ("witnesses", "reason"),
+    [
+        ((), "`witnesses` is not a non-empty array of strings"),
+        (("src/cursor.py:41",), "is not"),
+        (
+            (f"{OTHER_REPOSITORY} src/cursor.py:41 at {COMMIT}",),
+            f"names {OTHER_REPOSITORY!r}, which `basis` names no commit for",
+        ),
+        (
+            (f"{REPOSITORY} src/cursor.py:41 at {'f' * 40}",),
+            f"where `basis` holds {COMMIT!r} for {REPOSITORY!r}",
+        ),
+    ],
+    ids=["none", "no-shape", "an-origin-outside-basis", "another-commit"],
+)
+def test_a_witness_is_held_to_the_basis_it_was_seen_in(
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    witnesses: tuple[str, ...],
+    reason: str,
+) -> None:
+    refused = _validated(drafts_root, capsys, tickets.render(_ticket(witnesses=witnesses)))
+    assert reason in refused, refused
+
+
+@pytest.mark.parametrize(
+    ("departure", "reason"),
+    [
+        (
+            {tickets.DRAFT_SOURCES_FIELD: {"drafts:x/drafts/y": SOURCE}},
+            "`draft_sources` is not an object keyed by the record's `drafts`",
+        ),
+        (
+            {tickets.DRAFT_SOURCES_FIELD: {SOUND_DRAFT: "written by hand"}},
+            "`draft_sources` is not an object keyed by the record's `drafts`",
+        ),
+        (
+            {tickets.TRANSCRIPTS_FIELD: {SOUND_DRAFT: "two\nlines"}},
+            "`transcripts` is not an object keyed by exactly the drafts",
+        ),
+        (
+            {tickets.DRAFT_SOURCES_FIELD: {SOUND_DRAFT: "author manager"}},
+            "`transcripts` is not an object keyed by exactly the drafts",
+        ),
+    ],
+    ids=["a-draft-it-does-not-name", "no-author-line", "two-lines", "a-managers-transcript"],
+)
+def test_the_drafts_sources_and_transcripts_are_held_to_the_drafts(
+    departure: dict[str, object], reason: str
+) -> None:
+    item = _item()
+    _record(item).update(departure)
+    assert any(reason in one for one in tickets.problems(item)), tickets.problems(item)
+
+
+def test_a_record_naming_a_nodes_draft_owes_its_transcript_and_a_pending_one_owes_neither() -> None:
+    """`board-status` writes the sources and the transcripts together: a record holding a node
+    draft's source and no transcript is refused, and a pending one holding neither is sound."""
+    item = _item()
+    del _record(item)[tickets.TRANSCRIPTS_FIELD]
+    assert any(
+        f"carries no `transcripts`, where its drafts {SOUND_DRAFT} record a transcript" in one
+        for one in tickets.problems(item)
+    ), tickets.problems(item)
+    del _record(item)[tickets.DRAFT_SOURCES_FIELD]
+    item["content"] = PLAIN_BODY
+    assert tickets.problems(item, pending=True) == []
+
+
+def test_a_schema_15_body_carrying_owning_runs_or_a_record_key_before_it_is_refused(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    owned = BODY.replace("## Evidence", "## Owning runs\n\nlisting-run\n\n## Evidence")
+    refused = _validated(drafts_root, capsys, tickets.render(_ticket(body=owned)))
+    assert "the body carries `## Owning runs`, which schema 15 moved to the record's" in refused
+    item = _item(_schema_14(_ticket()))
+    _record(item)[tickets.WITNESSES_FIELD] = [WITNESS]
+    assert any(
+        "the record is schema 14 and carries `witnesses`, which only a record from schema 15" in one
+        for one in tickets.problems(item)
+    )
+
+
+@pytest.mark.parametrize("schema", list(range(tickets.ESTIMATE_AT, tickets.FIELDS_AT)))
+def test_a_stored_ticket_of_each_older_sound_schema_reads_as_before(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str], schema: int
+) -> None:
+    """A ticket of schemas 7 to 14 in its own shape validates and reads exactly as before:
+    its body untouched, none of schema 15's keys, and its `## Evidence` still held to name its
+    host."""
+    body = (
+        before_schema_15(BODY)
+        if schema >= tickets.SEARCH_RETIRED_AT
+        else before_schema_12(BODY)
+        if schema >= tickets.PLAIN_AT
+        else before_schema_11(BODY)
+        if schema >= tickets.INVARIANT_AT
+        else before_schema_10(BODY)
+        if schema >= tickets.STRUCTURE_AT
+        else SCHEMA_7_BODY
+    )
+    # Schema 7's own body states a `high` residual, so its estimate is that.
+    estimated = tickets.Priority.HIGH if schema < tickets.STRUCTURE_AT else tickets.Priority.MEDIUM
+    older = _ticket(body=body, priority_estimate=estimated, priority=estimated)
+    path = _write(drafts_root, older, _at_schema(older, schema))
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    read = tickets.read_ticket(path)
+    assert read.schema == schema
+    assert read.body == body.strip()
+    assert (read.draft_sources, read.transcripts, read.witnesses) == (None, (), ())
+    assert tickets.FIELDS_KEYS[0] not in path.read_text(encoding="utf-8")
+    assert "<details>" not in read.body
+    unhosted = dataclasses.replace(older, body=body.replace(f"Verified on `{HOST}`.", "Verified."))
+    refused = _validated(drafts_root, capsys, _at_schema(unhosted, schema))
+    assert f"does not name the host {HOST!r} the record's `host` states" in refused, refused
+
+
+def test_the_estimate_of_a_schema_15_body_is_the_estimate_of_the_same_values_at_schema_14(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The same severities and frequency estimate the same priority and line from inside the
+    `Priority calculation` block as from the plain lines, through the real `board-status`."""
+    stated = {}
+    for cause, schema in (
+        ("blocked-cause", tickets.SCHEMA),
+        ("plain-cause", tickets.OWNED_LAST_AT),
+    ):
+        ticket = _ticket(
+            root_cause=tickets.RootCause(cause),
+            frequency=tickets.Frequency.CONSISTENT,
+            priority_estimate=None,
+        )
+        path = _write(drafts_root, ticket, _at_schema(ticket, schema))
+        assert _decided(path, capsys) == (tickets.SOUND, "backlog\n", "")
+        read = tickets.read_ticket(path)
+        lines = [
+            line
+            for line in read.body.splitlines()
+            if line.startswith(f"- {tickets.ESTIMATE_LINE}:")
+        ]
+        assert read.schema == schema
+        stated[schema] = (read.priority_estimate, read.priority, lines)
+    assert stated[tickets.SCHEMA] == stated[tickets.OWNED_LAST_AT]
+    assert stated[tickets.SCHEMA][0] is tickets.Priority.HIGH
+    assert tickets.stated_with_workaround(BODY) is tickets.stated_with_workaround(
+        before_schema_15(BODY)
+    )
+
+
+def _comment_ids(destination: str) -> list[tuple[str, str]]:
+    """Each comment on ``destination``: its id and body, as the store lists them."""
+    listed = plan_store.sdk(plan_store.client().task_comment_list(destination)).comments
+    return [(str(getattr(one.id, "root", one.id)), one.body) for one in listed]
+
+
+def test_comment_writes_its_parts_in_order_and_edits_only_this_runs_own_in_place(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`comment` writes the block, what was observed, the `Bears on the ticket:` paragraph and
+    the marker in that order; `--edit` rewrites this run's own comment in place and refuses
+    another run's, writing nothing; each write is receipted."""
+    issue = _filed(drafts_root, OTHER_RUN, CAUSE, "the cursor skips the last page")
+    older = tickets.render_comment(OTHER_RUN, CAUSE, "Seen earlier.", comment_sources(OTHER_RUN))
+    plan_store.sdk(plan_store.client().task_comment_add(issue, body=older))
+    status, _, said = _comment(issue, "Seen again.", capsys, bears_on="it widens to page 10.")
+    assert status == tickets.SOUND, said
+    ((theirs, _), (mine, body)) = _comment_ids(issue)
+    assert (
+        body.strip()
+        == _posted_body(RUN, CAUSE, "Seen again.")
+        .replace(
+            "\n\n<!-- orchestrator:",
+            f"\n\n{tickets.BEARS_ON} it widens to page 10.\n\n<!-- orchestrator:",
+        )
+        .strip()
+    )
+    assert body.index("Seen again.") < body.index(tickets.BEARS_ON) < body.index("<!-- ")
+
+    refused = _comment(issue, "Seen once more.", capsys, RUN, "--edit", theirs)
+    assert refused[0] == tickets.UNSOUND, refused
+    assert f"holds no evidence comment {theirs!r} whose marker names run {RUN}" in _flat(refused[2])
+    assert _comment_ids(issue)[0][1] == older
+    edited = _comment(issue, "Seen once more.", capsys, RUN, "--edit", mine)
+    assert edited[0] == tickets.SOUND, edited
+    assert [one for one, _ in _comment_ids(issue)] == [theirs, mine]
+    assert "Seen once more." in _comment_ids(issue)[1][1]
+    receipts = [
+        one
+        for one in tickets.read_receipts(drafts_root, RUN)[0]
+        if one.command is tickets.ReceiptCommand.COMMENT
+    ]
+    outcomes = [one.outcome for one in receipts]
+    assert [one.id for one in outcomes if isinstance(one, tickets.CommentOutcomeReceipt)] == [
+        mine,
+        mine,
+    ], outcomes
+
+
+def test_comment_refuses_a_part_repeating_its_opening_and_sources_that_are_no_json(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A part carrying the comment's own opening would read as a second comment, and sources
+    that are not JSON are no sources: both refused with nothing posted."""
+    issue = _filed(drafts_root, OTHER_RUN, CAUSE, "the cursor skips the last page")
+    repeated = _comment(issue, f"Seen.\n\n{tickets.comment_summary(RUN)}\n", capsys)
+    assert repeated[0] == tickets.UNSOUND, repeated
+    assert f"it repeats its opening {tickets.comment_summary(RUN)!r} after its block" in _flat(
+        repeated[2]
+    )
+    evidence, sources = tmp_path / "evidence.md", tmp_path / "sources.json"
+    evidence.write_text("Seen.", encoding="utf-8")
+    sources.write_text("{not json", encoding="utf-8")
+    words = ["comment", "--board", BOARD, "--run", RUN, "--root-cause", CAUSE]
+    words += ["--evidence-file", str(evidence), "--sources-file", str(sources), issue]
+    assert tickets.main(words) == tickets.UNSOUND
+    assert "the sources file is not JSON" in capsys.readouterr().err
+    assert _comment_bodies(issue) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["Seen again.\n\n<!-- marker -->", "<details>\n<summary>x</summary>\n\n\n\n</details>\nx"],
+    ids=["no-opening", "an-empty-block"],
+)
+def test_a_comment_opening_with_neither_shape_is_not_this_runs(body: str) -> None:
+    assert any(
+        "its opening line is" in one and "or, written before it" in one
+        for one in tickets.run_comment_problems(RUN, body)
+    )
+
+
+def test_a_draft_the_store_cannot_read_is_its_failure_rather_than_a_dropped_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a draft the store answers it holds no longer is left without a source: any other
+    failure of the store is its own, which every command reports, so a source is never
+    silently lost to an outage. The outage is induced at the store's boundary, the one place a
+    test can make a working local store fail."""
+
+    def unreadable(_: str) -> Mapping[str, object]:
+        raise OSError("the drafts source could not be reached")
+
+    monkeypatch.setattr(plan_store, "task_record", unreadable)
+    with pytest.raises(OSError, match="the drafts source could not be reached"):
+        tickets.draft_fields((SOUND_DRAFT,))
+
+
+def test_a_blocked_impact_beside_a_plain_fix_is_refused_naming_the_fixs_block(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Each section is held to its own blocks: a sound plain locations part, or one with no
+    bullet, beside a blocked `## Impact`, is refused for what it is."""
+    plain_fix = BODY.replace(
+        _blocked(tickets.CONTRIBUTING_LOCATIONS, LOCATION),
+        f"**{tickets.CONTRIBUTING_LOCATIONS}.**\n{LOCATION}",
+    )
+    assert plain_fix != BODY
+    item = _item()
+    item["content"] = plain_fix
+    assert any(
+        "carries its `**Contributing locations.**` part plain, where a schema-15 ticket carries "
+        "them in its `Contributing locations` block" in one
+        for one in tickets.problems(item)
+    ), tickets.problems(item)
+    empty = PLAIN_BODY.replace(f"{LOCATION}\n", "")
+    assert empty != PLAIN_BODY
+    refused = _validated(drafts_root, capsys, tickets.render(_ticket(body=empty)))
+    assert "part carries no bullet" in refused, refused
+
+
+def test_a_comment_whose_block_names_another_run_is_not_this_runs() -> None:
+    """The block an evidence comment opens with names its run in its summary, so a block
+    naming another run's opens no comment of this run's, whatever its marker says."""
+    body = tickets.render_comment(RUN, CAUSE, "Seen again.", comment_sources(RUN))
+    renamed = body.replace(tickets.comment_summary(RUN), tickets.comment_summary(OTHER_RUN))
+    assert tickets.run_comment_problems(RUN, body) == []
+    assert any(
+        f"its opening block is summarised {tickets.comment_summary(OTHER_RUN)!r}" in one
+        for one in tickets.run_comment_problems(RUN, renamed)
+    )
+
+
+def test_a_draft_id_the_store_holds_as_no_draft_records_no_source(drafts_root: Path) -> None:
+    """A draft id whose record is not the one a draft is written as is one no source can be
+    read off: it gets no entry, as a draft the store no longer holds gets none."""
+    (held,) = _drafted(drafts_root, RUN, "not-a-draft-record")
+    assert tickets.draft_fields((tickets.QualifiedDraftId(held),)) == ((), ())

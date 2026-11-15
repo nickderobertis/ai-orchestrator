@@ -143,8 +143,8 @@ def manager_attribution(reference: RulingReference) -> str:
     return (
         f"{ATTRIBUTION_OPENING}manager (ruling reference `{reference}`): a strong default "
         "you may decline with your reason. To decline it, run `onepipeline decline-ruling "
-        f'"$ONEPIPELINE_RUN_ID" --ruling {reference}` with the reason on standard input; '
-        "the manager is told, and may take it to the user."
+        f'"$ONEPIPELINE_RUN_ID" --ruling {reference} --reason <text>`, giving the reason as '
+        "that one quoted argument; the manager is told, and may take it to the user."
     )
 
 

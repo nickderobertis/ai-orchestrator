@@ -53,5 +53,16 @@
   optional `## {{ shape.related_tickets }}`. Then {% if settled %}validate it with `--pending`, and this run's settle step
   records it at schema {{ shape.schema }} and copies it{% else %}`{{ board_status }}` records it at schema {{ shape.schema }}; validate it and
   copy it{% endif %}. Another run's item keeps its schema and its body.
+- a ticket of this run older than schema {{ shape.fields_at }} is brought to it when this run rewrites it:
+  its `## {{ shape.owning_runs }}` section removed, since the record's `owning_runs` holds them; its
+  `## {{ shape.evidence }}` rewritten to say only what happened, its host, basis, draft ids, commits and
+  transcript commands taken out, since the record holds them; its record's `{{ shape.witnesses_field }}`
+  written from the claims its evidence verified, one {{ shape.witness_shape }} each, at the commit
+  `basis` records; and its parts left plain for {% if settled %}this run's settle step{% else %}`{{ board_status }}`{% endif %}
+  to put in their blocks. Then {% if settled %}validate it with `--pending`, and this run's settle step
+  records it at schema {{ shape.schema }}, writing its `{{ shape.draft_sources_field }}` and `{{ shape.transcripts_field }}`, and copies
+  it{% else %}`{{ board_status }}` records it at schema {{ shape.schema }}, writing its `{{ shape.draft_sources_field }}` and
+  `{{ shape.transcripts_field }}`; validate it and copy it{% endif %}. Another run's item keeps its schema
+  and its body.
 {%- endmacro %}
 <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->

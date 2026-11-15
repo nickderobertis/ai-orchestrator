@@ -41,6 +41,7 @@ from test_follow_ups_answer_comments_recipe_e2e import (
     _serving,
 )
 from test_follow_ups_recipe_e2e import (
+    COMMIT,
     GATE,
     HOST,
     OK,
@@ -80,13 +81,14 @@ OWN_CAUSE = "the-session-token-is-never-rotated"
 SHARED_CAUSE = "the-login-page-retries-without-backoff"
 
 #: The command the agent posts or edits its evidence comment with: it lists the issue's
-#: comments, keeps the one whose marker names this run and cause, and edits it with the store's
-#: `task comment edit`, or posts one with the module's `comment`, as the task prescribes — never
-#: a bare `task comment add`, so the post leaves the run's receipt.
+#: comments, keeps the one whose marker names this run and cause, and writes it with the
+#: module's `comment` from its parts — with `--edit` naming that comment where there is one, as
+#: the task prescribes — never a bare `task comment add` or `task comment edit`, so each write
+#: leaves the run's receipt.
 COMMENT_PROGRAM = """\
 import json, pathlib, subprocess, sys
 
-store, board, issue, run, cause, body = sys.argv[1:7]
+store, board, issue, run, cause, evidence, sources = sys.argv[1:8]
 listed = json.loads(subprocess.run(
     [store, "task", "comment", "list", issue, "--json"], check=True, capture_output=True, text=True
 ).stdout)["comments"]
@@ -94,14 +96,12 @@ from orchestrator import follow_up_tickets as tickets
 mine = [one for one in listed
         if tickets.comment_owner(one["body"]) == tickets.CommentOwner(tickets.RunId(run),
                                                                       tickets.RootCause(cause))]
-path = pathlib.Path(body)
+command = [sys.executable, "-m", "orchestrator.follow_up_tickets", "comment", "--board", board]
+command += ["--run", run, "--root-cause", cause, "--evidence-file", evidence]
+command += ["--sources-file", sources]
 if mine:
-    command = [store, "task", "comment", "edit", issue, mine[0]["id"], "--body-file", str(path)]
-    command.append("--json")
-else:
-    command = [sys.executable, "-m", "orchestrator.follow_up_tickets", "comment", "--board", board]
-    command += ["--run", run, issue, "--body-file", str(path)]
-subprocess.run(command, check=True)
+    command += ["--edit", mine[0]["id"]]
+subprocess.run([*command, issue], check=True)
 """
 
 #: What the agent writes its account with: the dispositions, under the run the task names.
@@ -165,10 +165,18 @@ def _turn(bench: Bench, key: str, draft: Path | None, other_issue: str) -> list[
         ticket.parent.mkdir(parents=True, exist_ok=True)
         staged_own = _staged(bench, f"{key}-own.md", tickets.render(written))
         staged_shared = _staged(bench, f"{key}-shared.md", tickets.render(local))
-    comment = _staged(
+    evidence = _staged(bench, f"{key}-evidence.md", f"Seen again in follow-up run `{key}`.")
+    sources = _staged(
         bench,
-        f"{key}-comment.md",
-        tickets.render_comment(key, SHARED_CAUSE, f"Seen again in follow-up run `{key}`."),
+        f"{key}-sources.json",
+        json.dumps(
+            {
+                "host": HOST,
+                "basis": {REPOSITORY: COMMIT},
+                "drafts": list(drafted) or [f"{tickets.SOURCE}:{key}/drafts/a-draft"],
+                "witnesses": [f"{REPOSITORY} src/cursor.py:41 at {COMMIT}"],
+            }
+        ),
     )
     helper = _staged(bench, "comment.py", COMMENT_PROGRAM)
     account = _staged(bench, "account.py", ACCOUNT_PROGRAM)
@@ -188,7 +196,7 @@ def _turn(bench: Bench, key: str, draft: Path | None, other_issue: str) -> list[
         f"{module} validate {shlex.quote(str(shared))}",
         shlex.join(
             [python, str(helper), str(ONETASKGRAPH_BIN), BOARD, other_issue, key, SHARED_CAUSE]
-            + [str(comment)]
+            + [str(evidence), str(sources)]
         ),
         f"{module} re-estimate --board {BOARD} --run {shlex.quote(key)} {shlex.quote(other_issue)}",
     ]

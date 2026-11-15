@@ -51,6 +51,7 @@ from typing import Literal
 import follow_up_boundary
 import github_board as remote
 import pytest
+from follow_up_ticket_shape import comment_sources
 from github_board import _GitHubFixture, _Operation
 from published_tools import ONETASKGRAPH_BIN
 
@@ -142,6 +143,7 @@ def _filed(loopback: Loopback, cause: str = remote.PROPOSED_CAUSE, **facts: obje
     ticket = remote._follow_up_ticket(
         remote.SIBLING_REPOSITORY, cause=cause, verified_on=HOST, **facts
     )
+    remote.written_drafts(loopback.root, ticket)
     path = remote._written_ticket(loopback.root, ticket)
     for verb in ("board-status", "copy"):
         assert tickets.main([verb, "--board", BOARD, str(path)]) == tickets.SOUND
@@ -508,7 +510,12 @@ def _evidenced(loopback: Loopback, issue: str) -> None:
     _said(
         loopback,
         issue,
-        tickets.render_comment("another-run", remote.PROPOSED_CAUSE, "Seen on another host."),
+        tickets.render_comment(
+            "another-run",
+            remote.PROPOSED_CAUSE,
+            "Seen on another host.",
+            comment_sources("another-run"),
+        ),
     )
 
 

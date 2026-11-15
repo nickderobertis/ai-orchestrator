@@ -252,10 +252,10 @@ louder rather than duplicated.
   none, reads every page the store answers, and prints the result as one JSON document. `--status <word>`, repeated, keeps only the items at those statuses of
   what the other flags selected, and never selects on its own. Never ask with a bare
   `{{ plan_store }} task list`, which answers one page and a `next` cursor. Read one item with
-  `{{ plan_store }} task show <id> --json`. Post this run's evidence comment or budget question
-  with `{{ comment }} --board {{ board }} --run {{ run }} <id> --body-file <the comment>`, never a bare
-  `{{ plan_store }} task comment add`, and read or edit comments with
-  `{{ plan_store }} task comment list|edit`.
+  `{{ plan_store }} task show <id> --json`. Post this run's evidence comment or budget question,
+  or edit the one this run left, only with `{{ comment }}` from its parts, as "Ownership on the
+  board" states — never a bare `{{ plan_store }} task comment add` or `{{ plan_store }} task comment edit`
+  of one — and read comments with `{{ plan_store }} task comment list`.
 
 ## What each board status means
 
@@ -306,7 +306,10 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    That commit is the basis every claim about that repository is verified at, and it is
    what the ticket's `basis` records, for every repository its `repositories` lists.
 2. **Verify each draft against that basis.** Read what the draft claims, its transcript and
-   the tree, and decide whether the claim holds at the basis commit.
+   the tree, and decide whether the claim holds at the basis commit. Each claim that holds is
+   one entry of the ticket's `{{ shape.witnesses_field }}`, {{ shape.witness_shape }}: the repository's
+   origin as `basis` names it, the file and line it was seen at, and exactly the commit `basis`
+   records for that repository.
 3. **Drop a draft you cannot verify, or one the basis already fixes.** Keep the id of every
    dropped draft and the reason it was dropped: every draft, dropped or not, is accounted
    for at step 10 below, and that account is checked.
@@ -332,10 +335,11 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    situations, and record that as the ticket's `{{ shape.frequency_field }}`. That judgment and the
    severities are the facts its priority is estimated from; the estimate and the priority
    themselves are never yours to write.
-6. **Write each ticket, then delete the drafts it consumed.** Leave its priority estimate,
-   its estimate line and its priority to step 8's `{{ board_status }}`, which writes them, and
-   validate it only after that: `{{ validate }}` refuses a ticket without them. Then delete
-   the draft files that ticket consumed, under `{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.drafts_directory }}/`.
+6. **Write each ticket.** Leave its priority estimate, its estimate line and its priority, and
+   its `{{ shape.draft_sources_field }}` and `{{ shape.transcripts_field }}`, to step 8's `{{ board_status }}`,
+   which writes them, and validate it only after that: `{{ validate }}` refuses a ticket without
+   them. Keep the drafts it consumed until step 9 has copied it or posted its evidence:
+   `{{ board_status }}` and `{{ comment }}` read where each came from off the draft itself.
 7. **Search the board for the same root cause, and for the accepted fixes that bear on it.**
    A ticket whose record already names its card — its `{{ shape.copies_key }}` link, or the
    `{{ shape.binding_field }}` a ticket recorded before schema {{ shape.binding_retired_at }} still carries — is
@@ -450,10 +454,9 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    has ended. Where an
    open item for it was created by another run — found under this ticket's slug, or by the
    searches of step 7 under the slug this ticket then took from it — copy nothing: post this
-   run's one comment to that item with
-   `{{ comment }} --board {{ board }} --run {{ run }} <that item's id> --body-file <the comment>`, or edit
-   the comment this run already left there, under "Ownership on the board" below, its marker
-   naming that item's `root_cause`, and **after every such comment, re-estimate that item** with
+   run's one comment to that item, or edit the comment this run already left there, with
+   `{{ comment }}` from its parts as "Ownership on the board" below states, `--root-cause` naming
+   that item's `root_cause`, and **after every such comment, re-estimate that item** with
    `{{ re_estimate }} --board {{ board }} --run {{ run }} <that item's id>`, which recounts its
    occurrences, stores its estimate and rewrites its estimate line. Keep what each printed for
    your report.
@@ -465,7 +468,10 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    `{{ copy }}`, `{{ comment }}` and `{{ re_estimate }}` each append one line, built from the store's
    answer to the write, to this run's receipts at
    `{{ drafts_root }}/{{ shape.receipts_directory }}/{{ run }}{{ shape.receipt_suffix }}`. That file is the run's record of what
-   its writes did: never write, edit or delete it.
+   its writes did: never write, edit or delete it. Once a ticket is copied, or its evidence
+   is on another run's item, delete the draft files it consumed, under
+   `{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.drafts_directory }}/`: its record holds where each
+   came from, and a later `{{ board_status }}` keeps that and reads no draft again.
 10. **Account for every draft this dispatch was given.** Write one disposition per draft
     into `{{ dispositions }}`, to the shape under "The account of every draft" below, then run
     `{{ check_dispositions }}` and correct the account until it reports it sound. It is what
@@ -588,7 +594,14 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   with `repositories` removed or changed to get it filed, and report what was printed.
 - Its front matter carries the `{{ shape.record_key }}` record with every key present, and its body
   the headings {{ shape.headings }}, in that order, each with content. `created_by_run` is this
-  run, and `owning_runs` includes it.
+  run, and `owning_runs` includes it. **The body carries no `## {{ shape.owning_runs }}`**: the record's
+  `owning_runs` holds them, and the board shows the record's values on its fields,
+  {{ shape.board_fields }}. You supply `{{ shape.witnesses_field }}`, one entry per verified claim as step 2
+  says, as you supply `basis`; `{{ shape.draft_sources_field }}` — where each draft came from — and
+  `{{ shape.transcripts_field }}` — each draft's transcript command — are `{{ board_status }}`'s to write from
+  the drafts the record names, and never yours. `{{ validate }}` refuses a schema-{{ shape.schema }} ticket
+  carrying `## {{ shape.owning_runs }}`, or a witness naming an origin `basis` does not name or a commit
+  other than the one it records.
 - **`## Root cause` is plain prose for a reader who knows what the project does but not how
   it is built**: the guarantee that is missing or broken, in the product's own terms — what
   the system should do and does not — with no labelled parts and no file path, module,
@@ -601,11 +614,18 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   part: after its opening paragraph and before its unit subsections, one bullet per
   location that contributes to the root cause, {{ shape.location_shape }}, possibly several and
   in several repositories. Every specific code reference the ticket carries belongs in that
-  section. `{{ validate }}` refuses a schema-{{ shape.schema }} fix without the part, with no bullet in it,
-  or with it after a unit subsection.
-- **`## {{ shape.evidence }}` closes the ticket**, after every section a person reads to
-  decide on it. `{{ validate }}` refuses a schema-{{ shape.schema }} body with any retired search
-  heading or with Evidence anywhere but last. Write no substitute query or candidate log.
+  section. Write the part plain, as the example shows: `{{ board_status }}` puts it in one collapsed
+  `<details>` block summarised `{{ shape.contributing_locations_summary }}`, which a reader opens with one tap;
+  never write a `<details>` block yourself. `{{ validate }}` refuses a schema-{{ shape.schema }} fix without
+  the part, with no bullet in it, with it after a unit subsection, or with the part still plain
+  where `{{ board_status }}` has not yet put it in its block.
+- **`## {{ shape.evidence }}` closes the ticket, and says what happened**: in prose, what each
+  occurrence did and what was seen when the claims were verified, after every section a person
+  reads to decide on it. It carries nothing the record holds — no `Host:` or `Basis:` line, no
+  qualified draft id, no 40-character commit and no transcript command: `host`, `basis`, `drafts`,
+  `{{ shape.witnesses_field }}` and the transcripts `{{ board_status }}` reads hold them. `{{ validate }}` refuses a
+  schema-{{ shape.schema }} Evidence carrying any of them, and a body with any retired search heading or
+  with Evidence anywhere but last. Write no substitute query or candidate log.
 - **`## {{ shape.related_tickets }}` is optional, directly before `## {{ shape.evidence }}`**, and
   omitted entirely when empty: no heading and no placeholder `none`. {{ shape.relatedness_bar }}
   Keep every `{{ shape.dependency_field }}` entry as a
@@ -638,7 +658,12 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   carrying {{ shape.workaround_costs }} — or, with a workaround of `{{ shape.no_workaround }}`, saying there is
   {{ shape.no_acceptable_workaround }} and why. `{{ validate }}` refuses a schema-{{ shape.schema }} ticket without them, and
   one whose workaround is not `{{ shape.no_workaround }}` but whose severity with the workaround equals a
-  severity above `low`. The rubric judges across users, development and resources, but the
+  severity above `low`. Write the `**{{ shape.workaround_cost }}.**` part and the three lines plain, as the
+  example shows: `{{ board_status }}` moves the `- Workaround:` line and the workaround's costs into one
+  collapsed `{{ shape.workaround_cost }}` block, and the severity lines with the estimate into one
+  collapsed `{{ shape.priority_calculation }}` block, the last two things in the section, and you never
+  write a `<details>` block yourself; `{{ validate }}` refuses a schema-{{ shape.schema }} section still plain,
+  naming `{{ board_status }}`. The rubric judges across users, development and resources, but the
   product owner's part states the impact itself in plain words — how many users lose what,
   how much a regularly used workflow slows, or the $/month and quota share — never opening on
   a label naming which area decides ("Users decide: …"), which `{{ validate }}` refuses on a
@@ -653,8 +678,7 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   after `## {{ shape.suggested_fix }}` and gives each rejected fix with why it was rejected; otherwise it
   is left out.
 - **`host` is read, never typed.** Run `hostname` on the machine you run on and write
-  exactly what it prints, both as `host` and in the `## {{ shape.evidence }}` section, never a value you
-  type or recall.
+  exactly what it prints as `host`, never a value you type or recall.
 - **A ticket written against an accepted ticket's fix depends on it, as the store's own
   top-level `{{ shape.dependency_field }}`** — one entry per accepted ticket whose fix changed this
   ticket, as `{id: {{ board }}:<native id>, item: {{ shape.dependency_item }}}` and nothing else, its `kind` left to
@@ -784,8 +808,8 @@ budget account at `{{ budgets }}`, with the change's telemetry copied unchanged 
   the same threshold and direction; read it with onebudgetspec `list`. Re-file nothing. Post this
   run's one evidence comment to that closed item with `{{ comment }}`,
   under "Ownership on the board", in the shape stated there, its occurrence being the
-  entry's result line and the diagnosed cause, and asking whether the budget should change
-  instead; it is the one evidence comment that
+  entry's result line and the diagnosed cause, and its `--question-file` asking whether the
+  budget should change instead; it is the one evidence comment that
   goes on a closed item. The disposition is `{{ shape.budget_question }}`, its `item` the closed item.
   When the recorded budget differs, the budget changed since the item was closed, and the
   overrun is filed as usual, as a new ticket.
@@ -934,7 +958,15 @@ what the project does but not how it is built, naming no file, module, function,
 before its unit subsections; the `**{{ shape.owner_cost }}.**` part states the impact with no
 label naming which area decides; optional `## {{ shape.related_tickets }}` comes directly before
 the last `## {{ shape.evidence }}`. Remove retired search logs and write no substitute query or
-candidate log.
+candidate log. **The body carries no `## {{ shape.owning_runs }}`**, and `## {{ shape.evidence }}` says what
+happened and nothing the record holds — no `Host:` or `Basis:` line, no qualified draft id,
+no 40-character commit and no transcript command; the record's `{{ shape.witnesses_field }}` holds
+one entry per verified claim, {{ shape.witness_shape }}, which you supply as you do `basis`, while
+its `{{ shape.draft_sources_field }}` and `{{ shape.transcripts_field }}` are this run's settle step's to write
+from the drafts. Write the `**{{ shape.workaround_cost }}.**` part, the three `## {{ shape.impact }}` lines and
+the {{ shape.contributing_locations }} part plain, as the example shows: the settle step puts them in
+their collapsed `{{ shape.workaround_cost }}`, `{{ shape.priority_calculation }}` and
+`{{ shape.contributing_locations_summary }}` blocks, and you never write a `<details>` block yourself.
 `{{ validate }}` refuses a schema-{{ shape.schema }} ticket that departs from it, and `{{ check_responses }}`
 refuses this account while the ticket of an issue it answers on is refused.
 

@@ -793,3 +793,30 @@ def test_a_public_id_that_cannot_name_a_draft_project_is_refused(
 
     with pytest.raises(Refused, match="cannot name a draft project"):
         drafts.follow_up_key(RUN, runs=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("author", "line"),
+    [
+        (drafts.Author("node", "verify-cursor", None), "author node; node verify-cursor"),
+        (drafts.Author("monitor", None, "monitor"), "author monitor; member monitor"),
+        (drafts.Author("manager", None, None), "author manager"),
+    ],
+)
+def test_a_drafts_source_line_names_its_author_and_reads_back_as_it(
+    author: drafts.Author, line: str
+) -> None:
+    """The line a ticket's record states a draft came from: the kind, then the node and the
+    member where the author names them, read back as that author and nothing else."""
+    assert drafts.source(author) == line
+    assert drafts.parsed_source(line) == author
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["author node", "author manager; node verify", "author robot", "author monitor", "node x"],
+)
+def test_a_line_no_author_states_is_no_source(line: str) -> None:
+    """A kind its author grammar refuses — a node naming none, a manager naming one, an unknown
+    kind, a monitor naming no member — or no `author` at all reads as no source."""
+    assert drafts.parsed_source(line) is None

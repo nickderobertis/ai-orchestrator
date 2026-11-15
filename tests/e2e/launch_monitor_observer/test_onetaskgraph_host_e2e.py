@@ -94,7 +94,9 @@ from github_board import (
     _wide_pages,
     _write_inputs,
     _written_ticket,
+    comment_parts,
     planted_comment,
+    written_drafts,
 )
 from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask, TaskDetail
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
@@ -1966,6 +1968,7 @@ def _spanning_ticket(filed_in: str, *listed: str) -> follow_up_tickets.Ticket:
         repository=follow_up_tickets.Origin(filed_in),
         changes=origins,
         basis=tuple(sorted(follow_up_tickets.Basis(one, commit) for one in origins)),
+        witnesses=tuple(f"{one} src/cursor.py:41 at {commit}" for one in origins),
     )
 
 
@@ -2097,15 +2100,12 @@ def _commented(environment: dict[str, str], qualified: str, body: str, scratch: 
     return str(json.loads(added.stdout)["id"])
 
 
-def _evidence_posted(
-    environment: dict[str, str], run: str, qualified: str, body: str, scratch: Path
+def _evidence_posted(  # noqa: PLR0913 - the comment's run, card, cause and parts
+    environment: dict[str, str], run: str, qualified: str, cause: str, evidence: str, scratch: Path
 ) -> str:
-    """Post ``run``'s evidence comment ``body`` on ``qualified`` through `comment`: its id."""
-    scratch.write_text(body, encoding="utf-8")
+    """Post ``run``'s evidence comment on ``qualified`` through `comment` from its parts: its id."""
     posted = _follow_up_module(
-        environment,
-        *("comment", "--board", follow_up_tickets.BOARD, "--run", run),
-        *("--body-file", str(scratch), qualified),
+        environment, *comment_parts(scratch.parent / "parts", run, cause, evidence), qualified
     )
     assert posted.returncode == 0, posted.stdout + posted.stderr
     return str(json.loads(posted.stdout)["id"])
@@ -2173,7 +2173,7 @@ def test_a_re_estimate_after_evidence_and_after_a_confirming_reply_reads_back_th
             # llmlint: ignore-end[tests_mirror_real_usage]
             for item, cause in causes.items():
                 if step == "evidence":
-                    body = follow_up_tickets.render_comment(LATER_RUN, cause, "Seen again.")
+                    _evidence_posted(environment, LATER_RUN, item, cause, "Seen again.", scratch)
                 else:
                     asked = _commented(environment, item, "I hit this too.\n", scratch)
                     body = follow_up_tickets.render_reply(
@@ -2185,9 +2185,6 @@ def test_a_re_estimate_after_evidence_and_after_a_confirming_reply_reads_back_th
                         response="It confirms the root cause.",
                         verdict=follow_up_tickets.Verdict.CONFIRMS,
                     )
-                if step == "evidence":
-                    _evidence_posted(environment, LATER_RUN, item, body, scratch)
-                else:
                     _commented(environment, item, body, scratch)
                 _re_estimated(environment, item)
             # llmlint: ignore-block[tests_mirror_real_usage] The no-write half of the property
@@ -2242,8 +2239,7 @@ def test_a_re_estimate_refused_part_way_is_retried_into_a_following_priority(
         item = _decided_and_copied(environment, ticket)
         assert _followups_item(environment, item)["priority"] == "medium"
         for run in (LATER_RUN, "a-third-run"):
-            body = follow_up_tickets.render_comment(run, PROPOSED_CAUSE, "Seen again.")
-            _evidence_posted(environment, run, item, body, scratch)
+            _evidence_posted(environment, run, item, PROPOSED_CAUSE, "Seen again.", scratch)
         # llmlint: ignore-block[tests_mirror_real_usage] GitHub refusing one write between two
         # it accepted is a failure of the remote, which no verb of the store can ask for; the
         # loopback board is the one place it can be induced. The re-estimate that meets it and
@@ -2880,14 +2876,9 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
         assert _counterpart_lookups(calls) == [], calls
         _per_step("create copy", _bounded_step("creating copy", trace=trace, writes=True))
         # Another run's evidence lands on the card, which the next recount counts.
-        seen = tmp_path / "seen.md"
-        seen.write_text(
-            follow_up_tickets.render_comment("another-run", path.stem, "Seen elsewhere too."),
-            encoding="utf-8",
-        )
         posted = _follow_up_step(
             environment,
-            *("comment", "--board", board, "--run", "another-run", "--body-file", str(seen)),
+            *comment_parts(tmp_path / "parts", "another-run", path.stem, "Seen elsewhere too."),
             issue,
         )
         assert posted.returncode == 0, posted.stderr
@@ -2929,18 +2920,13 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
             origin_in_body=True,
         )
         carrier = f"{board}:{other.content_id}"
-        evidence = tmp_path / "evidence.md"
-        evidence.write_text(
-            follow_up_tickets.render_comment(
-                PROPOSED_RUN, "shared-cause", "This run reproduced it at the recorded basis."
-            ),
-            encoding="utf-8",
+        evidence = comment_parts(
+            tmp_path / "parts",
+            PROPOSED_RUN,
+            "shared-cause",
+            "This run reproduced it at the recorded basis.",
         )
-        posted = _follow_up_step(
-            environment,
-            *("comment", "--board", board, "--run", PROPOSED_RUN),
-            *("--body-file", str(evidence), carrier),
-        )
+        posted = _follow_up_step(environment, *evidence, carrier)
         assert posted.returncode == 0, posted.stderr
         estimated = _follow_up_step(
             environment, "re-estimate", "--board", board, "--run", PROPOSED_RUN, carrier
@@ -3452,18 +3438,13 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
             assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
             _charged(spent, _RunPhase.WRITES, f"deciding evidence ticket {cause}")
             qualified = f"{board}:{carrier.content_id}"
-            evidence = tmp_path / f"evidence-{at}.md"
-            evidence.write_text(
-                follow_up_tickets.render_comment(
-                    PROPOSED_RUN, cause, "This run reproduced it at the recorded basis."
-                ),
-                encoding="utf-8",
+            evidence = comment_parts(
+                tmp_path / f"parts-{at}",
+                PROPOSED_RUN,
+                cause,
+                "This run reproduced it at the recorded basis.",
             )
-            posted = _follow_up_step(
-                environment,
-                *("comment", "--board", board, "--run", PROPOSED_RUN),
-                *("--body-file", str(evidence), qualified),
-            )
+            posted = _follow_up_step(environment, *evidence, qualified)
             assert posted.returncode == 0, posted.stderr
             estimated = _follow_up_step(
                 environment, "re-estimate", "--board", board, "--run", PROPOSED_RUN, qualified
@@ -3580,16 +3561,10 @@ def _reviewed_after_evidence(
             assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
             qualified = f"{board}:{carrier.content_id}"
             carriers.append(qualified)
-            evidence = tmp_path / f"evidence-{at}.md"
-            evidence.write_text(
-                follow_up_tickets.render_comment(run, cause, "Reproduced at the basis."),
-                encoding="utf-8",
+            evidence = comment_parts(
+                tmp_path / f"parts-{at}", run, cause, "Reproduced at the basis."
             )
-            posted = _follow_up_step(
-                environment,
-                *("comment", "--board", board, "--run", run),
-                *("--body-file", str(evidence), qualified),
-            )
+            posted = _follow_up_step(environment, *evidence, qualified)
             assert posted.returncode == 0, posted.stderr
             estimated = _follow_up_step(
                 environment, "re-estimate", "--board", board, "--run", run, qualified
@@ -3921,6 +3896,9 @@ def test_a_realistic_comment_pass_reads_the_board_once_before_its_replies_and_on
                 owning_runs=(follow_up_tickets.RunId(run),),
                 drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{run}/drafts/noticed"),),
             )
+            # Its draft still there when it is decided, as a run's are, so its record holds
+            # where the draft came from and the command reading its turns.
+            written_drafts(root, ticket)
             path = _written_ticket(root, ticket)
             assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
             causes[str(_validated_and_copied(environment, path)["destination"])] = (run, cause)
@@ -4474,10 +4452,15 @@ def test_a_ticket_outside_the_boards_creation_owners_is_refused_by_the_store_and
                 written_foreign,
                 priority_estimate=estimated,
                 priority=estimated,
-                body=follow_up_tickets.with_estimate_line(
-                    written_foreign.body,
-                    follow_up_tickets.estimate_line(medium, written_foreign.frequency, 1),
+                # As a `board-status` would have left it: its parts in their blocks, and no
+                # source of a draft the store does not hold.
+                body=follow_up_tickets.collapsed(
+                    follow_up_tickets.with_estimate_line(
+                        written_foreign.body,
+                        follow_up_tickets.estimate_line(medium, written_foreign.frequency, 1),
+                    )
                 ),
+                draft_sources=(),
             ),
         )
         _GitHubFixture.requests.clear()

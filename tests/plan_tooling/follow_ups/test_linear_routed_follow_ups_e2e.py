@@ -84,6 +84,8 @@ from github_board import (
     _hosted,
     _Repository,
     _serving_board,
+    as_schema,
+    comment_parts,
 )
 from linear_board import LinearBoard, linear_board
 from nx_workspace import (
@@ -862,9 +864,8 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
                         f"## {tickets.DUPLICATE_SEARCH}",
                     ),
                 )
-                text = tickets.render(historical).replace(
-                    f'"schema": {tickets.SCHEMA}', f'"schema": {schema}', 1
-                )
+                # The record that schema wrote: none of schema 15's keys, its own schema.
+                text = tickets.render(as_schema(historical, schema))
                 path.write_text(text, encoding="utf-8")
                 seeded = _run(
                     bench,
@@ -914,9 +915,10 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         # Each command's requests against Linear: first a record from before the binding
         # retired, bound to the item its first copy created, then that record brought forward.
         linear_native = filed_linear_item.partition(":")[2]
-        # A record from before the binding retired carries no estimate a copy recorded either.
+        # A record from before the binding retired carries no estimate a copy recorded either,
+        # and is written at the binding's last schema, in that schema's body and keys.
         legacy = dataclasses.replace(
-            placements[FILED_LINEAR],
+            as_schema(placements[FILED_LINEAR], tickets.BINDING_LAST_AT),
             retired=((tickets.BINDING_FIELD, linear_native),),
             board_estimate=None,
         )
@@ -941,16 +943,13 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         # and one more run left evidence on the Linear one.
         seeded_linear_item = _filed_earlier(bench, SEEDED_LINEAR, HIDDENCO)
         seeded_board_item = _filed_earlier(bench, SEEDED_BOARD, LIBRARY)
-        witnessed = _staged(
-            bench,
-            "evidence-witnessed.md",
-            tickets.render_comment(WITNESSED, SEEDED_LINEAR, "Seen again in the nightly sync."),
+        witnessed = comment_parts(
+            bench.tmp / "agent", WITNESSED, SEEDED_LINEAR, "Seen again in the nightly sync."
         )
         posted = _run(
             bench,
             bench.python,
-            *("-m", "orchestrator.follow_up_tickets", "comment", "--board", BOARD),
-            *("--run", WITNESSED, "--body-file", str(witnessed), seeded_linear_item),
+            *("-m", "orchestrator.follow_up_tickets", *witnessed, seeded_linear_item),
         )
         assert posted.returncode == 0, posted.stdout + posted.stderr
         seeded_linear_before = _item(bench, seeded_linear_item)
@@ -971,10 +970,8 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
             )
             later_commands.append(_put(bench, staged, local))
             later_commands.append(_searched(bench, local, cause, tmp / f"later-{cause}.json"))
-            evidence = _staged(
-                bench,
-                f"evidence-{cause}.md",
-                tickets.render_comment(LATER, cause, f"This run reproduced it ({cause})."),
+            evidence = comment_parts(
+                bench.tmp / "agent", LATER, cause, f"This run reproduced it ({cause})."
             )
             later_commands.append(
                 _in_checkout(
@@ -984,8 +981,7 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
                     f"{module} board-status --board {BOARD} {shlex.quote(str(local))} "
                     "> /dev/null\n"
                     f"{module} validate {shlex.quote(str(local))}\n"
-                    f"{module} comment --board {BOARD} --run {LATER} --body-file "
-                    f"{shlex.quote(str(evidence))} {item}\n"
+                    f"{module} {shlex.join(evidence)} {item}\n"
                     f"{module} re-estimate --board {BOARD} --run {LATER} {item}\n",
                 )
             )
@@ -1021,16 +1017,13 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
 
         # A person sets the Linear ticket's priority, and one more run's evidence arrives.
         _store(bench, "task", "priority", "set", seeded_linear_item, HELD_PRIORITY.value)
-        latest = _staged(
-            bench,
-            "evidence-latest.md",
-            tickets.render_comment(LATEST, SEEDED_LINEAR, "And once more on the next sync."),
+        latest = comment_parts(
+            bench.tmp / "agent", LATEST, SEEDED_LINEAR, "And once more on the next sync."
         )
         posted = _run(
             bench,
             bench.python,
-            *("-m", "orchestrator.follow_up_tickets", "comment", "--board", BOARD),
-            *("--run", LATEST, "--body-file", str(latest), seeded_linear_item),
+            *("-m", "orchestrator.follow_up_tickets", *latest, seeded_linear_item),
         )
         assert posted.returncode == 0, posted.stdout + posted.stderr
         held = _run(
@@ -1372,7 +1365,7 @@ def test_each_command_reads_the_linear_card_once_and_looks_no_counterpart_up(
     checked = counted["check-dispositions"]
     assert checked == Counted(tickets.SOUND, 0, 0, 0, 0, 2, 0, 0, 0), checked
     assert life.migrated.board_item is None
-    assert f'"schema": {tickets.SCHEMA}' in life.migrated_text
+    assert f'"schema": {tickets.OWNED_LAST_AT}' in life.migrated_text
     assert tickets.BINDING_FIELD not in life.migrated_text
     assert life.linear_files_after_commands == life.linear_files_after_filing
 
@@ -1486,7 +1479,7 @@ def test_new_and_rewritten_historical_bodies_publish_without_search_logs_on_both
     )
     for item in bodies:
         body = str(item["content"])
-        assert _record(item)["schema"] == tickets.SCHEMA == 14
+        assert _record(item)["schema"] == tickets.SCHEMA == 15
         assert "Duplicate search" not in body and "Queries:" not in body
         assert "Related tickets" not in body
         assert "Irrelevant old candidate" not in body and "/issues/999" not in body

@@ -23,6 +23,7 @@ from github_board import (
     PROPOSED_CAUSE,
     PROPOSED_RUN,
     SIBLING_REPOSITORY,
+    CommentParts,
     _decided_status,
     _follow_up_step,
     _follow_up_ticket,
@@ -35,6 +36,8 @@ from github_board import (
     _seeded_item,
     _serving_followups,
     _written_ticket,
+    as_schema,
+    comment_parts,
 )
 from published_tools import ONETASKGRAPH_BIN
 
@@ -172,7 +175,7 @@ def _legacy(environment: dict[str, str], path: Path, board_item: str) -> bytes:
     """Rewrite the ticket at ``path`` as a schema-12 record bound to ``board_item``; its bytes."""
     ticket = _ticket(environment, path)
     legacy = replace(
-        ticket,
+        as_schema(ticket, follow_up_tickets.OWNED_LAST_AT),
         retired=((follow_up_tickets.BINDING_FIELD, board_item),),
         board_estimate=None,
         links=(),
@@ -186,8 +189,8 @@ def test_a_record_bound_by_board_item_is_copied_onto_that_card_and_brought_forwa
 ) -> None:
     """A record from before schema 13 names its card by `board_item`; the copy lands there.
 
-    No card is created, and the record is rewritten at the current schema with the store's own
-    link to that card in place of the key.
+    No card is created, and the record is rewritten at schema 14 — the last reading the body
+    it holds — with the store's own link to that card in place of the key.
     """
     environment, root = _followups_environment(tmp_path)
     path = _written_ticket(root, _follow_up_ticket(SIBLING_REPOSITORY))
@@ -214,7 +217,7 @@ def test_a_record_bound_by_board_item_is_copied_onto_that_card_and_brought_forwa
     assert follow_up_tickets.BINDING_FIELD not in text
     migrated = _ticket(environment, path)
     assert migrated.link(FOLLOWUPS) == held.content_id
-    assert follow_up_tickets.record(migrated)["schema"] == follow_up_tickets.SCHEMA
+    assert follow_up_tickets.record(migrated)["schema"] == follow_up_tickets.OWNED_LAST_AT
     assert _receipts(root)[-1]["card"] == _card(held)
 
 
@@ -485,13 +488,9 @@ def test_a_card_nobody_changed_follows_a_raised_estimate_across_board_status_the
         assert _copy(environment, path)[0] == follow_up_tickets.SOUND
         (card,) = _carrying(PROPOSED_ID)
         for run in ("a-later-run", "a-third-run"):
-            body = tmp_path / f"{run}.md"
-            body.write_text(
-                follow_up_tickets.render_comment(run, path.stem, "Seen again."), encoding="utf-8"
-            )
             posted = _follow_up_step(
                 environment,
-                *("comment", "--board", FOLLOWUPS, "--run", run, "--body-file", str(body)),
+                *comment_parts(tmp_path / "comments", run, path.stem, "Seen again."),
                 _card(card),
             )
             assert posted.returncode == 0, posted.stdout + posted.stderr
@@ -509,7 +508,8 @@ def test_a_record_of_an_older_schema_on_a_card_holding_none_follows_its_estimate
     tmp_path: Path,
 ) -> None:
     """A schema-13 record carries no `board_estimate`, so its copy guards `none`: a card at none
-    takes the ticket's estimate, and the record is rewritten at the current schema naming it.
+    takes the ticket's estimate, and the record is rewritten at schema 14 naming it, the last
+    schema reading the body it holds.
 
     The copy that follows a raised estimate, with no `board-status` between, guards the estimate
     the first copy recorded, which the untouched card still holds, so the card follows it.
@@ -536,10 +536,7 @@ def test_a_record_of_an_older_schema_on_a_card_holding_none_follows_its_estimate
             ),
         )
         text = follow_up_tickets.render(linked)
-        older = text.replace(
-            f'"schema": {follow_up_tickets.SCHEMA}',
-            f'"schema": {follow_up_tickets.BOARD_ESTIMATE_AT - 1}',
-        )
+        older = follow_up_tickets.render(as_schema(linked, follow_up_tickets.BOARD_ESTIMATE_AT - 1))
         assert older != text and follow_up_tickets.BOARD_ESTIMATE_FIELD not in older
         path.write_text(older, encoding="utf-8")
         status, out, said = _copy(environment, path)
@@ -548,9 +545,9 @@ def test_a_record_of_an_older_schema_on_a_card_holding_none_follows_its_estimate
         assert _priority_of(held) == "medium"
         migrated = _ticket(environment, path)
         stored = follow_up_tickets.record(migrated)
-        # Rewritten at the current schema naming the estimate the copy wrote, the store's link
-        # and origin carried through as the store wrote them.
-        assert stored["schema"] == follow_up_tickets.SCHEMA
+        # Rewritten at schema 14 naming the estimate the copy wrote, the store's link and origin
+        # carried through as the store wrote them.
+        assert stored["schema"] == follow_up_tickets.OWNED_LAST_AT
         assert stored[follow_up_tickets.BOARD_ESTIMATE_FIELD] == "medium"
         assert migrated.links == linked.links
         assert migrated.origin == linked.origin
@@ -582,7 +579,7 @@ def test_a_record_of_an_older_schema_on_a_card_holding_none_follows_its_estimate
     assert outcome["priority_condition"] == {"held": "medium", "met": True}
     assert outcome["result"]["priority"] == "high"
     after = follow_up_tickets.record(_ticket(environment, path))
-    assert after["schema"] == follow_up_tickets.SCHEMA
+    assert after["schema"] == follow_up_tickets.OWNED_LAST_AT
     assert after[follow_up_tickets.BOARD_ESTIMATE_FIELD] == "high"
 
 
@@ -749,13 +746,10 @@ def test_the_closeout_check_refuses_an_account_its_receipts_contradict(tmp_path:
         assert _copy(environment, gone)[0] == follow_up_tickets.SOUND
         _decided_status(environment, gone, "--withdraw")
         assert _copy(environment, gone)[0] == follow_up_tickets.SOUND
-        body = tmp_path / "evidence.md"
-        body.write_text(
-            follow_up_tickets.render_comment(PROPOSED_RUN, "shared-cause", "Seen at the basis."),
-            encoding="utf-8",
-        )
         for step in (
-            ("comment", "--board", FOLLOWUPS, "--run", PROPOSED_RUN, "--body-file", str(body)),
+            comment_parts(
+                tmp_path / "comments", PROPOSED_RUN, "shared-cause", "Seen at the basis."
+            ),
             ("re-estimate", "--board", FOLLOWUPS, "--run", PROPOSED_RUN),
         ):
             done = _follow_up_step(environment, *step, _card(carrier))
@@ -901,28 +895,31 @@ def test_the_closeout_check_refuses_an_account_its_receipts_contradict(tmp_path:
 
 
 @pytest.mark.parametrize(
-    ("body", "said"),
+    ("parts", "said"),
     [
+        ({"evidence": "## Impact\n\nAll."}, "the evidence carries the ticket heading `## Impact`"),
         (
-            lambda run: follow_up_tickets.render_comment(
-                run, "shared-cause", "## Impact\n\nAll."
-            ).replace("All.", "All."),
-            "carries the ticket heading `## Impact`",
+            {"evidence": "Seen again.", "bears_on": "## Root cause\n\nWider."},
+            "the bears-on part carries the ticket heading `## Root cause`",
         ),
         (
-            lambda run: follow_up_tickets.comment_opening(run) + "\n\nSeen again.\n",
-            "its last line is",
+            {"evidence": "<details>\n<summary>x</summary>\n\nSeen.\n\n</details>"},
+            "the evidence carries a `<details>` or `</details>` line",
         ),
+        ({"evidence": "  "}, "the evidence file is empty"),
+        ({"evidence": "Seen again.", "cause": "Shared Cause"}, "is not a kebab-case slug"),
         (
-            lambda run: "Seen again.\n\n" + follow_up_tickets.comment_marker(run, "shared-cause"),
-            "its opening line is",
+            {"evidence": "Seen again.", "sources": {"host": "verifier.example"}},
+            "the sources are not one JSON object holding exactly",
         ),
     ],
-    ids=["a-ticket-heading", "no-marker-last", "another-opening"],
+    ids=["a-ticket-heading", "a-heading-elsewhere", "a-block", "empty", "a-cause", "sources"],
 )
-def test_comment_refuses_a_body_not_this_runs_shape_and_posts_nothing(
-    tmp_path: Path, body: object, said: str
+def test_comment_refuses_a_part_not_this_runs_shape_and_posts_nothing(
+    tmp_path: Path, parts: CommentParts, said: str
 ) -> None:
+    """Each part `comment` writes from is held to its shape on the GitHub board before anything
+    reaches the board: nothing is sent, posted or receipted."""
     environment, root = _followups_environment(tmp_path)
     with _serving_followups(environment, fields=True):
         carrier = _seeded_item(
@@ -933,15 +930,16 @@ def test_comment_refuses_a_body_not_this_runs_shape_and_posts_nothing(
             origin="drafts:earlier-run/tickets/shared-cause",
             origin_in_body=True,
         )
-        written = tmp_path / "comment.md"
-        assert callable(body)
-        written.write_text(body(PROPOSED_RUN), encoding="utf-8")
-        _GitHubFixture.requests.clear()
-        posted = _follow_up_step(
-            environment,
-            *("comment", "--board", FOLLOWUPS, "--run", PROPOSED_RUN, "--body-file", str(written)),
-            _card(carrier),
+        words = comment_parts(
+            tmp_path / "comments",
+            PROPOSED_RUN,
+            str(parts.get("cause", "shared-cause")),
+            str(parts["evidence"]),
+            bears_on=parts.get("bears_on"),
+            sources=parts.get("sources"),
         )
+        _GitHubFixture.requests.clear()
+        posted = _follow_up_step(environment, *words, _card(carrier))
         sent = list(_GitHubFixture.requests)
 
     assert posted.returncode == follow_up_tickets.UNSOUND, posted.stdout + posted.stderr
@@ -1230,11 +1228,10 @@ def test_a_ticket_on_a_private_destination_keeps_its_lookup_and_its_one_card(
     assert _lookups(recopied) != []
 
 
-def _older_schema(_environment: dict[str, str], path: Path, _card_id: str) -> None:
+def _older_schema(environment: dict[str, str], path: Path, _card_id: str) -> None:
     text = path.read_text(encoding="utf-8")
-    older = text.replace(
-        f'"schema": {follow_up_tickets.SCHEMA}', f'"schema": {follow_up_tickets.PRIOR_SCHEMA}'
-    )
+    held = _ticket(environment, path)
+    older = follow_up_tickets.render(as_schema(held, follow_up_tickets.PRIOR_SCHEMA))
     assert older != text
     path.write_text(older, encoding="utf-8")
 

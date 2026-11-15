@@ -21,44 +21,51 @@
   occasion. A comment dispatch runs no re-estimate itself: its settle step makes the one each
   of its confirming replies is owed, counting from the snapshot's comments and the replies it
   verified rather than from a fresh read of the board's.
-- **An evidence comment** carries this run's evidence on another run's issue. Its last line
-  is exactly
-
-  `{{ evidence_marker }}`
-
-  and its first line is visible to a reader: `{{ evidence_opening }}`
+- **An evidence comment** carries this run's evidence on another run's issue. It belongs to
+  the run its last line names, `{{ evidence_marker }}` for this run; one this run's `{{ comment }}`
+  writes opens with one collapsed block summarised `{{ shape.comment_summary }}`, and one written
+  before that block existed opens with the line `{{ evidence_opening }}`.
 
   **It carries only this run's new occurrence**, because the issue already states the
-  ticket and a comment that re-renders it hides the one new fact it adds. Its body is, in
-  this order:
+  ticket and a comment that re-renders it hides the one new fact it adds. Write it only with
 
-  1. the opening line above;
-  2. this run's occurrence: the host it was verified on, read with `hostname`; the basis
-     commit of each repository; what was observed; and the drafts or the budget entry it
-     rests on;
-  3. one short paragraph headed in plain text `Bears on the ticket:`, naming the section of
-     the issue the new evidence contradicts or extends (its root cause, impact or suggested
-     fix) and stating only the delta, since this run cannot edit another run's ticket. It is
-     optional, but **required where this run's evidence shows the root cause broader than
-     the issue states**, and then states only the widened root cause, in the same plain
-     words a ticket's `## Root cause` is written in, and names each location it adds as a
-     contributing location of the suggested fix. A run widens its own issue by rewriting its
-     ticket and copying it again instead;
-  4. the marker above, as the last line.
+  `{{ comment }} --board {{ board }} --run {{ run }} --root-cause <the issue's root_cause> --evidence-file <observed> --sources-file <sources> [--bears-on-file <bears on>] [--question-file <question>] <the issue's id>`
 
-  It never repeats what the issue already says — its root cause, impact, examples,
-  suggested fix, rejected fixes or owning runs — and never carries a ticket's level-2
-  section heading, current or retired ({{ shape.ticket_headings }}). Post it with
-  `{{ comment }} --board {{ board }} --run {{ run }} <the issue's id> --body-file <the comment>`, which
-  refuses, before posting anything, a body whose first line is not the opening above, whose
-  last line is not this run's marker, or that carries one of those headings as a level-2
-  heading.
+  from these parts, each a file you write, which it puts in their one order — the opening
+  block, the parts, then the marker — so you never write an opening line, a block or a
+  marker yourself:
+
+  1. `--sources-file`: one JSON object holding exactly {{ shape.comment_source_keys }}, as a ticket's
+     record holds them — the host read with `hostname`, the basis commit of each repository,
+     the drafts this occurrence rests on (none only for a budget question) and one witness per
+     verified claim, {{ shape.witness_shape }}. `{{ comment }}` reads each draft's source and transcript
+     from the draft, and puts all of it in the comment's collapsed block;
+  2. `--evidence-file`: what was observed, in prose, which the comment shows as written;
+  3. `--bears-on-file`, optional: one short paragraph, which `{{ comment }}` writes after
+     `{{ shape.bears_on }}`, naming the section of the issue the new evidence contradicts or
+     extends (its root cause, impact or suggested fix) and stating only the delta, since this
+     run cannot edit another run's ticket. It is **required where this run's evidence shows
+     the root cause broader than the issue states**, and then states only the widened root
+     cause, in the same plain words a ticket's `## Root cause` is written in, and names each
+     location it adds as a contributing location of the suggested fix. A run widens its own
+     issue by rewriting its ticket and copying it again instead;
+  4. `--question-file`, for a budget question only: the question, which the comment shows as
+     written.
+
+  No part repeats what the issue already says — its root cause, impact, examples,
+  suggested fix, rejected fixes or owning runs — and none carries a ticket's level-2
+  section heading, current or retired ({{ shape.ticket_headings }}), or a `<details>` line.
+  `{{ comment }}` refuses, before writing anything, a card outside `{{ board }}`'s family, an empty
+  evidence file, a part carrying one of those headings or a `<details>` line, a root cause that
+  is not a slug, and sources that do not validate.
 
   It goes only on an open issue another run created for the same root cause, which
   receives at most **one** from this run — whatever status the board holds it at, so an
   item at `Deferred` receives this run's one comment like any other open item. Where this
-  run's evidence comment is already there, edit it in place with
-  `{{ plan_store }} task comment edit`; never add a second. This run never adds an evidence
+  run's evidence comment is already there, edit it in place with the same `{{ comment }}`
+  command and `--edit <that comment's id>`, which refuses a comment whose marker does not name
+  this run as its evidence comment; never add a second, and never edit it with a bare
+  `{{ plan_store }} task comment edit`. This run never adds an evidence
   comment to an issue it created: it edits that issue by copying its ticket again instead.
 - **A reply** answers one person's comment. Each comment the feedback below quotes under a
   `### Comment` heading, with its id and URL, gets exactly **one** new reply from this run,

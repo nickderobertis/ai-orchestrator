@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.111.0. The whole of that reasoning —
+onepipeline 0.113.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -709,7 +709,7 @@ It never writes the project's title, description or labels, and on an item it na
 the fields a projection changed — the status word, the engine's own `onepipeline.*` keys,
 and, where the node's definition moved, its title, body, `delivers` and `depends_on` — so
 a body somebody authored on the board survives every settlement of every run launched from
-it, re-read on the adopted onepipeline 0.111.0, and a person's edit to any field stands
+it, re-read on the adopted onepipeline 0.113.0, and a person's edit to any field stands
 until the run next changes that same field. Below the 0.16.3 that fixed it, it did not:
 the shadow project a copy wrote over the board was built with the body hardcoded to an
 empty string and the copy is a total replacement by contract, so every destination
@@ -731,7 +731,7 @@ is written, and the destination is left exactly as it was. A read that could fal
 a default is a read that can delete, so this is the property that makes the preservation
 above worth anything. It is held in onepipeline's own suite rather than here: since
 https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted onepipeline
-0.111.0 among them — reads and projects plans through the linked onetaskgraph crates and
+0.113.0 among them — reads and projects plans through the linked onetaskgraph crates and
 ignores `ONETASKGRAPH_BIN`, so no host seam can
 inject a refused read into the store in process any more, and
 `store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
@@ -744,7 +744,7 @@ prompt first retry to a one-minute ceiling instead of retrying about four times 
 resets that schedule once it recovers, and retries until the projection lands; stopping or
 settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.111.0, that schedule answers only the failures a retry can change. A projection the store
+0.113.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. A
@@ -1091,7 +1091,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.111.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.113.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -1271,7 +1271,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.111.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.113.0 by dumping both sides of a monitor member's whole
   environment on the suite's real launches, their paid model doubled: the judge side by
   the probe `tests/e2e/observer_environment.py` stands in for the judge command with, the
   agent side by the stand-in harness's monitor turn recording all of it.
@@ -1682,7 +1682,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.111.0 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.113.0 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1854,7 +1854,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.111.0**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.113.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -2135,7 +2135,7 @@ events stay the record of what an edit became, and are where a `queued` one is r
 **A `queued` receipt resolves even across a driver's death.** A driver claims an
 envelope — moves the channel's command cursor past it — before it answers it, so one
 that died between the two used to take the claimed edits and notes with it. On the
-adopted onepipeline 0.111.0 every record an envelope's effects leave — `edit-committed`,
+adopted onepipeline 0.113.0 every record an envelope's effects leave — `edit-committed`,
 `command-accepted`, `edit-rejected` and `note-shown` — names that `envelope`, and `just
 orchestrate --adopt` replays each envelope the dead driver claimed and never answered
 exactly once: one the journal already shows applied is answered from that record rather
@@ -2438,14 +2438,17 @@ replies were already posted, until it reached the provider's deadline.
 **A ticket names its host and reaches the board as a proposal.** Evidence is a claim about
 trees read on one machine — its registered checkouts, its installed tools, its run
 journals — so a ticket's record's `host` names the machine its verification ran on, read
-from `hostname` rather than typed, and its `## Evidence` section states that host where a
-reader of the issue sees it. The `followups` source's `metadata_fields` also projects that
-host onto the board's `Host` text field, so the board filters a ticket by the machine it
-came from as it filters by its origin, while the description's metadata slot stays the
-record's one home; Linear has no such field, so a routed Linear tracker keeps it in that
-slot alone. The field is created on the board by `just plans sources fields followups
+from `hostname` rather than typed. From schema 15 the record also holds the rest of the
+audit trail the body once carried — owning runs, basis, each draft's source and transcript,
+and a witness per verified claim — and `## Evidence` says only what happened. The
+`followups` source's `metadata_fields` projects those values onto the board's text fields
+(`BOARD_FIELDS` in `orchestrator/follow_up_tickets.py`), so the board filters a ticket by
+the machine, run or basis it came from as it filters by its origin, while the description's
+metadata slot stays the record's one home and the one every check reads; a routed Linear
+tracker shows the same values in one collapsed `Fields` section the store writes at the end
+of the issue. The fields are created on the board by `just plans sources fields followups
 --apply`, the plan-store verb, and never by a hand-written mutation; a copy onto a board
-lacking it is refused before anything is written, the store's message naming `sources
+lacking one is refused before anything is written, the store's message naming `sources
 fields`. A new ticket lands on the board in `Proposal`, and the user
 moving it to `Todo` is what accepts it, so a later agent sent to work on accepted
 follow-ups selects them by the board's status alone. The board is therefore the record of
@@ -3954,7 +3957,7 @@ the contract.
 
 **A landing a manager starts is owed the same way, from before it acts until it closes.**
 `just publish-branch`, `just repo-recover` and `just integrate` run the engine's own landing
-verbs, which on the adopted onepipeline 0.111.0 register each landing as supervised work of the
+verbs, which on the adopted onepipeline 0.113.0 register each landing as supervised work of the
 session that started it — in the live flow of that session the verb runs inside, or in a
 flow registered for that landing alone — before drafting, preparing or pushing anything,
 and print it:
@@ -4553,7 +4556,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.111.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.113.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and four optional fields: a `criterion`; a `deliver` of `live`, `turn-end` or
@@ -4711,7 +4714,7 @@ outcome` — is answered by that next driver before anything it claims itself, s
 lost.
 
 **A `cancel` does not wait behind a note its node never answers.** On the adopted
-onepipeline 0.111.0 a `cancel` its envelope would apply refuses, in its node's
+onepipeline 0.113.0 a `cancel` its envelope would apply refuses, in its node's
 conversation's place, each note to that node still outstanding — offered or waiting
 behind another — with a reason naming the cancelling envelope, so no turn is presented
 with it; each such refusal is the note's own `edit-rejected` record, and the notes'

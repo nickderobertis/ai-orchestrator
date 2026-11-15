@@ -133,6 +133,30 @@ sources:
         unknown: Needs Attention
         done: Done
         cancelled: Canceled
+      # The ticket record's values shown in one collapsed `Fields` section at the end of each
+      # issue's description, as the `followups` board shows them on its fields.
+      metadata_fields:
+        - field: Host
+          key: orchestrator.follow-up
+          path: [host]
+        - field: Owning runs
+          key: orchestrator.follow-up
+          path: [owning_runs]
+        - field: Basis
+          key: orchestrator.follow-up
+          path: [basis]
+        - field: Drafts
+          key: orchestrator.follow-up
+          path: [draft_sources]
+        - field: Transcripts
+          key: orchestrator.follow-up
+          path: [transcripts]
+        - field: Witnesses
+          key: orchestrator.follow-up
+          path: [witnesses]
+        - field: Verified at
+          key: orchestrator.follow-up
+          path: [verified_at]
     cache:
       enabled: true
   # This host's own private plans board: a GitHub Project and the issue repository its items
@@ -176,5 +200,23 @@ sources:
         - field: Host
           key: orchestrator.follow-up
           path: [host]
+        - field: Owning runs
+          key: orchestrator.follow-up
+          path: [owning_runs]
+        - field: Basis
+          key: orchestrator.follow-up
+          path: [basis]
+        - field: Drafts
+          key: orchestrator.follow-up
+          path: [draft_sources]
+        - field: Transcripts
+          key: orchestrator.follow-up
+          path: [transcripts]
+        - field: Witnesses
+          key: orchestrator.follow-up
+          path: [witnesses]
+        - field: Verified at
+          key: orchestrator.follow-up
+          path: [verified_at]
     cache:
       enabled: true

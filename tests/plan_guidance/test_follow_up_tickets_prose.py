@@ -12,10 +12,12 @@ there, in `orchestrator:test`, and those reading a registered checkout in
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 
 import follow_up_variables
 import pytest
+from follow_up_ticket_shape import comment_sources
 from test_follow_up_tickets import (
     BOARD_STATUS,
     CAUSE,
@@ -155,12 +157,27 @@ def test_budget_evidence_is_held_to_the_runs_comment_receipt_on_the_loopback_boa
             done = _budget_cli(root, RUN, "--board", "followups")
             assert done.returncode == tickets.UNSOUND
             assert "evidence" in done.stderr
-            question = root / f"question-{word}.md"
-            question.write_text(
-                tickets.render_comment(RUN, cause, "Measured long gate. Should the budget change?"),
+            measured, question = root / f"measured-{word}.md", root / f"question-{word}.md"
+            measured.write_text("Measured long gate.", encoding="utf-8")
+            question.write_text("Should the budget change?", encoding="utf-8")
+            sources = root / f"sources-{word}.json"
+            held = comment_sources(RUN)
+            sources.write_text(
+                json.dumps(
+                    {
+                        "host": held.host,
+                        "basis": {entry.origin: entry.commit for entry in held.basis},
+                        "drafts": [],
+                        "witnesses": list(held.witnesses),
+                    }
+                ),
                 encoding="utf-8",
             )
-            posted = ["comment", "--board", "followups", "--run", RUN, "--body-file", str(question)]
+            posted = [
+                *("comment", "--board", "followups", "--run", RUN, "--root-cause", cause),
+                *("--evidence-file", str(measured), "--sources-file", str(sources)),
+                *("--question-file", str(question)),
+            ]
             assert tickets.main([*posted, item]) == tickets.SOUND
             estimated = ["re-estimate", "--board", "followups", "--run", RUN, item]
             assert tickets.main(estimated) == tickets.SOUND
@@ -183,7 +200,7 @@ def test_relatedness_contract_and_current_example_agree_in_both_modes(feedback: 
 
 def test_candidate_locations_follow_the_plain_schema_boundary_without_repurposing_it() -> None:
     task = _flat(_task())
-    assert tickets.PLAIN_AT == 11 and tickets.SCHEMA == 14
+    assert tickets.PLAIN_AT == 11 and tickets.SCHEMA == 15
     assert (
         "under `## Suggested fix`'s `**Contributing locations.**` on a schema-11 or later "
         "ticket, under `## Root cause`'s `**Contributing locations.**` on a schema-10 ticket"

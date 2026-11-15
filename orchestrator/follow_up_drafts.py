@@ -491,6 +491,35 @@ def checked_member(kind: Kind, member: str | None) -> None:
         )
 
 
+#: One draft's author as a follow-up ticket's record states where the draft came from: the
+#: kind, then the node and the member where the author names them, as :func:`source` writes it.
+SOURCE_LINE = re.compile(
+    r"author (?P<kind>[a-z]+)(?:; node (?P<node>[^\n]+?))?(?:; member (?P<member>[^\n;]+))?"
+)
+
+
+def source(author: Author) -> str:
+    """Where a draft came from, in one line: `author <kind>`, then its node and its member."""
+    line = f"author {author.kind}"
+    if author.node is not None:
+        line += f"; node {author.node}"
+    if author.member is not None:
+        line += f"; member {author.member}"
+    return line
+
+
+def parsed_source(line: str) -> Author | None:
+    """The author ``line`` states as :func:`source` writes it, or `None` when it states none."""
+    matched = SOURCE_LINE.fullmatch(line)
+    if matched is None:
+        return None
+    try:
+        author = checked_author(matched["kind"], matched["node"], matched["member"])
+    except Refused:
+        return None
+    return author if source(author) == line else None
+
+
 def transcript_for(run: str, author: Author) -> str | None:
     """The command that reads the turns ``author`` drafted from, or `None` for a manager."""
     if author.kind == "manager":

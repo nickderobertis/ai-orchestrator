@@ -363,7 +363,7 @@ def test_follow_up_prose_keeps_only_qualifying_related_work_before_evidence(
     document: str, heading: str
 ) -> None:
     prose = " ".join(section(document, heading).split()).lower()
-    assert tickets.SCHEMA == 14 and tickets.PLAIN_AT == 11
+    assert tickets.SCHEMA == 15 and tickets.PLAIN_AT == 11
     assert "`## duplicate search`" not in prose
     assert "optional `## related tickets` directly before" in prose
     for required in (

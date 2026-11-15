@@ -55,6 +55,7 @@ import follow_up_variables
 import github_board as remote
 import pytest
 from flow_engine_stand_in import UNDOUBLED, give_flow_engine
+from follow_up_ticket_shape import comment_sources
 from github_board import _GitHubFixture, _Operation
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_recipe_e2e import (
@@ -740,7 +741,9 @@ def life(tmp_path_factory: pytest.TempPathFactory) -> Life:  # noqa: PLR0915 - o
             watermark_before = _watermark(bench)
             _next_second()
             # Run A's last response: an evidence comment on run C's issue.
-            marker = tickets.render_comment(runs["A"], "cache-key-ignores-the-locale", "Seen in A.")
+            marker = tickets.render_comment(
+                runs["A"], "cache-key-ignores-the-locale", "Seen in A.", comment_sources(runs["A"])
+            )
             ids[marker] = _marked(bench, issues["c"], marker)
             ids[BEFORE_BOUNDARY] = _commented(bench, issues["c"], BEFORE_BOUNDARY, REVIEWER)
             _next_second()
@@ -1554,7 +1557,13 @@ def test_a_write_landing_fewer_parts_than_it_asked_for_is_partial_and_the_next_p
             issue = _filed(bench, run, cause)
             # Another run's evidence, so the confirming reply makes 3 occurrences and the
             # estimate moves the priority as well as the issue's estimate line and record.
-            _marked(bench, issue, tickets.render_comment("another-run", cause, "Seen elsewhere."))
+            _marked(
+                bench,
+                issue,
+                tickets.render_comment(
+                    "another-run", cause, "Seen elsewhere.", comment_sources("another-run")
+                ),
+            )
             _next_second()
             _commented(bench, issue, ON_A, REVIEWER)
             turn = [_replying(bench, run, log, reads)]

@@ -149,12 +149,20 @@ BOARD = "followups"
 #: Schema 14 adds the optional :data:`BOARD_ESTIMATE_FIELD`, the estimate the ticket's card last
 #: received from a copy, which the next copy's priority guard names so it reads nothing first;
 #: a record of an earlier schema carries none, and its copy names `none` in its place.
-SCHEMA = 14
+#: Schema 15 moves a ticket's audit trail out of its body into the record and onto board fields
+#: (:data:`BOARD_FIELDS`): the body loses `## Owning runs`, and `## Evidence` says what happened
+#: and nothing the record holds; the record gains :data:`DRAFT_SOURCES_FIELD` and
+#: :data:`TRANSCRIPTS_FIELD`, which `board-status` writes from the drafts, and
+#: :data:`WITNESSES_FIELD`, which the agent supplies beside `basis`. The long optional parts —
+#: :data:`WORKAROUND_COST`, :data:`PRIORITY_CALCULATION` and :data:`CONTRIBUTING_LOCATIONS` — each
+#: sit in one authored expandable block, which :func:`collapsed` writes. Schemas 7 to 14 stay
+#: sound in their own shape, and none is rewritten in bulk.
+SCHEMA = 15
 #: Every earlier schema a re-dispatch brings a ticket forward from, enumerated rather than
 #: admitted by range, so a record declaring any other schema — zero, negative, a later one or
 #: no integer — is refused by name rather than read as an older ticket. `board-status` reads a
 #: board item's record of one before :data:`ESTIMATE_AT` as storing no estimate.
-PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
 #: The schema just before, which every reader still accepts as sound: its body predates
 #: :data:`SCHEMA`'s structure, and a run that rewrites it brings it forward.
 PRIOR_SCHEMA = PRIOR_SCHEMAS[-1]
@@ -180,6 +188,11 @@ BINDING_RETIRED_AT = 13
 BINDING_LAST_AT = BINDING_RETIRED_AT - 1
 #: The schema that adds :data:`BOARD_ESTIMATE_FIELD`.
 BOARD_ESTIMATE_AT = 14
+#: The schema that moves a ticket's metadata out of its body into the record and onto board
+#: fields, and collapses its long optional parts into authored blocks; the one before it is the
+#: last whose body is schema 12's.
+FIELDS_AT = 15
+OWNED_LAST_AT = FIELDS_AT - 1
 #: Every schema a reader accepts as sound: from :data:`ESTIMATE_AT` on, because schema 7's body
 #: predates the structure :data:`STRUCTURE_AT` added, schemas 7 to 9 the structure
 #: :data:`INVARIANT_AT` added, and schemas 7 to 10 the shape :data:`PLAIN_AT` gave it, which a
@@ -191,6 +204,51 @@ KEY = "orchestrator.follow-up"
 #: The record's key naming the machine its verification ran on, which the `followups`
 #: source's `metadata_fields` projects onto the board's `Host` text field.
 HOST_FIELD = "host"
+#: **Where each draft a ticket consumed came from**, from :data:`FIELDS_AT`: an object keyed by
+#: the record's `drafts` whose draft record `board-status` could read, each value
+#: :func:`follow_up_drafts.source` of that draft's author — `author <kind>`, then `; node <node>`
+#: and `; member <member>` where it names them. **No entry for a draft means its draft record was
+#: not readable when the ticket was written** — an earlier pass deleted it — and no value stands
+#: in for it. `board-status` writes it from the drafts, keeping every entry the record already
+#: holds; no agent does.
+DRAFT_SOURCES_FIELD = "draft_sources"
+#: **The command that reads each draft's turns**, from :data:`FIELDS_AT`: an object keyed by
+#: exactly the drafts :data:`DRAFT_SOURCES_FIELD` names whose author is no manager — every such
+#: draft record names a `transcript` — each value that command verbatim, and absent when no
+#: draft names one. `board-status` writes it with the sources; no agent does.
+TRANSCRIPTS_FIELD = "transcripts"
+#: **Where each verified claim was seen**, from :data:`FIELDS_AT`: a non-empty array, one entry per
+#: verified claim, each `<origin> <path>:<line> at <commit>` (:data:`WITNESS`), where the origin
+#: is a key of `basis` and the commit exactly the one `basis` holds for it. The agent supplies it.
+WITNESSES_FIELD = "witnesses"
+#: The failure kind the store answers a read of an item it does not hold with.
+NO_SUCH_ITEM = "no-such-item"
+#: The record keys :data:`FIELDS_AT` adds, which no earlier record carries.
+FIELDS_KEYS = (DRAFT_SOURCES_FIELD, TRANSCRIPTS_FIELD, WITNESSES_FIELD)
+#: One witness, as :data:`WITNESSES_FIELD` holds it.
+WITNESS = re.compile(r"(?P<origin>\S+) (?P<path>\S+):(?P<line>[1-9][0-9]*) at (?P<commit>\S+)")
+#: **The board fields a ticket's record is shown on**, in the order the `followups` source's
+#: `metadata_fields` declares them: each field's name, and the path inside the record at
+#: :data:`KEY` its value is read from. The store renders a string as itself, an array one element
+#: per line and an object one `KEY: VALUE` line per entry, and shortens a value over a GitHub text
+#: field's limit to its whole lines and one elision line; the record keeps the whole value, and no
+#: check reads a field. `tests/test_plan_source_roots.py` holds `onetaskgraph.yaml`'s resolved
+#: `metadata_fields`, and those of every Linear source the example user layer's `followups` routes
+#: reach, to this declaration.
+BOARD_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Host", (HOST_FIELD,)),
+    ("Owning runs", ("owning_runs",)),
+    ("Basis", ("basis",)),
+    ("Drafts", (DRAFT_SOURCES_FIELD,)),
+    ("Transcripts", (TRANSCRIPTS_FIELD,)),
+    ("Witnesses", (WITNESSES_FIELD,)),
+    ("Verified at", ("verified_at",)),
+)
+
+
+def metadata_fields() -> list[dict[str, object]]:
+    """:data:`BOARD_FIELDS` as a source's `metadata_fields` entries declare them."""
+    return [{"field": field, "key": KEY, "path": list(path)} for field, path in BOARD_FIELDS]
 
 
 class Status(StrEnum):
@@ -490,7 +548,9 @@ class OverrunBudget(NamedTuple):
 #: How long a ticket's title may be.
 TITLE_LIMIT = 120
 
-#: The keys of a ticket's record, every one present, in the order they are written.
+#: The keys of a ticket's record, in the order they are written: every one present, but for
+#: :data:`FIELDS_KEYS`, which only a record from :data:`FIELDS_AT` carries, and of those
+#: :data:`TRANSCRIPTS_FIELD` only where a draft the record names records a transcript.
 RECORD_KEYS = (
     "schema",
     "root_cause",
@@ -498,7 +558,10 @@ RECORD_KEYS = (
     "created_by_run",
     "owning_runs",
     "drafts",
+    DRAFT_SOURCES_FIELD,
+    TRANSCRIPTS_FIELD,
     "basis",
+    WITNESSES_FIELD,
     "verified_at",
     HOST_FIELD,
     "priority_estimate",
@@ -598,17 +661,22 @@ LOCATION_SHAPE = "`- <repository> `<path>`: <what this location does that breaks
 #: board because the disposition account stays on the host that verified the ticket.
 DUPLICATE_SEARCH = "Duplicate search"
 
+#: The heading a body before :data:`FIELDS_AT` lists its owning runs under, which the record's
+#: `owning_runs` and the board's `Owning runs` field say from that schema on.
+OWNING_RUNS = "Owning runs"
 #: The level-2 headings a :data:`SCHEMA` ticket's body carries, in this order, each with
-#: content: every section a person reads to decide on the ticket first, then the agent-facing
-#: optional related work and `## Evidence` last.
+#: content: every section a person reads to decide on the ticket first, then the optional
+#: related work and `## Evidence`, what happened, last.
 HEADINGS = (
     ROOT_CAUSE,
     "Impact",
     "Examples",
     "Suggested fix",
-    "Owning runs",
     "Evidence",
 )
+#: The headings a ticket from :data:`PLAIN_AT` to :data:`OWNED_LAST_AT` carries, in that order:
+#: :data:`HEADINGS` with `## Owning runs` before `## Evidence`.
+OWNED_HEADINGS = (*HEADINGS[:-1], OWNING_RUNS, HEADINGS[-1])
 #: The headings a ticket before :data:`PLAIN_AT` carries, in that schema's order;
 #: :data:`DUPLICATE_SEARCH`, last, only from :data:`INVARIANT_AT` on.
 PRIOR_HEADINGS = (
@@ -670,7 +738,8 @@ RETIRED_HEADINGS = ("Repository", "Suggested fixes")
 #: The schema that retired them.
 RETIRED_AT = 5
 
-#: The heading whose section names the host the verification ran on.
+#: The heading whose section says what happened; before :data:`FIELDS_AT` it also named the host
+#: the verification ran on, and the drafts, basis and transcripts the record now holds.
 EVIDENCE = "Evidence"
 
 #: The heading whose section states what the root cause costs when it fires: prose, then
@@ -842,6 +911,290 @@ WHO_DECIDES = re.compile(
 WORKAROUND_COSTS = ("Applying it", "Side effects on the outcome", "Discovery")
 NO_ACCEPTABLE_WORKAROUND = "no acceptable workaround"
 _LABELLED_PART = re.compile(r"^\*\*(?P<part>[^*\n]+)\.\*\*", re.MULTILINE)
+
+
+#: **The authored expandable blocks a :data:`FIELDS_AT` body carries**, in the form onetaskgraph's
+#: README "Expandable blocks" states: `<details>` alone with no attribute, the summary line, a
+#: blank line, the body, a blank line, `</details>`, never nested. Each holds one long, optional
+#: part a person reads only on a tap, by its summary: the :data:`WORKAROUND_COST` block, opening
+#: with the `Workaround` line, then the :data:`PRIORITY_CALCULATION` block, both ending
+#: `## Impact`, and the :data:`CONTRIBUTING_LOCATIONS` block of `## Suggested fix`. The agent
+#: writes each part plain, and :func:`collapsed`, which :func:`render` applies, writes the block;
+#: only the authored form is written here, and Linear's `+++` form is the store's to write and
+#: read back.
+PRIORITY_CALCULATION = "Priority calculation"
+BLOCK_SUMMARIES = (WORKAROUND_COST, PRIORITY_CALCULATION, CONTRIBUTING_LOCATIONS)
+#: One authored block, as :func:`block` writes it; a `<details>` or `</details>` line that is no
+#: part of one is how a malformed or foreign block is found.
+_BLOCK = re.compile(
+    r"^<details>\n<summary>(?P<summary>[^\n]*)</summary>\n\n"
+    r"(?P<body>(?:(?!^[ \t]*</?details\b)[^\n]*\n)*?)\n</details>[ \t]*$",
+    re.MULTILINE,
+)
+_DETAILS_LINE = re.compile(r"^[ \t]*</?details\b[^\n]*$", re.MULTILINE | re.IGNORECASE)
+#: The lines the :data:`PRIORITY_CALCULATION` block holds, in order, the estimate's optional.
+CALCULATION_LINES = (SEVERITY_LINE, MITIGATED_LINE, ESTIMATE_LINE)
+
+
+def block(summary: str, content: str) -> str:
+    """``content`` as the one authored expandable block whose summary is ``summary``."""
+    return f"<details>\n<summary>{summary}</summary>\n\n{content.strip()}\n\n</details>"
+
+
+def _unfenced(text: str) -> str:
+    """``text`` with each fenced block blanked to its length, so positions are unchanged."""
+    return _FENCE.sub(lambda fenced: re.sub(r"[^\n]", " ", fenced[0]), text)
+
+
+class Blocks(NamedTuple):
+    """The authored blocks a text carries, and every `<details>` line no block accounts for."""
+
+    found: list[re.Match[str]]
+    stray: list[str]
+
+
+def blocks(text: str) -> Blocks:
+    """The well-formed blocks ``text`` carries outside fenced code, and the stray lines.
+
+    A block whose `<details>` carries an attribute, that lacks a blank line, nests another or
+    is not closed is no block, so its `<details>` and `</details>` lines are stray.
+    """
+    unfenced = _unfenced(text)
+    found = [held for held in _BLOCK.finditer(unfenced) if held["body"].strip()]
+    spans = [(held.start(), held.end()) for held in found]
+    stray = [
+        line[0].strip()
+        for line in _DETAILS_LINE.finditer(unfenced)
+        if not any(line.start() == start or line.end() == end for start, end in spans)
+    ]
+    stray += [
+        f"an empty `{held['summary']}` block"
+        for held in _BLOCK.finditer(unfenced)
+        if not held["body"].strip()
+    ]
+    return Blocks(found, stray)
+
+
+def _section_span(body: str, heading: str) -> tuple[int, int] | None:
+    """Where ``body``'s `## <heading>` section's content starts and ends, or `None` without one."""
+    found = re.search(rf"^## {re.escape(heading)}[ \t]*$", body, re.MULTILINE)
+    if found is None:
+        return None
+    following = _NEXT_HEADING.search(body, found.end())
+    return found.end(), following.start() if following else len(body)
+
+
+def _replaced(body: str, heading: str, rewrite: Callable[[str], str | None]) -> str:
+    """``body`` with its `## <heading>` content passed through ``rewrite``, kept where it says
+    `None`, and every blank line around the content as it was."""
+    span = _section_span(body, heading)
+    if span is None:
+        return body
+    content = body[span[0] : span[1]]
+    written = rewrite(content.strip())
+    if written is None:
+        return body
+    lead = content[: len(content) - len(content.lstrip())]
+    tail = content[len(content.rstrip()) :]
+    return body[: span[0]] + lead + written + tail + body[span[1] :]
+
+
+def _plain_impact_blocked(text: str) -> str | None:
+    """An `## Impact` content's plain workaround cost and lines as its two blocks, or `None`.
+
+    `None` for content that is not the plain shape: no :data:`WORKAROUND_COST` part, or lines
+    that are not exactly the three and any estimate line, in order, with nothing between or
+    after them.
+    """
+    cost = [
+        part for part in _LABELLED_PART.finditer(text) if part["part"].strip() == WORKAROUND_COST
+    ]
+    if len(cost) != 1:
+        return None
+    lines = [
+        line
+        for line in IMPACT_LINE.finditer(text, cost[0].end())
+        if line["label"] in (*IMPACT_LINES, ESTIMATE_LINE)
+    ]
+    # Exactly the three lines and any estimate line, in order, with nothing between or after
+    # them: anything else is no plain shape, and collapsing it would drop what sits there.
+    if not lines or not IMPACT_TAIL.fullmatch(text[lines[0].start() :]):
+        return None
+    held = {line["label"]: as_written(line[0]) for line in lines}
+    costs = text[cost[0].end() : lines[0].start()].strip()
+    calculation = "\n".join(held[label] for label in CALCULATION_LINES if label in held)
+    return (
+        f"{text[: cost[0].start()].rstrip()}\n\n"
+        f"{block(WORKAROUND_COST, held[WORKAROUND_LINE] + chr(10) + costs)}\n\n"
+        f"{block(PRIORITY_CALCULATION, calculation)}"
+    )
+
+
+def _plain_locations_blocked(text: str) -> str | None:
+    """A `## Suggested fix` content's plain contributing locations as their block, or `None`."""
+    unfenced = _unfenced(text)
+    placed = [
+        part
+        for part in _LABELLED_PART.finditer(unfenced)
+        if part["part"].strip() == CONTRIBUTING_LOCATIONS
+    ]
+    units = _SUBHEADING.search(unfenced)
+    if len(placed) != 1 or units is None or placed[0].start() > units.start():
+        return None
+    listed = text[placed[0].end() : units.start()].strip()
+    if not listed:
+        return None
+    return (
+        f"{text[: placed[0].start()].rstrip()}\n\n{block(CONTRIBUTING_LOCATIONS, listed)}\n\n"
+        f"{text[units.start() :]}"
+    )
+
+
+def collapsed(body: str) -> str:
+    """``body`` with its plain :data:`BLOCK_SUMMARIES` parts in their authored blocks.
+
+    The one writer of the blocks: the :data:`WORKAROUND_COST` part, opened by the `Workaround`
+    line moved there as its first bullet, and the `Severity`, `Severity with the workaround` and
+    any `Priority estimate` lines as the :data:`PRIORITY_CALCULATION` block, ending `## Impact`;
+    and the :data:`CONTRIBUTING_LOCATIONS` part of `## Suggested fix`. A section already
+    carrying a `<details>` or `</details>` line, a correctly blocked one included, is left
+    unchanged, so a malformed or foreign block is refused by validation rather than re-wrapped,
+    and so is a section that is not the plain shape.
+    """
+
+    def unblocked(rewrite: Callable[[str], str | None]) -> Callable[[str], str | None]:
+        def plain(text: str) -> str | None:
+            return None if _DETAILS_LINE.search(_unfenced(text)) else rewrite(text)
+
+        return plain
+
+    body = _replaced(body, IMPACT, unblocked(_plain_impact_blocked))
+    return _replaced(body, SUGGESTED_FIX, unblocked(_plain_locations_blocked))
+
+
+def _misplaced_lines(text: str, allowed: Sequence[str], where: str) -> list[str]:
+    """The `## Impact` lines ``text`` carries other than ``allowed``, as one refusal each."""
+    return [
+        f"{where} carries its `- {line['label']}:` line outside the "
+        f"`{PRIORITY_CALCULATION if line['label'] in CALCULATION_LINES else WORKAROUND_COST}` "
+        "block it belongs in; `board-status` writes it there"
+        for line in IMPACT_LINE.finditer(text)
+        if line["label"] in (*IMPACT_LINES, ESTIMATE_LINE) and line["label"] not in allowed
+    ]
+
+
+def blocked_impact(text: str) -> tuple[str, list[str]]:
+    """A :data:`FIELDS_AT` `## Impact` content read as the plain shape, and how it is not blocked.
+
+    The content is the visible parts, then exactly the :data:`WORKAROUND_COST` block, opening
+    with the `Workaround` line, then the :data:`PRIORITY_CALCULATION` block holding the severity
+    lines and any estimate line, and nothing after them. What it answers is the same content as
+    the plain shape a schema-14 section carries, which every check of the parts and the lines
+    reads; refused, it answers ``text`` unchanged with the problems, each naming `board-status`
+    as what writes the blocks.
+    """
+    where = f"the body's `## {IMPACT}` section"
+    shape = (
+        f"{where} does not end with its two blocks, `{WORKAROUND_COST}` then "
+        f"`{PRIORITY_CALCULATION}`, each the one authored `<details>` block `board-status` writes "
+        "from the plain part, with nothing after them"
+    )
+    held = blocks(text)
+    if held.stray:
+        return text, [
+            f"{where} carries {', '.join(repr(line) for line in held.stray)}, which is no "
+            "authored block of a ticket; `board-status` writes its blocks from the plain parts"
+        ]
+    if [found["summary"] for found in held.found] != [WORKAROUND_COST, PRIORITY_CALCULATION]:
+        return text, [shape]
+    cost, calculation = held.found
+    if text[cost.end() : calculation.start()].strip() or text[calculation.end() :].strip():
+        return text, [shape]
+    visible = text[: cost.start()]
+    costed, calculated = _content(text, cost), _content(text, calculation)
+    found = _misplaced_lines(visible, (), where)
+    found += _misplaced_lines(costed, (WORKAROUND_LINE,), where)
+    found += _misplaced_lines(calculated, CALCULATION_LINES, where)
+    if any(part["part"].strip() == WORKAROUND_COST for part in _LABELLED_PART.finditer(visible)):
+        found.append(
+            f"{where} carries `**{WORKAROUND_COST}.**` as a plain part, where its "
+            f"`{WORKAROUND_COST}` block holds it; `board-status` writes the block"
+        )
+    workaround, _, costs = costed.partition("\n")
+    opening = IMPACT_LINE.fullmatch(workaround)
+    if opening is None or opening["label"] != WORKAROUND_LINE:
+        found.append(
+            f"{where}'s `{WORKAROUND_COST}` block does not open with its `- {WORKAROUND_LINE}:` "
+            "line; `board-status` moves it there"
+        )
+    if found:
+        return text, found
+    # The plain shape puts the workaround line second, between the two severities.
+    severity, *rest = [line.strip() for line in calculated.split("\n") if line.strip()]
+    lines = "".join(f"{line}\n" for line in (severity, workaround, *rest))
+    return f"{visible.rstrip()}\n**{WORKAROUND_COST}.**\n{costs.strip()}\n\n{lines}", []
+
+
+def _content(text: str, found: re.Match[str]) -> str:
+    """The body of the block ``found`` matched, read from ``text`` itself, fenced code and all."""
+    return text[found.start("body") : found.end("body")].strip()
+
+
+def blocked_locations(text: str) -> tuple[str, list[str]]:
+    """A :data:`FIELDS_AT` `## Suggested fix` content read as the plain shape, and its problems.
+
+    Its :data:`CONTRIBUTING_LOCATIONS` part is exactly one authored block, between the opening
+    paragraph and the first unit subsection; what it answers is the content with that block as
+    the plain labelled part, which the locations check reads.
+    """
+    where = f"the body's `## {SUGGESTED_FIX}` section"
+    held = blocks(text)
+    if held.stray:
+        return text, [
+            f"{where} carries {', '.join(repr(line) for line in held.stray)}, which is no "
+            "authored block of a ticket; `board-status` writes its blocks from the plain parts"
+        ]
+    plain_part = any(
+        part["part"].strip() == CONTRIBUTING_LOCATIONS
+        for part in _LABELLED_PART.finditer(_unfenced(text))
+    )
+    if [found["summary"] for found in held.found] != [CONTRIBUTING_LOCATIONS] or plain_part:
+        return text, [
+            f"{where} does not carry its `{CONTRIBUTING_LOCATIONS}` as exactly one authored "
+            "`<details>` block after its opening paragraph and before its unit subsections; "
+            "`board-status` writes the block from the plain part"
+        ]
+    (listed,) = held.found
+    units = _SUBHEADING.search(_unfenced(text))
+    if units is not None and listed.start() > units.start():
+        return text, [
+            f"{where}'s `{CONTRIBUTING_LOCATIONS}` block comes after a unit subsection; it comes "
+            "after the opening paragraph and before the first unit subsection"
+        ]
+    plain = (
+        f"{text[: listed.start()]}**{CONTRIBUTING_LOCATIONS}.**\n{_content(text, listed)}"
+        f"{text[listed.end() :]}"
+    )
+    return plain, []
+
+
+def expanded(body: str) -> str:
+    """A :data:`FIELDS_AT` ``body`` with each block read back as its plain part, where it can be.
+
+    Every reader of a part's content reads it from inside its block through this, so a check
+    written against the plain shape decides the same for the blocked one. A section whose blocks
+    are not the shape is left as it is, for validation to name.
+    """
+
+    def read(reading: Callable[[str], tuple[str, list[str]]]) -> Callable[[str], str | None]:
+        def plain(text: str) -> str | None:
+            held, problems = reading(text)
+            return None if problems else held
+
+        return plain
+
+    body = _replaced(body, IMPACT, read(blocked_impact))
+    return _replaced(body, SUGGESTED_FIX, read(blocked_locations))
 
 
 def impact_section(prose: str, severity: str, workaround: str, with_workaround: str) -> str:
@@ -1110,6 +1463,14 @@ DRAFT_ID = re.compile(rf"{re.escape(SOURCE)}:(?P<run>[^/\s]+)/{re.escape(drafts.
 #: written into a ticket's body, which becomes an issue's description.
 COMMENT_MARKER = '<!-- orchestrator:follow-up-comment run="{run}" root_cause="{root_cause}" -->'
 COMMENT_OPENING = "Additional evidence from follow-up run `{run}`."
+#: **The summary of the authored block an evidence comment opens with**, which holds its
+#: metadata: :data:`COMMENT_OPENING` without the run's code span, because GitHub shows a code
+#: span inside `<summary>` as literal backticks. Every comment already on the boards opens with
+#: :data:`COMMENT_OPENING` instead, and every reader accepts either (:func:`run_comment_problems`).
+COMMENT_SUMMARY = "Additional evidence from follow-up run {run}."
+#: The label of an evidence comment's optional paragraph stating what its evidence changes about
+#: the ticket, which `comment` writes before the paragraph an agent supplies.
+BEARS_ON = "Bears on the ticket:"
 
 #: The last line of a reply a follow-up run owns, naming the one comment it answers and
 #: whether it judged that comment to confirm the root cause, and the visible line it opens
@@ -1231,7 +1592,12 @@ class Ticket:
     :data:`BOARD_ESTIMATE_FIELD`, `None` until a copy first writes it. ``changes`` is every
     repository the ticket's fix changes when its `repositories` lists more than one, in the order
     listed, and empty for a ticket listing only its ``repository``; :attr:`repositories` is the
-    list either way.
+    list either way. ``schema`` is the schema its record was read at, which a rewrite keeps unless
+    it brings the ticket forward, :data:`SCHEMA` for a ticket composed here. ``draft_sources``,
+    ``transcripts`` and ``witnesses`` are a :data:`FIELDS_AT` record's
+    :data:`DRAFT_SOURCES_FIELD`, :data:`TRANSCRIPTS_FIELD` and :data:`WITNESSES_FIELD`, in the
+    record's order: the sources `None` until `board-status` records them, the transcripts empty
+    until then, and all three absent from an older record.
     """
 
     title: str
@@ -1257,6 +1623,10 @@ class Ticket:
     board_estimate: Priority | None = None
     creating: str | None = None
     reserved: tuple[tuple[str, str], ...] = ()
+    schema: int = SCHEMA
+    draft_sources: tuple[tuple[QualifiedDraftId, str], ...] | None = None
+    transcripts: tuple[tuple[QualifiedDraftId, str], ...] = ()
+    witnesses: tuple[str, ...] = ()
 
     @property
     def board_item(self) -> BoardItemId | None:
@@ -1330,24 +1700,40 @@ def ticket_path(root: Path, run: str, root_cause: str) -> Path:
     return root / TASKS_DIRECTORY / run / TICKETS / f"{root_cause}{TICKET_SUFFIX}"
 
 
+def written_at(ticket: Ticket) -> int:
+    """The schema ``ticket``'s record is written at: its own, or :data:`BINDING_LAST_AT` while it
+    still carries a retired key."""
+    return BINDING_LAST_AT if ticket.retired else ticket.schema
+
+
 def record(ticket: Ticket) -> dict[str, object]:
     """The metadata a ticket is stored under: every key present, each optional one once set.
 
     A ticket still carrying a retired key is written at :data:`BINDING_LAST_AT`, the last schema
     the key is read at, with what it carries of them as read, until its next `copy` brings it
-    forward without them.
+    forward without them; every other ticket at its own ``schema``. A :data:`FIELDS_AT` record
+    carries its :data:`FIELDS_KEYS`: its draft sources once `board-status` has recorded them —
+    at once, and empty, for a ticket consuming no draft — its transcripts only where a draft
+    records one.
     """
+    fields = written_at(ticket) >= FIELDS_AT
     held: dict[str, object] = {
-        "schema": BINDING_LAST_AT if ticket.retired else SCHEMA,
+        "schema": written_at(ticket),
         "root_cause": ticket.root_cause,
         "repository": ticket.repository,
         "created_by_run": ticket.created_by_run,
         "owning_runs": list(ticket.owning_runs),
         "drafts": list(ticket.drafts),
-        "basis": {entry.origin: entry.commit for entry in ticket.basis},
-        "verified_at": ticket.verified_at,
-        HOST_FIELD: ticket.host,
     }
+    if fields and (ticket.draft_sources is not None or not ticket.drafts):
+        held[DRAFT_SOURCES_FIELD] = dict(ticket.draft_sources or ())
+    if fields and ticket.transcripts:
+        held[TRANSCRIPTS_FIELD] = dict(ticket.transcripts)
+    held["basis"] = {entry.origin: entry.commit for entry in ticket.basis}
+    if fields:
+        held[WITNESSES_FIELD] = list(ticket.witnesses)
+    held["verified_at"] = ticket.verified_at
+    held[HOST_FIELD] = ticket.host
     if ticket.priority_estimate is not None:
         held[ESTIMATE_FIELD] = str(ticket.priority_estimate)
     held.update(ticket.retired)
@@ -1372,8 +1758,16 @@ def render(ticket: Ticket) -> str:
     record's `repository` alone for a ticket whose fix changes one repository. The
     store's :data:`DEPENDENCY_FIELD` is written only when the ticket depends on something,
     and its :data:`ORIGIN_KEY` and :data:`COPIES_KEY` only as the ticket holds them, each in
-    the one-line form the store itself writes into a `local-md` record.
+    the one-line form the store itself writes into a `local-md` record. A ticket from
+    :data:`FIELDS_AT` is written with its plain parts in their blocks (:func:`collapsed`), so
+    every write of this module stores the collapsed form.
     """
+    body = collapsed(ticket.body) if written_at(ticket) >= FIELDS_AT else ticket.body
+    return _rendered(ticket, body)
+
+
+def _rendered(ticket: Ticket, body: str) -> str:
+    """``ticket`` as its `local-md` record, with ``body`` as its body exactly as given."""
     fields: dict[str, object] = {
         "title": ticket.title,
         "status": ticket.status.value,
@@ -1393,7 +1787,7 @@ def render(ticket: Ticket) -> str:
         metadata[key] = json.loads(value)
     metadata[KEY] = record(ticket)
     fields["metadata"] = metadata
-    return frontmatter(fields, ticket.body)
+    return frontmatter(fields, body)
 
 
 def repository_name(origin: str) -> str:
@@ -1480,6 +1874,114 @@ def _basis_problems(basis: object, verified: Sequence[object]) -> list[str]:
     return found
 
 
+def _fields_shape(held: Mapping[str, object]) -> bool:
+    """Whether ``held`` is a record of :data:`FIELDS_AT`'s shape, carrying its metadata."""
+    schema = held.get("schema")
+    return type(schema) is int and schema >= FIELDS_AT
+
+
+def _keyed_lines(value: object, keys: Collection[object], *, exactly: bool = True) -> bool:
+    """Whether ``value`` is an object keyed by ``keys`` — exactly, or by some of them — each value
+    one non-blank line."""
+    held = {str(key) for key in keys}
+    return (
+        isinstance(value, Mapping)
+        and (set(map(str, value)) == held if exactly else set(map(str, value)) <= held)
+        and all(
+            isinstance(line, str) and line.strip() == line and line and "\n" not in line
+            for line in value.values()
+        )
+    )
+
+
+def _fields_problems(held: Mapping[str, object]) -> list[str]:
+    """How a :data:`FIELDS_AT` record's :data:`FIELDS_KEYS` are not their shapes.
+
+    The drafts' sources key some of the record's drafts — those `board-status` could read — each
+    value an author line; the transcripts key exactly the drafts the sources name whose author
+    is no manager, which every other author's draft records, and are absent when no draft
+    records one; the witnesses are one or more,
+    each naming an origin of `basis` at exactly the commit `basis` holds for it. A pending read
+    owes neither the sources nor the transcripts, which `board-status` writes together, so a
+    record carrying no sources is owed no transcripts either.
+    """
+    found = []
+    consumed = held.get("drafts")
+    named = [one for one in consumed if isinstance(one, str)] if isinstance(consumed, list) else []
+    sources = held.get(DRAFT_SOURCES_FIELD)
+    # Each draft's source read as whether its draft records a transcript; `None` where it is
+    # no source line.
+    transcribed: dict[str, bool | None] | None = None
+    if DRAFT_SOURCES_FIELD in held:
+        if _keyed_lines(sources, named, exactly=False):
+            # `_keyed_lines` has just proven it an object of lines.
+            transcribed = {
+                str(draft): _records_transcript(str(line))
+                for draft, line in cast(Mapping[str, object], sources).items()
+            }
+        if transcribed is None or None in transcribed.values():
+            found.append(
+                f"`{DRAFT_SOURCES_FIELD}` is not an object keyed by the record's `drafts`, each "
+                "value one line `author <kind>`, then `; node <node>` and `; member <member>` "
+                "where the draft's author names them; leave it as `board-status` wrote it from "
+                "the drafts"
+            )
+            transcribed = None
+    recorded = [draft for draft, records in (transcribed or {}).items() if records]
+    transcripts = held.get(TRANSCRIPTS_FIELD)
+    if TRANSCRIPTS_FIELD in held:
+        listed = transcripts if isinstance(transcripts, Mapping) else {}
+        keys = recorded if transcribed is not None else [one for one in named if one in listed]
+        if not keys or not _keyed_lines(transcripts, keys):
+            found.append(
+                f"`{TRANSCRIPTS_FIELD}` is not an object keyed by exactly the drafts whose draft "
+                "record names a transcript, each value that command, and absent when none does; "
+                "leave it as `board-status` wrote it from the drafts"
+            )
+    elif recorded:
+        found.append(
+            f"the `{KEY}` record carries no `{TRANSCRIPTS_FIELD}`, where its drafts "
+            + ", ".join(recorded)
+            + " record a transcript; `board-status` writes it from the drafts"
+        )
+    found.extend(_witnesses_problems(held.get(WITNESSES_FIELD), held.get("basis")))
+    return found
+
+
+def _records_transcript(line: str) -> bool | None:
+    """Whether the draft a :data:`DRAFT_SOURCES_FIELD` ``line`` states records a transcript, or
+    `None` when ``line`` states no source: every author's draft does but a manager's."""
+    author = drafts.parsed_source(line)
+    return None if author is None else author.kind != "manager"
+
+
+def _witnesses_problems(witnesses: object, basis: object) -> list[str]:
+    """How ``witnesses`` is not one or more claims each seen in `basis`, at its basis commit."""
+    shape = (
+        f"`{WITNESSES_FIELD}` is not a non-empty array of strings, one per verified claim, each "
+        "`<origin> <path>:<line> at <commit>`"
+    )
+    if not isinstance(witnesses, list) or not witnesses:
+        return [shape]
+    held = basis if isinstance(basis, Mapping) else {}
+    found = []
+    for witness in witnesses:
+        matched = WITNESS.fullmatch(witness) if isinstance(witness, str) else None
+        if matched is None:
+            found.append(f"{shape}: {witness!r} is not")
+        elif matched["origin"] not in held:
+            found.append(
+                f"`{WITNESSES_FIELD}` entry {witness!r} names {matched['origin']!r}, which "
+                "`basis` names no commit for"
+            )
+        elif held[matched["origin"]] != matched["commit"]:
+            found.append(
+                f"`{WITNESSES_FIELD}` entry {witness!r} is at {matched['commit']!r}, where "
+                f"`basis` holds {held[matched['origin']]!r} for {matched['origin']!r}"
+            )
+    return found
+
+
 def _real_time(value: object) -> bool:
     if not isinstance(value, str) or not drafts.DRAFTED_AT.fullmatch(value):
         return False
@@ -1529,7 +2031,17 @@ def _record_problems(
             + ", ".join(str(one) for one in SOUND_SCHEMAS[:-1])
             + f" or {SOUND_SCHEMAS[-1]}; bring the ticket to the current shape"
         )
-    owed = [key for key in RECORD_KEYS if not (pending and key == ESTIMATE_FIELD)]
+    fields = _fields_shape(held)
+    # `board-status` writes the estimate and the drafts' sources and transcripts, so a pending
+    # read owes none of them; whether transcripts are owed at all is the drafts' sources' to say.
+    written_later = (ESTIMATE_FIELD, DRAFT_SOURCES_FIELD) if pending else ()
+    owed = [
+        key
+        for key in RECORD_KEYS
+        if key not in written_later
+        and key != TRANSCRIPTS_FIELD
+        and (fields or key not in FIELDS_KEYS)
+    ]
     missing = [key for key in owed if key not in held]
     if missing:
         written = (
@@ -1537,10 +2049,18 @@ def _record_problems(
             if ESTIMATE_FIELD in missing
             else ""
         )
+        if DRAFT_SOURCES_FIELD in missing:
+            written += f"; `{DRAFT_SOURCES_FIELD}` is written by `board-status`, from the drafts"
         return [*found, f"the `{KEY}` record is missing {', '.join(missing)}{written}"]
     if unexpected := sorted(key for key in held if key not in (*RECORD_KEYS, *OPTIONAL_KEYS)):
         found.append(
             f"the `{KEY}` record carries keys this does not write: {', '.join(unexpected)}"
+        )
+    if not fields and (early := [key for key in FIELDS_KEYS if key in held]):
+        found.append(
+            f"the record is schema {held.get('schema')!r} and carries "
+            + ", ".join(f"`{key}`" for key in early)
+            + f", which only a record from schema {FIELDS_AT} on carries"
         )
     if ESTIMATE_FIELD in held and held[ESTIMATE_FIELD] not in ESTIMATES:
         found.append(
@@ -1584,6 +2104,8 @@ def _record_problems(
         found.extend(_drafts_problems(held["drafts"], held["owning_runs"]))
     verified = repositories if isinstance(repositories, list) and len(repositories) > 1 else []
     found.extend(_basis_problems(held["basis"], verified or [repository]))
+    if fields:
+        found.extend(_fields_problems(held))
     if not _real_time(held["verified_at"]):
         found.append(
             f"`verified_at` {held['verified_at']!r} is not an RFC 3339 UTC time like "
@@ -1993,6 +2515,7 @@ def _body_problems(
     invariant: bool = True,
     plain: bool = True,
     search_retired: bool = True,
+    fields: bool = False,
 ) -> list[str]:
     """Every way a body is not a ticket's; ``structured`` is :func:`_impact_problems`'s, and
     also holds `## Suggested fix` to its opening paragraph and unit subsections. ``invariant``
@@ -2002,8 +2525,12 @@ def _body_problems(
     to its order, its plain `## Root cause`, the :data:`CONTRIBUTING_LOCATIONS` of its
     `## Suggested fix` and its last `## Evidence`; without it an :data:`INVARIANT_AT` ticket's
     `## Root cause` is its :data:`ROOT_CAUSE_PARTS` and the historical search section is last.
-    ``search_retired`` refuses that heading anywhere and places related work before Evidence."""
+    ``search_retired`` refuses that heading anywhere and places related work before Evidence.
+    ``fields`` holds a :data:`FIELDS_AT` ticket to carrying no `## Owning runs`, to an
+    `## Evidence` holding none of the record's metadata, and to its parts in their authored
+    blocks, each read from inside its block by the checks of the plain shape."""
     plain = plain and invariant
+    fields = fields and search_retired and plain
     if not isinstance(body, str):
         return ["the ticket has no body"]
     found = drafts.sections(body)
@@ -2019,10 +2546,15 @@ def _body_problems(
         return [
             f"the body carries `## {DUPLICATE_SEARCH}`, which schema {SEARCH_RETIRED_AT} retired"
         ]
+    if fields and OWNING_RUNS in names:
+        return [
+            f"the body carries `## {OWNING_RUNS}`, which schema {FIELDS_AT} moved to the record's "
+            "`owning_runs` and the board's field; remove the section"
+        ]
     headings = (
-        HEADINGS
+        (HEADINGS if fields else OWNED_HEADINGS)
         if search_retired
-        else (*HEADINGS[:-1], DUPLICATE_SEARCH, EVIDENCE)
+        else (*OWNED_HEADINGS[:-1], DUPLICATE_SEARCH, EVIDENCE)
         if plain
         else PRIOR_HEADINGS
         if invariant
@@ -2051,25 +2583,99 @@ def _body_problems(
             )
         ):
             return cause
+        content = found[at][1]
+        unfolded = fields and required in (IMPACT, SUGGESTED_FIX)
+        # A plain part is held to the plain shape first, so what it lacks is named as that;
+        # only a sound plain part is then refused for not being in its block.
+        still_plain = unfolded and not _DETAILS_LINE.search(_unfenced(content))
+        if unfolded and not still_plain:
+            reading = blocked_impact if required == IMPACT else blocked_locations
+            content, unblocked = reading(content.strip())
+            if unblocked:
+                return unblocked
         if required == IMPACT and (
-            impact := _impact_problems(found[at][1], held, structured=structured, plain=plain)
+            impact := _impact_problems(content, held, structured=structured, plain=plain)
         ):
             return impact
         if (
             required == SUGGESTED_FIX
             and structured
-            and (fix := _fix_problems(found[at][1], locations=plain))
+            and (fix := _fix_problems(content, locations=plain))
         ):
             return fix
-        if required == EVIDENCE and is_host(host) and str(host) not in found[at][1]:
+        if still_plain:
+            return [_plain_part_problem(required)]
+        if required == EVIDENCE and fields and (metadata := _evidence_metadata(content)):
+            return [
+                f"the body's `## {EVIDENCE}` section carries "
+                + ", ".join(metadata)
+                + f", which the record holds from schema {FIELDS_AT} and the board shows on its "
+                "fields; say there only what happened"
+            ]
+        if required == EVIDENCE and not fields and is_host(host) and str(host) not in content:
             return [
                 f"the body's `## {EVIDENCE}` section does not name the host {host!r} the "
                 "record's `host` states; state there the host the verification ran on"
             ]
         after = at + 1
+    if fields and (unblocked := _foreign_blocks_problems(found)):
+        return unblocked
     return _rejected_fixes_problems(found) + (
         _tail_problems(found, plain=plain, search_retired=search_retired) if invariant else []
     )
+
+
+#: What a :data:`FIELDS_AT` `## Evidence` is refused for carrying, each the record's to hold: a
+#: `Host:` or `Basis:` line, a qualified draft id, a 40-character commit and a transcript command.
+_METADATA_LINE = re.compile(
+    r"^[ \t]*(?:[-*+][ \t]+)?(?:\*\*)?(?P<label>Host|Basis)(?:\*\*)?:", re.MULTILINE
+)
+_EVIDENCE_COMMIT = re.compile(r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
+_TRANSCRIPT_COMMAND = re.compile(rf"\b{re.escape(drafts.ENGINE)} (?:transcript|monitor)\b")
+
+
+def _plain_part_problem(heading: str) -> str:
+    """The refusal of a :data:`FIELDS_AT` section whose sound parts are still plain."""
+    if heading == IMPACT:
+        parts = f"its `**{WORKAROUND_COST}.**` part and its lines"
+        held = f"its `{WORKAROUND_COST}` and `{PRIORITY_CALCULATION}` blocks"
+    else:
+        parts = f"its `**{CONTRIBUTING_LOCATIONS}.**` part"
+        held = f"its `{CONTRIBUTING_LOCATIONS}` block"
+    return (
+        f"the body's `## {heading}` section carries {parts} plain, where a schema-{FIELDS_AT} "
+        f"ticket carries them in {held}; run `board-status`, which writes the blocks"
+    )
+
+
+def _evidence_metadata(text: str) -> list[str]:
+    """What metadata the record holds a :data:`FIELDS_AT` ``text`` carries, one phrase each."""
+    found = [f"a `{line['label']}:` line" for line in _METADATA_LINE.finditer(text)]
+    if DRAFT_ID.search(text):
+        found.append("a qualified draft id")
+    if _EVIDENCE_COMMIT.search(text):
+        found.append("a 40-character commit")
+    if _TRANSCRIPT_COMMAND.search(text):
+        found.append("a transcript command")
+    return list(dict.fromkeys(found))
+
+
+def _foreign_blocks_problems(found: Sequence[tuple[str, str]]) -> list[str]:
+    """How a :data:`FIELDS_AT` body carries a `<details>` line outside the sections whose blocks
+    are its own: only `## Impact` and `## Suggested fix` carry one, each read by its own check."""
+    carried = [
+        name
+        for name, content in found
+        if name not in (IMPACT, SUGGESTED_FIX) and _DETAILS_LINE.search(_unfenced(content))
+    ]
+    if not carried:
+        return []
+    return [
+        "the body's "
+        + ", ".join(f"`## {name}`" for name in carried)
+        + " carries a `<details>` or `</details>` line, which no ticket section but the blocks "
+        f"`board-status` writes in `## {IMPACT}` and `## {SUGGESTED_FIX}` carries"
+    ]
 
 
 #: What a :data:`PLAIN_AT` `## Root cause` names only by leaving the product's own terms, each
@@ -2532,15 +3138,22 @@ def problems(  # noqa: PLR0913 - each reading of an item is its own keyword
     structured = isinstance(held, Mapping) and _structured(held)
     invariant = isinstance(held, Mapping) and _invariant(held)
     plain = isinstance(held, Mapping) and _plain_shape(held)
+    fields = isinstance(held, Mapping) and _fields_shape(held)
+    content = item_content(item) if isinstance(item.get("content"), str) else item.get("content")
+    # A pending read is `board-status`'s, which writes the blocks: it reads the plain parts an
+    # agent writes as the blocks it is about to write, and a blocked body as it stands.
+    if fields and pending and isinstance(content, str):
+        content = collapsed(content)
     found.extend(
         _body_problems(
-            item_content(item) if isinstance(item.get("content"), str) else item.get("content"),
+            content,
             host,
             checked,
             structured=structured,
             invariant=invariant,
             plain=plain,
             search_retired=isinstance(held, Mapping) and _search_retired_shape(held),
+            fields=fields,
         )
     )
     found.extend(edge_problems(edges))
@@ -2647,6 +3260,12 @@ def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keywo
             Priority(str(held[BOARD_ESTIMATE_FIELD])) if BOARD_ESTIMATE_FIELD in held else None
         ),
         creating=(None if CREATING_KEY not in metadata else json.dumps(metadata[CREATING_KEY])),
+        schema=cast(int, held["schema"]),
+        draft_sources=(
+            _draft_keyed(held[DRAFT_SOURCES_FIELD]) if DRAFT_SOURCES_FIELD in held else None
+        ),
+        transcripts=_draft_keyed(held.get(TRANSCRIPTS_FIELD)),
+        witnesses=tuple(str(one) for one in cast(list[object], held.get(WITNESSES_FIELD) or [])),
         reserved=tuple(
             sorted(
                 (str(key), json.dumps(value))
@@ -2656,6 +3275,12 @@ def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keywo
             )
         ),
     )
+
+
+def _draft_keyed(value: object) -> tuple[tuple[QualifiedDraftId, str], ...]:
+    """A record's draft-keyed object, as read, in the order it holds; empty where it holds none."""
+    held = value if isinstance(value, Mapping) else {}
+    return tuple((QualifiedDraftId(str(draft)), str(line)) for draft, line in held.items())
 
 
 def ticket_edges(ticket: str) -> list[Edge]:
@@ -3848,10 +4473,11 @@ def copy_ticket(path: Path, board: str) -> Copied:
     (:func:`append_receipt`) before it is reported.
 
     A record from before :data:`BINDING_RETIRED_AT` is brought forward once its copy lands: it is
-    rewritten at :data:`SCHEMA` without the key or the origin it pointed at that card, the
-    store's own link to that card recorded by the copy in its place. A record of
-    :data:`PRIOR_SCHEMA`, whose body is already the current schema's, is rewritten at
-    :data:`SCHEMA` once its copy lands too, every key the store holds on it carried through.
+    rewritten at :data:`OWNED_LAST_AT` without the key or the origin it pointed at that card, the
+    store's own link to that card recorded by the copy in its place. A record of the schema
+    before :data:`BOARD_ESTIMATE_AT`, whose body that schema reads, is rewritten at
+    :data:`OWNED_LAST_AT` once its copy lands too, every key the store holds on it carried
+    through; a later record keeps its schema, which only its run's rewrite moves.
     Either way the rewrite names the estimate the copy wrote as :data:`BOARD_ESTIMATE_FIELD`, so
     the next copy's priority guard names it. Refused, a record is left as it was, byte for byte.
     """
@@ -3892,16 +4518,22 @@ def copy_ticket(path: Path, board: str) -> Copied:
         raise Undecided(ticket.status)
     guard = Priority.NONE if ticket.board_estimate is None else ticket.board_estimate
     receiving = ticket.priority_estimate
-    # Staged only on a record of the current schema: rendering rewrites the record at it, which
-    # an older record's body is not written to, and only a current record carries the key.
-    written_at = _held_record(stored.item).get("schema")
-    current = written_at == SCHEMA
+    # Staged only on a record that carries the key: rendering rewrites the record at its own
+    # schema, and only a record from that schema on carries it.
+    schema_held = _held_record(stored.item).get("schema")
+    current = schema_held == SCHEMA
     root = path.absolute().parents[3]
     # Decided off the record as it stands, before the estimate below is staged into it.
     create = reached is None and creates_without_lookup(
         ticket, root, run, identifier, destination, current=current
     )
-    staged = current and receiving is not None and receiving != ticket.board_estimate
+    staged = (
+        type(schema_held) is int
+        and schema_held >= BOARD_ESTIMATE_AT
+        and not ticket.retired
+        and receiving is not None
+        and receiving != ticket.board_estimate
+    )
     if staged:
         path.write_text(render(dataclasses.replace(ticket, board_estimate=receiving)), "utf-8")
 
@@ -3970,16 +4602,18 @@ def copy_ticket(path: Path, board: str) -> Copied:
             f"the store copied this ticket onto {reached_id}, where its record names {card}: "
             "report it"
         )
-    # A record carrying the retired binding, or one of the schema just before whose body is
-    # already the current one's, is rewritten at the current schema naming the estimate this
-    # copy wrote, re-read so the link and every other key the store wrote on it is carried.
-    if ticket.board_item is not None or written_at == PRIOR_SCHEMA:
+    # A record carrying the retired binding, or one of the schema before the board estimate,
+    # whose body is already the shape that schema reads, is rewritten at :data:`OWNED_LAST_AT`,
+    # the last schema reading that body, naming the estimate this copy wrote, re-read so the
+    # link and every other key the store wrote on it is carried. Its run brings it on from there.
+    if ticket.board_item is not None or schema_held == BOARD_ESTIMATE_AT - 1:
         copied_from = read_ticket(path, for_copy=True)
         migrated = dataclasses.replace(
             copied_from,
             retired=(),
             origin=None if _points_at_item(copied_from.origin) else copied_from.origin,
             board_estimate=receiving,
+            schema=OWNED_LAST_AT,
         )
         path.write_text(render(migrated), encoding="utf-8")
     return Copied(cast(CopyAction, action), _native(reached_id, destination), destination)
@@ -4060,6 +4694,19 @@ def _record_frequency(held: Mapping[str, object]) -> Frequency | None:
     return None if frequency is None else Frequency(str(frequency))
 
 
+def brought_to(schema: int) -> int:
+    """The schema `board-status` writes a ticket of this run read at ``schema`` at.
+
+    A ticket of schemas :data:`SEARCH_RETIRED_AT` to :data:`OWNED_LAST_AT` carries the body those
+    schemas share, so it is written at :data:`OWNED_LAST_AT` and reaches :data:`SCHEMA` only by
+    its run's rewrite; an older one is written at :data:`SCHEMA`, which its run then rewrites it
+    to; a current one stays where it is.
+    """
+    if SEARCH_RETIRED_AT <= schema <= OWNED_LAST_AT:
+        return OWNED_LAST_AT
+    return max(schema, SCHEMA)
+
+
 def estimate_before_copy(
     path: Path,
     card: str | None,
@@ -4074,6 +4721,14 @@ def estimate_before_copy(
     is that estimate, which its copy's priority guard writes onto the card only while the card
     holds the estimate it last received. Its :data:`BOARD_ESTIMATE_FIELD` is left as it is. The
     ticket is read as it was before this wrote anything, and written only when it changes.
+
+    It is written at :func:`brought_to` its schema: a ticket of schemas 12 to 14, whose body
+    those schemas share, at :data:`OWNED_LAST_AT`, so its run's rewrite is what brings it to
+    :data:`SCHEMA`; an older one at :data:`SCHEMA`, which `validate` then refuses until its run
+    rewrites it. At :data:`FIELDS_AT` or later its :data:`DRAFT_SOURCES_FIELD` and
+    :data:`TRANSCRIPTS_FIELD` are read from the drafts its record names (:func:`draft_fields`)
+    and its plain parts put in their blocks (:func:`collapsed`), so what it returns is what the
+    card receives.
     """
     ticket = read_ticket(path, pending=True) if ticket is None else ticket
     with_workaround = stated_with_workaround(ticket.body)
@@ -4088,11 +4743,59 @@ def estimate_before_copy(
             ticket.body, estimate_line(with_workaround, ticket.frequency, count)
         ),
         priority=estimated,
+        schema=brought_to(ticket.schema),
     )
+    if written_at(decided) >= FIELDS_AT:
+        sources, transcripts = draft_fields(ticket.drafts, ticket)
+        decided = dataclasses.replace(
+            decided,
+            body=collapsed(decided.body),
+            draft_sources=sources,
+            transcripts=transcripts,
+        )
     rendered = render(decided)
     if path.read_text(encoding="utf-8") != rendered:
         path.write_text(rendered, encoding="utf-8")
     return decided
+
+
+def draft_fields(
+    consumed: Sequence[QualifiedDraftId],
+    held: Ticket | None = None,
+) -> tuple[tuple[tuple[QualifiedDraftId, str], ...], tuple[tuple[QualifiedDraftId, str], ...]]:
+    """Each draft's source, and the transcript of each that records one, in ``consumed``'s order.
+
+    A draft ``held`` already records the source of keeps it and its transcript as recorded, so a
+    later `board-status` reads no draft its run has since deleted. Every other is read from its
+    own `orchestrator.follow-up-draft` record through the store: its source is
+    :func:`follow_up_drafts.source` of the draft's author, and its transcript that record's
+    command verbatim, which a manager's draft has none of. A draft the store no longer holds —
+    deleted before any record kept its source — or holds as no draft's record gets no entry in
+    either. Any other failure of the store is its :class:`OSError`, which every command reports.
+    """
+    recorded = dict(held.draft_sources or ()) if held is not None else {}
+    commands = dict(held.transcripts) if held is not None else {}
+    sources, transcripts = [], []
+    for draft in consumed:
+        if draft in recorded:
+            sources.append((draft, recorded[draft]))
+            if draft in commands:
+                transcripts.append((draft, commands[draft]))
+            continue
+        try:
+            read = drafts.from_store_item(plan_store.task_record(draft))
+        except OSError as exc:
+            # The one failure read past: the store answering it no longer holds that draft.
+            if getattr(getattr(exc.__cause__, "failure", None), "kind", None) != NO_SUCH_ITEM:
+                raise
+            continue
+        except drafts.Refused:
+            # Held, but not as the record a draft is written as: no source can be read off it.
+            continue
+        sources.append((draft, drafts.source(read.author)))
+        if read.transcript is not None:
+            transcripts.append((draft, read.transcript))
+    return tuple(sources), tuple(transcripts)
 
 
 class ReEstimated(NamedTuple):
@@ -4299,6 +5002,7 @@ def re_estimate_decision(issue: str, item: Mapping[str, object], reads: BoardRea
         invariant=_invariant(held),
         plain=_plain_shape(held),
         search_retired=_search_retired_shape(held),
+        fields=_fields_shape(held),
     ):
         raise Refused([f"{issue}'s content is not sound: {problem}" for problem in unsound])
     frequency = _record_frequency(held)
@@ -4317,27 +5021,57 @@ def re_estimate_decision(issue: str, item: Mapping[str, object], reads: BoardRea
     return Reestimate(estimated, count, priority, rewritten, record, line)
 
 
-def _posted(  # noqa: PLR0913 - the comment, and everything its receipt names
-    board: str, run: str, card: str, body: str, root: Path | None = None
-) -> Mapping[str, object]:
-    """Post ``body`` on ``card`` as ``run``'s evidence comment or budget question, and receipt it.
-
-    :class:`Refused`, before anything is posted, for a body that is not this run's comment
-    shape (:func:`run_comment_problems`) or a card outside ``board``'s family.
-    """
+def _card_problems(board: str, card: str) -> list[str]:
+    """How ``card`` is not an item of ``board`` or of a board it routes to."""
     matched = QUALIFIED_ID.fullmatch(card)
     if matched is None or (
         matched["source"] != board and matched["source"] not in plan_store.reachable(board)
     ):
-        raise Refused(
-            [
-                f"{card!r} is not an item of the board {board!r} or a board it routes to, as "
-                "`<board>:<id>`"
-            ]
-        )
+        return [
+            f"{card!r} is not an item of the board {board!r} or a board it routes to, as "
+            "`<board>:<id>`"
+        ]
+    return []
+
+
+def _posted(  # noqa: PLR0913 - the comment, and everything its receipt names
+    board: str,
+    run: str,
+    card: str,
+    body: str,
+    root: Path | None = None,
+    edit: str | None = None,
+) -> Mapping[str, object]:
+    """Post ``body`` on ``card`` as ``run``'s evidence comment or budget question, and receipt it.
+
+    With ``edit``, the comment of that id is edited in place with the store's `task comment
+    edit` instead, refused unless the comment the card holds under that id is ``run``'s
+    evidence comment by its marker. :class:`Refused`, before anything is written, for a body
+    that is not this run's comment shape (:func:`run_comment_problems`); ``card`` is one
+    :func:`composed_comment` has held to ``board``'s family. Both writes append the receipt the
+    closeout reads.
+    """
     if found := run_comment_problems(run, body):
         raise Refused(found)
-    written = plan_store.sdk(plan_store.client().task_comment_add(card, body=body))
+    client = plan_store.client()
+    if edit is None:
+        written = plan_store.sdk(client.task_comment_add(card, body=body))
+    else:
+        answer = plan_store.complete(plan_store.sdk(client.task_show(card)))
+        held = [
+            comment.body
+            for comment in answer.comments or ()
+            if str(getattr(comment.id, "root", comment.id)) == edit
+        ]
+        owner = comment_owner(held[0]) if held else None
+        if owner is None or owner.run != run or owner.kind is not CommentKind.EVIDENCE:
+            raise Refused(
+                [
+                    f"{card} holds no evidence comment {edit!r} whose marker names run {run}; "
+                    "a run edits only its own evidence comment"
+                ]
+            )
+        written = plan_store.sdk(client.task_comment_edit(card, edit, body=body))
     owner = comment_owner(body)
     outcome = CommentOutcomeReceipt(
         id=written.id.root if hasattr(written.id, "root") else str(written.id),
@@ -4359,31 +5093,152 @@ def comment_marker(run: str, root_cause: str) -> str:
 
 
 def comment_opening(run: str) -> str:
-    """The visible first line of an evidence comment ``run`` owns."""
+    """The visible first line of an evidence comment ``run`` wrote before its block existed."""
     return COMMENT_OPENING.format(run=run)
 
 
-def render_comment(run: str, root_cause: str, evidence: str) -> str:
-    """A whole comment ``run`` adds to another run's issue: opening, evidence, marker."""
-    return f"{comment_opening(run)}\n\n{evidence.strip()}\n\n{comment_marker(run, root_cause)}\n"
+def comment_summary(run: str) -> str:
+    """The summary of the block an evidence comment ``run`` owns opens with."""
+    return COMMENT_SUMMARY.format(run=run)
+
+
+@dataclass(frozen=True)
+class CommentSources:
+    """An evidence comment's metadata: the values a :data:`FIELDS_AT` record holds, in its shapes.
+
+    ``draft_sources`` and ``transcripts`` are read from the drafts as `board-status` reads them
+    (:func:`draft_fields`), never supplied, and name only the drafts the store still holds.
+    """
+
+    host: Host
+    basis: tuple[Basis, ...]
+    drafts: tuple[QualifiedDraftId, ...]
+    witnesses: tuple[str, ...]
+    draft_sources: tuple[tuple[QualifiedDraftId, str], ...] = ()
+    transcripts: tuple[tuple[QualifiedDraftId, str], ...] = ()
+
+
+#: The keys a `comment --sources-file` holds, exactly.
+COMMENT_SOURCE_KEYS = (HOST_FIELD, "basis", "drafts", WITNESSES_FIELD)
+
+
+def comment_sources(run: str, held: object, *, question: bool = False) -> CommentSources:
+    """The sources ``held`` states for ``run``'s comment, validated as a record's are.
+
+    ``held`` is a `--sources-file`'s JSON: exactly :data:`COMMENT_SOURCE_KEYS`, its host a
+    hostname, its basis a commit per origin, its drafts ``run``'s — none only for a budget
+    ``question``, which rests on the budget account — and its witnesses each seen in that basis.
+    Each draft's source and transcript are then read from the draft. :class:`Refused` otherwise.
+    """
+    if not isinstance(held, Mapping) or sorted(map(str, held)) != sorted(COMMENT_SOURCE_KEYS):
+        raise Refused(
+            [
+                "the sources are not one JSON object holding exactly "
+                + ", ".join(f"`{key}`" for key in COMMENT_SOURCE_KEYS)
+            ]
+        )
+    found = []
+    if not is_host(held[HOST_FIELD]):
+        found.append(f"`host` {held[HOST_FIELD]!r} is not a hostname; write what `hostname` prints")
+    found.extend(_basis_problems(held["basis"], []))
+    if held["drafts"] != [] or not question:
+        found.extend(_drafts_problems(held["drafts"], [run]))
+    found.extend(_witnesses_problems(held[WITNESSES_FIELD], held["basis"]))
+    if found:
+        raise Refused(found)
+    basis = cast(Mapping[str, str], held["basis"])
+    consumed = tuple(QualifiedDraftId(str(one)) for one in cast(list[object], held["drafts"]))
+    sources, transcripts = draft_fields(consumed)
+    return CommentSources(
+        host=Host(str(held[HOST_FIELD])),
+        basis=tuple(Basis(Origin(origin), Commit(commit)) for origin, commit in basis.items()),
+        drafts=consumed,
+        witnesses=tuple(str(one) for one in cast(list[object], held[WITNESSES_FIELD])),
+        draft_sources=sources,
+        transcripts=transcripts,
+    )
+
+
+def comment_metadata(sources: CommentSources) -> str:
+    """The bullets of an evidence comment's block: the host, each basis entry, each draft with
+    its source and transcript, and each witness."""
+    lines = [f"- Host: {sources.host}"]
+    lines += [f"- Basis: {entry.origin} at {entry.commit}" for entry in sources.basis]
+    held, recorded = dict(sources.draft_sources), dict(sources.transcripts)
+    for draft in sources.drafts:
+        line = f"- Draft: {draft}"
+        if draft in held:
+            line += f"; {held[draft]}"
+        if draft in recorded:
+            line += f"; transcript: {recorded[draft]}"
+        lines.append(line)
+    lines += [f"- Witness: {witness}" for witness in sources.witnesses]
+    return "\n".join(lines)
+
+
+def render_comment(  # noqa: PLR0913 - every part of a comment is its own keyword
+    run: str,
+    root_cause: str,
+    evidence: str,
+    sources: CommentSources,
+    *,
+    bears_on: str | None = None,
+    question: str | None = None,
+) -> str:
+    """A whole evidence comment ``run`` adds to another run's issue, in its one order.
+
+    First the authored block whose summary is :func:`comment_summary`, holding the metadata
+    (:func:`comment_metadata`); then what was observed, any :data:`BEARS_ON` paragraph and any
+    budget ``question``, all visible; then the marker, as the last line.
+    """
+    parts = [block(comment_summary(run), comment_metadata(sources)), evidence.strip()]
+    if bears_on is not None and bears_on.strip():
+        parts.append(f"{BEARS_ON} {bears_on.strip()}")
+    if question is not None and question.strip():
+        parts.append(question.strip())
+    parts.append(comment_marker(run, root_cause))
+    return "\n\n".join(parts) + "\n"
+
+
+def _opening_problems(run: str, body: str) -> list[str]:
+    """How ``body`` does not open as ``run``'s evidence comment does, in either shape.
+
+    Every comment already on the boards opens with :func:`comment_opening` as its first non-blank
+    line; a comment `comment` writes now opens with one authored block whose summary is
+    :func:`comment_summary`, and no line after it repeats the opening.
+    """
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    opening, summary = comment_opening(run), comment_summary(run)
+    first = lines[0] if lines else ""
+    if first == opening:
+        return []
+    leading = _BLOCK.match(body.lstrip())
+    if leading is None or not leading["body"].strip():
+        return [
+            f"its opening line is {first!r}, where run {run}'s comment opens with one "
+            f"`<details>` block summarised {summary!r}, or, written before it, {opening!r}"
+        ]
+    if leading["summary"] != summary:
+        return [
+            f"its opening block is summarised {leading['summary']!r}, where run {run}'s "
+            f"comment's block is summarised {summary!r}"
+        ]
+    after = body.lstrip()[leading.end() :]
+    if any(line.strip() in (opening, summary) for line in after.splitlines()):
+        return [f"it repeats its opening {summary!r} after its block"]
+    return []
 
 
 def run_comment_problems(run: str, body: str) -> list[str]:
     """Every way ``body`` is not ``run``'s evidence comment or budget question, as `comment` posts.
 
-    Its opening line is :func:`comment_opening`, its last line ``run``'s evidence marker
+    It opens as :func:`_opening_problems` accepts, its last line is ``run``'s evidence marker
     (:func:`comment_marker`), and it carries no ticket section heading: an evidence comment
     carries only the run's new occurrence, so one that re-renders the ticket is refused before it
     reaches the board.
     """
     lines = [line.strip() for line in body.splitlines() if line.strip()]
-    found = []
-    opening = comment_opening(run)
-    if not lines or lines[0] != opening:
-        found.append(
-            f"its opening line is {lines[0] if lines else ''!r}, where run {run}'s comment opens "
-            f"{opening!r}"
-        )
+    found = _opening_problems(run, body)
     owner = comment_owner(body)
     if owner is None or owner.run != run or owner.kind is not CommentKind.EVIDENCE:
         found.append(
@@ -4395,6 +5250,25 @@ def run_comment_problems(run: str, body: str) -> list[str]:
         "run's new occurrence, so drop what repeats the ticket"
         for heading in comment_ticket_headings(body)
     )
+    return found
+
+
+def comment_part_problems(named: str, text: str) -> list[str]:
+    """How one part an agent supplies to `comment` is not a part `comment` places as given.
+
+    A part is prose: it carries no ticket level-2 heading and no `<details>` or `</details>`
+    line, since `comment` writes the comment's one block itself.
+    """
+    found = [
+        f"the {named} carries the ticket heading `## {heading}`; an evidence comment carries "
+        "only this run's new occurrence"
+        for heading in comment_ticket_headings(text)
+    ]
+    if _DETAILS_LINE.search(text):
+        found.append(
+            f"the {named} carries a `<details>` or `</details>` line; `comment` writes the "
+            "comment's one block itself"
+        )
     return found
 
 
@@ -5580,7 +6454,13 @@ def ticket_section_headings() -> tuple[str, ...]:
     has re-rendered the ticket into the comment; deriving them here means a heading added to
     a ticket is refused in a comment with no further edit.
     """
-    return (*HEADINGS, DUPLICATE_SEARCH, REJECTED_FIXES, RELATED_TICKETS, *RETIRED_HEADINGS)
+    return (
+        *OWNED_HEADINGS,
+        DUPLICATE_SEARCH,
+        REJECTED_FIXES,
+        RELATED_TICKETS,
+        *RETIRED_HEADINGS,
+    )
 
 
 #: A Markdown ATX level-2 heading line, its text without the optional closing hashes.
@@ -6908,7 +7788,11 @@ _HEADING_GUIDANCE = (
     f"`{NO_WORKAROUND}` leaves the two the same, and its `**{WORKAROUND_COST}.**` part says "
     f"there is {NO_ACCEPTABLE_WORKAROUND} and why, in place of the three bullets. Any other "
     f"workaround lowers a severity above `{Severity.LOW}` at least one level. The fourth line, "
-    "the priority estimate and why, is written by `board-status` and never by you>\n\n"
+    "the priority estimate and why, is written by `board-status` and never by you. Write the "
+    f"`**{WORKAROUND_COST}.**` part and the lines plain, as below: `board-status` puts the "
+    f"workaround line and its costs in a collapsed `{WORKAROUND_COST}` block and the severities "
+    f"and the estimate in a collapsed `{PRIORITY_CALCULATION}` block, and you never write a "
+    "`<details>` block yourself>\n\n"
     + impact_section(
         f"**{IMPACT_PARTS[0]}.** <each affected group by name: users of X, developers of Y, or "
         "spend only>\n"
@@ -6929,7 +7813,9 @@ _HEADING_GUIDANCE = (
     "<one or more examples of it>",
     "<one paragraph: what changes overall, and why that removes the root cause. The one fix "
     "this ticket recommends, concrete enough that whoever picks it up has nothing left to "
-    "choose; never a list of options or alternatives to choose between>\n\n"
+    "choose; never a list of options or alternatives to choose between. Write the "
+    f"`**{CONTRIBUTING_LOCATIONS}.**` part plain, as below: `board-status` puts it in a "
+    f"collapsed `{CONTRIBUTING_LOCATIONS}` block>\n\n"
     f"**{CONTRIBUTING_LOCATIONS}.**\n"
     "- <repository name> `<path>`: <what this location does that breaks the guarantee>\n"
     "- <one bullet per location that contributes, in whichever repository it is: every "
@@ -6941,10 +7827,10 @@ _HEADING_GUIDANCE = (
     "show only the contracts that change — public interfaces, CLI flags, schemas, output "
     "shapes and documented behaviour — each as a diff or the full shape. A fix that changes "
     f"behaviour with no interface change says so in one sentence. {_CONCISION}>",
-    "<every run whose evidence this ticket carries>",
-    "<the host the verification ran on, exactly as `hostname` printed it; then per draft: "
-    "the qualified draft id, its run and node, the verified claim with `path:line` at the "
-    "basis commit, and the transcript command from the draft>",
+    "<what happened, in prose: what each occurrence did and what was seen when the claims were "
+    "verified. Nothing the record holds: no `Host:` or `Basis:` line, no qualified draft id, no "
+    "commit and no transcript command — the record's `host`, `basis`, `drafts` and `witnesses` "
+    "hold them, and the board shows them on its fields>",
 )
 
 #: **A ticket at the level the user approved**: onepipeline#625's `## Root cause`, `## Impact`
@@ -7066,9 +7952,10 @@ def _example_body() -> str:
 def ticket_example(run: str, board: str) -> str:
     """The example ticket a verifying dispatch fills in, as the stored record renders it.
 
-    It is :func:`render` over a :class:`Ticket` of placeholders rather than text written
-    beside it, so the example an agent copies and the record the validator reads back are
-    one shape: a key added to the record reaches the example with it.
+    It is the record :func:`render` writes for a :class:`Ticket` of placeholders rather than
+    text written beside it, so the example an agent copies and the record the validator reads
+    back are one shape: a key added to the record reaches the example with it. Its body is the
+    plain form the agent writes, which `board-status` puts in its blocks.
     """
     example = Ticket(
         title="<repository name>: <the invariant in one line>",
@@ -7094,6 +7981,23 @@ def ticket_example(run: str, board: str) -> str:
         verified_at=Timestamp("<now, in RFC 3339 UTC: YYYY-MM-DDTHH:MM:SSZ>"),
         host=Host("<exactly what `hostname` prints on the machine you run on>"),
         body=_example_body(),
+        schema=SCHEMA,
+        draft_sources=(
+            (
+                QualifiedDraftId(f"{SOURCE}:{run}/{drafts.DRAFTS}/<draft-id>"),
+                "<written by `board-status` from the draft, never by you>",
+            ),
+        ),
+        transcripts=(
+            (
+                QualifiedDraftId(f"{SOURCE}:{run}/{drafts.DRAFTS}/<draft-id>"),
+                "<written by `board-status` from the draft, never by you>",
+            ),
+        ),
+        witnesses=(
+            "<an origin `basis` names> <path>:<line> at <the commit `basis` holds for it>: one "
+            "entry per verified claim",
+        ),
         depends_on=(
             QualifiedBoardId(
                 f"{board}:<native id of an accepted ticket whose fix changed this one; leave "
@@ -7110,7 +8014,7 @@ def ticket_example(run: str, board: str) -> str:
         # The same placeholder as `priority_estimate`, written through `str` alike.
         priority=cast(Priority, "<written by `board-status`, never by you>"),
     )
-    return render(example)
+    return _rendered(example, example.body)
 
 
 def _keyed(keys: Sequence[str], *values: object) -> dict[str, object]:
@@ -7223,9 +8127,21 @@ def shape(run: str) -> dict[str, object]:
         "receipt_suffix": RECEIPT_SUFFIX,
         "skipped_unchanged": SKIPPED_UNCHANGED,
         "headings": ", ".join(f"`## {heading}`" for heading in HEADINGS),
+        "fields_at": FIELDS_AT,
+        "owning_runs": OWNING_RUNS,
+        "draft_sources_field": DRAFT_SOURCES_FIELD,
+        "transcripts_field": TRANSCRIPTS_FIELD,
+        "witnesses_field": WITNESSES_FIELD,
+        "witness_shape": "`<origin> <path>:<line> at <commit>`",
+        "board_fields": ", ".join(f"`{field}`" for field, _ in BOARD_FIELDS),
+        "priority_calculation": PRIORITY_CALCULATION,
+        "comment_summary": comment_summary(run),
+        "bears_on": BEARS_ON,
+        "comment_source_keys": ", ".join(f"`{key}`" for key in COMMENT_SOURCE_KEYS),
         "root_cause_bar": ROOT_CAUSE_BAR,
         "root_cause_parts": ", ".join(f"`**{part}.**`" for part in ROOT_CAUSE_PARTS),
         "contributing_locations": f"`**{CONTRIBUTING_LOCATIONS}.**`",
+        "contributing_locations_summary": CONTRIBUTING_LOCATIONS,
         "location_shape": LOCATION_SHAPE,
         "plain_at": PLAIN_AT,
         "search_retired_at": SEARCH_RETIRED_AT,
@@ -7717,8 +8633,9 @@ def _parser() -> _Parser:
     commented = commands.add_parser(
         "comment",
         help=(
-            "post a run's evidence comment or budget question on a card, refusing a body that is "
-            "not the run's comment shape before anything is posted, and receipt the store's answer"
+            "write a run's evidence comment or budget question on a card from its parts, or edit "
+            "the run's own in place, refusing a part or sources that are not the comment's shape "
+            "before anything is written, and receipt the store's answer"
         ),
     )
     commented.add_argument("--board", required=True, metavar="SOURCE")
@@ -7728,7 +8645,36 @@ def _parser() -> _Parser:
     commented.add_argument(
         "--root", type=Path, help="the drafts root; the store's `drafts` root by default"
     )
-    commented.add_argument("--body-file", type=Path, required=True, metavar="PATH")
+    commented.add_argument(
+        "--root-cause",
+        required=True,
+        metavar="SLUG",
+        help="the root cause of the issue commented on, as its record's `root_cause` names it",
+    )
+    commented.add_argument(
+        "--evidence-file", type=Path, required=True, metavar="PATH", help="what was observed"
+    )
+    commented.add_argument(
+        "--sources-file",
+        type=Path,
+        required=True,
+        metavar="PATH",
+        help="JSON holding `host`, `basis`, `drafts` and `witnesses`, as a ticket record does",
+    )
+    commented.add_argument(
+        "--bears-on-file",
+        type=Path,
+        metavar="PATH",
+        help="what the evidence changes about the ticket, written after `Bears on the ticket:`",
+    )
+    commented.add_argument(
+        "--question-file", type=Path, metavar="PATH", help="a budget question, as it is asked"
+    )
+    commented.add_argument(
+        "--edit",
+        metavar="COMMENT-ID",
+        help="edit this run's evidence comment of that id in place rather than adding one",
+    )
     commented.add_argument("card", metavar="CARD", help="the card, as `<board>:<id>`")
     listing = commands.add_parser(
         "board-items",
@@ -8485,11 +9431,55 @@ def _re_estimated(arguments: argparse.Namespace) -> int:
     return SOUND
 
 
+def composed_comment(arguments: argparse.Namespace) -> str:
+    """The comment `comment`'s parts compose, every part held to its shape before any is used.
+
+    :class:`Refused` for a card outside the board's family, an empty evidence file, a part
+    carrying a ticket level-2 heading or a `<details>` line, a root cause outside the slug
+    grammar, and sources that do not validate — all before anything is read from a board.
+    """
+    found = _card_problems(arguments.board, arguments.card)
+    if not SLUG.fullmatch(arguments.root_cause):
+        found.append(f"the root cause {arguments.root_cause!r} is not a kebab-case slug")
+    evidence = arguments.evidence_file.read_text(encoding="utf-8")
+    if not evidence.strip():
+        found.append("the evidence file is empty; say there what this run observed")
+    parts = {"evidence": evidence}
+    for named, path in (
+        ("bears-on part", arguments.bears_on_file),
+        ("question", arguments.question_file),
+    ):
+        if path is not None:
+            parts[named] = path.read_text(encoding="utf-8")
+    if "question" in parts and not parts["question"].strip():
+        found.append("the question file is empty; say there what the budget question asks")
+    for named, text in parts.items():
+        found.extend(comment_part_problems(named, text))
+    try:
+        held = json.loads(arguments.sources_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        found.append(f"the sources file is not JSON ({exc})")
+        held = None
+    if found:
+        raise Refused(found)
+    sources = comment_sources(arguments.run, held, question="question" in parts)
+    return render_comment(
+        arguments.run,
+        arguments.root_cause,
+        evidence,
+        sources,
+        bears_on=parts.get("bears-on part"),
+        question=parts.get("question"),
+    )
+
+
 def _commented(arguments: argparse.Namespace) -> int:
     """Post a run's evidence comment or budget question, for the `comment` command."""
     try:
-        body = arguments.body_file.read_text(encoding="utf-8")
-        posted = _posted(arguments.board, arguments.run, arguments.card, body, arguments.root)
+        body = composed_comment(arguments)
+        posted = _posted(
+            arguments.board, arguments.run, arguments.card, body, arguments.root, arguments.edit
+        )
     except Refused as refusal:
         print(f"{PROG}: {arguments.card}: refused, nothing posted: {refusal}", file=sys.stderr)
         return UNSOUND
