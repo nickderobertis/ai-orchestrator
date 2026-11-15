@@ -6,8 +6,8 @@ finished, gate-green work for a reason this host authored, and the worker cannot
 its way out of it. That is measured rather than imagined:
 `personas/crozier/crozier-corpus.yaml` demanded `just gate` be fully green, and crozier
 has no `gate` recipe at all — its deterministic tier is `check` and its judged tier is
-a separate `lint-llm-diff`, which is exactly the pair `config/onevcs.rules.yml`
-resolves for crozier's merge path.
+a separate `lint-llm-diff`, which is exactly the pair crozier's merge path
+runs.
 
 Which recipes a repository defines is a fact no file here decides, so the only way to
 hold the prose to it is to ask that repository. Two callers do, at the two places the

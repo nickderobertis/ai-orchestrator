@@ -16,26 +16,30 @@
 #
 # shellcheck shell=bash
 
-# Print the checkout list a caller naming none reads: this host's own complete list,
-# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, when that file
-# exists, and the tracked `config/onevcs.checkouts` under the repository root $1 otherwise.
+# Print the checkout list a caller naming none reads: this host's own list,
+# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, whether or not it
+# exists — a caller refuses a missing one with `missing_checkouts_list`, because no tracked
+# list stands in for it.
 #
-# The host's file replaces the tracked one whole rather than adding to it, so a host whose
-# registrations include private repositories keeps them outside every checkout and lists
-# its public ones there too; nothing merges two lists. `XDG_CONFIG_HOME` is honoured only
-# when absolute, as `scripts/claude-alt-config-dir.sh` resolves the identities file beside it.
+# The list is the host's because which checkouts a host works in, and where, is the
+# host's to say: each repository declares its own policy in its `onevcs.toml`, so a
+# registration is a line here and never an edit to a tracked file. `XDG_CONFIG_HOME` is
+# honoured only when absolute, as `scripts/claude-alt-config-dir.sh` resolves the
+# identities file beside it.
 default_checkouts_file() {
-    local repo_root=$1 config_home
+    local config_home
     if [[ ${XDG_CONFIG_HOME-} == /* ]]; then
         config_home=$XDG_CONFIG_HOME
     else
         config_home="${HOME:-}/.config"
     fi
-    if [[ $config_home == /* && -f $config_home/ai-orchestrator/onevcs.checkouts ]]; then
-        printf '%s\n' "$config_home/ai-orchestrator/onevcs.checkouts"
-    else
-        printf '%s\n' "$repo_root/config/onevcs.checkouts"
-    fi
+    printf '%s\n' "$config_home/ai-orchestrator/onevcs.checkouts"
+}
+
+# Report, as caller $1, that this host has no checkout list at $2, and where to read how
+# to write one. The caller exits; this only says why.
+missing_checkouts_list() {
+    echo "$1: this host has no checkout list at $2; create it naming every checkout this host works in, one path per line (docs/host-setup.md, section 7), or name another with --checkouts" >&2
 }
 
 # Print every path the list at $1 names, one per line, `~` expanded against `$HOME`.

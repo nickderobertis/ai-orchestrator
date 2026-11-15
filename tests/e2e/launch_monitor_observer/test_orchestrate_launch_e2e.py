@@ -62,7 +62,7 @@ from test_short_state_budget import SUFFIX, composition_overhead, shipped_sessio
 from waits import deadline, until
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_check
+from orchestrator import plan_store
 from orchestrator.labels import (
     NODE_LABEL,
     POINTER_FILE_NAME,
@@ -70,7 +70,7 @@ from orchestrator.labels import (
     SCOPE_LABEL,
     Scope,
 )
-from orchestrator.plan_store import WRITABLE_PLUGIN, read_tasks
+from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
 # What the recipes these journeys run leave in the temporary directory, by design or
@@ -102,6 +102,13 @@ SHIPPED_RUN = "scheduler-research"
 #: The pool-maintenance schedule `just orchestrate` names, whose parse the engine retains
 #: in the launch record beside the bus configuration.
 MAINTENANCE_SCHEDULE = REPO_ROOT / "config" / "onepipeline.maintenance.yaml"
+
+#: The engine's own lever beneath the launch config's `require_rendered`, which beats it.
+REQUIRE_RENDERED_ENV = "ONEPIPELINE_REQUIRE_RENDERED"
+
+#: The plan-edit hook `config/onepipeline.launch.yaml` registers: the judged review every
+#: live task edit reaches before it applies.
+PLAN_EDIT_HOOK = REPO_ROOT / "scripts" / "review-plan-item.sh"
 
 #: The plan schema written in the shipped example projects' onepipeline metadata.
 PLAN_SCHEMA_VERSION = 3
@@ -2496,8 +2503,8 @@ def test_the_launch_hands_the_engine_this_checkouts_bus_configuration(
     assert bus["authors"]["monitor"]["capabilities"] == grants, (
         f"the launch recorded monitor grants other than this checkout's {grants}: {bus['authors']}"
     )
-    # The criteria bar is the engine's envelope reviewer, not a bus validator; the journey
-    # below holds the reviewer the launch recorded.
+    # The criteria bar is the engine's plan-edit hook, not a bus validator; the journey
+    # below holds the hook the launch recorded.
     assert not bus.get("validators"), bus.get("validators")
     assert not bus.get("hooks"), bus.get("hooks")
 
@@ -2629,20 +2636,34 @@ def _spawned(recorded: dict[str, Any], key: str) -> Path:
     return (Path(recorded["dir"]) / recorded[key]).resolve()
 
 
+def _assert_launch_gates(recorded: dict[str, Any]) -> None:
+    """The launch recorded this host's plan-edit hook, the file it runs, and no reviewer.
+
+    A command the engine spawns in the launch directory, so it is compared as the file it
+    runs there. The launch check runs before a run exists and so is in no run's record;
+    the planning journeys under `tests/e2e/planning/` drive the launches it refuses.
+    """
+    hook = recorded.get("plan_edit_hook")
+    assert isinstance(hook, dict), f"the launch recorded no plan-edit hook: {recorded}"
+    assert (Path(recorded["dir"]) / hook["command"][0]).resolve() == PLAN_EDIT_HOOK, hook
+    assert "envelope_reviewer" not in recorded, recorded
+
+
 @pytest.mark.xdist_group("orchestrate-launch")
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] Placed beside the schedule read it mirrors, on the one `launched` fixture this module already spends a real launch on; a project of its own would spend a second launch to read the same record.  # noqa: E501
 def test_the_launch_config_records_every_setting_the_recipe_once_passed_as_a_flag(
     launched: Launched,
 ) -> None:
     """`just orchestrate`'s launch config set each setting the recipe once passed as a flag
-    to the value that flag set, and adds the envelope reviewer and its bar.
+    to the value that flag set, and adds the plan-edit hook.
 
     A path the engine resolves (the template root, the drafting graph) is recorded
     absolute, so it is compared as the flag spelled it; a command the engine spawns (the
-    hooks, the reviewer and its bar) is recorded as the document spells it and run in the
-    launch directory, so it is compared as the file it runs. The two documents the engine
-    parses are compared as documents: the bus configuration and the maintenance schedule are
-    each the same file the flag named, which the journeys beside this one hold value by value.
+    hooks and the plan-edit hook) is recorded as the document spells it
+    and run in the launch directory, so it is compared as the file it runs. The two
+    documents the engine parses are compared as documents: the bus configuration and the
+    maintenance schedule are each the same file the flag named, which the journeys beside
+    this one hold value by value.
     `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py` holds that the recipe
     renders none of those flags.
     """
@@ -2656,7 +2677,7 @@ def test_the_launch_config_records_every_setting_the_recipe_once_passed_as_a_fla
     # records what the variable says. `tests/e2e/launch_monitor_observer/
     # test_onetaskgraph_host_e2e.py` launches a rendered plan through this recipe with the
     # variable unset and holds the record to the document's `true`.
-    exported = launched.environment.get(plan_check.REQUIRE_RENDERED_ENV)
+    exported = launched.environment.get(REQUIRE_RENDERED_ENV)
     expected = flags["--require-rendered"] if exported is None else exported
     assert recorded.get("require_rendered", False) is (expected == "true"), recorded
     assert Path(recorded["template_root"]).resolve() == Path(flags["--template-root"]).resolve()
@@ -2669,11 +2690,7 @@ def test_the_launch_config_records_every_setting_the_recipe_once_passed_as_a_fla
     assert recorded["pr_author_graph"] == str(REPO_ROOT / flags["--pr-author-graph"])
     assert isinstance(recorded["bus_config"], dict), recorded.get("bus_config")
     assert isinstance(recorded["maintenance_config"], dict), recorded.get("maintenance_config")
-    assert _spawned(recorded, "envelope_reviewer") == REPO_ROOT / "scripts" / "envelope-review.sh"
-    assert (
-        _spawned(recorded, "envelope_reviewer_bar")
-        == REPO_ROOT / "scripts" / "envelope-review-bar.sh"
-    )
+    _assert_launch_gates(recorded)
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
@@ -2723,7 +2740,7 @@ def test_a_callers_own_flag_beats_the_launch_config_through_the_recipe(
     for key in ("failure_hook", "pr_author_graph"):
         assert not recorded.get(key), f"the caller blanked {key}, yet it was recorded: {recorded}"
     assert _spawned(recorded, "dispatch_env_hook") == REPO_ROOT / "scripts" / "dispatch-env-hook.sh"
-    assert _spawned(recorded, "envelope_reviewer") == REPO_ROOT / "scripts" / "envelope-review.sh"
+    _assert_launch_gates(recorded)
 
 
 #: The run id `onepipeline` mints from the probing plan's `name`, and what the export
@@ -4582,13 +4599,21 @@ def test_launch_omits_withdrawn_tasks_and_refuses_their_dependents(
         encoding="utf-8",
     )
     source = project_from_plan(plan)
-    withdrawn = next(task for task in read_tasks(source) if task.node_id == "withdrawn")
+    store, native = source.split(":", 1)
+    withdrawn = next(
+        task.id.model_dump()
+        for page in plan_store.every_page(
+            source, plan_store.client().task_list, source=[store], project=native
+        )
+        for task in page.items
+        if task.item.metadata.get("onepipeline.id") == "withdrawn"
+    )
     closed = subprocess.run(
         [
             str(REPO_ROOT / ".venv/bin/onetaskgraph"),
             "task",
             "update",
-            str(withdrawn.qualified_id),
+            str(withdrawn),
             "--status",
             "cancelled",
         ],

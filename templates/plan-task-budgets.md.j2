@@ -5,7 +5,7 @@ description: >-
   includes it after the task's `## Why`, and `just check-plan` renders it alone from the
   task's `orchestrator.budgets` metadata to hold the task's body to that record.
 variables:
-  # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The `budgets` description restates the shape `orchestrator/plan_budgets.py` states once, and `tests/test_plan_budgets_template.py` fails the moment the two part: the keys, the vocabularies and the name's cap are each compared with that module's own.
+  # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The `budgets` description restates in words the shape its own `schema` below states once, which the plan store holds every rendering to; `tests/e2e/planning/` renders a record breaking it and reads the refusal.
   budgets:
     description: >-
       One object per budget this task owns, or `[]` when it owns none, with exactly these
@@ -42,6 +42,32 @@ variables:
     type: list
     items: object
     default: []
+    schema:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [id, name, basis, repository, file, file_change, measure, inner_measure_reason, unit, direction, threshold, workload, evidence, command]
+        dependentRequired:
+          schema_version: [source, check_runtime_seconds]
+        properties:
+          schema_version: {const: 2}
+          id: {type: string, pattern: "^[a-z][a-z0-9-]*$"}
+          name: {type: string, minLength: 1, maxLength: 60, pattern: "^[^\\n]*$"}
+          basis: {enum: [measured, arithmetic, design, published docs, estimate]}
+          repository: {type: string, minLength: 1}
+          file: {type: string, pattern: "(^|/)budgets\\.yaml$"}
+          file_change: {enum: [add, change, none]}
+          measure: {type: string, minLength: 1}
+          inner_measure_reason: {type: string}
+          unit: {type: string, minLength: 1}
+          direction: {enum: [max, min]}
+          threshold: {type: number}
+          workload: {type: string, minLength: 1}
+          evidence: {type: string, minLength: 1}
+          command: {type: string, minLength: 1}
+          source: {enum: [direct, telemetry]}
+          check_runtime_seconds: {type: number, minimum: 0}
   # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 ---
 {#-
@@ -49,8 +75,8 @@ variables:
   document's link to this section. The heading is exactly `## Budgets`, so the section's
   anchor is `budgets`. A schema-2 budget's own heading is `Budget <id>`, plain Markdown and no
   raw HTML, which a public copy of the task may carry: its slug is the anchor
-  `orchestrator/plan_budgets.py`'s `budget_anchor` states, because `just check-plan` holds
-  the id to onebudgetspec's id pattern. A legacy budget's heading is its name.
+  GitHub's heading slug of `Budget <id>`, because this template's schema holds the id to
+  onebudgetspec's id pattern. A legacy budget's heading is its name.
 -#}
 {% if budgets %}
 ## Budgets

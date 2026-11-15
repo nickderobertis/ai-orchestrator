@@ -47,5 +47,8 @@ for argument in "$@"; do
 done
 [[ -n "$kind" ]] || defaults+=(--label kind=main)
 
+# The engine's check document names no project, so the launch check the launch config
+# registers (`scripts/plan-attestation-check.sh`) reads the plan this launch names from here.
+export ORCHESTRATOR_PLAN="${1:-}"
 # llmlint: ignore[tool_output_is_signal] Streaming the run as it goes is what an attached launch is for, and its validated launch failures name the input to correct; `--detach` is the spelling that returns one line.
 exec "$script_dir/onepipeline.sh" start "$@" ${defaults[@]+"${defaults[@]}"}

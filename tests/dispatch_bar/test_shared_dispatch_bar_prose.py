@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 from shared_dispatch_bar import (
+    APPENDIX,
     BASE_CONFIG,
     appendix_text,
     phrases_in_both,
@@ -19,8 +20,6 @@ from shared_dispatch_bar import (
 )
 from test_dispatch_appendix import DOWNSTREAM_CHECKS_ARE_NOT_JUDGED, REPORT_RATHER_THAN_EDIT
 from test_shared_dispatch_bar import PLANTED_SENTENCES
-
-from orchestrator.criteria_guard import APPENDIX
 
 
 def test_no_statement_of_dispatch_policy_stands_in_both_files() -> None:

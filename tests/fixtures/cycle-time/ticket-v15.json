@@ -1,0 +1,36 @@
+{
+  "schema": 15,
+  "root_cause": "cursor-skips-last-page",
+  "repository": "github.com/nickderobertis/some-service",
+  "created_by_run": "listing-run",
+  "owning_runs": [
+    "listing-run"
+  ],
+  "drafts": [
+    "drafts:listing-run/drafts/20260101T000000Z-cursor"
+  ],
+  "draft_sources": {
+    "drafts:listing-run/drafts/20260101T000000Z-cursor": "author node; node verify-cursor"
+  },
+  "transcripts": {
+    "drafts:listing-run/drafts/20260101T000000Z-cursor": "onepipeline transcript listing-run verify-cursor"
+  },
+  "basis": {
+    "github.com/nickderobertis/some-service": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "witnesses": [
+    "github.com/nickderobertis/some-service src/cursor.py:41 at 0123456789abcdef0123456789abcdef01234567"
+  ],
+  "verified_at": "2026-01-01T00:00:00Z",
+  "host": "verifier-01.build.example",
+  "priority_estimate": "medium",
+  "frequency": "intermittent",
+  "budget": {
+    "repository": "github.com/nickderobertis/some-service",
+    "file": "budgets.yaml",
+    "id": "cycle-time",
+    "threshold": 123,
+    "direction": "max"
+  },
+  "board_estimate": "medium"
+}

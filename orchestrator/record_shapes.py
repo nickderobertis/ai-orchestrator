@@ -1,7 +1,7 @@
 """The shapes a plan-store record here is read and named by, with no writer of a plan.
 
-A plan's project and task records are created by the pinned store itself —
-`orchestrator/plan_records.py` drives its `project create` and `task create` — so what is
+A plan's project and task records are created by the pinned store itself — its `project
+create` and `task create`, from this host's templates — so what is
 left here is what several readers share about a record's shape: the qualified-id and
 normalized-origin parsers, the cross-DAG reference, the reserved metadata prefix and the
 local Markdown layout's directory names. :func:`frontmatter` remains the renderer the
@@ -44,9 +44,7 @@ ENGINE_PREFIX = "onepipeline."
 
 #: The directories of a local-md root a record sits in: `<root>/projects/<project>.md`,
 #: `<root>/tasks/…` and `<root>/documents/<document>.md`. The store owns the layout; these
-#: names are what `orchestrator/plan_store.py` resolves a record's path and its root by, and
-#: what `orchestrator/plan_budgets.py` names a design document's directory by before the
-#: document exists.
+#: names are what `orchestrator/plan_store.py` resolves a record's path and its root by.
 PROJECTS_DIRECTORY = "projects"
 TASKS_DIRECTORY = "tasks"
 DOCUMENTS_DIRECTORY = "documents"
@@ -56,11 +54,7 @@ DOCUMENTS_DIRECTORY = "documents"
 #: what a clone URL carries beyond it, so both are dropped before the shape is asked.
 #: `onevcs` files a hosted repository under exactly this key, and its `resolve` answers
 #: an identity's `origin` in it, so what this recognizes is what that CLI would answer.
-#: Reconciled against both owners rather than trusted:
-#: `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` registers a real
-#: hosted scratch identity, writes a record through this shape, and reads the node's `repo`
-#: back out of the installed engine's own loader equal to the origin the installed `onevcs`
-#: answers. Each segment is held to the characters a host name, an owner and a repository
+#: Each segment is held to the characters a host name, an owner and a repository
 #: name are made of, because the value is promoted into a record other programs then read:
 #: whitespace, a query string or a control character in a segment is not an origin.
 _HOSTED_ORIGIN = re.compile(r"[A-Za-z0-9.-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
@@ -100,10 +94,8 @@ class QualifiedId(NamedTuple):
 def qualified_id(value: str) -> QualifiedId | None:
     """``value`` split into the source and native halves of a qualified id, or `None`.
 
-    The one parser for that shape in this repository, and the reason it sits in this module
-    rather than beside its first caller: `plan_store.qualified` refuses a project id that is
-    not one, and the writers of a `delivers` entry refuse a ticket id that is not one, and
-    this is the module they share. A second encoding of the same shape is a contract that
+    The one parser for that shape in this repository, kept in this shared module so that no
+    reader encodes it a second time: a second encoding of the same shape is a contract that
     drifts.
 
     A `delivers` entry is promoted into a record another program then resolves, so an
@@ -122,8 +114,8 @@ def hosted_origin(repo: str) -> str | None:
     engine reads a node's ``repo`` from that list's first entry and reserves the
     ``onepipeline.repo`` key for an identity a normalized origin cannot name, which is a
     local checkout `onevcs` knows by its path. This is the one place that shape is
-    decided, and :mod:`orchestrator.publication_guard` asks it of what `onevcs` answers
-    so the record a plan writes and the record `just check-plan` refuses agree.
+    decided, and `orchestrator/host_adoption_check.py` and the follow-up records ask it of
+    what `onevcs` and a record answer.
     """
     normalized = _CLONE_SCHEME.sub("", repo).removesuffix(".git")
     return normalized if _HOSTED_ORIGIN.fullmatch(normalized) else None

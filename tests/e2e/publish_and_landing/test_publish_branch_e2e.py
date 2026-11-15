@@ -877,7 +877,7 @@ def test_publish_branch_lands_a_branch_whose_merge_path_is_loud_on_both_pipes(
 ) -> None:
     """The output this host stopped silencing: far past one pipe buffer, on both streams.
 
-    `config/onevcs.rules.yml` used to prepend `env NEXTEST_STATUS_LEVEL=fail` to nine
+    The tracked rules file used to prepend `env NEXTEST_STATUS_LEVEL=fail` to nine
     gates, because an `onevcs` before 0.2.10 read a verifying child's stdout to EOF
     before it read stderr at all: a child that filled the 64 KiB stderr buffer wedged
     there forever and was reported as a *rejection*, twice failing complete work here.

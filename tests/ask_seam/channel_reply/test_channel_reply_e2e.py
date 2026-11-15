@@ -2,14 +2,13 @@
 
 The recipe is the engine's own submission verb, `onepipeline reply`, and everything it does
 with an envelope — binding a verdict by its correlation, refusing one no pending question
-holds, routing an envelope's halves, running the engine's envelope reviewer the launch config
-names before anything is appended, applying an edit to a run nothing drives, waiting on a driver
-that holds one — is the installed engine's and bus's, proven by their own suites. What these
-journeys prove is the **wiring**: that the recipe reaches that behaviour over runs `just
+holds, routing an envelope's halves, applying an edit to a run nothing drives, waiting on a
+driver that holds one — is the installed engine's and bus's, proven by their own suites. What
+these journeys prove is the **wiring**: that the recipe reaches that behaviour over runs `just
 orchestrate` really launched, under the bus configuration `config/onemessagebus.yaml` those
-launches recorded; that the envelope reviewer the launch config names is this repository's
-criteria bar and the engine's recorded passes key on this repository's bar fingerprint;
-and that the recipe's whole output is the engine's receipt and exit status. The journeys:
+launches recorded, and that the recipe's whole output is the engine's receipt and exit status.
+How the launch config's plan-edit hook judges an edit's task prose is
+`tests/e2e/planning/test_live_correction_e2e.py`'s. The journeys:
 
 * a `complete` command, and separately a completion verdict, close a settled run whose
   driver has exited: before the reply the real `just unfinished` and the real `Stop` hook
@@ -18,9 +17,6 @@ and that the recipe's whole output is the engine's receipt and exit status. The 
 * a ruling bound to a real question by its correlation answers it; the same ruling again,
   one naming a correlation nothing raised, and a commands-only envelope naming a
   correlation are each refused with nothing appended;
-* an envelope whose task prose the envelope reviewer refuses is refused whole with the
-  reviewer's reason — with and without a verdict half, on a run nothing drives and on a run a driver
-  holds — and nothing of it is appended, applied, journalled or remembered as a pass;
 * a valid edit is applied by the driver holding a run, or by the reply itself where nothing
   drives the run, and is recorded as the planner's when it names no author; an envelope
   read from a file and one read from stdin are both taken;
@@ -34,12 +30,6 @@ and that the recipe's whole output is the engine's receipt and exit status. The 
 * an envelope naming another node is applied beside a live note no turn takes, a note
   passing its `delivery_timeout_seconds` untaken is carried or, under `persist: false`,
   refused naming the deadline, and a carried note is taken back by a `withdraw-note`;
-* a novel whole task the judged review refuses is refused whole with that review's
-  findings, after exactly one judged turn;
-* a novel whole task whose judged turn answers nothing is not applied, because an unjudged
-  envelope never passes;
-* an identical envelope sent again under an unchanged bar passes from the pass cache,
-  spending no second judged turn;
 * two runs' envelopes, written to the per-run paths the manager allowlist grants and both
   written before either is sent, each reach only their own run.
 
@@ -53,9 +43,9 @@ llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This *is* the e
 journey here spends a real launch and is behind its own — this directory is an Nx project
 of its own, keyed on `askSeamChannelReply` and selected by directory, which
 `tests/ask_seam/AGENTS.md` states as the settled design and `tests/conftest.py` enforces.
-That key names, file by file, what these journeys were measured reading — the reviewer
-script and its module the engine runs as the launch config's envelope reviewer, the base
-config and the planner persona the bar it holds an envelope to is fingerprinted over, the
+That key names, file by file, what these journeys were measured reading — the review
+script the engine runs as the launch config's plan-edit hook, the base config and the
+planner persona its judge reads, the
 graphs and harness configs a launch and its one dispatch read, and the Stop hook and the
 `unfinished` view the completion journeys ask — and nothing wider, so an edit outside it
 replays a green this tier already earned and an edit inside it re-runs the journey that
@@ -86,7 +76,6 @@ from project_fixtures import helper, project_from_plan
 from waits import deadline, until
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_review
 from orchestrator.root import REPO_ROOT
 
 #: The wrapper a dispatched agent asks through, which is what raises the real question.
@@ -96,8 +85,8 @@ ASK_MANAGER = REPO_ROOT / "scripts" / "ask-manager.sh"
 FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
 
-#: The guard over the identities `ONEHARNESS_BIN_*` cannot reach. The judged tier the
-#: envelope reviewer spends a turn of goes through `oneharness.plan-review.toml`'s chain, whose
+#: The guard over the identities `ONEHARNESS_BIN_*` cannot reach. The judged review the
+#: plan-edit hook spends on an edit's task goes through its harness chain, whose
 #: Codex identities are doubled by the stand-in above and whose Claude ones are only
 #: reached by a chain that fell through — and where a billed turn and a free one look
 #: identical from a journey's assertions, this is what makes the difference loud.
@@ -106,9 +95,10 @@ PAID_PROVIDER_GUARD = helper("no-paid-provider")
 #: The settings file whose `Stop` entry the completion journeys run, as the harness runs it.
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 
-#: What the doubled provider answers a review turn with: a verdict that passes, in the
-#: shape `config/plan-review-verdict.schema.json` declares.
-PASSING_VERDICT = {"passes": True, "findings": []}
+#: What the doubled provider answers a review turn with: the judge-only run's supervisor
+#: decision, a pass. The plan checklist's llmlint batches are answered apart from it, every
+#: rule holding (`tests/e2e/fake_codex.py`).
+PASSING_VERDICT = {"completion": True, "reason": "the stand-in reviewer passes it"}
 
 #: A launching session these journeys state rather than inherit: this suite runs inside
 #: a dispatch whose own harness session would otherwise own the runs.
@@ -146,7 +136,7 @@ GATE_NODE = "gate"
 HELD_NODE = "held"
 
 #: What `just channel-reply` exits with for every refusal: the engine's `reply` exits 2,
-#: whether the channel, the author's grants, the envelope reviewer or the graph refused.
+#: whether the channel, the author's grants, the plan-edit hook or the graph refused.
 REPLY_REFUSED = 2
 
 #: The reply window a question is asked under while a journey answers it: long enough that
@@ -185,11 +175,9 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     # And the identities that seam cannot reach; see `PAID_PROVIDER_GUARD`.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
-    # The judged review turn the envelope reviewer spends on a novel whole task, scripted to pass;
-    # `_judged_turns` counts how many the doubled provider was asked for.
+    # The judged review the plan-edit hook spends on an added node's task, scripted to pass.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider's answer is scripted.
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(PASSING_VERDICT)])
-    environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "review-launches")
     environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     # Host state under the real `HOME` reaches a launch these journeys make, so a
     # sandbox is what makes them answer about this checkout.
@@ -278,17 +266,21 @@ def _launched(
 
 
 @contextlib.contextmanager
-def _gated(tmp_path: Path, run: RunId) -> Iterator[Replying]:
+def _gated(tmp_path: Path, oneharness_bin: str, run: RunId) -> Iterator[Replying]:
     """A launched run whose frontier is a human gate, and which nothing drives.
 
     Nothing is ever dispatched — `work` depends on the gate and nobody attests it — so this
     run costs a launch and no provider turn at all, and the launch's driver hands the run
     back at the gate: from then on nothing drives it, which `_undriven` asks the run itself.
+    An edit adding a node is judged by the plan-edit hook, whose judge turn the stand-in
+    answers through the real `oneharness`.
     """
     _require_just()
+    environment = _environment(tmp_path)
+    environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     launched = _launched(
         tmp_path,
-        _environment(tmp_path),
+        environment,
         run,
         [
             {"id": GATE_NODE, "kind": "human", "task": _task("Approve.")},
@@ -307,16 +299,20 @@ def _gated(tmp_path: Path, run: RunId) -> Iterator[Replying]:
 
 
 @pytest.fixture
-def replying(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Replying]:
+def replying(
+    tmp_path: Path, oneharness_bin: str, request: pytest.FixtureRequest
+) -> Iterator[Replying]:
     """A gated run nothing drives; see `_gated`."""
-    with _gated(tmp_path, _named(request, "channel-reply")) as launched:
+    with _gated(tmp_path, oneharness_bin, _named(request, "channel-reply")) as launched:
         yield launched
 
 
 @pytest.fixture
-def other_replying(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Replying]:
+def other_replying(
+    tmp_path: Path, oneharness_bin: str, request: pytest.FixtureRequest
+) -> Iterator[Replying]:
     """A second gated run beside `replying`, as another manager's would be."""
-    with _gated(tmp_path / "other", _named(request, "other-reply")) as launched:
+    with _gated(tmp_path / "other", oneharness_bin, _named(request, "other-reply")) as launched:
         yield launched
 
 
@@ -498,20 +494,9 @@ def _nodes(replying: Replying) -> list[str]:
     ]
 
 
-def _judged_turns(replying: Replying) -> int:
-    """How many review turns the doubled provider has been asked for so far.
-
-    Read off the attempt log the stand-in appends to per launch — the only moment a
-    journey can prove the provider was reached — because a judged turn spent and a pass
-    found in the cache look the same from the recipe's own answer.
-    """
-    log = Path(replying.environment["FAKE_CODEX_ATTEMPT_LOG"])
-    return len(log.read_text(encoding="utf-8").splitlines()) if log.is_file() else 0
-
-
 # `Any` in the envelopes and commands below because an envelope is the channel's open JSON
 # contract: its values are whatever JSON each op carries, and the engine, the bus and the
-# envelope reviewer each read the members they own.
+# plan-edit hook each read the members they own.
 def _send(
     replying: Replying,
     envelope: dict[str, Any],
@@ -520,8 +505,8 @@ def _send(
 ) -> subprocess.CompletedProcess[str]:
     """Send one envelope as a manager types it: piped into `just channel-reply <run>`.
 
-    `environment` replaces the run's own for this one send, which is how a journey scripts
-    what the doubled reviewer answers the envelope reviewer's judged turn, or shortens the wait.
+    `environment` replaces the run's own for this one send, which is how a journey shortens
+    the wait.
     """
     return _just(
         "channel-reply",
@@ -554,37 +539,6 @@ def _refused(sent: subprocess.CompletedProcess[str]) -> str:
     )
     assert sent.stdout == "", f"a refused reply printed a receipt anyway: {sent.stdout}"
     return sent.stderr
-
-
-def _novel_task(replying: Replying, subject: str) -> str:
-    """A whole task nothing holds a pass for, which the deterministic bar takes.
-
-    Carrying the run's own id and `subject`, so no earlier send anywhere — from this checkout
-    or from another journey of this run — can already have cleared it: the judged turn is
-    owed, which is what the journeys using it are about.
-    """
-    return "\n\n".join(
-        (
-            f"## What\n\nAdd the {subject} run {replying.run} needs and the test that drives it.",
-            "## Why\n\nThe user cannot complete a purchase without it.",
-            "## Acceptance criteria\n\n- The finished tree carries an assertion whose "
-            "subject is that behaviour, so removing it fails.",
-            "## Additional info\n\nRun `just test` over what you changed, and commit it.",
-        )
-    )
-
-
-def _adding(node: str, task: str, *deps: str) -> dict[str, Any]:
-    """An envelope adding one engineer node, with `task` as its prose."""
-    return {
-        "version": 3,
-        "commands": [
-            {
-                "op": "add",
-                "node": {"id": node, "persona": "engineer", "deps": list(deps), "task": task},
-            }
-        ],
-    }
 
 
 def _settling(node: str, *deps: str) -> dict[str, Any]:
@@ -726,70 +680,6 @@ def test_a_ruling_binds_to_its_question_and_one_no_pending_question_holds_is_ref
         assert _nodes(driven) == nodes, "a refused reply changed the graph"
     finally:
         _reaped(asking)
-
-
-#: The amendment this refusal was written from, verbatim as it was sent during the run it
-#: cost: the checks it names run on the host after publication, so the agent step it binds
-#: has ended before any of them start.
-UNSATISFIABLE_AMENDMENT = (
-    "The finished branch merges cleanly into its base and its change request's "
-    "required checks pass."
-)
-
-#: The verdict half that rides beside the refused amendment in its second spelling.
-RIDING_VERDICT = {"completion": False, "message": "Amend the bar, then carry on."}
-
-
-def _refused_whole(replying: Replying, node: str) -> None:
-    """Send the unsatisfiable amendment bare and beside a verdict, twice each, and hold all four.
-
-    Each is refused with the envelope reviewer's own reason and exit 2, and nothing of it reaches
-    the run: no record on the command or reply queue, no record in the journal — so no edit
-    applied, no verdict delivered, no completion requested — no change to the graph, and no
-    judged turn spent on a text the free tier refuses. Nor is any of it remembered as a
-    pass: the same envelope sent again is judged again, and refused again for the reason.
-    """
-    amendment = {"op": "amend", "id": node, "text": UNSATISFIABLE_AMENDMENT}
-    bare = {"version": 3, "commands": [amendment]}
-    with_verdict = {**bare, **RIDING_VERDICT}
-    replies, commands = _records(replying, "replies"), _records(replying, "commands")
-    written = len(_recorded(replying, *WRITTEN_BY_A_REPLY))
-    nodes = _nodes(replying)
-    turns = _judged_turns(replying)
-
-    for envelope in (bare, with_verdict, bare, with_verdict):
-        said = _refused(_send(replying, envelope))
-
-        assert f"the amendment for node '{node}'" in said, said
-        assert "required checks pass" in said, said
-
-    assert _records(replying, "commands") == commands, "a refused envelope reached the queue"
-    assert _records(replying, "replies") == replies, "a refused verdict reached the queue"
-    assert len(_recorded(replying, *WRITTEN_BY_A_REPLY)) == written, (
-        "a refused envelope left a record in the run's journal"
-    )
-    assert _nodes(replying) == nodes, "a refused envelope changed the graph"
-    assert _judged_turns(replying) == turns, "a text the free tier refuses was put to the judge"
-
-
-def test_task_prose_the_envelope_reviewer_refuses_is_refused_whole_where_nothing_drives_the_run(
-    replying: Replying,
-) -> None:
-    """The envelope reviewer the launch config names binds the reply that would apply an edit.
-
-    With nothing driving the run, an accepted edit is applied by the reply itself, so this
-    is the path on which a reviewer that ran after the apply would be no review at all.
-    """
-    assert _unfinished_and_undriven(replying), "the premise is a run nothing drives"
-
-    _refused_whole(replying, WORK_NODE)
-
-
-def test_task_prose_the_envelope_reviewer_refuses_is_refused_whole_on_a_run_a_driver_holds(
-    driven: Replying,
-) -> None:
-    """The same refusal on the queued path: nothing of it reaches the driver's queue."""
-    _refused_whole(driven, HELD_NODE)
 
 
 def _authored_by_the_planner(replying: Replying, node: str) -> str:
@@ -1273,147 +1163,6 @@ def test_a_completion_verdict_closes_a_settled_run_whose_driver_has_exited(
     assert "commands" not in receipt, receipt
     _completion_requested(settled, reason)
     _no_longer_owed(settled)
-
-
-#: What the doubled reviewer finds in a task it refuses, in the verdict schema's shape. The
-#: `why` is distinctive so the refusal can be read for the reviewer's own words.
-JUDGED_FINDING = {
-    "criterion": "- The finished tree carries an assertion whose subject is that behaviour",
-    "why": "names no journey a reader could run to watch that assertion fail",
-}
-
-
-def test_a_novel_task_the_judged_review_refuses_is_refused_whole_with_its_findings(
-    replying: Replying,
-) -> None:
-    """The judged tier binds through the reply as the deterministic one does.
-
-    A novel whole task clears the free tier and is put to one judged turn, and here the
-    reviewer refuses it. Nothing is applied: the recipe exits refused with the review's
-    finding on stderr, and the run journals no edit. And the refusal is not remembered as
-    a pass: the same envelope, sent again to a reviewer that passes it, is judged again
-    before it is applied.
-    """
-    envelope = _adding("reviewed", _novel_task(replying, "refund"), GATE_NODE)
-    environment = {
-        **replying.environment,
-        "FAKE_CODEX_ANSWERS": json.dumps(
-            [json.dumps({"passes": False, "findings": [JUDGED_FINDING]})]
-        ),
-    }
-
-    said = _refused(_send(replying, envelope, environment=environment))
-
-    assert "was refused by its judged review" in said, said
-    assert JUDGED_FINDING["why"] in said, said
-    assert _judged_turns(replying) == 1, "the refusal did not come from one judged turn"
-    assert not _committed(replying, "reviewed"), "a refused envelope was applied"
-
-    passed = _receipt(_send(replying, envelope))
-
-    assert passed["state"] == "applied", passed
-    assert _judged_turns(replying) == 2, "the refused envelope was passed without being judged"
-    assert len(_committed(replying, "reviewed")) == 1
-
-
-def test_a_novel_task_whose_judged_turn_answers_nothing_is_never_applied(
-    replying: Replying,
-) -> None:
-    """No verdict is not a pass: the envelope reviewer exits unjudged, and nothing is applied.
-
-    Every launch of the doubled reviewer dies after it starts, so the review chain ends
-    with no verdict at all. `orchestrator.envelope_review` exits unjudged rather than
-    reading that either way, and the reply holds an unjudged envelope back exactly as it
-    holds a refused one: nothing is applied, and the recipe says the prose could not be
-    judged, not that it was refused. Nor is anything remembered: the same envelope, sent
-    again once the reviewer answers, is judged before it is applied.
-    """
-    envelope = _adding("unjudged", _novel_task(replying, "invoice"), GATE_NODE)
-    environment = {**replying.environment, "FAKE_CODEX_UNAVAILABLE_ATTEMPTS": "1000"}
-
-    said = _refused(_send(replying, envelope, environment=environment))
-
-    assert "could not be judged" in said, said
-    assert "was refused" not in said, said
-    reached = _judged_turns(replying)
-    assert reached >= 1, "the reviewer was never reached, so nothing was tested"
-    assert not _committed(replying, "unjudged"), "an unjudged envelope was applied"
-
-    answered = _receipt(_send(replying, envelope))
-
-    assert answered["state"] == "applied", answered
-    assert _judged_turns(replying) == reached + 1, (
-        "the unjudged envelope was passed without being judged once the reviewer answered"
-    )
-
-
-def test_a_live_edit_is_never_asked_the_lifecycle_question(
-    replying: Replying, tmp_path: Path
-) -> None:
-    """A live edit's judged turn is held to the plan bar without the lifecycle question.
-
-    A live edit shows its reviewer no repository and no steps, so whether it is a
-    lifecycle node cannot be read off its fields, and the question asked of one alone —
-    whether its criteria change a file of its repository — is not rendered into its
-    prompt. What is proven is the prompt the real `oneharness` sent for the one judged
-    turn the reply spent, read back from the provider's own log: it carries the plan
-    bar's question and the live-edit frame, and none of the lifecycle question. The
-    criteria here describe only work outside every repository, the very shape that
-    question refuses, and the reply is applied.
-    """
-    log = tmp_path / "edit-prompts.jsonl"
-    environment = {**replying.environment, "FAKE_CODEX_PROMPT_LOG": str(log)}
-    task = "\n\n".join(
-        (
-            f"## What\n\nPrepare the mirror run {replying.run} purges, in a host-local directory.",
-            "## Why\n\nThe purge cannot run until the mirror is ready.",
-            "## Acceptance criteria\n\n- The mirror's history under the host-local "
-            "directory carries none of the paths the task lists.",
-        )
-    )
-
-    sent = _receipt(_send(replying, _adding("mirror", task, GATE_NODE), environment=environment))
-
-    assert sent["state"] == "applied", sent
-    assert _judged_turns(replying) == 1, "the novel task was not put to one judged turn"
-    (prompt,) = [
-        " ".join(json.loads(line)["prompt"].split())
-        for line in log.read_text(encoding="utf-8").splitlines()
-    ]
-    assert " ".join(plan_review.LIVE_EDIT_FRAME.split()) in prompt, prompt
-    assert " ".join(plan_review.LIFECYCLE_NO_DIFF_QUESTION.split()) not in prompt, prompt
-
-
-def test_an_identical_review_under_an_unchanged_bar_passes_from_the_runs_record(
-    replying: Replying,
-) -> None:
-    """One judged turn per reviewed document under one bar, however often it is offered.
-
-    The engine records a pass of its envelope reviewer under the run's own
-    `validator-passes/`, keyed on the document it judged — the edit and the plan it lands
-    in — and on what `scripts/envelope-review-bar.sh` prints. So a novel whole task spends
-    the judged turn once; dropping the node it added puts the plan back as it was, and the
-    same envelope sent again is the same document under the same bar, passed from that
-    record: the doubled reviewer is not asked again, while both sends are applied. Its
-    record is keyed on content unique to this journey, so no other send can be passed by it.
-    """
-    envelope = _adding("cached", _novel_task(replying, "route"))
-
-    first = _receipt(_send(replying, envelope))
-
-    assert first["state"] == "applied", first
-    assert _judged_turns(replying) == 1, "the first send did not spend exactly one turn"
-
-    dropped = {"version": 3, "commands": [{"op": "drop", "id": "cached", "dependents": "detach"}]}
-    assert _receipt(_send(replying, dropped))["state"] == "applied"
-    second = _receipt(_send(replying, envelope))
-
-    assert second["state"] == "applied", second
-    assert _judged_turns(replying) == 1, (
-        "the identical document under an unchanged bar was judged again rather than "
-        "passed from the record the first send left"
-    )
-    assert len(_committed(replying, "cached")) >= 2
 
 
 #: The manager's allowlist, whose one file-write grant says where a reply's envelope goes.

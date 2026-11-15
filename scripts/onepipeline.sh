@@ -45,7 +45,7 @@
 # A launch also names this host's launch config, `config/onepipeline.launch.yaml`, which
 # states every launch-level setting the engine reads from one — the bus configuration, the
 # dispatch-env hook, the pool-maintenance schedule, the template root, the rendered-only
-# check, the run-end hooks, the drafting graph and the envelope reviewer — so no flag for
+# check, the run-end hooks, the drafting graph, the launch check and the plan-edit hook — so no flag for
 # any of them is injected here; the document's header says what each is for.
 #
 # A launch also has to carry ORCHESTRATOR_ASK_MANAGER, the path of
@@ -85,8 +85,8 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 export_template_root onepipeline || exit "$?"
 
 # Only a launch starts harnesses; a read-only view must not create a directory or
-# refuse on an indirection it never uses. `launching` carries this arm's answer past the
-# design-approval gate below, so which verbs are a launch is decided here once.
+# refuse on an indirection it never uses. `launching` carries this arm's answer below, so
+# which verbs are a launch is decided here once.
 launching=false
 case "${1:-}" in
     start | adopt)
@@ -141,21 +141,6 @@ if [ "${1:-}" = publish-branch ] || [ "${1:-}" = repo-recover ] || [ "${1:-}" = 
     export_lock_timeout onepipeline || exit $?
 fi
 
-# What a plan is put in front of a person as is its design document, and their approval
-# of that document is what gates dispatch. So a launch asks before it dispatches: this is
-# the only place every shape of `just orchestrate` passes through, and refusing here is
-# what makes the gate a gate rather than a habit. `adopt` is deliberately outside it —
-# adoption attaches a fresh driver to a run whose plan was already gated when it started,
-# and there is no project on its command line to ask about.
-#
-# The launch's own arguments are handed over as they were typed rather than parsed here;
-# `orchestrator/design_approval.py` states why, and which of them it then asks the store
-# about. Its exit status is carried out unchanged: 1 is the refusal, 2 is a plan store
-# that could not be read at all.
-if [ "${1:-}" = start ]; then
-    uv run orchestrator-launch-gate "${@:2}" || exit "$?"
-fi
-
 # The follow-up drafting command every dispatch and the monitor draft with, this checkout's
 # own `scripts/follow-up-draft.sh` over `onefollowup draft`; it reaches a dispatch only by
 # inheritance, so the launch is the last place that can put it there.
@@ -172,10 +157,6 @@ fi
 # spawns — `oneagentgraph health` among them — is this checkout's pinned one. A `flow` is
 # left the PATH it was given, as a launch is: its program is a launcher that resolves its
 # own tools, and that PATH is the caller's to choose.
-#
-# Resolved *after* the design-approval gate above, so a launch that gate refuses is
-# refused for its plan rather than for the install; an `adopt`, which runs no gate, and
-# every view reach the refusal below directly.
 engine="${script_dir%/scripts}/node_modules/.bin/onepipeline"
 if [ ! -x "$engine" ]; then
     echo "onepipeline: this checkout has no executable engine at $engine; run 'just bootstrap' to install the pinned releases from bun.lock, then retry" >&2
@@ -214,7 +195,7 @@ fi
 # Every launch names this host's launch config, `config/onepipeline.launch.yaml`, and no
 # flag that document carries: the bus configuration, the dispatch-env hook, the
 # pool-maintenance schedule, the template root, the rendered-only check, the run-end hooks,
-# the drafting graph and the envelope reviewer are the document's to state, and the engine
+# the drafting graph, the launch check and the plan-edit hook are the document's to state, and the engine
 # reads them once at the launch and retains them in the launch record. A caller who names a
 # setting's own flag keeps theirs — the engine lets a flag beat the document's key, a blank
 # one included — and one who names a launch config of their own keeps that instead. `start`
@@ -242,7 +223,7 @@ fi
 
 # A flow keeps a planner channel of its own, which `ask` raises a launcher's questions on
 # when no run is named, so it is kept under the same bus configuration a run's is.
-# `scripts/launch-flow.sh` is the one caller. Only the flags before `--` are the verb's;
+# `just plan` and `just finish-plan` run one. Only the flags before `--` are the verb's;
 # everything after it is the program the flow runs, so a `--bus-config` there is not this
 # one. A caller who names one keeps theirs.
 if [ "${1:-} ${2:-}" = "flow run" ]; then

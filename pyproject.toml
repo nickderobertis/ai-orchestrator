@@ -7,14 +7,14 @@ requires-python = ">=3.13"
 # classifier is the truthful statement of that, and the one PyPI refuses an upload over.
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
-    "onetaskgraph-sdk==0.14.14",
+    "onetaskgraph-sdk==0.14.16",
     "onebudgetspec-cli==0.2.2",
     "oneagentgraph-cli==0.13.0",
     "oneharness-cli==0.26.1",
     "onejudge==0.23.1",
     "onemessagebus-cli==0.11.1",
-    "onevcs-cli==0.66.0",
-    "onefollowup-cli==0.4.0",
+    "onevcs-cli==0.67.0",
+    "onefollowup-cli==0.5.0",
     # A library rather than a producer's wheel: the one YAML reader this package has,
     # for composing the workspaces file `just repos-apply` installs. Pinned exactly like
     # the wheels so the lock and this list agree; `tests/test_host_installs.py` states
@@ -23,53 +23,12 @@ dependencies = [
 ]
 
 [project.scripts]
-# The seven commands this repository still owns. Every other verb is a thin `just`
-# wrapper over a published CLI. The first reads a plan project against the review bar
-# each of its nodes resolves to, which no published CLI knows how to do: the bar is
-# composed from this host's own base config and the role `onepipeline` links, and the
-# plan is refused before a launch spends a dispatch on a node its own judge would fail
-# on procedure.
-orchestrator-check-plan = "orchestrator.plan_check:main"
-# The second spends the judged turn that clears a plan's authored content: `check-plan`
-# refuses a task carrying no review record for what it currently says, and this is what
-# records one. It is a command of this repository rather than a wrapper because the
-# record it writes has to be written by this repository's own code — see
-# `orchestrator/plan_review.py` for why that is structural rather than a convention.
-orchestrator-review-plan = "orchestrator.plan_review:main"
-# The third is the step between them: it copies a cleared plan onto the board this
-# repository launches from, refusing one whose criteria nothing has reviewed before the
-# destination is asked to hold it. It is a command of this repository rather than a bare
-# `onetaskgraph project copy` because that pre-flight has to ask the same question
-# `check-plan` asks, of the same code — a second implementation of the review key would
-# disagree with the first the moment either moved.
-orchestrator-copy-plan = "orchestrator.plan_copy:main"
-# The fourth records the user's approval of the design document a plan is reviewed as,
-# which is the thing a person can actually judge and so the thing put in front of them.
-# It is a command of this repository because the record is keyed on the design-doc template
-# as this checkout's own template root resolves it — see `orchestrator/design_approval.py`.
-# Once recorded it completes the plan's design-review task for that version, releasing the
-# plan's hold — `orchestrator/design_review.py`.
-orchestrator-approve-design = "orchestrator.design_review:approve_main"
-# The fifth is the other half of that gate and is not a verb anybody types: every launch
-# this repository makes goes through it, and it refuses a plan whose design document is
-# missing or unapproved before `onepipeline start` is reached.
-orchestrator-launch-gate = "orchestrator.design_approval:gate_main"
-# The sixth answers where a destination holds a plan `just finish-plan` copied into it,
-# and the one design document beside it — the two things a person then opens. Neither
-# address can be composed from this side: a destination decides its own native ids and
-# where its records live, so both are read back out of it through the origin stamp the
-# store writes onto every record it creates by copying.
-orchestrator-plan-locations = "orchestrator.plan_locations:main"
-# The seventh composes the workspaces file `just repos-apply` installs — the tracked
-# `config/onevcs.workspaces.yml` overlaid by the host's own file outside every checkout —
-# so a host sizes its pool where its identities already live rather than in a tracked
-# file every host shares; `orchestrator/workspaces_overlay.py` states the overlay rule.
+# The one command this repository still owns: it composes the workspaces file `just
+# repos-apply` installs — the tracked `config/onevcs.workspaces.yml` overlaid by the host's
+# own file outside every checkout — so a host sizes its pool where its identities already
+# live rather than in a tracked file every host shares; `orchestrator/workspaces_overlay.py`
+# states the overlay rule. Every other verb is a thin `just` wrapper over a published CLI.
 orchestrator-workspaces-overlay = "orchestrator.workspaces_overlay:main"
-# The eighth is the design-review task's two ends: `raise`, `just finish-plan`'s step that
-# asks for the board copy's document to be read and approved, and `adapter`, the trusted
-# approval authority `.onepipeline/config.yaml` names, which the engine runs when that task
-# is completed — `orchestrator/design_review.py`.
-orchestrator-design-review = "orchestrator.design_review:main"
 
 [dependency-groups]
 dev = [

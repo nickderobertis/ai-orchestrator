@@ -21,7 +21,6 @@
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/config/onetaskgraph.version",
-      "{workspaceRoot}/orchestrator/human_items.py",
       "{workspaceRoot}/orchestrator/run_reading.py",
       "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/config/onepipeline.version",

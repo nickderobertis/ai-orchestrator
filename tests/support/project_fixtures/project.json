@@ -15,19 +15,10 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/e2e/project_fixtures.py",
-      "{workspaceRoot}/orchestrator/accepted_opaque.py",
-      "{workspaceRoot}/orchestrator/design_approval.py",
-      "{workspaceRoot}/orchestrator/design_chain.py",
       "{workspaceRoot}/orchestrator/npm_installs.py",
-      "{workspaceRoot}/orchestrator/plan_budgets.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
-      "{workspaceRoot}/orchestrator/plan_units.py",
-      "{workspaceRoot}/orchestrator/plan_records.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
-      "{workspaceRoot}/orchestrator/publication_guard.py",
       "{workspaceRoot}/orchestrator/root.py",
-      "{workspaceRoot}/orchestrator/spike_plan.py",
-      "{workspaceRoot}/orchestrator/task_body.py",
       "{projectRoot}/project.json"
     ]
   },

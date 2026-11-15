@@ -3,12 +3,6 @@
 # analyses what the test targets that `budgets` depends on recorded during their normal
 # run (`tests/budget_telemetry.py`), reporting the figure and its breakdown. This file is
 # the one statement of each threshold.
-#
-# A budget labelled `planning` is about one planning flow the way `cycle-time` is about one
-# landed change, so no push gate and no Nx target selects it: `scripts/finish-plan.sh`
-# checks it over the flow it has just finished, with `PLAN_CHECKLIST_FLOW` naming the
-# flow's draft run and `PLAN_CHECKLIST_PROJECT` its plan project, and an overrun warns
-# without refusing the plan. Its command reads that flow's own run records.
 schema_version: 1
 budgets:
   - id: lost-turn-surface-chars
@@ -20,55 +14,6 @@ budgets:
     unit: characters
     direction: max
     threshold: 400
-  - id: plan-level-prompt-chars
-    description: >-
-      Characters of the plan-level prompt `just review-plan` composes for a realistic
-      44-node, 52-budget plan. It protects the room that prompt needs inside the smallest
-      context window a candidate of the plan-level role answers in.
-    measure: reported
-    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
-    unit: characters
-    direction: max
-    threshold: 200000
-  # llmlint: ignore-block[budgets_track_product_owner_outcomes] The only budget bounding how the plan-level prompt grows with a plan's size: the total is measured on one 44-node fixture, whose ceiling would not catch a per-node regression of more than twice, so this is the scaling outcome a plan author relies on rather than a part the total already guards.
-  - id: plan-level-prompt-chars-per-node
-    description: >-
-      Characters one node costs the plan-level prompt, at the costliest node of a realistic
-      plan. It protects how fast that prompt grows with a plan's node count, which keeps a
-      plan of any size reviewable however long its task bodies are.
-    measure: reported
-    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
-    unit: characters
-    direction: max
-    threshold: 1600
-  # llmlint: ignore-end[budgets_track_product_owner_outcomes]
-  # This repository's orchestrator project keeps every test under tests/ and every fixture
-  # under tests/fixtures, and orchestrator/ holds the package and, under budgets/, only the
-  # design document graph's own measurement below; the budgets above are measured from
-  # tests/ too, through tests/budget_telemetry.py.
-  # llmlint: ignore-block[budgets_scoped_to_minimal_tree] see above
-  - id: plan-checklist-added-seconds
-    description: >-
-      Seconds one planning flow waits on the plan checklist beyond its planners' reviewer,
-      read off the harness's recorded judge time. It protects how long planning takes.
-    labels: [host, planning]
-    measure: reported
-    command: ["uv", "run", "--directory", "..", "python", "-m", "orchestrator.plan_checklist_budgets"]
-    unit: seconds
-    direction: max
-    threshold: 400
-  - id: plan-checklist-tokens
-    description: >-
-      Harness tokens, input plus output as oneharness records them, that the plan checklist
-      spends over one planning flow: its draft and finalize planner dispatches and its `just
-      review-plan` run. It protects the subscription quota planning draws on.
-    labels: [planning]
-    measure: reported
-    command: ["uv", "run", "--directory", "..", "python", "-m", "orchestrator.plan_checklist_budgets"]
-    unit: tokens
-    direction: max
-    threshold: 3000000
-  # llmlint: ignore-end[budgets_scoped_to_minimal_tree]
   - id: design-doc-dag-label-size
     description: >-
       Smallest on-screen label size of the Planned tasks graph a design document opens with,
@@ -91,24 +36,3 @@ budgets:
     direction: max
     threshold: 1350
   # llmlint: ignore-end[budgets_track_product_owner_outcomes]
-  - id: spike-brief-delivery-seconds
-    description: >-
-      Seconds from a plan's spikes becoming eligible until the manager is handed the readable
-      spike brief link, split into writing, board publication and channel delivery. It
-      protects the time people have to stop an unneeded measurement before it spends quota.
-    measure: reported
-    command: ["uv", "run", "--directory", "..", "python", "-m", "orchestrator.spike_brief_budgets", "--measure", "spike-brief-delivery-seconds"]
-    unit: seconds
-    direction: max
-    threshold: 300
-    labels: [host, planning]
-  - id: spike-brief-model-tokens
-    description: >-
-      Input plus output tokens one spike brief spends on both sides of its conversation,
-      failed attempts included. It protects the subscription quota planning draws on.
-    measure: reported
-    command: ["uv", "run", "--directory", "..", "python", "-m", "orchestrator.spike_brief_budgets", "--measure", "spike-brief-model-tokens"]
-    unit: tokens
-    direction: max
-    threshold: 100000
-    labels: [host, planning]

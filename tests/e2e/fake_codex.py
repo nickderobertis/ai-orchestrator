@@ -122,8 +122,7 @@ class Usage(TypedDict):
     output_tokens: int
 
 
-#: What every billed turn of this provider bills; `tests/e2e/spike_brief/backend.py` bills its
-#: controlled turns the same figures by reading this one.
+#: What every billed turn of this provider bills.
 TURN_USAGE = Usage(input_tokens=4, cached_input_tokens=0, output_tokens=1)
 
 

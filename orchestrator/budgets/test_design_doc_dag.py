@@ -243,6 +243,49 @@ def test_an_svg_stating_no_positive_size_is_refused(tmp_path: Path, drawn: str) 
         design_doc_dag.svg_size(written, "plan-4")
 
 
+def test_a_graph_answer_is_read_as_its_units_and_direction() -> None:
+    answered = json.dumps(
+        {"direction": "TB", "nodes": [{"group": "API"}, {"group": "API"}, {"group": "Docs"}, {}]}
+    )
+    assert design_doc_dag.graph_shape(answered) == (2, "TB")
+
+
+@pytest.mark.parametrize(
+    "answered",
+    [
+        "not json",
+        "[]",
+        json.dumps({"nodes": "x", "direction": "TB"}),
+        json.dumps({"nodes": [1], "direction": "TB"}),
+        json.dumps({"nodes": []}),
+        json.dumps({"nodes": [{"group": ["API"]}], "direction": "TB"}),
+    ],
+)
+def test_a_graph_answer_of_another_shape_is_refused_naming_the_repair(answered: str) -> None:
+    with pytest.raises(Unmeasured, match="re-provision the checkout"):
+        design_doc_dag.graph_shape(answered)
+
+
+def test_a_task_create_answer_is_read_as_the_one_id_it_names() -> None:
+    answered = json.dumps({"items": [{"id": "dagsource:route"}], "errors": []})
+    assert design_doc_dag.created_id(answered) == "dagsource:route"
+
+
+@pytest.mark.parametrize(
+    "answered",
+    [
+        "not json",
+        "[]",
+        json.dumps({"items": []}),
+        json.dumps({"items": [{"id": ""}]}),
+        json.dumps({"items": [{"id": "a:b"}, {"id": "a:c"}]}),
+    ],
+)
+def test_a_task_create_answer_naming_no_one_id_is_refused(answered: str) -> None:
+    with pytest.raises(Unmeasured, match="re-provision the checkout"):
+        design_doc_dag.created_id(answered)
+
+
 def test_a_failing_command_is_refused_naming_its_exit_and_repair() -> None:
     with pytest.raises(Unmeasured, match=r"sh -c exit 3 exited 3: .*; repair it"):
         design_doc_dag.run(["sh", "-c", "exit 3"], "repair it")

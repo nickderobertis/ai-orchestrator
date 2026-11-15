@@ -154,7 +154,7 @@ def setup_repo(
     shutil.copy2(REPO_ROOT / "scripts" / "host-sweep.sh", scripts / "host-sweep.sh")
     # The last thing session setup runs is `just repos-bootstrap`, which provisions the
     # registered sibling checkouts' gates — through the recipe, the script, and the
-    # reader of the tracked checkout list, so all three are part of a repo this script
+    # reader of the host's checkout list, so all three are part of a repo this script
     # can be run in. `HOME` is `tmp_path` in every journey here, so every listed `~/`
     # path is absent and the recipe skips each one: no journey here runs a sibling's
     # bootstrap, and the report it leaves says so.
@@ -169,8 +169,9 @@ def setup_repo(
     manifest, lock = engine_manifest_and_lock()
     (repo / "package.json").write_text(manifest, encoding="utf-8")
     (repo / "bun.lock").write_text(lock, encoding="utf-8")
-    # A checkout list of `~/` paths, which `HOME` being `tmp_path` leaves absent.
-    (config / "onevcs.checkouts").write_text("~/no-such-sibling\n", encoding="utf-8")
+    # The checkout list `setup_environment` names, of a `~/` path the `HOME` that is
+    # `tmp_path` leaves absent: the suite's configuration home holds no host list.
+    checkout_list(tmp_path).write_text("~/no-such-sibling\n", encoding="utf-8")
     # Every adopted release is copied, so a further pinned tool needs no fixture edit;
     # the parameters below then restate only what a journey deliberately moves.
     for declared in (REPO_ROOT / "config").glob("*.version"):
@@ -193,6 +194,11 @@ def run_setup(
     )
     await_host_sweep(tmp_path)
     return setup
+
+
+def checkout_list(tmp_path: Path) -> Path:
+    """The checkout list session setup's `repos-bootstrap` reads in a journey's sandbox."""
+    return tmp_path / "onevcs.checkouts"
 
 
 def setup_environment(tmp_path: Path, *, path: str | None = None) -> dict[str, str]:
@@ -224,6 +230,8 @@ def setup_environment(tmp_path: Path, *, path: str | None = None) -> dict[str, s
         "ASDF_BUN_VERSION": bun_version,
         "ASDF_DATA_DIR": os.environ.get("ASDF_DATA_DIR", str(Path.home() / ".asdf")),
         "HOME": str(tmp_path),
+        # The list `setup_repo` writes, since no tracked list stands in for the host's.
+        "ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS": str(checkout_list(tmp_path)),
         # Named beside `HOME` rather than derived from it: the suite exports
         # `ONEVCS_HOME` to a copy of the host's root (`tests/onevcs_state_snapshot.py`),
         # and that export would otherwise win over the derivation this sandbox

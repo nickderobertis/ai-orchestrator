@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # The ONE source of this checkout's host credentials, run through scripts/dispatch-env.sh
 # by scripts/onepipeline.sh at driver start and by scripts/dispatch-env-hook.sh before
-# every node-scope dispatch, and sourced by scripts/plan.sh, so the names in the
+# every node-scope dispatch, and sourced by scripts/plan-store.sh, so the names in the
 # gitignored `.env` reach every dispatch. `scripts/telemetry-server.sh` also sources
 # it so supervisory writes from the DAG view and read API have board credentials.
 #

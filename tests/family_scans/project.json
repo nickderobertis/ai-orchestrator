@@ -16,7 +16,6 @@
     "support-plan-fixture-source",
     "support-plan-root-variable",
     "support-plan-sources",
-    "support-published-tools",
     "support-registered-checkouts",
     "support-short-state",
     "support-waits"
@@ -33,7 +32,6 @@
       "{workspaceRoot}/personas/**/*",
       "{workspaceRoot}/scripts/**/*",
       "{workspaceRoot}/templates/**/*",
-      "{workspaceRoot}/tests/test_plan_budgets_template.py",
       "{workspaceRoot}/tests/family_scans/**/*",
       "{workspaceRoot}/justfile"
     ]

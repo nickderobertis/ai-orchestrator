@@ -1,0 +1,62 @@
+{
+  "name": "planning",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/planning",
+  "tags": [
+    "scope:planning",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-fake-backend",
+    "support-fake-codex",
+    "support-follow-up-variables",
+    "support-harness-indirections",
+    "support-no-paid-provider",
+    "support-nx-workspace",
+    "support-project-fixtures",
+    "support-scratch-identity",
+    "support-short-state",
+    "support-waits"
+  ],
+  "//": "llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] planningWorkspace keys this target on config/, graphs/, personas/, templates/, scripts/ and orchestrator/ whole because every journey here copies this checkout and runs the planning road in the copy, whose recipes, templates, review and launch gate read each of those trees as a whole: a key narrower than that copy would replay a verdict over files that changed it.",
+  "namedInputs": {
+    "planningWorkspace": [
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/.gitignore",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/.onepipeline/config.yaml",
+      "{workspaceRoot}/oneharness*.toml",
+      "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/graphs/**/*",
+      "{workspaceRoot}/personas/**/*",
+      "{workspaceRoot}/templates/**/*",
+      "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{projectRoot}/**/*"
+    ]
+  },
+  "// end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]",
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/planning --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "planningWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ],
+      "outputs": []
+    }
+  }
+}

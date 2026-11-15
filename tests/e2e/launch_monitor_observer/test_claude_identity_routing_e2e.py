@@ -95,11 +95,6 @@ CLAUDE_ROLE_CONFIGS = tuple(
 DISPATCH_ENVIRONMENT = REPO_ROOT / "scripts" / "dispatch-env.sh"
 LLMLINT_CONFIG = REPO_ROOT / "oneharness.llmlint.toml"
 
-#: An envelope carrying a command, which is what the engine's envelope reviewer judges.
-ENVELOPE = json.dumps(
-    {"version": 2, "commands": [{"op": "amend", "id": "work", "text": "Report."}]}
-)
-
 #: A binary that records the Claude-identity environment it was handed and answers. As a
 #: provider it answers the way claude-code does; as `uv` or `oneharness` it answers an
 #: empty object and exits 0, which ends every entry point's hand-off at once.
@@ -512,12 +507,11 @@ class EntryPoint(NamedTuple):
 
 
 #: Every entry point that calls `resolve_claude_alt_config_dir` and then runs `uv` or
-#: `oneharness`, with arguments that carry it to that hand-off.
+#: `oneharness`, with arguments that carry it to that hand-off. `scripts/onepipeline.sh` is
+#: no longer one: the `uv run` launch gate it handed off to was deleted by the planning
+#: cutover, and it now hands its resolved environment to the engine alone.
 ENTRY_POINTS = (
     EntryPoint("oneharness-usage.sh", ("--harness", "claude-code:primary")),
-    EntryPoint("onepipeline.sh", ("start", "plans:identity-routing-probe")),
-    EntryPoint("review-plan.sh", ("plans:identity-routing-probe",)),
-    EntryPoint("envelope-review.sh", (), ENVELOPE),
     EntryPoint("smoke.sh", ()),
 )
 

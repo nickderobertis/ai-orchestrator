@@ -58,7 +58,6 @@ the installed CLI's surface rather than anything a dispatch links.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import re
@@ -74,7 +73,7 @@ import pytest
 from registered_checkouts import discover_checkouts
 from test_linked_libraries import _linked_version
 
-from orchestrator import npm_installs, spike_flow
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_checkouts
@@ -1495,71 +1494,12 @@ def test_the_words_the_prose_declares_absent_are_absent(
         )
 
 
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves this
-# test out of every memoized tier into the uncached `orchestrator:test-checkouts`, because its
-# subject is the adopted engine's own source in a registered checkout, which no `nx.json` glob
-# hashes — the reason this module's other engine-source tests carry, beside which it reads
-# the same `engine_settlements` fixture.
-def test_the_settlement_the_spike_stage_waits_for_is_one_the_engine_writes(
-    engine_settlements: frozenset[tuple[str, str]],
-) -> None:
-    """`orchestrator/spike_flow.py` reads a kept spike as `done` with the outcome `preserved`.
-
-    That reader is what lets `just plan` go on from its spikes to their finalize, so a
-    release that settled a preserved node on another word would stop every spiked plan at
-    its spikes, each reported as not kept.
-    """
-    assert (spike_flow.DONE, spike_flow.PRESERVED) in engine_settlements, sorted(engine_settlements)
-
-
-def test_the_correction_the_spike_stage_also_reads_as_kept_is_the_engines_own_word() -> None:
-    """`orchestrator/spike_flow.py` also reads a spike `settle`d from evidence as kept.
-
-    A manager settles a spike whose session would not close from evidence once its branch is
-    kept on its origin, and the engine records that settlement on its own constant; a release
-    respelling it would stop every such plan at its spikes, each reported as not kept.
-    """
-    journal = _source(ONEPIPELINE, "journal.rs")
-    spelled = re.search(
-        r'pub(?:\(crate\))? const SETTLED_FROM_EVIDENCE: &str = "([a-z-]+)";', journal
-    )
-    assert spelled, (
-        f"onepipeline {ONEPIPELINE.ref} no longer declares SETTLED_FROM_EVIDENCE in "
-        "src/journal.rs, where this gate reads the word a settle records"
-    )
-    assert spelled.group(1) == spike_flow.SETTLED_FROM_EVIDENCE, (
-        f"onepipeline {ONEPIPELINE.ref} records a settle as {spelled.group(1)!r}, and "
-        f"orchestrator/spike_flow.py reads {spike_flow.SETTLED_FROM_EVIDENCE!r}"
-    )
-
-
-def test_the_statuses_the_spike_stage_names_a_skipped_dependent_by_are_ones_the_engine_writes() -> (
-    None
-):
-    """`orchestrator/spike_flow.py` names a spike behind a failed one by the engine's words.
-
-    The stop that names the failed spike and each dependent the engine skipped behind it
-    reads a ledger node's status as `failed` and `skipped`, so a release spelling either
-    another way would leave that stop naming nothing to retry.
-    """
-    shipped = "\n".join(
-        TEST_MODULE.sub("", _source(ONEPIPELINE, name)) for name in _rust_files(ONEPIPELINE)
-    )
-    words = set(dict(NODE_STATUS_WORD.findall(shipped)).values())
-
-    read = {spike_flow.DONE, spike_flow.FAILED, spike_flow.SKIPPED}
-    assert read <= words, (
-        f"onepipeline {ONEPIPELINE.ref} writes the node statuses {sorted(words)}, and "
-        f"orchestrator/spike_flow.py reads {sorted(read - words)} among {sorted(read)}"
-    )
-
-
-# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-
-
-#: The spikes' branch template `scripts/plan.sh` hands `onepipeline start`: the plan, then the
-#: node rendered by the expression this reads off the engine.
-SPIKES_TEMPLATE = re.compile(r'--branch-template "\$plan_native/(\{\{[^"]*\}\})"')
+#: The planning flow's template, whose `spikes` step launches a plan's spikes.
+PLANNING_TEMPLATE = REPO_ROOT / "templates" / "planning" / "planning.md.j2"
+#: The spikes' branch template that step hands `onepipeline start`: the plan's native id,
+#: then the node rendered by the expression this reads off the engine. The template file
+#: escapes it from its own rendering as a quoted Jinja string.
+SPIKES_TEMPLATE = re.compile(r"--branch-template \"\$\{1#\*:\}/\{\{ '(\{\{[^']*\}\})' \}\}\"")
 #: The engine's shipped default branch template, whose node expression is the one it renders.
 SHIPPED_TEMPLATE = re.compile(r'"(\{%[^"]*/(\{\{ node\.id \}\}))";')
 
@@ -1569,19 +1509,23 @@ SHIPPED_TEMPLATE = re.compile(r'"(\{%[^"]*/(\{\{ node\.id \}\}))";')
 # subject is the adopted engine's own source in a registered checkout, which no `nx.json` glob
 # hashes — the reason this module's other engine-source tests carry.
 def test_the_spikes_branch_template_names_the_node_as_the_engine_renders_it() -> None:
-    """`plan.sh` names every spike branch `<plan>/<node>`; the node is the engine's expression.
+    """The `spikes` step names every spike branch `<plan>/<node>`; the node is the engine's.
 
-    The template is the engine's to render, so the one expression `scripts/plan.sh` hands it
-    for the node is held to the one the pinned engine's own shipped default renders the node
-    by: a release that renamed it would cut spike branches no listing finds as the plan's.
+    The template is the engine's to render, so the one expression
+    `templates/planning/planning.md.j2` hands it for the node is held to the one the pinned
+    engine's own shipped default renders the node by: a release that renamed it would cut
+    spike branches no listing finds as the plan's.
     """
     shipped = SHIPPED_TEMPLATE.search(_source(ONEPIPELINE, "branchname.rs"))
     assert shipped is not None, (
         f"onepipeline {ONEPIPELINE.ref}'s src/branchname.rs no longer ships a default branch "
         "template ending in the node's id, which the spikes' template is held to"
     )
-    named = SPIKES_TEMPLATE.search((REPO_ROOT / "scripts" / "plan.sh").read_text("utf-8"))
-    assert named is not None, "scripts/plan.sh no longer launches the spikes with a template"
+    named = SPIKES_TEMPLATE.search(PLANNING_TEMPLATE.read_text("utf-8"))
+    assert named is not None, (
+        f"{PLANNING_TEMPLATE.relative_to(REPO_ROOT)} no longer launches the spikes with a "
+        "branch template"
+    )
     assert named.group(1) == shipped.group(2), (named.group(1), shipped.group(1))
 
 
@@ -2556,52 +2500,6 @@ def _built_run_root(tmp_path: Path) -> Path:
     return root
 
 
-#: The engine double `just plan`'s flow journeys install in place of `start`, which writes a
-#: launch record of its own that `unwatched`, the views and a flow's watch read as the
-#: engine's — `tests/unwatched/test_flow_stop_hook_e2e.py` among them.
-SPIKE_FLOW_ENGINE = REPO_ROOT / "tests" / "plan_tooling" / "plan_flow" / "spike_flow_engine.py"
-
-
-def test_the_spike_flow_doubles_launch_record_is_one_the_engine_declares(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The launch record the `start` double writes, `flow` included, is the engine's shape.
-
-    Built by the double's own writer and read back, both directions, for the reason
-    `test_the_built_run_root_writes_the_records_the_engine_declares` gives for the builder.
-    """
-    monkeypatch.syspath_prepend(str(SPIKE_FLOW_ENGINE.parent))
-    spec = importlib.util.spec_from_file_location("spike_flow_engine", SPIKE_FLOW_ENGINE)
-    assert spec is not None and spec.loader is not None
-    double = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(double)
-    monkeypatch.setenv("ONEPIPELINE_LAUNCHER", "claude-code")
-    monkeypatch.setenv("ONEPIPELINE_LAUNCHER_SESSION", probe_run_root.DEFAULT_SESSION)
-    monkeypatch.setenv("ONEPIPELINE_FLOW", "probe-flow")
-    root = tmp_path / "runs" / "probe-run"
-    # The labels and group every planning-flow launch carries, so the optional keys the
-    # double writes for them are held to the engine's declaration too.
-    double._launched(
-        root, "probe-run", "authoring:probe-run", {"kind": "spikes"}, "authoring:probe-plan"
-    )
-
-    composed = json.loads((root / "launch.json").read_text("utf-8"))
-    declared = _declared_fields(ONEPIPELINE, "ledger.rs", "LaunchRecord")
-    names = {field.name for field in declared}
-    required = {field.name for field in declared if not field.optional}
-    assert composed.get("flow") == "probe-flow", composed
-    assert composed.get("labels") == {"kind": "spikes"}, composed
-    assert composed.get("group") == "authoring:probe-plan", composed
-    assert set(composed) <= names, (
-        f"{SPIKE_FLOW_ENGINE.name} writes {sorted(set(composed) - names)} into a launch "
-        f"record, which onepipeline {ONEPIPELINE.ref}'s `LaunchRecord` does not declare"
-    )
-    assert required <= set(composed), (
-        f"{SPIKE_FLOW_ENGINE.name} omits {sorted(required - set(composed))} from a launch "
-        f"record, which onepipeline {ONEPIPELINE.ref}'s `LaunchRecord` requires"
-    )
-
-
 @pytest.mark.parametrize("record", BUILT_RECORDS, ids=lambda record: record.struct)
 def test_the_built_run_root_writes_the_records_the_engine_declares(
     record: Record, built_run_root: Path
@@ -3492,217 +3390,65 @@ def test_the_markers_a_snapshot_withdraws_are_the_ones_the_engine_takes_back() -
     )
 
 
-#: The five strings the engine composes an amendment into a task with, and where each
-#: is declared in `src/plan.rs`: the heading it renders under, the sentence stating its
-#: authority for the manager's amendment and the one for the user's, the criteria heading
-#: it renders into, and the notes heading a task stating no criteria section has one
-#: opened above. Read as declarations of string constants
-#: rather than as prose, so a reworded sentence is a moved value here rather than a
-#: paragraph quietly drifting. A Rust literal wrapped with a trailing backslash is read as
-#: the one line it compiles to.
-AMENDMENT_CONSTANTS = {
-    "AMENDMENT_HEADING": re.compile(r'pub const AMENDMENT_HEADING: &str = "([^"]+)";'),
-    "AMENDMENT_PRECEDENCE": re.compile(
-        r'const AMENDMENT_PRECEDENCE: &str =\s*"([^"]+)";', re.MULTILINE
-    ),
-    "USER_AMENDMENT_PRECEDENCE": re.compile(
-        r'const USER_AMENDMENT_PRECEDENCE: &str =\s*"([^"]+)";', re.MULTILINE
-    ),
-    "CRITERIA_HEADING": re.compile(r'const CRITERIA_HEADING: &str = "([^"]+)";'),
-    "ADDITIONAL_INFO_HEADING": re.compile(r'const ADDITIONAL_INFO_HEADING: &str = "([^"]+)";'),
+#: How the engine attributes a stored ruling, in `src/ruling.rs`: every attribution opens
+#: with `ATTRIBUTION_OPENING`, and each arm of `attribution` writes one sentence. The
+#: dispatch appendix quotes the opening of the user's and of the referenced manager's, the
+#: lines a worker and its judge tell the two parties apart by.
+DISPATCH_APPENDIX = REPO_ROOT / "templates" / "dispatch-appendix.md"
+ATTRIBUTION_OPENING = re.compile(r'const ATTRIBUTION_OPENING: &str = "([^"]+)";')
+ATTRIBUTION_ARMS = {
+    "Ruling from the user, relayed by the manager: it binds.": r"\(Provenance::User, _\)",
+    "Ruling from the manager (ruling reference": r"\(Provenance::Manager, Some\(reference\)\)",
 }
 
 #: A Rust string continuation: a backslash ending a line drops that newline and the
 #: leading whitespace of the next.
 RUST_CONTINUATION = re.compile(r"\\\n\s*")
 
-#: The engine's `amended`, whose arms are the whole of the placement rule: the block is
-#: one heading, the attribution line a recorded amendment carries where it carries one,
-#: the precedence sentence of that attribution's party — the user's for the user's, the
-#: manager's otherwise — a blank line and the amendment's clauses; a task
-#: stating a criteria section gets the block at that section's end, followed by whatever
-#: comes after it; and one stating none gets a criteria section opened for it,
-#: immediately before the operational-notes heading, or at the end.
-AMENDED = re.compile(
-    r"fn amended\(task: &str, amendment: &str\) -> String \{\s*"
-    r"(?://[^\n]*\s*)*"
-    r"let \(origin, _\) = crate::ruling::split_attribution\(amendment\);\s*"
-    r"let precedence = match origin\.map\(\|origin\| origin\.provenance\) \{\s*"
-    r"Some\(crate::provenance::Provenance::User\) => USER_AMENDMENT_PRECEDENCE,\s*"
-    r"_ => AMENDMENT_PRECEDENCE,\s*\};\s*"
-    r"let opening = origin\.map_or_else\(String::new, \|origin\| \{\s*"
-    r'format!\(\s*"\{\}\\n",\s*'
-    r"crate::ruling::attribution\(origin\.provenance, origin\.reference\.as_ref\(\)\)\s*"
-    r"\)\s*\}\);\s*"
-    r"let block = format!\(\s*"
-    r'"\{AMENDMENT_HEADING\}\\n\{opening\}\{precedence\}\\n\\n\{\}",\s*'
-    r"amendment_clauses\(amendment\)\s*\);\s*"
-    r"if let Some\(end\) = criteria_section_end\(task\) \{\s*"
-    r"let \(bar, rest\) = task\.split_at\(end\);\s*"
-    r"return if rest\.trim\(\)\.is_empty\(\) \{\s*"
-    r'format!\("\{\}\\n\\n\{block\}", bar\.trim_end\(\)\)\s*'
-    r"\} else \{\s*"
-    r'format!\("\{\}\\n\\n\{block\}\\n\{rest\}", bar\.trim_end\(\)\)\s*'
-    r"\};\s*\}\s*"
-    r'let block = format!\("\{CRITERIA_HEADING\}\\n\\n\{block\}"\);\s*'
-    r"match additional_info_at\(task\) \{\s*"
-    r'Some\(at\) => format!\("\{\}\\n\\n\{block\}\\n\{\}", '
-    r"task\[\.\.at\]\.trim_end\(\), &task\[at\.\.\]\),\s*"
-    r'None => format!\("\{\}\\n\\n\{block\}", task\.trim_end\(\)\),',
-    re.DOTALL,
-)
-
-#: How the engine shapes an amendment into clauses and bounds the section it lands in —
-#: each rule at the declaration `orchestrator.envelope_review.amendment_clauses` and
-#: `_criteria_section_end` restate, so a release that moved one fails here by name.
-AMENDMENT_SHAPING = {
-    "a clause is one bullet": re.compile(r'lines\.push\(format!\("- \{clause\}"\)\);'),
-    "a heading becomes a bold label between blank lines": re.compile(
-        r"lines\.push\(String::new\(\)\);\s*"
-        r'lines\.push\(format!\("\*\*\{text\}\*\*"\)\);\s*'
-        r"lines\.push\(String::new\(\)\);"
-    ),
-    "a wrapped line rejoins the clause above it with one space": re.compile(
-        r"Some\(clause\) => \{\s*clause\.push\(' '\);\s*clause\.push_str\(trimmed\);"
-    ),
-    "a heading is `#`s followed by a space or nothing": re.compile(
-        r"let text = line\.trim_start_matches\('#'\);\s*"
-        r"if text\.len\(\) == line\.len\(\) \{\s*return None;\s*\}\s*"
-        r"\(text\.is_empty\(\) \|\| text\.starts_with\(' '\)\)\.then\(\|\| text\.trim\(\)\)"
-    ),
-    "a bullet is `- `, `* ` or `+ `": re.compile(r'\["- ", "\* ", "\+ "\]'),
-    "a numbered item is digits then `. ` or `) `": re.compile(
-        r'rest\.strip_prefix\("\. "\)\s*\.or_else\(\|\| rest\.strip_prefix\("\) "\)\)'
-    ),
-    "a section is a level-two heading and not a deeper one": re.compile(
-        r'line\.starts_with\("##"\) && !line\.starts_with\("###"\)'
-    ),
-    "the criteria section ends at the next section heading, or at the end": re.compile(
-        r"if inside && is_section_heading\(trimmed\) \{\s*return Some\(at\);\s*\}\s*"
-        r"if trimmed == CRITERIA_HEADING \{\s*inside = true;\s*\}.*?"
-        r"inside\.then_some\(task\.len\(\)\)",
-        re.DOTALL,
-    ),
-    "an attribution first line is never one of the clauses": re.compile(
-        r"fn amendment_clauses\(amendment: &str\) -> String \{\s*(?://[^\n]*\s*)*"
-        r"let \(_, amendment\) = crate::ruling::split_attribution\(amendment\);"
-    ),
-}
-
-#: How the engine attributes a stored ruling, in `src/ruling.rs`, which
-#: `orchestrator.envelope_review.split_attribution` restates to find the attribution line a
-#: recorded amendment opens with: the three sentences `attribution` writes, the grammar of
-#: the reference `Reference` mints, and the split of a stored string's first line. Each is
-#: held to its declaration so a reworded sentence fails here by name rather than leaving an
-#: attributed amendment's line read as one of its clauses. The parser's and the recognizer's
-#: whole bodies are held, because `orchestrator.envelope_review._minted` restates which tokens
-#: the one accepts and the widths it parses each part into, and `_attribution_party` which
-#: lines the other recognizes, and a display format alone would show neither move.
-#: The arm of `attribution` each restated sentence is written by, read as the literal it
-#: compiles to and compared to the restatement whole.
-ATTRIBUTION_ARMS = {
-    "USER_ATTRIBUTION": r"\(Provenance::User, _\)",
-    "manager_attribution": r"\(Provenance::Manager, Some\(reference\)\)",
-    "UNREFERENCED_MANAGER_ATTRIBUTION": r"\(Provenance::Manager, None\)",
-}
-RULING_ATTRIBUTION = {
-    "every attribution opens with the same words": re.compile(
-        r'const ATTRIBUTION_OPENING: &str = "Ruling from the ";'
-    ),
-    "a reference is c<envelope>.<index> or a<reply>": re.compile(
-        r'Self::Command \{ envelope, index \} => write!\(f, "c\{envelope\}\.\{index\}"\),\s*'
-        r'Self::Answer \{ reply \} => write!\(f, "a\{reply\}"\),'
-    ),
-    "a reference parses as c<u64>.<u32> or a<u64>, of ASCII digits, and nothing else": (
-        re.compile(
-            r"fn from_str\(text: &str\) -> std::result::Result<Self, Self::Err> \{\s*"
-            r"let digits = \|text: &str\| -> std::result::Result<u64, \(\)> \{\s*"
-            r"if text\.is_empty\(\) \|\| "
-            r"!text\.bytes\(\)\.all\(\|byte\| byte\.is_ascii_digit\(\)\) \{\s*"
-            r"return Err\(\(\)\);\s*\}\s*text\.parse\(\)\.map_err\(drop\)\s*\};\s*"
-            r"if let Some\(rest\) = text\.strip_prefix\('c'\) \{\s*"
-            r"let \(envelope, index\) = rest\.split_once\('\.'\)\.ok_or\(\(\)\)\?;\s*"
-            r"return Ok\(Self::Command \{\s*envelope: digits\(envelope\)\?,\s*"
-            r"index: u32::try_from\(digits\(index\)\?\)\.map_err\(drop\)\?,\s*\}\);\s*\}\s*"
-            r"if let Some\(reply\) = text\.strip_prefix\('a'\) \{\s*"
-            r"return Ok\(Self::Answer \{\s*reply: digits\(reply\)\?,\s*\}\);\s*\}\s*"
-            r"Err\(\(\)\)"
-        )
-    ),
-    "a line is an attribution only where it is byte for byte one the engine writes": re.compile(
-        r"fn origin_of\(line: &str\) -> Option<Origin> \{\s*"
-        r"if line == attribution\(Provenance::User, None\) \{\s*"
-        r"return Some\(Origin \{\s*provenance: Provenance::User,\s*reference: None,\s*\}\);\s*\}\s*"
-        r"if line == attribution\(Provenance::Manager, None\) \{\s*"
-        r"return Some\(Origin::default\(\)\);\s*\}\s*"
-        r"let reference: Reference = line\s*"
-        r'\.strip_prefix\(&format!\("\{ATTRIBUTION_OPENING\}manager \(ruling reference `"\)\)\?\s*'
-        r"\.split_once\('`'\)\?\s*\.0\s*\.parse\(\)\s*\.ok\(\)\?;\s*"
-        r"\(line == attribution\(Provenance::Manager, Some\(&reference\)\)\)"
-        r"\.then_some\(Origin \{\s*"
-        r"provenance: Provenance::Manager,\s*reference: Some\(reference\),\s*\}\)"
-    ),
-    "only a stored string's exact first line is its attribution": re.compile(
-        r"let trimmed = text\.trim_start\(\);\s*"
-        r"let \(first, rest\) = trimmed\.split_once\('\\n'\)\.unwrap_or\(\(trimmed, \"\"\)\);\s*"
-        r"match origin_of\(first\) \{\s*Some\(origin\) => \(Some\(origin\), rest\),\s*"
-        r"None => \(None, text\),"
-    ),
-}
-
 #: A top-level struct's fields, at the indentation a struct body declares them.
 STRUCT_FIELD = re.compile(r"^\s{4}pub (?P<field>[a-z_]\w*): ", re.MULTILINE)
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves
-# this into the uncached `orchestrator:test-checkouts` for the reason the checkpoint gate
-# above states: its subject is the adopted engine's own source, outside this workspace.
-def test_the_node_a_live_edit_states_is_read_with_the_fields_the_engine_declares() -> None:
-    """`orchestrator/envelope_review.py` renders a node's amendment from the field the
-    engine renders one from, and passes over a node declaring that it dispatches nobody by
-    the field the engine settles that on. Each is a restatement of `Node` at the pinned
-    release: a renamed amendment or no-dispatch field would have it judge text no dispatch
-    reads, or refuse a bookmark nobody works.
+# these into the uncached `orchestrator:test-checkouts` for the reason the checkpoint gate
+# above states: their subject is the adopted engine's own source, outside this workspace.
+def test_the_attribution_lines_the_appendix_quotes_are_the_ones_the_engine_writes() -> None:
+    """`templates/dispatch-appendix.md` tells a worker and its judge whose ruling binds by
+    the attribution line the engine renders above it, so each line it quotes is held to
+    the sentence the pinned engine's `attribution` writes: a reworded sentence would leave
+    every reader of the appendix looking for a line no ruling carries.
     """
-    from orchestrator import envelope_review
+    ruling_rs = _source(ONEPIPELINE, "ruling.rs")
+    opening = ATTRIBUTION_OPENING.search(ruling_rs)
+    assert opening is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer declares ATTRIBUTION_OPENING in ruling.rs"
+    )
+    appendix = " ".join(DISPATCH_APPENDIX.read_text("utf-8").split())
+    for quoted, arm in ATTRIBUTION_ARMS.items():
+        literal = re.search(arm + r' => format!\(\s*"((?:[^"\\]|\\[\s\S])*)"\s*\)', ruling_rs)
+        assert literal is not None, (
+            f"onepipeline {ONEPIPELINE.ref} no longer writes the sentence {quoted!r} opens "
+            "from the arm of `attribution` in ruling.rs this gate reads it at"
+        )
+        written = (
+            RUST_CONTINUATION.sub("", literal.group(1))
+            .replace('\\"', '"')
+            .replace("{ATTRIBUTION_OPENING}", opening.group(1))
+        )
+        assert written.startswith(quoted), (
+            f"onepipeline {ONEPIPELINE.ref} attributes a ruling as {written!r}, which the "
+            f"appendix's quote {quoted!r} no longer opens"
+        )
+        assert quoted in appendix, f"templates/dispatch-appendix.md no longer quotes {quoted!r}"
 
+
+def test_the_node_field_the_orchestration_guide_names_is_one_the_engine_declares() -> None:
+    """`docs/orchestration.md` tells a planner a node names `assets_from`, and the engine's
+    `Node` at the pinned release is what reads it: a renamed field would be ignored."""
     node_struct = _source(ONEPIPELINE, "plan.rs").split("pub struct Node {", 1)[1]
     node_fields = set(STRUCT_FIELD.findall(node_struct.split("\n}\n", 1)[0]))
-    assert "assets_from" in node_fields
+    assert "assets_from" in node_fields, sorted(node_fields)
     assert "`assets_from`" in ORCHESTRATION.read_text(encoding="utf-8"), ORCHESTRATION
-    for name in ("AMENDMENT", "NO_DISPATCH"):
-        assert getattr(envelope_review, name) in node_fields, (
-            f"onepipeline {ONEPIPELINE.ref}'s `Node` no longer carries the field "
-            f"`orchestrator.envelope_review.{name}` names; it declares {sorted(node_fields)}"
-        )
-
-
-#: The envelope reviewer's declared contract, closing onepipeline's
-#: `docs/contract-divergences.md` entry 45: which ops the engine lists as the document's
-#: changes, and the prefix it reads a declared objection from.
-ENVELOPE_REVIEWER_CONTRACT = re.compile(
-    r'"objection_prefix": (?P<prefix>"[^"]*"),\s*'
-    r'"ops_listed_as_changes": (?P<ops>\[[^\]]*\])'
-)
-
-
-def test_the_ops_the_envelope_reviewer_reads_are_the_ones_the_engine_offers_it() -> None:
-    """`orchestrator/envelope_review.py` reads every op the engine lists among a document's
-    `changes`, and declares its objection on the prefix the engine reads one from. A release
-    that offered another op would put prose in front of a dispatch nothing here reads, and
-    one that moved the prefix would refuse an envelope naming no node.
-    """
-    from orchestrator import envelope_review
-
-    declared = ENVELOPE_REVIEWER_CONTRACT.search(
-        _source(ONEPIPELINE_DOCS, "contract-divergences.md")
-    )
-    assert declared is not None, (
-        f"onepipeline {ONEPIPELINE_DOCS.ref}'s contract-divergences.md no longer declares the "
-        "envelope reviewer's changes and objection prefix; re-read entry 45"
-    )
-    assert set(json.loads(declared["ops"])) == envelope_review.CHANGE_OPS, declared["ops"]
-    assert json.loads(declared["prefix"]) == envelope_review.OBJECTION_PREFIX, declared["prefix"]
 
 
 #: A struct's fields including a raw identifier — `pub r#match: RuleMatch` — spelled
@@ -3827,70 +3573,6 @@ def test_the_hook_receipt_words_the_manager_reads_are_the_engines_own() -> None:
 
     manager = _plain(MANAGER.read_text("utf-8"))
     assert MANAGER_DROPPED_SENTENCE in manager, "AGENTS.md no longer says what `dropped` means"
-
-
-def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it() -> None:
-    """A node an envelope states is judged on the task its dispatch will read, so how the
-    engine renders an amendment into a task is restated in `orchestrator/envelope_review.py`,
-    and this holds the restatement to the engine's source at the pinned release: the four
-    strings, the clause shaping and the placement rule. A release that moved any of them
-    would have every stated node judged on text no dispatch reads, silently.
-    """
-    from orchestrator import envelope_review
-
-    plan_rs = _source(ONEPIPELINE, "plan.rs")
-    for name, declaration in AMENDMENT_CONSTANTS.items():
-        declared = declaration.search(plan_rs)
-        assert declared is not None, (
-            f"onepipeline {ONEPIPELINE.ref} no longer declares {name} in plan.rs where this "
-            "gate reads it; re-read how it renders an amendment and correct the restatement"
-        )
-        value = RUST_CONTINUATION.sub("", declared.group(1))
-        assert getattr(envelope_review, name) == value, (
-            f"orchestrator/envelope_review.py restates {name} as "
-            f"{getattr(envelope_review, name)!r} while onepipeline {ONEPIPELINE.ref} "
-            f"declares {value!r}"
-        )
-    for rule, shaped in AMENDMENT_SHAPING.items():
-        assert shaped.search(plan_rs) is not None, (
-            f"onepipeline {ONEPIPELINE.ref} no longer declares the amendment rule "
-            f"{rule!r} where `orchestrator.envelope_review` restates it; re-read "
-            "`amendment_clauses` and `criteria_section_end` and correct the restatement"
-        )
-    ruling_rs = _source(ONEPIPELINE, "ruling.rs")
-    for rule, declared in RULING_ATTRIBUTION.items():
-        assert declared.search(ruling_rs) is not None, (
-            f"onepipeline {ONEPIPELINE.ref} no longer declares the attribution rule "
-            f"{rule!r} in ruling.rs where `orchestrator.envelope_review` restates it; "
-            "re-read `attribution`, `Reference` and `split_attribution` and correct the "
-            "restatement"
-        )
-    for name, arm in ATTRIBUTION_ARMS.items():
-        literal = re.search(arm + r' => format!\(\s*"((?:[^"\\]|\\[\s\S])*)"\s*\)', ruling_rs)
-        assert literal is not None, (
-            f"onepipeline {ONEPIPELINE.ref} no longer writes the {name} sentence from the "
-            "arm of `attribution` in ruling.rs this gate reads it at"
-        )
-        compiled = (
-            RUST_CONTINUATION.sub("", literal.group(1))
-            .replace('\\"', '"')
-            .replace("{ATTRIBUTION_OPENING}", envelope_review.ATTRIBUTION_OPENING)
-        )
-        restated = getattr(envelope_review, name)
-        restated = (
-            restated(envelope_review.RulingReference("{reference}"))
-            if callable(restated)
-            else restated
-        )
-        assert restated == compiled, (
-            f"orchestrator/envelope_review.py restates {name} as {restated!r} while "
-            f"onepipeline {ONEPIPELINE.ref} writes {compiled!r}"
-        )
-    assert AMENDED.search(plan_rs) is not None, (
-        f"onepipeline {ONEPIPELINE.ref}'s `amended` no longer places the block the way "
-        "`orchestrator.envelope_review.amended` restates; re-read it and correct the "
-        "restatement"
-    )
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
@@ -4761,34 +4443,6 @@ def test_the_boundary_context_the_templates_read_is_the_engines_own() -> None:
         assert read and read <= written, f"templates/{template} reads {read - written}"
         compared = set(CLEARANCE_COMPARED.findall(text))
         assert compared <= clearances, f"templates/{template} compares {compared - clearances}"
-
-
-#: The adopted plan store's README, the authority for the authored section-link form.
-ONETASKGRAPH_DOCS = Engine("onetaskgraph", _pinned_tag("onetaskgraph"), ".")
-#: What that README states of the slug rule, in its own words and examples, which
-#: `tests/plan_tooling/plan_copy/test_section_link_drift_e2e.py` restates in `_heading_slugs`.
-SECTION_LINK_SLUG_RULE = (
-    "its text lowercased, every character that is not a letter, a digit, a space, `-` or `_` "
-    "removed, and each space replaced by `-`.",
-    "The n-th repeat of a slug in one record is suffixed `-<n>`, so the second `## Budgets` is "
-    "`budgets-1`.",
-    "`### Step 2.b: retry (once)` is `step-2b-retry-once`",
-    "`### Budget <id>` is `budget-<id>`.",
-)
-
-
-def test_the_section_link_slug_rule_the_drift_journey_restates_is_the_stores_own() -> None:
-    """The adopted store's README still states the rule the drift journey holds a link to.
-
-    A copy between two folders of Markdown carries a fragment as written, so nothing the
-    journey runs would notice the store's rule moving: this is what would.
-    """
-    readme = _plain(_source(ONETASKGRAPH_DOCS, "README.md"))
-    for stated in SECTION_LINK_SLUG_RULE:
-        assert _plain(stated) in readme, (
-            f"onetaskgraph {ONETASKGRAPH_DOCS.ref}'s README no longer says {stated!r}; re-read "
-            "its *Section links*, then bring `_heading_slugs` and `budget_anchor` to it"
-        )
 
 
 def test_the_provisioning_failed_surface_the_prose_names_is_the_engines_own() -> None:

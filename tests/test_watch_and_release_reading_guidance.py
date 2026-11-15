@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -49,12 +50,16 @@ SETTLED_RUN = "gate-parity-2"
 #: a run it watches. Other journeys watch the checked-in recordings in place, so a copy taken
 #: while one runs can meet a record that vanishes mid-copy; none is ever checked in.
 LIVE_WATCHERS = shutil.ignore_patterns("watchers", "watch-terms")
-#: The launcher whose observer default is why a planning run has nothing watching it.
-PLAN_LAUNCHER = "scripts/plan.sh"
-#: What that launcher names when the caller names no graph. Quoted as the assignment so
-#: a default that moved to another spelling fails here rather than matching some other
-#: `off` in the file.
-PLANNING_OBSERVER = 'DEFAULT_DAG_GRAPH="off"'
+#: Where a planning run's observer is stated, and the words it is stated in.
+PLANNING_OBSERVER_DOCUMENT = "docs/orchestration.md"
+PLANNING_OBSERVER_CLAIM = "`just plan` and `just finish-plan` name `off` instead"
+#: The launchers that claim is about: the two recipes, and the planning flow's step that
+#: launches a plan's spikes.
+PLANNING_RECIPES = ("plan", "finish-plan")
+SPIKES_LAUNCHER = "templates/planning/planning.md.j2"
+#: The flag each names its observer by, quoted with its value so another `off` elsewhere in
+#: the file cannot satisfy it.
+PLANNING_OBSERVER = "--dag-graph off"
 
 
 def _text(relative_path: str) -> str:
@@ -126,20 +131,34 @@ def test_the_word_a_caller_is_told_to_anchor_on_is_the_word_the_engine_emits() -
     )
 
 
+def _recipe(name: str) -> str:
+    """The body of the justfile recipe ``name``, up to the next blank line."""
+    justfile = _text("justfile")
+    opened = re.search(rf"^{re.escape(name)}(?: [^\n]*)?:\n", justfile, re.MULTILINE)
+    assert opened is not None, f"the justfile no longer defines `{name}`"
+    return justfile[opened.end() :].split("\n\n", 1)[0]
+
+
+@pytest.mark.reads_docs
 def test_the_planning_launch_really_attaches_no_monitor_of_its_own() -> None:
-    """The claim a planning run watches least of itself has to be true of the launcher.
+    """The claim a planning run watches least of itself has to be true of the launchers.
 
     It is the reason that property is stated at all: a supervisor who believed a
     planning run had an observer would read its silence as a monitor with nothing to
-    report. If `just plan` ever attached one, the property would be telling a supervisor
-    to distrust a tier that was working.
+    report. If `just plan`, `just finish-plan` or the spikes step ever attached one, the
+    property would be telling a supervisor to distrust a tier that was working.
     """
-    launcher = _text(PLAN_LAUNCHER)
-
-    assert PLANNING_OBSERVER in launcher, (
-        f"{PLAN_LAUNCHER} no longer defaults to {PLANNING_OBSERVER!r}, and {MANAGER} tells "
-        "a supervisor that a planning run attaches no monitor of its own. Either the "
-        "launcher changed or the passage did"
+    assert PLANNING_OBSERVER_CLAIM in _flat(_text(PLANNING_OBSERVER_DOCUMENT)), (
+        f"{PLANNING_OBSERVER_DOCUMENT} no longer says {PLANNING_OBSERVER_CLAIM!r}"
+    )
+    for recipe in PLANNING_RECIPES:
+        assert PLANNING_OBSERVER in _recipe(recipe), (
+            f"`just {recipe}` no longer launches with {PLANNING_OBSERVER!r}, and "
+            f"{PLANNING_OBSERVER_DOCUMENT} tells a supervisor that a planning run attaches "
+            "no monitor of its own. Either the recipe changed or the passage did"
+        )
+    assert PLANNING_OBSERVER in _flat(_text(SPIKES_LAUNCHER)), (
+        f"{SPIKES_LAUNCHER} no longer launches a plan's spikes with {PLANNING_OBSERVER!r}"
     )
 
 

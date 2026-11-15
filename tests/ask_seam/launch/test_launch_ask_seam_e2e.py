@@ -16,14 +16,9 @@ have the dispatch *run* the wrapper, because a variable holding a runnable path 
 the same claim as an agent getting an answer back. `tests/e2e/fake_backend.py` stands in
 for the paid model alone, and asks with the environment its own turn inherited.
 
-**Journeys here are of two kinds, and they are held to different bars.** A *defect
-journey* covers a launch shape that was broken when it was written — every
-`just orchestrate` shape, which exported the seam nowhere, and the detached `just plan`
-ask, which refused with `ONEPIPELINE_RUN_ID is not set` — and each was observed failing
-for that reason before the fix. A *regression guard* covers a shape that already
-worked: the attached `just plan` ask, which is the one shape this host had ever proven,
-and which is why nothing noticed the rest. Each journey below says which it is; asking a
-regression guard to fail first would be asking for the impossible.
+**Every journey here began as a defect journey**: it covers a `just orchestrate` launch
+shape that was broken when it was written, exporting the seam nowhere, and each was
+observed failing for that reason before the fix.
 
 Handing a worker its run id is `onepipeline`'s own to do for a `just orchestrate`
 launch, whose plan this repository did not write — so what is asserted of those three
@@ -38,40 +33,31 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NamedTuple, NewType, NotRequired, TypedDict, cast
+from typing import NamedTuple, NewType, TypedDict, cast
 
-import plan_root_variable
 import pytest
 import short_state
-from conftest import git
 from fake_backend import (
     ASK_QUESTION_ENV,
     ASK_RECORD_ENV,
     ASK_TIMEOUT_ENV,
-    AUTHOR_PLAN_ENV,
     DISPATCHED_MEMBER,
     ENVIRONMENT_KEYS_ENV,
     MEMBER_OF_CONFIG,
     PROMPT_LOG_ENV,
-    RUN_ON_MARKER_ENV,
 )
-from flow_engine_stand_in import give_flow_engine
 from planner_channel import PersistentManager, just, ruling
-from project_fixtures import helper, project_from_plan, store_written
-from published_tools import ONETASKGRAPH_BIN
-from scratch_identity import GIT_IDENTITY, PLANNING_FLOW_ORIGIN, Identity, seeded
+from project_fixtures import helper, project_from_plan
+from scratch_identity import Identity, seeded
 from waits import deadline
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_store
-from orchestrator.record_shapes import PROJECTS_DIRECTORY
 from orchestrator.root import REPO_ROOT
 
 #: The engine's human item store, which it keeps beside the runs under a runs root once
@@ -106,11 +92,6 @@ INHERITED_ENVIRONMENT = (
     # environment rather than on anything the launch did.
     "ONEVCS_SESSION",
     "ORCHESTRATOR_ASK_MANAGER",
-    # The plan-authoring root a *planning* launch exports. Read from the one place that
-    # composes it rather than spelled here. A journey that kept the enclosing dispatch's
-    # would measure a directory some outer launch chose, and a launch that stopped
-    # exporting one at all would go on passing.
-    plan_root_variable.name(),
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
@@ -183,18 +164,6 @@ CHANNEL_ASKER = Input(
     "dispatch take back a question an earlier one left abandoned",
 )
 
-#: Not required of every launch either — only of a *planning* one, which is the launch
-#: that dispatches an agent whose whole deliverable is a plan. `onetaskgraph.yaml` roots
-#: the `authoring` source relatively and a dispatch resolves it against its own working
-#: directory, so without this the plan it authors lands wherever the dispatch stood —
-#: which, while a planner worked in a worktree of its own, was a copy of the directory
-#: nothing outside the worktree read and the run reclaimed.
-PLAN_ROOT = Input(
-    plan_root_variable.name(),
-    "the directory a dispatched planner authors its plan into; a relative source root "
-    "resolves against each process's own working directory, so an unset one is a plan "
-    "written where the launching checkout never looks",
-)
 
 #: Not an input of the wrapper at all, and read here because this is the one place a
 #: real dispatch's own environment is read per launch shape. `ONEVCS_SESSION` is what
@@ -254,7 +223,7 @@ ANSWER = "An opaque token; the node id would leak the ordering."
 #: What every launch's recorded bus configuration must say, read as the values that make
 #: it *this checkout's* `config/onemessagebus.yaml` rather than any configuration at all —
 #: the layout and the reply window this host measured, with no envelope hook or
-#: validator, since the engine's envelope reviewer judges every reply.
+#: validator, since the engine's plan-edit hook judges every edit carrying task prose.
 #: `tests/test_onemessagebus_config.py` holds each to the file and to the release that
 #: loads it; these are restated rather than parsed because nothing in this suite's
 #: environment reads YAML, and together they are what a launch that dropped the bus
@@ -313,148 +282,7 @@ pytestmark = [
     # from a published tool they run, is this module's own and goes with it
     # (`tests/short_state.py`).
     pytest.mark.usefixtures("module_tmpdir"),
-    # Read this checkout's own plan store here, whatever launch this suite runs inside and
-    # whatever root the suite's autouse isolation would otherwise state. This module both
-    # launches planning runs and asks what its own checkout resolves the `authoring` source
-    # to, and `scripts/plan-root-env.sh` keeps a root already in the environment by design —
-    # so a stated one would sit on both sides of every comparison below and a launch that
-    # had stopped resolving one at all would go on passing. An enclosing dispatch's exported
-    # root is defeated by the same opt-out, which is what this module's own fixture did
-    # before the isolation existed.
-    pytest.mark.real_plan_store_roots(
-        "authoring",
-        reason=(
-            "every expectation here is measured against what this checkout resolves the "
-            "`authoring` source to, and the launch keeps a root already in the environment: "
-            "an isolated root would be compared against itself"
-        ),
-    ),
 ]
-
-#: The two checkouts the node `just plan` writes names, as `scripts/plan.sh` defaults
-#: them. Each launch below seeds a scratch pair under exactly these names, so the
-#: recipe's own defaults resolve against a registry of the journey's own.
-PUBLICATION_ALIAS = "ai-orchestrator"
-EXECUTION_ALIAS = "ai-orchestrator-isolated"
-
-#: The plan source `scripts/plan.sh` writes its own project into and a dispatched planner
-#: authors into. Named here because the store reports one setting per source and this is
-#: the source these journeys read back.
-AUTHORING = "authoring"
-
-#: The brief a `just plan` launch is made from. Written to a temporary directory rather
-#: than taken from `examples/`, so these journeys read none of this repository's prose
-#: and stay in the code-only test tier.
-#:
-#: The `Plan project:` line is what the recipe's second node is given: a planning launch
-#: writes a `design-doc` node beside the planner, and that node has no other way to find
-#: the plan it is writing about. A brief without one is refused before anything is
-#: dispatched, which for the refusal journeys below would be the wrong refusal — so it is
-#: here rather than each of them passing `--no-design-doc` to avoid it.
-BRIEF = """## What
-Decide whether the paginated listing's cursor is an opaque token or a node id.
-
-Plan project: authoring:cursor-shape
-
-## Why
-The browser view cannot deep-link to a page until that is settled.
-
-## Acceptance criteria
-- The cursor's shape and its type are stated.
-"""
-
-
-class SettingOrigin(TypedDict):
-    """Which layer the plan store says one setting's value came from.
-
-    `variable` is present only for the environment layer, which is the whole reason this
-    is read: a root that came from a launch and one that came from the worktree's own
-    tracked document are the same directory string wearing two different origins.
-    """
-
-    layer: str
-    variable: NotRequired[str]
-
-
-class StoreSetting(TypedDict):
-    """One setting of the store's own `config show` answer, in the fields read here.
-
-    `value` stays `object` because that answer carries every setting the store resolves —
-    numbers, lists, and strings — and only the one this module asks about is a path. It
-    is narrowed where it is read rather than asserted of the whole answer.
-    """
-
-    key: str
-    value: object
-    origin: SettingOrigin
-
-
-class StoreConfiguration(TypedDict):
-    """What a dispatch's own `onetaskgraph config show --json` answers with."""
-
-    settings: list[StoreSetting]
-
-
-#: What `tests/e2e/fake_backend.py` reads out of the file `RUN_ON_MARKER_ENV` names: each
-#: marker, against the argument vectors a turn whose prompt carries it runs in order. An
-#: alias rather than a model, because the key is open by construction — it is whatever
-#: prose the journey keys on — and the contract is the shape of the value.
-RunOnMarker = dict[str, list[list[str]]]
-
-#: The fragment of that brief a dispatched turn's commands are keyed on. It is prose
-#: every dispatch of a planning launch carries, which is the point: both nodes a planning
-#: launch writes take the brief, both are given the same plan-authoring root, and both
-#: answering with that root is the claim rather than a collision.
-STORE_MARKER = "Plan project: authoring:cursor-shape"
-
-
-#: The plan a dispatched planner authors, in the one action a stand-in for the paid model
-#: can perform that anything downstream observes. Its content is beside the point — what
-#: is read back afterwards is that the launching checkout finds it at all, which is the
-#: whole of what an authoring root is for.
-AUTHORED_TASK = (
-    "## What\n\nAdd the route and the test that drives it.\n\n"
-    "## Why\n\nThe user cannot complete a purchase without it.\n\n"
-    "## Acceptance criteria\n\n- The route accepts a valid request and rejects an invalid one.\n"
-)
-
-
-def _authored_records(root: Path, native: str) -> dict[str, str]:
-    """The records a dispatched planner writes into ``root``, as absolute paths."""
-    rendered = store_written(
-        {
-            "schema_version": 3,
-            "name": native,
-            "goal": {"text": "Deliver the checkout route"},
-            "tasks": [
-                {
-                    "id": "route",
-                    "persona": "engineer",
-                    "title": "feat: add the checkout route",
-                    "task": AUTHORED_TASK,
-                }
-            ],
-        },
-        native_id=native,
-    )
-    return {str(root / relative): content for relative, content in rendered.items()}
-
-
-def _reading_the_plan_store(destination: Path) -> list[str]:
-    """The command a dispatched turn runs to report what its own plan store resolves.
-
-    `ONETASKGRAPH_BIN` is unset first because `onepipeline` composes it for every
-    dispatch and `onetaskgraph` reads every `ONETASKGRAPH_` name as a *setting* — so a
-    process that inherits it refuses `bin` as an unknown field and answers nothing at
-    all. `orchestrator/plan_store.py` strips it for the same reason; a dispatched agent
-    reaching the CLI directly has to do it too.
-    """
-    return [
-        "/bin/sh",
-        "-c",
-        f"unset ONETASKGRAPH_BIN; {shlex.quote(str(ONETASKGRAPH_BIN))} config show --json "
-        f"> {shlex.quote(str(destination))}",
-    ]
 
 
 #: What the two `just orchestrate` journeys that only read an environment launch without.
@@ -462,13 +290,6 @@ def _reading_the_plan_store(destination: Path) -> list[str]:
 #: another dispatch of the paid model's stand-in — real cost for a claim it has no
 #: bearing on, since what a *worker* is given is settled by the launching process rather
 #: than by who is watching.
-#:
-#: The `just plan` journeys below name none either, and not by a choice of their own:
-#: that recipe launches on `--dag-graph off`, because a planning run's output is the very
-#: plan a monitor would be comparing it against. So every ask measured here is asked on an
-#: unwatched run — which is the shape a planner is actually launched in, and is a claim
-#: about the channel in its own right: a blocking question waits on the bus alone, and an
-#: answer never had to get past an observer to reach the asker.
 #:
 #: Dropping it used to change the environment as well — below onepipeline 0.8.1 the run
 #: id reached a dispatch only by leaking out of an *attached* driver's own process after
@@ -478,8 +299,6 @@ def _reading_the_plan_store(destination: Path) -> list[str]:
 #: no longer who is watching.
 WITHOUT_OBSERVER = ("--dag-graph", "off")
 
-#: Where `scripts/plan.sh` writes what it generates, relative to this checkout.
-PLAN_DIRECTORY = REPO_ROOT / "scratch" / "plans"
 
 #: This repository's one entry point to `onepipeline`, used here for the one verb no
 #: recipe wraps: completing the human action an adopted run is parked on.
@@ -535,12 +354,6 @@ class Dispatch(NamedTuple):
     #: ledger it wrote into is what makes its run id one another launch would collide
     #: with, and a journey that built its own would collide with nothing.
     environment: dict[str, str]
-    #: Where the dispatch wrote its own plan store's `config show`, for the launches
-    #: that asked it to; `None` for every launch that did not.
-    store: Path | None = None
-    #: What the launch itself printed, for the one claim only the launcher can make:
-    #: where it says it wrote its project. `None` for a launch nothing read the stream of.
-    reported: str | None = None
 
 
 def _environment(
@@ -569,7 +382,6 @@ def _environment(
             RUNS_ROOT.name,
             CHANNEL_ASKER.name,
             SESSION.name,
-            PLAN_ROOT.name,
             CREDENTIAL_NAME,
         ]
     )
@@ -746,46 +558,6 @@ def _answering(run: RunId, environment: dict[str, str]) -> PersistentManager:
     )
 
 
-def _await_store_answer(reported: Path, *, seconds: float = MANAGER_SECONDS) -> None:
-    """Wait for the dispatch to report what its own plan store resolved.
-
-    Its own wait rather than the ask's, because the two do not finish together: the
-    stand-in serving a dispatch asks first and runs the turn's commands afterwards, so a
-    journey that returned when the answer landed would stop the run before the store had
-    been read — and read an absent file as a dispatch that resolved nothing.
-    """
-    limit = deadline(seconds)
-    while time.monotonic() < limit:
-        if reported.is_file() and reported.stat().st_size:
-            return
-        time.sleep(0.5)
-    raise AssertionError(
-        f"the dispatch never reported its own plan store at {reported} within {seconds}s"
-    )
-
-
-def _await_authored_plan(records: Mapping[str, str], *, seconds: float = MANAGER_SECONDS) -> None:
-    """Wait for the records a dispatched planner authors to be on disk.
-
-    The records rather than the instruction that asks for them, because the stand-in
-    claims that instruction by removing it *before* it writes anything: an absent
-    instruction says the authoring was reached and nothing about whether it finished, so
-    waiting on it would let this journey stop the run mid-write and then read back a
-    store that is missing exactly what it came to read.
-    """
-    pending = [Path(destination) for destination in records]
-    limit = deadline(seconds)
-    missing = pending
-    while time.monotonic() < limit:
-        missing = [path for path in pending if not path.exists()]
-        if not missing:
-            return
-        time.sleep(0.5)
-    raise AssertionError(
-        f"the dispatch authored no plan within {seconds}s; it never wrote {missing}"
-    )
-
-
 def _reaped(manager: PersistentManager, answered: AskRecord) -> None:
     """End the watch, and re-raise whatever the manager hit while it kept it.
 
@@ -920,12 +692,6 @@ def orchestrate_lifecycle(
     can go wrong: it holds no `runs` of its own, so a question reaches this run's channel
     only through what the dispatch was given. A manager answers over the run's own
     channel, and the ask's record says whether the answer came back.
-
-    It used to be the `just plan` launches that were read for this, while the planner
-    was a lifecycle node; `scripts/plan.sh` moved it back onto the direct shape, so a
-    planning dispatch runs in no session and is rightly given none — which left this
-    suite with no lifecycle dispatch to read, and a journey asserting a session of a
-    launch that opens none.
     """
     _requires_just()
     tmp_path = tmp_path_factory.mktemp("orchestrate-lifecycle")
@@ -1059,271 +825,6 @@ def _attest(
     raise AssertionError(f"run {run}'s '{reference}' never became attestable:\n{refusal}")
 
 
-def _authored_by_the_launch(root: Path, run: RunId) -> tuple[Path, list[Path]]:
-    """The records `just plan` writes for ``run`` under ``root``, and nothing else.
-
-    The project record by the run's own name, and every task the store files under that
-    project, at the path the store reports for it — the store names a task by its title,
-    so a launch's tasks are told apart from every other record in that root by the project
-    the store says they belong to, never by a pattern over file names, which would take
-    records the launch never wrote.
-    """
-    listed = subprocess.run(  # noqa: S603 - the pinned store, reading this checkout's root
-        [str(ONETASKGRAPH_BIN), "task", "list", "--source", AUTHORING, "--project", run, "--json"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-    assert listed.returncode == 0, listed.stderr
-    owned = [
-        Path(held["item"]["location"]["path"])
-        for held in json.loads(listed.stdout)["items"]
-        if (held["item"].get("location") or {}).get("path")
-    ]
-    return root / PROJECTS_DIRECTORY / f"{run}.md", owned
-
-
-def _forgotten(root: Path, run: RunId) -> None:
-    """Take back the records a launch of ``run`` wrote into ``root``, and only those.
-
-    These journeys launch into the authoring root this checkout really resolves — that
-    a launch writes where a real planner writes is the property they exist to prove — so
-    what they leave behind sits in a developer's own `.plans`, beside plans somebody
-    authored, and under stable names a later run of the suite then finds already taken.
-    Each launch takes back exactly its own records; a project or task under that root it
-    did not write is somebody's, and is not touched.
-    """
-    project, tasks = _authored_by_the_launch(root, run)
-    project.unlink(missing_ok=True)
-    for task in tasks:
-        task.unlink(missing_ok=True)
-
-
-def _carrying_the_plan_store_configuration(identity: Identity) -> None:
-    """Give the seeded checkouts this repository's store document.
-
-    A planner works in the launching checkout now, which carries `onetaskgraph.yaml` —
-    what declares the `authoring` source's plugin, the half of that source a launch does
-    not establish. The seeded identity beside this is a bare repository holding a README,
-    and it is given the same document so that a recipe which started cutting worktrees
-    from it again would find the store readable there too, rather than refusing a
-    configuration naming a root for a source no document defines.
-
-    Committed and pushed, because a session that cut a worktree would clone this checkout
-    and take its base from the origin they share.
-    """
-    execution = identity.execution
-    (execution / "onetaskgraph.yaml").write_bytes((REPO_ROOT / "onetaskgraph.yaml").read_bytes())
-    git("add", "-A", cwd=execution)
-    git(*GIT_IDENTITY, "commit", "-qm", "chore: carry the plan store configuration", cwd=execution)
-    git("push", "-q", "origin", "main", cwd=execution, env=identity.environment)
-
-
-@contextmanager
-def _planned(
-    tmp_path: Path,
-    oneharness_bin: str,
-    run: RunId,
-    *detached: str,
-    resolved: Path | None = None,
-    root: Path | None = None,
-    authored: str | None = None,
-) -> Iterator[Dispatch]:
-    """Launch `just plan` on a brief, have its dispatch ask, and hand back both.
-
-    Attached and detached differ by one flag and by nothing else here, so they are one
-    function: what they are being compared on is the environment each leaves behind, and
-    a second copy of the launch would be a second chance for the two to differ for a
-    reason that is not the flag.
-
-    A context rather than a value, because a launch leaves records behind in the
-    authoring root and they are the caller's to read for as long as it holds this: the
-    project the launch wrote is taken back — with the task directory beside it, and
-    nothing else in that root — when the caller lets go, whether or not the launch got
-    as far as a dispatch.
-
-    `resolved` names where the dispatch is to write the plan store's own answer about the
-    `authoring` source, which is the other half of what a launch establishes: a variable
-    in a dispatch's environment is not the claim that matters, and the store resolving it
-    to the launching checkout's directory is. `root` states a plan-authoring root the
-    caller has already chosen, so that a launch which resolves one of its own can be told
-    apart from one that leaves a caller's alone. `authored` names a project the dispatched
-    planner is to write into whichever root is in force, which is the last link: a root
-    both sides agree on is worth nothing until a plan written through it comes back.
-    """
-    turns, record = tmp_path / "turns.jsonl", tmp_path / "asked.json"
-    environment = _environment(tmp_path, oneharness_bin, turns, record=record)
-    # The plan this recipe writes is a direct node, so the launch opens no `onevcs`
-    # session; the scratch registry stays because the one thing no launch here may do is
-    # reach this host's own, whose registry a session reclaims run roots under, and a
-    # recipe that started opening sessions again must do so here rather than there.
-    identity = seeded(
-        tmp_path,
-        publication=PUBLICATION_ALIAS,
-        execution=EXECUTION_ALIAS,
-        origin=PLANNING_FLOW_ORIGIN,
-    )
-    _carrying_the_plan_store_configuration(identity)
-    environment["ONEVCS_HOME"] = str(identity.home)
-    environment.update(identity.environment)
-    if root is not None:
-        environment[PLAN_ROOT.name] = str(root)
-    # The root this launch writes its own project into: the one the caller chose, or
-    # else the one this checkout resolves, which is where a real planning launch writes.
-    authoring_root = root or plan_store.source_root(AUTHORING)
-    # Held rather than only written, because the wait below is on these very paths: the
-    # stand-in claims the instruction file before it writes them, so the instruction is
-    # gone by the time there is anything to read and only the records say authoring is done.
-    records: Mapping[str, str] | None = None
-    if authored is not None:
-        records = _authored_records(authoring_root, authored)
-        written = tmp_path / "authored-plan.json"
-        written.write_text(json.dumps(records), encoding="utf-8")
-        # The stand-in for the paid model performs the one action a real planner performs
-        # — it writes its plan into the store — because a stand-in that only reported
-        # would leave nothing for the launching checkout to read back. Everything above
-        # the provider stays real.
-        # llmlint: ignore[tests_mirror_real_usage] see the note above this line
-        environment[AUTHOR_PLAN_ENV] = str(written)
-    if resolved is not None:
-        instruction = tmp_path / "run-on-marker.json"
-        keyed: RunOnMarker = {STORE_MARKER: [_reading_the_plan_store(resolved)]}
-        instruction.write_text(json.dumps(keyed), encoding="utf-8")
-        # llmlint: ignore[tests_mirror_real_usage] The stand-in for the paid model runs
-        # the real store CLI in the dispatch's own worktree, which is what a dispatched
-        # planner does and the only thing about a turn anything downstream can observe.
-        environment[RUN_ON_MARKER_ENV] = str(instruction)
-    brief = tmp_path / f"{run}.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    generated = PLAN_DIRECTORY / f"{run}.plan.json"
-
-    # `--no-design-doc`, so this launch is the planner and nothing after it. What these
-    # journeys read is the environment a launch establishes and the run it establishes it
-    # for; the tail is a second launch about the plan the planner writes, and running it
-    # here would copy a fixture's plan into whatever destination the flow defaults to.
-    recipe = ["just", "plan", str(brief), "--name", run, "--no-design-doc", *detached]
-    try:
-        try:
-            with _attached(recipe, environment, tmp_path / "launch.log") as streamed:
-                dispatched = _await_dispatch(turns)
-                manager = _answering(run, environment)
-                answered = _await_answer(record, manager)
-                if records is not None:
-                    _await_authored_plan(records)
-                if resolved is not None:
-                    _await_store_answer(resolved)
-                _reaped(manager, answered)
-                assert (Path(environment["ONEPIPELINE_RUNS_DIR"]) / run).is_dir(), (
-                    f"`just plan` printed and exported run '{run}', which is not a run this "
-                    f"launch created:\n{streamed.read_text(encoding='utf-8')}"
-                )
-                launched = Dispatch(
-                    run=run,
-                    worker=dispatched,
-                    asked=answered,
-                    environment=environment,
-                    store=resolved,
-                    reported=streamed.read_text(encoding="utf-8"),
-                )
-        finally:
-            just("stop", run, environment=environment, seconds=60)
-            generated.unlink(missing_ok=True)
-        yield launched
-    finally:
-        _forgotten(authoring_root, run)
-
-
-@pytest.fixture(scope="module")
-def plan_attached(
-    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
-) -> Iterator[Dispatch]:
-    """Launch `just plan` attached — the one shape this host had ever proven.
-
-    This is the shape that also reports what its dispatch's own plan store resolves, so
-    the two halves of the plan-authoring root — the value a launch exports, and the
-    directory the store inside a dispatch then answers with — are read off one launch
-    rather than paid for twice.
-    """
-    _requires_just()
-    tmp_path = tmp_path_factory.mktemp("plan-attached")
-    with _planned(
-        tmp_path,
-        oneharness_bin,
-        RunId("launch-seam-plan-attached"),
-        resolved=tmp_path / "dispatch-config.json",
-    ) as launched:
-        yield launched
-
-
-@pytest.fixture(scope="module")
-def plan_root_already_chosen(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A plan-authoring root a caller points this launch at before it starts.
-
-    A genuinely separate writable directory, nowhere near this checkout's own — which is
-    the only shape that measures anything. A path merely spelled differently would prove
-    the value survived and nothing about where the launch then writes, and a directory
-    the checkout would have resolved anyway cannot tell a launch that honoured the
-    override from one that ignored it.
-    """
-    chosen = tmp_path_factory.mktemp("plan-root-already-chosen") / "somebody-elses-plans"
-    chosen.mkdir()
-    return chosen
-
-
-#: The project a dispatched planner authors under whichever root is in force. Distinct
-#: from the run's own name, because the launch writes a project of that name too and the
-#: point of reading this one back is that it is the *planner's* output.
-AUTHORED_PROJECT = "launch-seam-chosen-root-authored"
-
-
-@pytest.fixture(scope="module")
-def plan_over_a_chosen_root(
-    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str, plan_root_already_chosen: Path
-) -> Iterator[Dispatch]:
-    """Launch `just plan` over a root the caller chose, and read the whole path back.
-
-    Its own launch rather than a flag on one above, because what is being measured is a
-    launch's *starting environment*: the recipe resolves this checkout's own root
-    unconditionally, and only reading the value back out of a dispatch says whether the
-    one the caller chose survived that.
-
-    Attached rather than detached, because this journey reads what the dispatch wrote and
-    an attached launch is the shape that holds the run open while it does. It carries all
-    three halves of the override — the project the launch writes, the root the dispatch's
-    own store resolves, and the plan that dispatch authors — off one launch, because they
-    are one claim and three launches would be three chances for them to disagree for a
-    reason that is not the root.
-    """
-    _requires_just()
-    tmp_path = tmp_path_factory.mktemp("plan-chosen-root")
-    with _planned(
-        tmp_path,
-        oneharness_bin,
-        RunId("launch-seam-plan-chosen-root"),
-        root=plan_root_already_chosen,
-        resolved=tmp_path / "dispatch-config.json",
-        authored=AUTHORED_PROJECT,
-    ) as launched:
-        yield launched
-
-
-@pytest.fixture(scope="module")
-def plan_detached(
-    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
-) -> Iterator[Dispatch]:
-    """Launch `just plan --detach` — the shape this host actually launches a planner in."""
-    _requires_just()
-    with _planned(
-        tmp_path_factory.mktemp("plan-detached"),
-        oneharness_bin,
-        RunId("launch-seam-plan-detached"),
-        "--detach",
-    ) as launched:
-        yield launched
-
-
 def _given(dispatch: Dispatch, required: Input) -> str:
     """The one value every turn of this dispatch was given for a required input."""
     assert dispatch.worker, f"run {dispatch.run} dispatched nothing, so nothing here is measured"
@@ -1411,8 +912,6 @@ def test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under(
         "orchestrate_detached",
         "orchestrate_adopted",
         "orchestrate_lifecycle",
-        "plan_attached",
-        "plan_detached",
     ],
 )
 def test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under(
@@ -1455,8 +954,6 @@ def test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_u
         "orchestrate_attached",
         "orchestrate_detached",
         "orchestrate_adopted",
-        "plan_attached",
-        "plan_detached",
     ],
 )
 def test_every_launch_gives_its_dispatch_an_asker_to_ask_as(
@@ -1500,8 +997,6 @@ def test_every_launch_gives_its_dispatch_an_asker_to_ask_as(
         "orchestrate_attached",
         "orchestrate_detached",
         "orchestrate_adopted",
-        "plan_attached",
-        "plan_detached",
     ],
 )
 def test_every_launch_exports_repository_credentials_onto_its_dispatch(
@@ -1537,8 +1032,8 @@ def test_a_lifecycle_dispatch_is_given_the_session_its_worktree_belongs_to(
     spelling that names a session record under that home. That token is what the
     appendix's carve-out has a worker publish its draft under, and a launch whose
     dispatch lost it would leave a worker granted early publication with nothing to
-    name. The planning launches are deliberately not read for it: their node is direct,
-    so a session there would be the defect the journey below this one refuses.
+    name. The other launches are deliberately not read for it: their node is direct, so a
+    session there would be the defect the journey below this one refuses.
     """
     dispatch = orchestrate_lifecycle
     token = _given(dispatch, SESSION)
@@ -1559,8 +1054,6 @@ def test_a_lifecycle_dispatch_is_given_the_session_its_worktree_belongs_to(
         "orchestrate_attached",
         "orchestrate_detached",
         "orchestrate_adopted",
-        "plan_attached",
-        "plan_detached",
     ],
 )
 def test_a_direct_dispatch_is_given_no_session_at_all(
@@ -1568,13 +1061,11 @@ def test_a_direct_dispatch_is_given_no_session_at_all(
 ) -> None:
     """The other half: a dispatch in no session's worktree names none.
 
-    The node these launches dispatch is direct — the orchestrate shapes name no
-    repository, and `just plan` writes its planner as a direct node that works in the
-    launching checkout — so the engine opens no session for it and composes no
-    `ONEVCS_SESSION`. And it must not, because the appendix's carve-out tells a worker
-    holding one that it may publish a draft from it. Read as an absence off every turn
-    of the dispatch rather than as a blank, since a blank would be the variable composed
-    with nothing in it.
+    The node these launches dispatch is direct — it names no repository — so the engine
+    opens no session for it and composes no `ONEVCS_SESSION`. And it must not, because the
+    appendix's carve-out tells a worker holding one that it may publish a draft from it.
+    Read as an absence off every turn of the dispatch rather than as a blank, since a blank
+    would be the variable composed with nothing in it.
 
     `cast` for the reason the journey above gives: a fixture chosen by name at run time
     is one no static type can follow back to what it returns.
@@ -1588,311 +1079,7 @@ def test_a_direct_dispatch_is_given_no_session_at_all(
     )
 
 
-@pytest.mark.parametrize("shape", ["plan_attached", "plan_detached"])
-def test_every_plan_launch_gives_its_dispatch_the_plan_authoring_root_of_its_checkout(
-    shape: str, request: pytest.FixtureRequest
-) -> None:
-    """A planning launch's dispatch reads the launching checkout's own plan-authoring root.
-
-    `onetaskgraph.yaml` roots the `authoring` source at the relative `.plans`, and a
-    dispatch resolves it against its own working directory — so left alone, every
-    process resolves that source for itself and a planner placed anywhere but the
-    launching checkout authors a plan where that checkout never looks. Read back out of the
-    dispatch's own turn rather than off the launcher, for the reason the credential
-    journey above reads a credential that way: a launcher that exported a name and a
-    dispatch that received it are two different facts.
-
-    `cast` because the shape is parametrized: `getfixturevalue` resolves the fixture by
-    name at run time, which no static type can follow back to what it returns.
-    """
-    dispatch = cast(Dispatch, request.getfixturevalue(shape))
-    assert Path(_given(dispatch, PLAN_ROOT)) == plan_store.source_root(AUTHORING), (
-        f"the dispatch of {dispatch.run} was given a plan-authoring root that is not the "
-        "directory this checkout's plan store resolves the `authoring` source to"
-    )
-
-
-def test_a_dispatch_of_a_plan_launch_resolves_the_authoring_source_to_that_root(
-    plan_attached: Dispatch,
-) -> None:
-    """The store *inside* a dispatch answers with the launching checkout's directory.
-
-    A variable in an environment is not the claim that matters: what a dispatched
-    planner authors into is whatever its own plan store resolves the `authoring` source
-    to, from inside a worktree whose tracked configuration roots that source relatively.
-    So the process serving the dispatch runs the real store CLI where the dispatch runs
-    and reports what it answered, and this reads that answer back.
-
-    Both halves are asserted, because only the pair means anything: the root, and that
-    the store attributes it to the *environment* — a launch that stopped exporting one
-    would leave the worktree's own relative root answering, which is a different
-    directory reported the same way.
-    """
-    assert plan_attached.store is not None, "this launch was not asked to report a store"
-    assert plan_attached.store.is_file(), (
-        f"the dispatch of {plan_attached.run} never reported its own plan store; the "
-        "commands a turn runs are reported on the stand-in's stderr"
-    )
-    # `cast` because this is another program's answer arriving as JSON: the shape is
-    # declared above and each field is narrowed as it is read rather than trusted.
-    answered = cast(StoreConfiguration, json.loads(plan_attached.store.read_text(encoding="utf-8")))
-    key = f"sources.{AUTHORING}.config.root"
-    named = [setting for setting in answered["settings"] if setting["key"] == key]
-    assert len(named) == 1, (
-        f"the store inside a dispatch of {plan_attached.run} reported {len(named)} values "
-        f"for {key}, so there is no one root a dispatched planner would author into"
-    )
-    resolved = named[0]
-    root = resolved["value"]
-    assert isinstance(root, str), f"the store answered {key} with {root!r} rather than a path"
-
-    assert Path(root) == plan_store.source_root(AUTHORING), (
-        f"a dispatch of {plan_attached.run} resolves the {AUTHORING!r} source to {root}, "
-        "which is not the directory the launching checkout reads"
-    )
-    assert resolved["origin"] == {"layer": "environment", "variable": PLAN_ROOT.name}, (
-        f"the root a dispatch resolves came from {resolved['origin']} rather than from "
-        "the launch, so it is the worktree's own relative root answering"
-    )
-
-
-def test_a_plan_launch_keeps_a_plan_authoring_root_its_caller_already_chose(
-    plan_over_a_chosen_root: Dispatch, plan_root_already_chosen: Path
-) -> None:
-    """A root already in the environment is the root the dispatch reads.
-
-    The launch resolves this checkout's own unconditionally — that resolution is also
-    what refuses a root no plan could be authored into — so the only thing that says the
-    caller's choice survived it is reading the value back out of a dispatch.
-    """
-    assert Path(_given(plan_over_a_chosen_root, PLAN_ROOT)) == plan_root_already_chosen, (
-        f"the dispatch of {plan_over_a_chosen_root.run} was given a plan-authoring root "
-        "its launch resolved, rather than the one its caller had already chosen"
-    )
-
-
-def test_a_plan_launch_writes_its_own_project_under_the_root_its_caller_chose(
-    plan_over_a_chosen_root: Dispatch, plan_root_already_chosen: Path
-) -> None:
-    """The launch's own project is written where the store will then look for it.
-
-    This is the half a launch cannot survive getting wrong, and the one it used to get
-    wrong: the recipe wrote its project to a `.plans` relative to the tree it ran in
-    while `onepipeline start` resolved the configured root, so a caller who pointed that
-    root anywhere else had their plan refused by the launch gate — `no project with that
-    id` — moments after the launch reported writing it. The fixture reaching a dispatch
-    at all is the other half of the proof, since nothing is dispatched until the gate has
-    read this project.
-    """
-    written = plan_root_already_chosen / "projects" / f"{plan_over_a_chosen_root.run}.md"
-
-    assert written.is_file(), (
-        f"the launch of {plan_over_a_chosen_root.run} wrote no project under the root its "
-        f"caller chose; {plan_root_already_chosen} holds "
-        f"{sorted(path.name for path in plan_root_already_chosen.iterdir())}"
-    )
-    # And said so, which is the half a file on disk cannot answer: a record of this name
-    # under the wrong root — one a launch that ignored the override wrote into this
-    # checkout's own plan root, say — is not a file this test reads, and a reader that only
-    # looked at the chosen root could not tell a launch that wrote there from one that
-    # wrote to both. What the launch reports is about this launch alone.
-    assert plan_over_a_chosen_root.reported is not None, "this launch's stream was not read"
-    assert f"wrote {AUTHORING}:{plan_over_a_chosen_root.run} at {written}" in (
-        plan_over_a_chosen_root.reported
-    ), (
-        "the launch did not report writing its project under the root its caller chose:\n"
-        f"{plan_over_a_chosen_root.reported}"
-    )
-
-
-#: A project somebody else authored into this checkout's own plan root, planted beside a
-#: launch's records to measure what that launch takes back. Its name shares the stable
-#: prefix these journeys use, so a teardown that swept by pattern would take it too.
-SOMEBODY_ELSES_PROJECT = "launch-seam-somebody-elses-plan"
-
-
-def _somebody_elses_plan(root: Path) -> tuple[Path, list[Path]]:
-    """Write a stranger's project into ``root`` the way a real author does, and name it.
-
-    Through the store's own writer as a subprocess, because that is the one path
-    every project in that root arrives by — `scripts/plan.sh` pipes its generated plan
-    into exactly this module — and because the root is ignored by git, so no cache key
-    could carry it and this suite's read guards hold a test's own `open` off it.
-    """
-    written = subprocess.run(  # noqa: S603 - the store's own writer, on a plan this test composed
-        [
-            str(REPO_ROOT / ".venv" / "bin" / "python3"),
-            "-m",
-            "orchestrator.plan_records",
-            str(root),
-        ],
-        input=json.dumps(
-            {
-                "schema_version": 3,
-                "name": SOMEBODY_ELSES_PROJECT,
-                "goal": {"text": "A plan a person authored here"},
-                "tasks": [{"id": "theirs", "persona": "engineer", "task": AUTHORED_TASK}],
-            }
-        ),
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-    assert written.returncode == 0, f"the stranger's plan was not written:\n{written.stderr}"
-    return _authored_by_the_launch(root, RunId(SOMEBODY_ELSES_PROJECT))
-
-
-def test_a_plan_launch_takes_back_its_own_records_and_leaves_everyone_elses(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """A launch here writes into the real authoring root, and leaves it as it found it.
-
-    The launches above go into the `.plans` this checkout really resolves — not a root of
-    their own — because that a launch writes where a real planner writes is the claim.
-    The cost of that was residue: every green run of this module left its stable run ids
-    under `projects/` and `tasks/` of a developer's own plan root, where a planner or a
-    manager reading the authoring source found records nothing authored, and the next
-    run of the suite found its names already taken.
-
-    Its own launch rather than a look at a module fixture's, because a fixture's teardown
-    is what is being measured and no test in the module outlives it. Both halves are
-    asserted off one launch: the records are there while the launch is held, so the ones
-    it then no longer holds are ones the launch wrote into this checkout's root — and a
-    stranger's project, planted beside them under a name that shares their prefix, is
-    still there afterwards, which is what separates taking back one's own records from
-    sweeping the directory.
-    """
-    _requires_just()
-    run = RunId("launch-seam-plan-taken-back")
-    root = plan_store.source_root(AUTHORING)
-    project, _ = _authored_by_the_launch(root, run)
-    theirs_project, theirs_tasks = _somebody_elses_plan(root)
-    try:
-        with _planned(tmp_path, oneharness_bin, run):
-            assert project.is_file() and _authored_by_the_launch(root, run)[1], (
-                f"the launch of {run} wrote no records into this checkout's own authoring "
-                f"root {root}, so nothing below measures a teardown"
-            )
-
-        left = _authored_by_the_launch(root, run)[1]
-        assert not project.exists() and not left, (
-            f"the launch of {run} left its records in {root}: "
-            f"{[str(path) for path in (project, *left) if path.exists()]}"
-        )
-        assert theirs_project.is_file() and theirs_tasks, "the stranger's plan wrote no task"
-        assert all(path.is_file() for path in theirs_tasks), (
-            f"the launch of {run} took back records it never wrote from {root}: "
-            f"{[str(path) for path in (theirs_project, *theirs_tasks) if not path.exists()]}"
-        )
-    finally:
-        theirs_project.unlink(missing_ok=True)
-        for task in theirs_tasks:
-            task.unlink(missing_ok=True)
-
-
-def test_a_dispatch_over_a_chosen_root_resolves_its_store_to_that_root(
-    plan_over_a_chosen_root: Dispatch, plan_root_already_chosen: Path
-) -> None:
-    """Inside the dispatch, the store answers with the directory the caller chose.
-
-    The environment value reaching a dispatch and the dispatch's own store resolving it
-    are two facts, and only the second is what a planner authors through. Both halves are
-    asserted for the same reason the default-root journey asserts both: a root reported
-    from the *file* layer would be the worktree's own relative `.plans`, which is a
-    different directory read back the same way.
-    """
-    assert plan_over_a_chosen_root.store is not None, "this launch reported no store"
-    assert plan_over_a_chosen_root.store.is_file(), (
-        f"the dispatch of {plan_over_a_chosen_root.run} never reported its own plan store"
-    )
-    # `cast` for the reason the default-root journey casts: this is another program's
-    # answer arriving as JSON, the shape is declared above, and each field is narrowed as
-    # it is read rather than trusted.
-    answered = cast(
-        StoreConfiguration, json.loads(plan_over_a_chosen_root.store.read_text(encoding="utf-8"))
-    )
-    key = f"sources.{AUTHORING}.config.root"
-    named = [setting for setting in answered["settings"] if setting["key"] == key]
-    assert len(named) == 1, f"the store reported {len(named)} values for {key}"
-    root = named[0]["value"]
-    assert isinstance(root, str), f"the store answered {key} with {root!r} rather than a path"
-
-    assert Path(root) == plan_root_already_chosen, (
-        f"a dispatch of {plan_over_a_chosen_root.run} resolves the {AUTHORING!r} source to "
-        f"{root}, which is not the root its caller chose"
-    )
-    assert named[0]["origin"] == {"layer": "environment", "variable": PLAN_ROOT.name}, (
-        f"the root the dispatch resolved came from {named[0]['origin']} rather than from "
-        "the launch, so it is the worktree's own relative root answering"
-    )
-
-
-def test_the_launching_checkout_reads_the_plan_its_dispatch_authored(
-    plan_over_a_chosen_root: Dispatch, plan_root_already_chosen: Path
-) -> None:
-    """The last link: a plan written through that root comes back to the checkout.
-
-    A root both sides agree on is worth nothing until this holds, and it is the whole
-    reason the root is configured rather than guessed — the review, the design document
-    and the copy onto the board all read the plan the planner authored, and each of them
-    reads it from the launching checkout after the dispatch is gone.
-
-    Read through the store rather than off the filesystem, and with this process pointed
-    at the same root the launch pointed its dispatch at, because that is what an operator
-    who chose the root has: the value is theirs, exported, and every command they then
-    run resolves through it.
-    """
-    project = f"{AUTHORING}:{AUTHORED_PROJECT}"
-    with pytest.MonkeyPatch.context() as reading:
-        reading.setenv(PLAN_ROOT.name, str(plan_root_already_chosen))
-        tasks = plan_store.read_tasks(project)
-
-    assert [task.node_id for task in tasks] == ["route"], (
-        f"the launching checkout could not read {project} back out of the root its "
-        f"dispatch authored into: {tasks}"
-    )
-
-
-@pytest.mark.parametrize("shape", ["plan_attached", "plan_detached"])
-@pytest.mark.parametrize("required", REQUIRED_INPUTS, ids=lambda row: row.name)
-def test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs(
-    shape: str, required: Input, request: pytest.FixtureRequest
-) -> None:
-    """Both inputs, both shapes — a defect journey for the detached one, a guard for the other.
-
-    `just plan` writes the plan and owns its `name`, so both halves of the environment
-    are this recipe's to establish, and the detached shape had only one of them: measured
-    before the fix, a worker there was given no `ONEPIPELINE_RUN_ID` at all, so its first
-    question died on `ONEPIPELINE_RUN_ID is not set`. The attached shape passes before
-    and after, and is here as the guard on the one path that already worked.
-
-    Parametrized over the inputs rather than asserting them together so a launch path
-    that stops providing one is named by the failing case, which is what makes this
-    readable from a suite run months from now.
-    """
-    dispatch = cast(Dispatch, request.getfixturevalue(shape))
-    given = _given(dispatch, required)
-    assert given.strip(), f"{required.name} reached the dispatch blank, and it is {required.why}"
-
-
-def test_a_plan_launch_tells_its_dispatch_the_run_it_actually_created(
-    plan_detached: Dispatch,
-) -> None:
-    """The run a dispatch is told it is under is the run the launch made, not another one.
-
-    A question is only answerable on the right channel, and the id is where that goes
-    wrong silently: a wrapper handed somebody else's run does not fail, it queues a
-    blocking surface on a channel that run's own manager is not watching, and waits out
-    its whole reply window for an answer nobody there will send.
-    """
-    assert _given(plan_detached, RUN_ID) == plan_detached.run
-
-
-@pytest.mark.parametrize(
-    "shape", ["orchestrate_attached", "orchestrate_lifecycle", "plan_attached", "plan_detached"]
-)
+@pytest.mark.parametrize("shape", ["orchestrate_attached", "orchestrate_lifecycle"])
 def test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand(
     shape: str, request: pytest.FixtureRequest
 ) -> None:
@@ -1905,12 +1092,10 @@ def test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_han
     --correlation`. What comes back has to be exactly one line — the bus's `reply` answer,
     carrying the envelope the manager sent — at exit 0.
 
-    Attached `just orchestrate` and detached `just plan` were defect journeys when first
-    written: the first found no wrapper and the second refused with `ONEPIPELINE_RUN_ID is
-    not set`. The lifecycle shape is the ask from a session worktree, which holds no `runs`
+    Attached `just orchestrate` was a defect journey when first written: it found no
+    wrapper. The lifecycle shape is the ask from a session worktree, which holds no `runs`
     of its own, so it reaches this run's channel only through the runs root its dispatch
-    was given. Attached `just plan` is the regression guard on the one shape that always
-    worked.
+    was given.
     """
     dispatch = cast(Dispatch, request.getfixturevalue(shape))
     asked = dispatch.asked
@@ -1945,17 +1130,12 @@ def test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_han
 
 
 #: The shapes of launch this module makes, each read for the bus configuration its run
-#: recorded. The design-document launch is not among them: `_planned` launches `just plan`
-#: with `--no-design-doc`, so the flow's second launch is made only by the plan-flow
-#: journeys under `tests/plan_tooling/`.
+#: recorded.
 LAUNCH_SHAPES = (
     "orchestrate_attached",
     "orchestrate_detached",
     "orchestrate_adopted",
     "orchestrate_lifecycle",
-    "plan_attached",
-    "plan_detached",
-    "plan_over_a_chosen_root",
 )
 
 
@@ -1996,8 +1176,8 @@ def test_every_launch_records_this_checkouts_bus_configuration_for_its_run(
         f"bus's defaults rather than this host's: {sorted(recorded)}"
     )
     assert bus.get("profile") == BUS_PROFILE, bus
-    # No bus validator: the engine's envelope reviewer, which the same launch config names,
-    # judges every reply carrying edits.
+    # No bus validator: the engine's plan-edit hook, which the same launch config names,
+    # judges every edit carrying task prose.
     assert not bus.get("validators"), bus.get("validators")
     assert not bus.get("hooks"), bus.get("hooks")
     codecs = bus.get("codecs")
@@ -2006,47 +1186,6 @@ def test_every_launch_records_this_checkouts_bus_configuration_for_its_run(
     assert monitor.get("reply_window_seconds") == BUS_REPLY_WINDOW_SECONDS, (
         f"run {dispatch.run} serves its observer's judge side under a reply window of "
         f"{monitor.get('reply_window_seconds')!r}, not this host's {BUS_REPLY_WINDOW_SECONDS}"
-    )
-
-
-def test_a_second_plan_launch_under_one_name_is_refused_rather_than_given_another_run(
-    plan_detached: Dispatch, tmp_path: Path
-) -> None:
-    """A defect journey: the second launch used to print and hand out the first run's id.
-
-    `onepipeline` mints a run id from the plan's `name` and, when a run root of that name
-    already exists, mints the first free `<name>-2` instead. So the second launch here
-    printed `just channel-next <name>` — naming the *first* run, which is live and whose
-    manager is somebody else — and, now that the id is exported to the dispatch too,
-    would have sent that planner's blocking questions to it.
-
-    Launched against a name a journey above already used, rather than against a run root
-    written by hand: what makes this a defect is that an ordinary launch takes the name
-    first, and its ledger keeps it for as long as the run is on record.
-
-    The recipe writes the plan and owns its `name`, so it refuses instead of predicting
-    what will be minted. Both halves are asserted: the refusal names the collision and
-    what to do, and nothing is left behind for the next launch to pick up.
-    """
-    _requires_just()
-    run = plan_detached.run
-    brief = tmp_path / "brief.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    generated = PLAN_DIRECTORY / f"{run}.plan.json"
-
-    refused = just(
-        "plan", str(brief), "--name", run, "--detach", environment=plan_detached.environment
-    )
-
-    assert refused.returncode != 0, (
-        f"a second launch under the name '{run}' was not refused, and the run it "
-        f"named is the first one's:\n{refused.stdout}{refused.stderr}"
-    )
-    reported = refused.stderr + refused.stdout
-    assert f"run '{run}' already exists" in reported, reported
-    assert "pass --name with a run id nothing has taken yet" in reported, reported
-    assert not generated.exists(), (
-        f"the refused launch left {generated.name} for the next one to pick up"
     )
 
 
@@ -2123,427 +1262,3 @@ def test_a_launch_whose_wrapper_it_cannot_run_is_refused_before_anything_starts(
     assert "ask-manager wrapper is not an executable file" in refused.stderr, refused.stderr
     assert "chmod +x" in refused.stderr, f"the refusal states no remedy:\n{refused.stderr}"
     assert not (tmp_path / "runs").exists(), "a run was started by a launch that cannot ask"
-
-
-@pytest.mark.parametrize("shape", ["a directory nothing may search", "a file"])
-def test_a_plan_launch_that_cannot_search_the_ledger_refuses_rather_than_assuming(
-    tmp_path: Path, oneharness_bin: str, shape: str
-) -> None:
-    """A ledger this launch cannot look in is said out loud, not read as an empty one.
-
-    The guarantee above rests on a negative — no run root of this name — and a negative
-    is only worth as much as the lookup behind it. A ledger directory that cannot be
-    searched answers "no such run" for every name in it, so a launch that trusted that
-    would export a run id that is already somebody else's live run, which is the one
-    thing the refusal exists to prevent.
-
-    A mode of `000` does not by itself make a directory unsearchable: `root`, and
-    anything else holding `CAP_DAC_READ_SEARCH`, is unaffected and there is no portable
-    mode that stops them. So the scenario is measured with the same `access(2)` the guard
-    consults, and skipped by name where it cannot be built rather than passing as a
-    permission test that read a readable ledger.
-    """
-    _requires_just()
-    run = RunId("launch-seam-plan-unsearchable")
-    environment = _environment(tmp_path, oneharness_bin, tmp_path / "turns.jsonl")
-    ledger = Path(environment["ONEPIPELINE_RUNS_DIR"])
-    if shape == "a file":
-        # The other way a configured ledger is unusable, and the one no permission can
-        # rescue: something that is not a directory at all answers no lookup.
-        ledger.write_text("not a ledger\n", encoding="utf-8")
-    else:
-        ledger.mkdir(parents=True)
-        ledger.chmod(0o000)
-        if os.access(ledger, os.X_OK):
-            ledger.chmod(0o755)
-            pytest.skip(
-                "this user searches a mode-0 directory, so an unsearchable ledger cannot be set up"
-            )
-    brief = tmp_path / "brief.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    generated = PLAN_DIRECTORY / f"{run}.plan.json"
-
-    try:
-        refused = just("plan", str(brief), "--name", run, "--detach", environment=environment)
-
-        assert refused.returncode != 0, f"an unsearchable ledger launched:\n{refused.stdout}"
-        reported = refused.stderr + refused.stdout
-        assert "cannot be searched" in reported, reported
-        assert "fix its permissions" in reported, reported
-        assert not generated.exists(), "a plan was written for a launch that was refused"
-    finally:
-        if ledger.is_dir():
-            ledger.chmod(0o755)
-        generated.unlink(missing_ok=True)
-
-
-#: The helpers `scripts/plan.sh` sources before it writes anything. Each establishes
-#: environment a dispatch cannot be launched without — the seam an agent puts a question
-#: to its manager over, this checkout's own credentials, and the plan-authoring root a
-#: dispatched planner writes into — and `plan.sh` reads each out of its helper rather
-#: than resolving any of them itself. So a checkout missing one is a launch that cannot
-#: establish it at all, which is a different missing piece from a helper that is there
-#: but broken, and one that would otherwise surface as a shell error naming a file the
-#: operator never asked about.
-#: The grammar `scripts/plan.sh` reads its brief and its options through, which is not an
-#: environment helper and so is not one of the cases below: it is sourced before any of
-#: them, so a checkout without it never reaches the refusal each of these journeys is
-#: about. Kept present in every one of them for that reason.
-BRIEF_GRAMMAR = "plan-brief.sh"
-#: The helper `scripts/plan.sh` enters its flow through, sourced after the brief grammar and
-#: before any environment helper; kept present for the same reason, and given the engine it
-#: enters that flow through (`give_flow_engine`), because a checkout without one is refused
-#: there, before any refusal below.
-FLOW_HELPER = "launch-flow.sh"
-
-LAUNCH_ENVIRONMENT_HELPERS = (
-    "credentials-env.sh",
-    "ask-manager-env.sh",
-    "plan-root-env.sh",
-)
-
-
-@pytest.mark.parametrize("missing", LAUNCH_ENVIRONMENT_HELPERS)
-def test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_nothing(
-    missing: str,
-    tmp_path: Path,
-) -> None:
-    """The recipe refuses a checkout missing either helper, before it writes a plan.
-
-    Driven by running the real recipe from a directory holding the recipe and every
-    helper but one, so the refusal proved is the one that helper's absence produces
-    rather than whichever check happens to come first.
-    """
-    scripts = tmp_path / "checkout" / "scripts"
-    scripts.mkdir(parents=True)
-    alone = scripts / "plan.sh"
-    alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
-    alone.chmod(0o755)
-    # `ask-manager.sh` beside them, because it is what the ask-manager helper resolves
-    # and refuses over: without it every case past that helper reports its absence
-    # instead of the one this case removed.
-    kept = {*LAUNCH_ENVIRONMENT_HELPERS, "ask-manager.sh", BRIEF_GRAMMAR, FLOW_HELPER} - {missing}
-    for present in sorted(kept):
-        copied = scripts / present
-        copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
-        copied.chmod(0o755)
-    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
-    give_flow_engine(scripts.parent)
-    brief = tmp_path / "brief.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    working = tmp_path / "working"
-    working.mkdir()
-
-    refused = subprocess.run(  # noqa: S603 - the real recipe, from a checkout without the helper
-        [str(alone), str(brief), "--name", f"launch-seam-no-{missing.removesuffix('.sh')}"],
-        cwd=working,
-        env=dict(os.environ),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert refused.returncode != 0, refused.stdout
-    assert "required helper is not a readable regular file" in refused.stderr, refused.stderr
-    assert missing in refused.stderr, refused.stderr
-    assert not (working / "scratch").exists(), (
-        "a plan was written for a launch that cannot establish its dispatch environment"
-    )
-
-
-def test_a_plan_launch_in_a_checkout_without_an_engine_is_refused_naming_it(
-    tmp_path: Path,
-) -> None:
-    """No engine means no launch flow, and the launcher refuses rather than going on without one.
-
-    The flow is what holds the manager's session for the launcher's whole life, so a
-    launcher that went on in no flow would launch runs and ask questions nothing is woken
-    for. Driven through the real recipe from a checkout holding every helper and the real
-    engine wrapper but no installed engine command, so the refusal proved is the missing
-    engine's and nothing after it.
-    """
-    checkout = tmp_path / "checkout"
-    scripts = checkout / "scripts"
-    scripts.mkdir(parents=True)
-    for present in (
-        "plan.sh",
-        *LAUNCH_ENVIRONMENT_HELPERS,
-        "ask-manager.sh",
-        BRIEF_GRAMMAR,
-        FLOW_HELPER,
-    ):
-        copied = scripts / present
-        copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
-        copied.chmod(0o755)
-    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
-    engine = give_flow_engine(checkout)
-    engine.unlink()
-    brief = tmp_path / "brief.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    working = tmp_path / "working"
-    working.mkdir()
-    runs = tmp_path / "runs"
-
-    refused = subprocess.run(  # noqa: S603 - the real recipe, from a checkout without an engine
-        [str(scripts / "plan.sh"), str(brief), "--name", "launch-seam-no-engine"],
-        cwd=working,
-        env={**dict(os.environ), "ONEPIPELINE_RUNS_DIR": str(runs)},
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert refused.returncode == 2, refused.stdout + refused.stderr
-    # The refusal is the launcher's only word: nothing past the flow's entry ran.
-    (said,) = refused.stderr.splitlines()
-    assert said.startswith(f"plan: this checkout has no engine at {engine}"), said
-    assert "just bootstrap" in said, said
-    assert not (working / "scratch").exists(), "a plan was written for a launch with no engine"
-    assert not runs.exists(), "a run was started for a launch with no engine"
-
-
-def test_a_plan_launch_whose_engine_wrapper_cannot_be_run_is_refused_naming_it(
-    tmp_path: Path,
-) -> None:
-    """A wrapper the kernel refuses is explained by the launcher, never left to a bare error.
-
-    The flow is entered by exec'ing the engine wrapper, so its failure must come back to
-    the launcher to say what to repair. Driven through the real recipe from a checkout
-    holding every helper and an engine, with the wrapper present but not executable, so
-    the refusal proved is the wrapper's and nothing before it.
-    """
-    checkout = tmp_path / "checkout"
-    scripts = checkout / "scripts"
-    scripts.mkdir(parents=True)
-    for present in (
-        "plan.sh",
-        *LAUNCH_ENVIRONMENT_HELPERS,
-        "ask-manager.sh",
-        BRIEF_GRAMMAR,
-        FLOW_HELPER,
-    ):
-        copied = scripts / present
-        copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
-        copied.chmod(0o755)
-    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
-    give_flow_engine(checkout)
-    wrapper = scripts / "onepipeline.sh"
-    wrapper.chmod(0o644)
-    brief = tmp_path / "brief.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    working = tmp_path / "working"
-    working.mkdir()
-    runs = tmp_path / "runs"
-
-    refused = subprocess.run(  # noqa: S603 - the real recipe, from a checkout whose wrapper cannot run
-        [str(scripts / "plan.sh"), str(brief), "--name", "launch-seam-no-wrapper"],
-        cwd=working,
-        env={**dict(os.environ), "ONEPIPELINE_RUNS_DIR": str(runs)},
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert refused.returncode == 2, refused.stdout + refused.stderr
-    said = refused.stderr.splitlines()[-1]
-    assert said.startswith(f"plan: the engine wrapper {wrapper} could not be run"), said
-    assert "just bootstrap" in said, said
-    assert not (working / "scratch").exists(), "a plan was written for a launch with no flow"
-    assert not runs.exists(), "a run was started for a launch with no flow"
-
-
-#: Every helper `scripts/plan.sh` sources, so each one's load failure is driven rather
-#: than the first one's standing in for the rest. They are sourced in sequence and each
-#: establishes a different part of the dispatch environment, so a reader cannot infer one
-#: refusal from another: they went out of step exactly once, when the ask-manager source
-#: was left to strict mode while the credentials source three lines above it was not, and
-#: nothing here noticed because only the credentials half had a journey.
-SOURCED_HELPERS = (
-    FLOW_HELPER,
-    "credentials-env.sh",
-    "ask-manager-env.sh",
-    "plan-root-env.sh",
-)
-
-
-@pytest.mark.parametrize("corrupted", SOURCED_HELPERS)
-def test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing(
-    tmp_path: Path, corrupted: str
-) -> None:
-    """A helper that is readable and then fails to load still refuses the launch, attributably.
-
-    The check before the source answers "is the file there and readable", which a corrupt
-    or half-written helper passes. Left to strict mode, what follows is a bare shell
-    syntax error naming a file the operator never asked about and no action to take —
-    beside diagnostics that name both. Driven through the real recipe, because the whole
-    point is what an operator sees when they run it.
-    """
-    scripts = tmp_path / "checkout" / "scripts"
-    scripts.mkdir(parents=True)
-    alone = scripts / "plan.sh"
-    alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
-    alone.chmod(0o755)
-    intact = {*SOURCED_HELPERS, "ask-manager.sh", BRIEF_GRAMMAR} - {corrupted}
-    for present in sorted(intact):
-        copied = scripts / present
-        copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
-        copied.chmod(0o755)
-    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
-    give_flow_engine(scripts.parent)
-    (scripts / corrupted).write_text("this is ( not valid bash\n", encoding="utf-8")
-    brief = tmp_path / "brief.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    working = tmp_path / "working"
-    working.mkdir()
-
-    name = f"launch-seam-unloadable-{corrupted.removesuffix('.sh')}"
-    refused = subprocess.run(  # noqa: S603 - the real recipe, against a helper that cannot load
-        [str(alone), str(brief), "--name", name],
-        cwd=working,
-        env=dict(os.environ),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert refused.returncode != 0, refused.stdout
-    assert "could not be loaded" in refused.stderr, refused.stderr
-    assert corrupted in refused.stderr, refused.stderr
-    assert "just bootstrap" in refused.stderr, refused.stderr
-    assert not (working / "scratch").exists(), (
-        f"a plan was written for a launch whose {corrupted} never loaded"
-    )
-
-
-#: A credentials file the loader refuses, and the phrase its refusal carries. Both are
-#: things an operator really does — a line they typed wrongly, and a path they created as
-#: the wrong kind of thing — as opposed to a file the launcher merely cannot resolve.
-UNUSABLE_CREDENTIAL_FILES = (
-    ("malformed line", "GH_PROJECTS_TOKEN=fine\nnot-an-assignment\n", "malformed credential line"),
-    ("not a regular file", None, "is not a readable regular file"),
-)
-
-
-@pytest.mark.parametrize(
-    ("label", "written", "expected"),
-    UNUSABLE_CREDENTIAL_FILES,
-    ids=[row[0] for row in UNUSABLE_CREDENTIAL_FILES],
-)
-def test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing(
-    label: str, written: str | None, expected: str, tmp_path: Path
-) -> None:
-    """A `.env` the loader refuses stops the plan launch, with the loader's own reason.
-
-    The launcher propagates the loader's exit status rather than carrying on, because a
-    dispatch launched without the credentials an operator placed for it fails much later
-    and somewhere else — against GitHub, with nothing pointing back at the file. Driven
-    through the real recipe over a checkout whose `.env` this journey controls, so what
-    is proved is what an operator running `just plan` would see.
-    """
-    checkout = tmp_path / "checkout"
-    scripts = checkout / "scripts"
-    scripts.mkdir(parents=True)
-    alone = scripts / "plan.sh"
-    alone.write_bytes((REPO_ROOT / "scripts" / "plan.sh").read_bytes())
-    alone.chmod(0o755)
-    for present in (
-        BRIEF_GRAMMAR,
-        FLOW_HELPER,
-        "credentials-env.sh",
-        "ask-manager-env.sh",
-        "ask-manager.sh",
-        "plan-root-env.sh",
-    ):
-        copied = scripts / present
-        copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
-        copied.chmod(0o755)
-    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
-    give_flow_engine(checkout)
-    credentials = checkout / ".env"
-    if written is None:
-        credentials.mkdir()
-    else:
-        credentials.write_text(written, encoding="utf-8")
-    brief = tmp_path / "brief.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    working = tmp_path / "working"
-    working.mkdir()
-
-    refused = subprocess.run(  # noqa: S603 - the real recipe, over a `.env` it must refuse
-        [str(alone), str(brief), "--name", f"launch-seam-unusable-{label.replace(' ', '-')}"],
-        cwd=working,
-        env=dict(os.environ),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert refused.returncode != 0, refused.stdout
-    assert expected in refused.stderr, refused.stderr
-    assert not (working / "scratch").exists(), (
-        "a plan was written for a launch whose credentials file the loader refused"
-    )
-
-
-@pytest.mark.parametrize(
-    ("label", "make"),
-    [
-        ("a file", lambda root: root.write_text("not a plan store\n", encoding="utf-8")),
-        ("a read-only directory", lambda root: root.mkdir(mode=0o500)),
-    ],
-)
-def test_a_plan_launch_over_an_unusable_plan_authoring_root_writes_nothing(
-    label: str, make: Callable[[Path], object], tmp_path: Path
-) -> None:
-    """A root no plan could be authored into stops the launch before it writes or dispatches.
-
-    The alternative is the failure this whole seam exists to prevent, one step later: the
-    launch writes its project, opens a session, dispatches a planner, and that planner
-    authors its plan into a directory nothing can write — or worse, into whatever it
-    resolves for itself. Refusing costs one line and nothing else has happened yet.
-
-    Driven through the real recipe in this checkout, so the resolution refusing is this
-    repository's own rather than one a copied tree could only approximate; what the
-    journey supplies is the root, which is the launch's own starting environment.
-    """
-    root = tmp_path / "plans"
-    make(root)
-    brief = tmp_path / "brief.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    working = tmp_path / "working"
-    working.mkdir()
-    runs = tmp_path / "runs"
-    run = f"launch-seam-unusable-root-{label.replace(' ', '-')}"
-
-    try:
-        refused = subprocess.run(  # noqa: S603 - the real recipe, over a root it must refuse
-            [str(REPO_ROOT / "scripts" / "plan.sh"), str(brief), "--name", run],
-            cwd=working,
-            env={
-                **dict(os.environ),
-                PLAN_ROOT.name: str(root),
-                "ONEPIPELINE_RUNS_DIR": str(runs),
-            },
-            text=True,
-            capture_output=True,
-            timeout=e2e_timeout(120),
-            check=False,
-        )
-    finally:
-        if root.is_dir():
-            root.chmod(0o700)
-
-    assert refused.returncode == 2, refused.stdout + refused.stderr
-    assert str(root) in refused.stderr, refused.stderr
-    assert PLAN_ROOT.name in refused.stderr, refused.stderr
-    assert not (working / ".plans").exists(), (
-        "a plan was written for a launch whose plan-authoring root cannot hold one"
-    )
-    assert not (runs / run).exists(), (
-        "a run was started for a launch whose plan-authoring root cannot hold a plan"
-    )

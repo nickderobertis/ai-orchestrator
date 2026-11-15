@@ -42,7 +42,7 @@ profile: planner-channel
 # `@` pin to the protocol the installed onejudge speaks, against a bundle derived from
 # that release, and the resolved layout to the four queues the engine writes.
 schemas:
-  - "https://raw.githubusercontent.com/nickderobertis/onepipeline/v0.110.2/schemas/planner-channel.json@3"
+  - "https://raw.githubusercontent.com/nickderobertis/onepipeline/v0.113.1/schemas/planner-channel.json@3"
   - "https://raw.githubusercontent.com/nickderobertis/onejudge/onejudge-v0.23.1/schemas/judge-seat-frames.json@8"
 authors:
   # The channel's authors, as the bus's Contract A has a configuration declare them: the
@@ -75,11 +75,10 @@ authors:
       rework: "starting work on a reviewer's feedback answers its reviewers with new instructions, which is the planner's decision rather than an observation"
       decline: "declining a reviewer's feedback answers its reviewer for the change, which is the planner's decision rather than an observation"
       retitle: "a change request's title is the subject that lands on the base, which is the planner's decision rather than an observation"
-# No `hooks`: what a reply envelope carrying edits is held to is the engine's envelope
-# reviewer, which config/onepipeline.launch.yaml names — `scripts/envelope-review.sh`, the
-# criteria bar — because the engine offers it the plan and the goal the edit lands in, and
-# records its passes under the run. A `note`'s `criterion` is not among what the pinned
-# engine offers it, so a note's criterion is held to no bar until the engine offers it.
+# No `hooks` and no envelope validator: a reply envelope's edits are judged by the engine's
+# plan-edit hook, which config/onepipeline.launch.yaml names — `scripts/review-plan-item.sh`,
+# the same judge-only review authoring runs — once per node whose task an `amend`, `retry`,
+# `requeue` or `add` introduces or changes. A `note` never reaches it.
 codecs:
   # The monitor's judge side: `onemessagebus serve surfaces --codec monitor` over this
   # file, as graphs/dag-scope.yaml spawns it, interpreting onejudge's command-provider

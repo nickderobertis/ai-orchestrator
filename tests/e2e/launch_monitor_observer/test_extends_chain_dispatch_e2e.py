@@ -452,13 +452,12 @@ def test_the_adopted_cli_resolves_a_chain_and_attributes_it_to_the_parent(
 ) -> None:
     """The third road: the `oneharness` CLI this host runs itself, reading a chain.
 
-    `config/onepipeline.version` governs the two roads above, but four of this host's
-    ten role files are read by the CLI `config/oneharness.version` names rather than by
-    the engine — `oneharness.toml` and `oneharness.judge.toml` through
-    `config/onejudge.base.yaml`'s `bin: oneharness`, and `oneharness.llmlint.toml` and
-    `oneharness.plan-review.toml` named on a command line — so a CLI pin that could not
-    resolve a chain would refuse those four at the first read while both dispatch roads
-    stayed green.
+    `config/onepipeline.version` governs the two roads above, but three of this host's
+    role files are read by the CLI `config/oneharness.version` names rather than by the
+    engine — `oneharness.toml` and `oneharness.judge.toml` through
+    `config/onejudge.base.yaml`'s `bin: oneharness`, and `oneharness.llmlint.toml` named on
+    a command line — so a CLI pin that could not resolve a chain would refuse those three
+    at the first read while both dispatch roads stayed green.
 
     The `source` annotation is asserted beside the value because the two failures this
     guards are told apart by it: a CLI that ignored `extends` would report the built-in

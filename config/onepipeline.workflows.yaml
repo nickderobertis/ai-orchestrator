@@ -1,0 +1,14 @@
+# The launch config of this host's own workflow runs — `just plan`, `just finish-plan`, the
+# spikes run a planning run's `spikes` step starts, and the follow-up runs — as the
+# engine's `start --launch-config` reads it. It is `config/onepipeline.launch.yaml` without
+# what only a plan's own run carries: no launch check (a planning run launches a plan
+# nothing has reviewed yet, which is the point of it), no plan-edit hook, no run-end hook
+# and no drafting graph. A planning run's tasks are rendered by the store from this host's
+# `templates/planning/` files rather than resolved by name, so `require_rendered` is off.
+# Paths are relative to the launch directory, this checkout's root.
+schema_version: 14
+require_rendered: false
+template_root: templates
+bus_config: config/onemessagebus.yaml
+dispatch_env_hook: scripts/dispatch-env-hook.sh
+maintenance_config: config/onepipeline.maintenance.yaml

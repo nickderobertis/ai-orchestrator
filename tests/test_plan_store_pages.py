@@ -3,10 +3,9 @@
 A listing the store answers is one page — its `page_size` setting, 50 unless configured —
 with a `next` cursor when more remain, and a reader that took the first page for the whole
 answered "nothing more" for every item on the second. What is proven here is
-`plan_store.every_page` and each reader routed through it, over real `local-md` sources with
-nothing in the store's place: a project past the default page with no page-size override, the
-shape of that incident, and `ONETASKGRAPH_PAGE_SIZE` — the store's own environment layer for
-the setting — making a small source span pages for the rest.
+`plan_store.every_page` over a real `local-md` source with nothing in the store's place, with
+`ONETASKGRAPH_PAGE_SIZE` — the store's own environment layer for the setting — making a
+small source span pages.
 """
 
 from __future__ import annotations
@@ -16,12 +15,8 @@ from pathlib import Path
 import pytest
 
 from orchestrator import plan_store
-from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import WRITABLE_PLUGIN
-from orchestrator.record_shapes import PlanNode, frontmatter
 
-#: The store's default page, which the default-page case has to pass without naming it.
-DEFAULT_PAGE = 50
 SOURCE = "pagedsource"
 
 
@@ -30,133 +25,33 @@ def _source(monkeypatch: pytest.MonkeyPatch, name: str, root: Path) -> None:
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{name.upper()}__CONFIG__ROOT", str(root))
 
 
-def _tasks(count: int, **extra: object) -> list[PlanNode]:
-    return [
-        PlanNode(id=f"t{i:02d}", title=f"Task {i:02d}", task=f"Body {i}.")
-        for i in range(1, count + 1)
-    ]
-
-
-def test_read_tasks_reads_a_project_past_the_stores_default_page(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """More tasks than one default page, no page-size override: every one is returned."""
-    monkeypatch.delenv("ONETASKGRAPH_PAGE_SIZE", raising=False)
-    root = tmp_path / "source"
-    nodes = _tasks(DEFAULT_PAGE + 5)
-    # A dependency from the last page onto the first, so the edge resolves across pages.
-    nodes[-1] = PlanNode(id="t55", title="Task 55", task="Body 55.", deps=["t01"])
-    write_plan_project(root, {"name": "demo", "tasks": nodes})
-    _source(monkeypatch, SOURCE, root)
-
-    # The premise, read off the installed store rather than assumed: the first page as the
-    # SDK reports it stops short and names a cursor.
-    first = plan_store.sdk(plan_store.client().task_list(source=[SOURCE], project="demo"))
-    assert len(first.items) == DEFAULT_PAGE
-    assert first.next is not None
-
-    records = plan_store.read_tasks(f"{SOURCE}:demo")
-
-    assert [record.node_id for record in records] == [node["id"] for node in nodes]
-    assert records[-1].deps == ("t01",)
-    plan, _ = plan_store.read_project(f"{SOURCE}:demo")
-    assert len(plan["tasks"]) == DEFAULT_PAGE + 5
-
-
-def test_identity_checks_hold_over_the_union_of_every_page(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A duplicate node id and a second repository past the first page are still refused."""
-    monkeypatch.delenv("ONETASKGRAPH_PAGE_SIZE", raising=False)
-    duplicate = tmp_path / "duplicate"
-    write_plan_project(duplicate, {"name": "demo", "tasks": _tasks(DEFAULT_PAGE + 1)})
-    last = duplicate / "tasks" / "task-51.md"
-    last.write_text(
-        last.read_text(encoding="utf-8").replace("onepipeline.id: t51", "onepipeline.id: t01"),
-        encoding="utf-8",
-    )
-    _source(monkeypatch, "duplicate", duplicate)
-    with pytest.raises(OSError, match="duplicate task or node identities"):
-        plan_store.read_tasks("duplicate:demo")
-
-    repositories = tmp_path / "repositories"
-    nodes = _tasks(DEFAULT_PAGE + 1)
-    nodes[-1] = PlanNode(id="t51", title="Task 51", task="Body 51.", repo="github.com/acme/one")
-    write_plan_project(repositories, {"name": "demo", "tasks": nodes})
-    last = repositories / "tasks" / "task-51.md"
-    last.write_text(
-        last.read_text(encoding="utf-8").replace(
-            "- github.com/acme/one\n", "- github.com/acme/one\n- github.com/acme/two\n"
-        ),
-        encoding="utf-8",
-    )
-    _source(monkeypatch, "repositories", repositories)
-    with pytest.raises(OSError, match="task-51' has more than one repository"):
-        plan_store.read_tasks("repositories:demo")
-
-
-def test_task_dependencies_are_read_past_one_page(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("ONETASKGRAPH_PAGE_SIZE", "1")
-    root = tmp_path / "source"
-    write_plan_project(
-        root,
-        {
-            "name": "demo",
-            "tasks": [
-                PlanNode(id="a", title="A", task="Body."),
-                PlanNode(id="b", title="B", task="Body."),
-                PlanNode(id="c", title="C", task="Body.", deps=["a", "b"]),
-            ],
-        },
-    )
-    _source(monkeypatch, SOURCE, root)
-
-    edges = plan_store.sdk(plan_store.client().task_deps(f"{SOURCE}:c"))
-    assert len(edges.items) == 1 and edges.next is not None
-
-    records = {record.node_id: record for record in plan_store.read_tasks(f"{SOURCE}:demo")}
-    assert records["c"].deps == ("a", "b")
-
-
-def test_projects_and_documents_are_read_past_one_page(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("ONETASKGRAPH_PAGE_SIZE", "2")
-    root = tmp_path / "source"
-    names = ["alpha", "beta", "gamma", "delta", "epsilon"]
-    for name in names:
-        write_plan_project(root, {"name": name, "tasks": []})
-    documents = root / "documents"
-    documents.mkdir()
-    for index in range(5):
-        (documents / f"note-{index}.md").write_text(
-            frontmatter({"title": f"Note {index}", "project": "alpha", "labels": ["x"]}, "Body.\n"),
-            encoding="utf-8",
-        )
-    _source(monkeypatch, SOURCE, root)
-
-    first = plan_store.sdk(plan_store.client().project_list(source=[SOURCE]))
-    assert len(first.items) == 2 and first.next is not None
-
-    assert sorted(project.title for project in plan_store.read_projects(SOURCE)) == sorted(names)
-    read = plan_store.read_documents(f"{SOURCE}:alpha")
-    assert sorted(document.title for document in read) == [f"Note {i}" for i in range(5)]
-    assert {document.project for document in read} == {"alpha"}
-
-
 def test_a_listing_past_the_ceiling_is_refused_naming_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ONETASKGRAPH_PAGE_SIZE", "1")
     root = tmp_path / "source"
-    write_plan_project(root, {"name": "demo", "tasks": _tasks(3)})
     _source(monkeypatch, SOURCE, root)
+    # Three tasks of one project, written as the `local-md` plugin stores them.
+    (root / "projects").mkdir(parents=True)
+    (root / "projects" / "demo.md").write_text("---\ntitle: demo\nstatus: todo\n---\n")
+    (root / "tasks").mkdir()
+    for i in range(3):
+        (root / "tasks" / f"t{i}.md").write_text(
+            f"---\ntitle: Task {i}\nstatus: todo\nproject: demo\n---\nBody {i}.\n"
+        )
     monkeypatch.setattr(plan_store, "LISTING_PAGE_CEILING", 2)
 
+    def listing() -> list[object]:
+        pages = plan_store.every_page(
+            f"project '{SOURCE}:demo'",
+            plan_store.client().task_list,
+            source=[SOURCE],
+            project="demo",
+        )
+        return [item for page in pages for item in page.items]
+
     with pytest.raises(OSError) as refused:
-        plan_store.read_tasks(f"{SOURCE}:demo")
+        listing()
 
     message = str(refused.value)
     assert message.startswith(f"listing project '{SOURCE}:demo' read 2 pages")
@@ -164,4 +59,4 @@ def test_a_listing_past_the_ceiling_is_refused_naming_it(
 
     # A listing that ends exactly at the ceiling is whole, not refused.
     monkeypatch.setattr(plan_store, "LISTING_PAGE_CEILING", 3)
-    assert len(plan_store.read_tasks(f"{SOURCE}:demo")) == 3
+    assert len(listing()) == 3

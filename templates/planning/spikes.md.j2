@@ -1,0 +1,47 @@
+---
+onetaskgraph_template: 1
+description: >-
+  The spikes of one plan, as a plan graph: the brief of what they will measure, the user's
+  approval of it, and the spikes the draft adds. The draft creates it as `<plan>-spikes`
+  only when the plan needs a measurement; the planning run's `spikes` step launches it in
+  the same flow, and its `finalize` step reworks the plan from their reports. Finalize is
+  not a member here because the engine refuses any node depending on a `publish:
+  "preserve"` node, and every spike is one.
+variables:
+  plan:
+    description: The qualified id of the plan whose spikes these are, `authoring:<native id>`.
+    type: text
+    required: true
+  native:
+    description: The plan project's native id.
+    type: text
+    required: true
+members:
+  - id: "{{ native }}-spikes-brief"
+    title: "Write the spike brief of {{ plan }}"
+    template: {file: spike-brief.md.j2}
+    answers:
+      plan: "{{ plan }}"
+      native: "{{ native }}"
+    metadata:
+      onepipeline.id: spike-brief
+      onepipeline.persona: ../personas/spike-brief.yaml
+      onepipeline.agent_graph: graphs/spike-brief.yaml
+  - id: "{{ native }}-spikes-approve"
+    title: "Approve the spike brief of {{ plan }}"
+    template: {file: step.md.j2}
+    answers:
+      description: "Waits for the user's approval of the spike brief before any spike runs."
+    depends_on: ["{{ native }}-spikes-brief"]
+    metadata:
+      onepipeline.id: approve-spikes
+      onepipeline.kind: human
+      onepipeline.human_item:
+        kind: task
+        priority: medium
+        title: "Approve the spikes of {{ plan }}"
+        body: >-
+          Read the document {{ native }}-spike-brief of {{ plan }}. Once the user approves
+          the spikes it describes, run `just approve-spikes <this run's id>`.
+---
+The spikes of `{{ plan }}`: the spike brief, its approval, and each spike.

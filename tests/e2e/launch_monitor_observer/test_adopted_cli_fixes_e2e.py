@@ -727,15 +727,15 @@ def test_a_relative_source_root_resolves_against_the_document_that_supplied_it(
     assert found == [str(records / "tasks" / PROJECT / f"{TASK}.md")], found
 
 
-#: How the store spells `ROOT_SETTING` at its environment layer, which is the layer
-#: `scripts/plan-root-env.sh` exports this checkout's own absolute root at.
+#: How the store spells `ROOT_SETTING` at its environment layer: the layer above the
+#: document that a caller states an absolute root at.
 ROOT_SETTING_ENV = "ONETASKGRAPH_SOURCES__WORK__CONFIG__ROOT"
 
 
 def test_an_exported_absolute_root_still_beats_the_document_a_dispatch_reads(
     tmp_path: Path,
 ) -> None:
-    """Why this host still exports an absolute root rather than relying on the fix.
+    """Why an absolute root stated above the document beats relying on the fix.
 
     A dispatch works in a worktree carrying its own copy of `onetaskgraph.yaml`, so
     resolving against the document it reads puts its records under *that* copy — the

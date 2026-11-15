@@ -1,9 +1,7 @@
 """The contracts the manager/planner seam restates are reconciled with their source.
 
 A copy of a contract owned somewhere else is only sound while something reconciles it.
-`scripts/plan-brief.sh`'s copy of the plan-task layout is reconciled in
-`tests/plan_tooling/check_and_review/test_task_templates.py`, where the template is
-rendered. Two copies are held here. The engine's `onepipeline ask`, which
+Two copies are held here. The engine's `onepipeline ask`, which
 `scripts/ask-manager.sh` runs, refuses without the run it asks on, and the journeys that
 prove a launch builds that hold their own list of the names they measure. And the persona's
 fallback ask is a statement of the engine's channel layout a planner runs when its launch

@@ -40,27 +40,14 @@ from typing import NamedTuple
 
 import pytest
 from delegation_checkout import (
-    BLANKS,
-    BRIEF,
-    BUS_CONFIG,
-    CHECK_OUTPUT_ENV,
     CHECKOUT,
-    COLLIDING_BRIEF,
-    COLLIDING_PROJECT,
-    CREATED_LOCATION_ENV,
-    CREATED_PROJECT,
-    CREATED_RECORD,
-    CREATED_TASK,
     DEFAULTS,
     ENGINE,
     ENGINE_REPORTS_ENV,
     ENGINE_VERSION,
     PINNED_ENGINE,
-    PLAN_PROJECT,
     READ_API,
-    RESOLVED_LOADER_ENV,
     ROOT,
-    SEEDED_PLAN_RECORDS,
     TEMPLATE_ROOT_TRACE_ENV,
 )
 from delegation_checkout import at as _at
@@ -68,104 +55,9 @@ from delegation_checkout import delegation_checkout as _checkout
 from delegation_checkout import run_recipe as _run
 from waits import timeout as e2e_timeout
 
-#: The run the design-document launch is made under, derived from the flow's own name.
-DESIGN_PROJECT = "authoring:cursor-shape-design"
-
-#: The source `just finish-plan` copies into when the caller names none, which is the
-#: board this repository plans against. A literal here for the reason
-#: `tests/plan_tooling/plan_copy/test_copy_plan_recipe_e2e.py` spells it as one: importing the
-#: constant would make this table assert that it equals itself.
-THE_BOARD = "plans"
-
-#: What `just plan` adds to its planning launch, and only to that one: its one node is the
-#: manager's hand-written brief, which no template renders, so it names the opt-out itself.
-PLANNING_RENDERED = "--require-rendered false"
-#: The kind and group every planning launch carries: the draft's kind, under the plan
-#: project its brief declares, joined to its flag so the launch gate does not read it as
-#: a second plan to approve.
-PLANNING_LABELS = f"--label kind=planning --group={PLAN_PROJECT} {BLANKS}"
-
-
-def _design_labels(project: str) -> str:
-    """The kind and group the design-document launch carries, under the plan it documents,
-    and the launch settings it names blank."""
-    return f"--label kind=design --group={project} {BLANKS}"
-
-
-def _flow(script: str, name: str, *arguments: str) -> str:
-    """The flow a launcher enters before anything it writes, re-executing itself in it.
-
-    Through the wrapper, which adds this host's bus configuration as it does to a launch;
-    `just plan` handing over to its tail enters it again, which the engine answers by
-    running the tail in the flow already entered.
-    """
-    return (
-        f"{ENGINE} flow run {BUS_CONFIG} --name {name} -- "
-        f"{CHECKOUT}/scripts/{script} {' '.join(arguments)}"
-    )
-
-
-def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[str, ...]:
-    """Every command line the tail of the planning flow reaches, in order.
-
-    Stated once because it is one sequence: `just plan` hands over to `just finish-plan`
-    rather than repeating its steps, so a row that reached a different set of verbs here
-    would be the two entry points having drifted apart. The order is the whole contract —
-    the review is before the check, the check is before the launch that writes the
-    document, and the copy is after both — because a document written from unreviewed
-    content is the failure this ordering exists to prevent.
-    """
-    to = () if destination == THE_BOARD else ("--to", destination)
-    return (
-        _flow("finish-plan.sh", "cursor-shape", BRIEF, "--name", "cursor-shape", *to),
-        f"uv run orchestrator-review-plan {project}",
-        f"uv run orchestrator-check-plan {project}",
-        *_graph_reads(project),
-        *_writer_task(project),
-        f"uv run orchestrator-launch-gate {DESIGN_PROJECT} {_design_labels(project)}"
-        f" --dag-graph off",
-        ENGINE_VERSION,
-        f"{ENGINE} start {DEFAULTS} {DESIGN_PROJECT} {_design_labels(project)} --dag-graph off",
-        f"uv run orchestrator-copy-plan {project} --to {destination}",
-        f"uv run orchestrator-plan-locations {project} --in {destination}",
-        f"uv run orchestrator-design-review raise {project} --in {destination}",
-    )
-
-
 #: Where the tail's composed answers file is named on a trace line: a scratch file whose
 #: name is the system's to choose, so a row states it as this placeholder.
 ANSWERS = "--answers <answers>"
-
-
-def _graph_reads(project: str) -> tuple[str, ...]:
-    """The store's two reads of the plan's graph, grouped by unit: the picture's, then the rows'.
-
-    Through `uv run`, as the tail's other plan-store reads are, so a checkout that delegates
-    to another's installs reaches the store the same way.
-    """
-    return tuple(
-        f"uv run onetaskgraph project graph {project} --format {form} --group-by orchestrator.unit"
-        for form in ("mermaid", "json")
-    )
-
-
-def _writer_task(project: str) -> tuple[str, ...]:
-    """The three command lines that create and check the design-document node's own task.
-
-    The `plan-task` template resolved through the wrapper, the store's `task create` fed
-    it, and the engine's check of the item that create answered with — before the launch
-    gate, because a task the engine refuses is one nothing launches.
-    """
-    return (
-        f"{ENGINE} template resolve plan-task --json",
-        "uv run onetaskgraph task create authoring --template-loader - --no-interactive"
-        f" --project {DESIGN_PROJECT.partition(':')[2]}"
-        f" --title Write the design document for {project} {ANSWERS}"
-        ' --metadata onepipeline.id="design-doc"'
-        ' --metadata onepipeline.persona="../personas/design-doc.yaml"'
-        ' --metadata onepipeline.agent_graph="graphs/design-doc.yaml" --json',
-        f"{ENGINE} template check plan-task --item {CREATED_TASK}",
-    )
 
 
 def _answers_named(line: str) -> str:
@@ -219,9 +111,9 @@ DELEGATIONS = (
     # The two graph flags and the run's kind are the recipe's own addition: both graphs
     # ship defaulted to nothing, so a bare launch runs with no agent watching it and
     # answers no reviewer. Every other launch setting — the run-end hooks, the drafting
-    # graph, the bus configuration, the dispatch-env hook, the maintenance schedule and the
-    # envelope reviewer — is the launch config's, which the wrapper names and nothing here
-    # renders as a flag.
+    # graph, the bus configuration, the dispatch-env hook, the maintenance schedule, the
+    # launch check and the plan-edit hook — is the launch config's, which the wrapper names
+    # and nothing here renders as a flag.
     Delegation(
         "orchestrate",
         ("authoring:probe",),
@@ -306,131 +198,23 @@ DELEGATIONS = (
     # Adoption attaches a fresh driver to an intact ledger, which already records the
     # graphs, hooks and dispatch-env hook its launch chose, so no default is added to it.
     Delegation("orchestrate", ("--adopt", "run-1"), f"{ENGINE} adopt run-1"),
-    # `just plan` writes the plan it launches, so the argument its published line
-    # carries is a path this recipe generated rather than one the caller typed. Both
-    # of its own flags are absorbed here — `--name` decides that path and `--max-turns`
-    # goes into the node — and everything else reaches `onepipeline start` untouched.
-    #
-    # `--dag-graph off` is the observer default it adds, and it is the whole of what a
-    # planning launch differs from a bare `onepipeline start` by: the journal, the
-    # ownership row, the surfaces and the DAG UI place are all that verb's own, and an
-    # observer would only add a monitor comparing the run against the plan it has not
-    # written yet.
-    #
-    # What follows that launch is the tail, and every row of it is `just finish-plan`'s
-    # own: this recipe hands over rather than repeating those steps, which is what keeps
-    # the two entry points one sequence.
+    # The planning recipes that reach one engine verb, through the launch wrapper: the
+    # engine's own plan load with this host's install check registered, and the attest that
+    # releases a spikes run waiting on its brief's approval. `just plan`, `just
+    # finish-plan`, `just review-plan` and `just approve-design` compose several library
+    # verbs and are driven whole by `tests/e2e/planning/`.
     Delegation(
-        "plan",
-        (BRIEF,),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape {PLANNING_LABELS} --dag-graph off"
-        f" {PLANNING_RENDERED}",
-        then=_tail(),
-        before=(_flow("plan.sh", "cursor-shape", BRIEF),),
+        "check-plan",
+        ("authoring:probe",),
+        f"{ENGINE} plan check authoring:probe --check orchestrator/host_adoption_check.py",
     ),
-    # `--detach` hands back before the planner has written anything, so there is no plan
-    # for the tail to be about and the launch prints the command that finishes it later.
-    # That is the one shape where `just plan` reaches a single verb.
+    # A human wait pauses a run and lets its driver go, so the attest is followed by the
+    # adoption that drives the spikes run on.
     Delegation(
-        "plan",
-        (BRIEF, "--name", "listing-api", "--max-turns", "40", "--detach"),
-        f"{ENGINE} start {DEFAULTS} authoring:listing-api {PLANNING_LABELS} --detach"
-        f" --dag-graph off "
-        f"{PLANNING_RENDERED}",
-        before=(
-            _flow(
-                "plan.sh",
-                "listing-api",
-                BRIEF,
-                "--name",
-                "listing-api",
-                "--max-turns",
-                "40",
-                "--detach",
-            ),
-        ),
-    ),
-    # The joined spelling of both, which is a separate parsing path: `--name=` decides
-    # the plan path this line names, and `--max-turns=` is absorbed rather than
-    # forwarded — which is exactly what its absence from this line asserts.
-    Delegation(
-        "plan",
-        (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
-        f"{ENGINE} start {DEFAULTS} authoring:listing-api {PLANNING_LABELS} --detach"
-        f" --dag-graph off "
-        f"{PLANNING_RENDERED}",
-        before=(
-            _flow(
-                "plan.sh", "listing-api", BRIEF, "--name=listing-api", "--max-turns=40", "--detach"
-            ),
-        ),
-    ),
-    # `--no-design-doc` stops the flow after the planner, so the tail is absent here for
-    # a different reason than it is absent above: there is nothing to write a document
-    # about copying, rather than nothing written yet.
-    Delegation(
-        "plan",
-        (BRIEF, "--no-design-doc"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape {PLANNING_LABELS} --dag-graph off"
-        f" {PLANNING_RENDERED}",
-        before=(_flow("plan.sh", "cursor-shape", BRIEF, "--no-design-doc"),),
-    ),
-    # `--to` is the tail's own flag and reaches it rather than `onepipeline start`: the
-    # destination decides nothing about the planner, and everything about where the plan
-    # a person reviews ends up.
-    Delegation(
-        "plan",
-        (BRIEF, "--to", "elsewhere"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape {PLANNING_LABELS} --dag-graph off"
-        f" {PLANNING_RENDERED}",
-        then=_tail(destination="elsewhere"),
-        before=(_flow("plan.sh", "cursor-shape", BRIEF, "--to", "elsewhere"),),
-    ),
-    # A caller who names an observer keeps it, in either spelling and including their
-    # own `off`: the flag refuses to be given twice, so the default is added only when
-    # neither spelling was typed. It is the *planner's* observer: the tail is a separate
-    # launch of one node that reads a finished plan, so it keeps its own default.
-    Delegation(
-        "plan",
-        (BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape {PLANNING_LABELS}"
-        f" --dag-graph graphs/dag-scope.yaml "
-        f"{PLANNING_RENDERED}",
-        then=_tail(),
-        before=(_flow("plan.sh", "cursor-shape", BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),),
-    ),
-    Delegation(
-        "plan",
-        (BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape {PLANNING_LABELS}"
-        f" --dag-graph=graphs/other.yaml --detach "
-        f"{PLANNING_RENDERED}",
-        before=(
-            _flow("plan.sh", "cursor-shape", BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
-        ),
-    ),
-    # The tail on its own, which is how a plan edited after it was authored is finished:
-    # the same six verbs in the same order, reached without a planner being launched at
-    # all. Its published line is the design-document launch, because that is the one verb
-    # of the six that starts a run.
-    Delegation(
-        "finish-plan",
-        (BRIEF, "--to", "elsewhere"),
-        "uv run orchestrator-review-plan authoring:listing-cursor",
-        before=(_flow("finish-plan.sh", "cursor-shape", BRIEF, "--to", "elsewhere"),),
-        then=(
-            "uv run orchestrator-check-plan authoring:listing-cursor",
-            *_graph_reads("authoring:listing-cursor"),
-            *_writer_task("authoring:listing-cursor"),
-            "uv run orchestrator-launch-gate authoring:cursor-shape-design "
-            f"{_design_labels('authoring:listing-cursor')} --dag-graph off",
-            ENGINE_VERSION,
-            f"{ENGINE} start {DEFAULTS} authoring:cursor-shape-design "
-            f"{_design_labels('authoring:listing-cursor')} --dag-graph off",
-            "uv run orchestrator-copy-plan authoring:listing-cursor --to elsewhere",
-            "uv run orchestrator-plan-locations authoring:listing-cursor --in elsewhere",
-            "uv run orchestrator-design-review raise authoring:listing-cursor --in elsewhere",
-        ),
+        "approve-spikes",
+        ("run-1",),
+        f"{ENGINE} attest run-1 approve-spikes",
+        then=(ENGINE_VERSION, f"{ENGINE} adopt run-1 --detach"),
     ),
     Delegation("channel-next", ("run-1",), f"{ENGINE} next run-1"),
     # The read profile is the CLI's own default, so the recipes name no filter and
@@ -647,12 +431,6 @@ DELEGATIONS = (
 )
 
 
-#: The command `scripts/onepipeline.sh` puts every launch through before it reaches the
-#: engine: the design-document approval gate. It is derived from the published line below
-#: rather than restated per row, and that is the claim rather than a saving — **every**
-#: `onepipeline start` this repository makes is gated, so a row that could name it and did
-#: not would be a launch that got past.
-LAUNCH_GATE = "uv run orchestrator-launch-gate"
 STARTS = f"{ENGINE} start "
 ADOPTS = f"{ENGINE} adopt "
 
@@ -660,17 +438,13 @@ ADOPTS = f"{ENGINE} adopt "
 def _gated(published: str) -> tuple[str, ...]:
     """What a launch owes before its own line, and nothing for one that launches nothing.
 
-    The gate first, over the launch as typed; then the wrapper's question to the engine
-    about which release it is, which an adoption asks too, since it runs no gate.
+    The wrapper's question to the engine about which release it is, which a launch and an
+    adoption both ask. The launch check `just orchestrate`'s launch config registers is the
+    engine's to run, after this line, so it leaves no line of its own here.
     """
-    if published.startswith(ADOPTS):
+    if published.startswith((ADOPTS, STARTS)):
         return (ENGINE_VERSION,)
-    if not published.startswith(STARTS):
-        return ()
-    typed = published.removeprefix(STARTS)
-    # The wrapper names its launch config after the gate has read the launch as typed.
-    typed = typed.removeprefix(f"{DEFAULTS} ")
-    return (f"{LAUNCH_GATE} {typed}", ENGINE_VERSION)
+    return ()
 
 
 #: The envelope a row naming a reply file hands the recipe: a verdict, which the engine's
@@ -850,518 +624,6 @@ def test_a_read_only_view_asks_the_engine_for_no_version(tmp_path: Path) -> None
     assert result.returncode == 0, result.stdout + result.stderr
     assert "engine requested" not in result.stderr + result.stdout
     assert _traced_at(checkout, trace) == [f"{ENGINE} next run-1"]
-
-
-#: The task record a whole `just plan` writes itself under the local authoring source: the
-#: planner node in the project the recipe generates, which the store files under the slug
-#: of its title. The `design-doc` node its tail generates — which reads the finished plan
-#: and writes the document a person reviews it as — is created by the store's own `task
-#: create`, which this checkout doubles, so that node's placement is read off the command
-#: line the tail hands the store instead.
-GENERATED_TASKS = (".plans/tasks/plan.md",)
-
-#: What a `task create` line would carry to place its node in a repository: the record's
-#: own `repositories`, or either placement key on its metadata.
-PLACING = ("--repository", "onepipeline.repo", "onepipeline.execution_checkout")
-
-
-class Placement(NamedTuple):
-    """Where one generated node's record says its dispatch works, in the record's terms."""
-
-    #: The record's own top-level `repositories`: the normalized origin of a hosted
-    #: repository, and empty for one that list cannot hold.
-    repositories: tuple[str, ...]
-    #: What the reserved `onepipeline.repo` key carries, which is a local checkout's
-    #: alias and never a hosted repository's — or `None` when the key is absent.
-    reserved: str | None
-    #: The registered execution checkout, which has no field of its own to move into and
-    #: stays an alias on `onepipeline.execution_checkout`.
-    execution: str | None
-
-
-#: What the launch has to say about where the planner works. A manager reading the
-#: receipt is the one who decides what their brief may ask it to leave behind, and it is
-#: the only place the constraints are put in front of them at the moment they apply.
-DIRECT_SAYS = (
-    "may write only to gitignored paths, may not commit, and may not leave the base branch"
-)
-
-#: The three flags the flow's grammar used to carry, each refused by name now: the first
-#: two would compose a lifecycle node, which the adopted engine settles `failed` as
-#: `empty-branch` for committing nothing, and the third named the only shape there is.
-RETIRED_PLACEMENT_FLAGS = (
-    ("--repo", "other"),
-    ("--execution-checkout", "other-isolated"),
-    ("--direct",),
-)
-
-
-def _placed(task_record: str) -> Placement | None:
-    """Where one generated record says its dispatch works, read off the record itself."""
-    repositories = re.search(r"^repositories: (\[.*\])$", task_record, re.MULTILINE)
-    reserved = re.search(r'"onepipeline.repo": "([^"]+)"', task_record)
-    execution = re.search(r'"onepipeline.execution_checkout": "([^"]+)"', task_record)
-    if repositories is None and reserved is None and execution is None:
-        return None
-    return Placement(
-        tuple(json.loads(repositories.group(1))) if repositories else (),
-        reserved.group(1) if reserved else None,
-        execution.group(1) if execution else None,
-    )
-
-
-def test_the_plan_recipe_writes_both_of_its_nodes_as_direct_nodes(tmp_path: Path) -> None:
-    """Where the dispatched planner works is decided by the document, before any launch.
-
-    `tests/e2e/launch_monitor_observer/test_plan_recipe_e2e.py` drives the shape all the way
-    into a real dispatch and reads the directory out of the run's journal; this is the cheap
-    half — the documents themselves, with the published CLI doubled so no planner is
-    dispatched to prove a field. Each node must carry **neither** placement field: a `repo`
-    would make it a lifecycle node, which the adopted engine settles `failed` as
-    `empty-branch` for committing nothing, and `execution_checkout` without a `repo` names a
-    clone nothing is cut from.
-
-    Both nodes are read, because the placement is a property of the *flow* rather than of
-    one launch: the two are written by two launches, which is exactly the seam a
-    placement could reappear at.
-    """
-    checkout, trace = _checkout(tmp_path)
-
-    result = _run(checkout, trace, "plan", BRIEF)
-
-    assert result.returncode == 0, result.stderr
-    for generated in GENERATED_TASKS:
-        task_record = (checkout / generated).read_text(encoding="utf-8")
-        placed = _placed(task_record)
-        assert placed is None, (
-            f"`just plan` wrote {generated} placed at {placed}, so that dispatch would be "
-            f"a lifecycle node rather than a direct one: {task_record}"
-        )
-    (created,) = [
-        line for line in trace.read_text().splitlines() if line.startswith(_writer_task("")[1][:40])
-    ]
-    for placing in PLACING:
-        assert placing not in created, (
-            f"the tail created its design-doc node carrying {placing}, so that dispatch "
-            f"would be a lifecycle node rather than a direct one: {created}"
-        )
-    assert DIRECT_SAYS in result.stderr, (
-        f"the launch said nothing about where this planner works, which is where its "
-        f"constraints are stated at all:\n{result.stderr}"
-    )
-
-
-@pytest.mark.parametrize("flag", RETIRED_PLACEMENT_FLAGS, ids=lambda row: row[0])
-def test_the_plan_recipe_refuses_a_retired_placement_flag_by_name(
-    tmp_path: Path, flag: tuple[str, ...]
-) -> None:
-    """A caller who read an older shape of this flow is told which shape every launch gets.
-
-    Refused before anything is written or launched, and refused by this recipe rather than
-    by `onepipeline start`, which has never heard of any of these and would report an
-    unknown argument that says nothing about why the flag is gone.
-    """
-    checkout, trace = _checkout(tmp_path)
-
-    result = _run(checkout, trace, "plan", BRIEF, *flag)
-
-    assert result.returncode != 0, result.stdout
-    assert "no longer an option of the planning flow" in result.stderr, result.stderr
-    assert not trace.exists() or "onepipeline start" not in trace.read_text(encoding="utf-8"), (
-        f"a refused launch still reached the engine:\n{trace.read_text(encoding='utf-8')}"
-    )
-    for generated in GENERATED_TASKS:
-        assert not (checkout / generated).exists(), f"a refused launch wrote {generated}"
-
-
-class Collision(NamedTuple):
-    """One launch whose run name is its brief's declared plan project's native id."""
-
-    what: str
-    invocation: tuple[str, ...]
-    #: The run name the launch would have used, which is also that native id.
-    run: str
-    #: The brief's declared plan project, qualified.
-    project: str
-
-
-#: Every way a run name reaches the declared project's id: given with `--name` in either
-#: spelling, derived from a brief named after its plan, and derived under the opt-out,
-#: which drops the requirement to declare a plan but not the collision of one declared.
-COLLISIONS = (
-    Collision("a derived name", (COLLIDING_BRIEF,), "cursor-colour", COLLIDING_PROJECT),
-    Collision(
-        "a given name",
-        (BRIEF, "--name", "listing-cursor"),
-        "listing-cursor",
-        PLAN_PROJECT,
-    ),
-    Collision(
-        "a joined given name, detached",
-        (BRIEF, "--name=listing-cursor", "--detach"),
-        "listing-cursor",
-        PLAN_PROJECT,
-    ),
-    Collision(
-        "a derived name with no design document",
-        (COLLIDING_BRIEF, "--no-design-doc"),
-        "cursor-colour",
-        COLLIDING_PROJECT,
-    ),
-)
-
-
-@pytest.mark.parametrize("collision", COLLISIONS, ids=lambda row: row.what)
-def test_the_plan_recipe_refuses_a_run_named_as_the_plan_it_authors(
-    tmp_path: Path, collision: Collision
-) -> None:
-    """A planning run and the plan it authors are never launched as one project.
-
-    The launch writes its own project as `authoring:<run>`, and the planner authors the
-    project the brief declares. Named alike, they are one record: the planner's plan
-    lands over the launch's project, and the run's settlement write-back then rewrites
-    that plan with the planning run's goal and node. So the launch is refused before it
-    writes a record or reaches the engine, naming both values and the remedy.
-    """
-    checkout, trace = _checkout(tmp_path)
-
-    result = _run(checkout, trace, "plan", *collision.invocation)
-
-    assert result.returncode != 0, f"{collision.what} launched:\n{result.stderr}"
-    stated = [line for line in result.stderr.splitlines() if line.startswith("plan: ")]
-    assert len(stated) == 1, result.stderr
-    (refusal,) = stated
-    assert f"the run name '{collision.run}'" in refusal, refusal
-    native = collision.project.split(":", 1)[1]
-    assert f"'{native}', the native id of the brief's plan project '{collision.project}'" in (
-        refusal
-    ), refusal
-    assert "; pass --name with a run name other than" in refusal, refusal
-    traced = trace.read_text(encoding="utf-8") if trace.exists() else ""
-    assert "onepipeline start" not in traced, f"a refused launch reached the engine:\n{traced}"
-    written = sorted(
-        str(one.relative_to(checkout))
-        for one in (checkout / ".plans").rglob("*")
-        if str(one.relative_to(checkout)) not in SEEDED_PLAN_RECORDS
-    )
-    assert written == [], f"a refused launch wrote plan records: {written}"
-
-
-def test_the_plan_recipe_launches_a_brief_named_after_its_plan_under_another_name(
-    tmp_path: Path,
-) -> None:
-    """The remedy the refusal names works: the same brief under another `--name` launches.
-
-    Its planning project is written under the name given, and the plan the brief declares
-    is left for the planner to author, so the two are separate records.
-    """
-    checkout, trace = _checkout(tmp_path)
-    run = "cursor-colour-planning"
-
-    result = _run(checkout, trace, "plan", COLLIDING_BRIEF, "--name", run, "--detach")
-
-    assert result.returncode == 0, result.stderr
-    published = (
-        f"{ENGINE} start {DEFAULTS} authoring:{run} --label kind=planning"
-        f" --group={COLLIDING_PROJECT} {BLANKS} --detach --dag-graph off {PLANNING_RENDERED}"
-    ).replace(CHECKOUT, str(checkout.resolve()))
-    assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
-    assert (checkout / ".plans" / "projects" / f"{run}.md").is_file(), result.stderr
-    native = COLLIDING_PROJECT.split(":", 1)[1]
-    assert not (checkout / ".plans" / "projects" / f"{native}.md").exists(), (
-        f"the launch wrote the plan its planner authors, {COLLIDING_PROJECT}, itself"
-    )
-
-
-def test_the_plan_recipe_launches_a_run_named_as_a_plan_in_another_source(
-    tmp_path: Path,
-) -> None:
-    """A declared plan in another source is another record, whatever its native id.
-
-    The launch writes `authoring:<run>`, so a brief declaring `plans:<run>` names a
-    project in a different store: the two cannot overwrite each other, and the launch
-    proceeds under the name its filename derives.
-    """
-    checkout, trace = _checkout(tmp_path)
-    native = COLLIDING_PROJECT.split(":", 1)[1]
-    elsewhere = f"plans:{native}"
-    (checkout / COLLIDING_BRIEF).write_text(
-        "## What\nDecide the cursor's colour.\n\n"
-        f"Plan project: {elsewhere}\n\n"
-        "## Why\nThe view cannot theme without it.\n\n"
-        "## Acceptance criteria\n- The colour is stated.\n"
-    )
-
-    result = _run(checkout, trace, "plan", COLLIDING_BRIEF, "--detach")
-
-    assert result.returncode == 0, result.stderr
-    assert "the native id of the brief's plan project" not in result.stderr, result.stderr
-    published = (
-        f"{ENGINE} start {DEFAULTS} authoring:{native} --label kind=planning"
-        f" --group={elsewhere} {BLANKS} --detach --dag-graph off {PLANNING_RENDERED}"
-    ).replace(CHECKOUT, str(checkout.resolve()))
-    assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
-    assert (checkout / ".plans" / "projects" / f"{native}.md").is_file(), result.stderr
-
-
-@pytest.mark.parametrize(
-    ("declaration", "names"),
-    (
-        (f"Plan project: {PLAN_PROJECT}\nPlan project: {COLLIDING_PROJECT}", "names 2 plan"),
-        ("Plan project: cursor-colour", "is not a qualified id"),
-    ),
-    ids=("two plan projects", "an unqualified plan project"),
-)
-def test_the_plan_recipe_opt_out_still_refuses_a_plan_project_it_cannot_compare(
-    tmp_path: Path, declaration: str, names: str
-) -> None:
-    """`--no-design-doc` drops the need to declare a plan, not the reading of one declared.
-
-    The opt-out's planner still authors into whatever the brief declares, so a declaration
-    this launch could not read would be one it could not compare with its run name: a
-    second line naming the run's own project would pass unseen. So an unusable one is
-    refused under the opt-out as it is without it, before anything is written or launched.
-    """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / COLLIDING_BRIEF).write_text(
-        f"## What\nDecide the cursor's colour.\n\n{declaration}\n\n"
-        "## Why\nThe view cannot theme without it.\n\n"
-        "## Acceptance criteria\n- The colour is stated.\n"
-    )
-
-    result = _run(checkout, trace, "plan", COLLIDING_BRIEF, "--no-design-doc")
-
-    assert result.returncode != 0, f"an unusable declaration launched:\n{result.stderr}"
-    assert names in result.stderr, result.stderr
-    traced = trace.read_text(encoding="utf-8") if trace.exists() else ""
-    assert "onepipeline start" not in traced, f"a refused launch reached the engine:\n{traced}"
-    written = sorted(
-        str(one.relative_to(checkout))
-        for one in (checkout / ".plans").rglob("*")
-        if str(one.relative_to(checkout)) not in SEEDED_PLAN_RECORDS
-    )
-    assert written == [], f"a refused launch wrote plan records: {written}"
-
-
-#: The status `scripts/finish-plan.sh` ends on when a step it depends on answered with
-#: something it cannot act on. A literal for the reason every status in
-#: `tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py` is one: it is what a caller
-#: branches on.
-FINISH_PLAN_UNRUNNABLE = 2
-
-
-def _refused_before_the_launch(checkout: Path, trace: Path, env: dict[str, str]) -> str:
-    """Run `just finish-plan` on the brief, and hold it to having launched and kept nothing.
-
-    Answers the recipe's stderr. What a refusal here must leave is no `onepipeline start`
-    and no record under the authoring root: the design project it wrote first is taken
-    back, so the next run of the same name starts from nothing.
-    """
-    result = _run(checkout, trace, "finish-plan", BRIEF, env=env)
-
-    assert result.returncode == FINISH_PLAN_UNRUNNABLE, f"{result.stdout}\n{result.stderr}"
-    traced = trace.read_text(encoding="utf-8")
-    assert " start " not in traced, f"a refused flow reached the engine's launch:\n{traced}"
-    assert "orchestrator-copy-plan" not in traced, f"a refused flow copied the plan:\n{traced}"
-    left = sorted(
-        str(one.relative_to(checkout))
-        for one in (checkout / ".plans").rglob("*.md")
-        if str(one.relative_to(checkout)) not in SEEDED_PLAN_RECORDS
-    )
-    assert left == [], f"a refused flow left records where the next run reads them: {left}"
-    return result.stderr
-
-
-#: The loader the engine answers `template resolve plan-task --json` with, less what a row
-#: takes out of it.
-PLAN_TASK_LOADER = '{"reference":"onepipeline:plan-task","entry":%s,"templates":%s}'
-PLAN_TASK_TEMPLATE = '{"name":"plan-task.md.j2","source":"## Acceptance criteria"}'
-
-
-@pytest.mark.parametrize(
-    ("loader", "names"),
-    [
-        (
-            PLAN_TASK_LOADER % ('""', f"[{PLAN_TASK_TEMPLATE}]"),
-            "a loader with no entry or templates to render",
-        ),
-        (
-            PLAN_TASK_LOADER % ('"plan-task.md.j2"', "[]"),
-            "a loader with no entry or templates to render",
-        ),
-        (
-            PLAN_TASK_LOADER % ('"plan-task.md.j2"', '[{"name":"plan-task.md.j2"}]'),
-            "a loader holding a template with no name or no source",
-        ),
-        (
-            PLAN_TASK_LOADER % ('"plan-task.md.j2"', '[{"name":"","source":"## What"}]'),
-            "a loader holding a template with no name or no source",
-        ),
-        (
-            PLAN_TASK_LOADER % ('"plan-task.md.j2"', '[{"name":"plan-task.md.j2","source":" "}]'),
-            "a loader holding a template with no name or no source",
-        ),
-    ],
-    ids=[
-        "empty-entry",
-        "no-templates",
-        "template-without-source",
-        "unnamed-template",
-        "blank-source",
-    ],
-)
-def test_the_finish_plan_recipe_refuses_a_resolved_loader_with_nothing_to_render(
-    tmp_path: Path, loader: str, names: str
-) -> None:
-    """An engine that resolves `plan-task` to a loader naming nothing is refused by name.
-
-    Handed to the store, such a loader would be read as a template with no body, so the
-    recipe holds the engine's answer to naming an entry and templates that each carry a
-    name and a source before it creates anything — and the store is never asked.
-    """
-    checkout, trace = _checkout(tmp_path)
-
-    stderr = _refused_before_the_launch(checkout, trace, {RESOLVED_LOADER_ENV: loader})
-
-    assert f"resolved plan-task to {names}" in stderr, stderr
-    assert "is not its loader document" in stderr, stderr
-    traced = trace.read_text(encoding="utf-8")
-    assert "onetaskgraph task create" not in traced, f"the store was asked anyway:\n{traced}"
-
-
-@pytest.mark.parametrize(
-    "location", ["null", "{}", '{"path":""}'], ids=["no-location", "no-path", "empty-path"]
-)
-def test_the_finish_plan_recipe_refuses_a_created_task_the_store_placed_nowhere(
-    tmp_path: Path, location: str
-) -> None:
-    """A task the store created with an id and no record path is refused, and named.
-
-    The store has no verb that removes a task, and a removal composed from its layout would
-    stand in for that verb, so the recipe takes back the project record it wrote, leaves the
-    task where the store put it, names the project holding it and the listing that finds it
-    with the project record gone, and launches nothing.
-    """
-    checkout, trace = _checkout(tmp_path)
-
-    result = _run(checkout, trace, "finish-plan", BRIEF, env={CREATED_LOCATION_ENV: location})
-
-    assert result.returncode == FINISH_PLAN_UNRUNNABLE, f"{result.stdout}\n{result.stderr}"
-    stderr = result.stderr
-    assert f"the store reports no task record path for {CREATED_TASK}" in stderr, stderr
-    assert f"the task it created is left in authoring:{CREATED_PROJECT}" in stderr, stderr
-    assert (
-        f"find it with 'just plans task list --source authoring --project {CREATED_PROJECT}'"
-        in stderr
-    ), stderr
-    # The project record is taken back; the one record left is the task the store wrote.
-    left = sorted(
-        str(one.relative_to(checkout))
-        for one in (checkout / ".plans").rglob("*.md")
-        if str(one.relative_to(checkout)) not in SEEDED_PLAN_RECORDS
-    )
-    assert left == [f".plans/{CREATED_RECORD}"], left
-    traced = trace.read_text(encoding="utf-8")
-    assert " start " not in traced, f"a refused flow reached the engine's launch:\n{traced}"
-    assert "orchestrator-copy-plan" not in traced, f"a refused flow copied the plan:\n{traced}"
-    assert "template check" not in traced, f"an unplaced task was checked anyway:\n{traced}"
-
-
-ANSWERS_REPAIR = "correct the answers this recipe composes for it"
-TEMPLATE_REPAIR = "repair the plan-task template 'onepipeline template resolve plan-task --json'"
-CHECKOUT_REPAIR = "provision this checkout with 'just bootstrap'"
-
-
-@pytest.mark.parametrize(
-    ("said", "status", "names", "repair"),
-    [
-        (
-            "onepipeline: refused: item authoring:write-the-design-document: no criteria listed",
-            6,
-            "it lists no acceptance criteria",
-            ANSWERS_REPAIR,
-        ),
-        (
-            "onepipeline: refused: item authoring:write-the-design-document: not its rendering",
-            6,
-            "the engine refused it as a rendering of plan-task",
-            ANSWERS_REPAIR,
-        ),
-        (
-            "onepipeline: refused: template plan-task: the item is not its recorded rendering",
-            6,
-            "the engine refused the plan-task template it was rendered from",
-            TEMPLATE_REPAIR,
-        ),
-        (
-            "onepipeline: invalid: 'refused: no criteria listed' names nothing in the sources",
-            FINISH_PLAN_UNRUNNABLE,
-            "the engine's check of authoring:write-the-design-document could not run",
-            CHECKOUT_REPAIR,
-        ),
-        (
-            "onepipeline: refused: item authoring:another-task: no criteria listed",
-            FINISH_PLAN_UNRUNNABLE,
-            "the engine's check of authoring:write-the-design-document could not run",
-            CHECKOUT_REPAIR,
-        ),
-    ],
-    ids=["no-criteria", "other-refusal", "template-refusal", "could-not-run", "another-item"],
-)
-def test_the_finish_plan_recipe_reads_a_refusal_only_off_the_engines_own_refusal_line(
-    tmp_path: Path, said: str, status: int, names: str, repair: str
-) -> None:
-    """The engine's check answers a refusal and a check that could not run with one status.
-
-    So the recipe reads which it was off the line the engine words a refusal of this item or
-    this template on, and a `refused:` anywhere else — inside an id the engine could not
-    find, or naming some other item — is a
-    check that could not run, whose repair is this checkout rather than the task's
-    answers; and a refusal of the template is repaired in the template, which no answer
-    changes. Either way nothing is launched and the project is taken back.
-    """
-    checkout, trace = _checkout(tmp_path)
-
-    result = _run(checkout, trace, "finish-plan", BRIEF, env={CHECK_OUTPUT_ENV: said})
-
-    assert result.returncode == status, f"{result.stdout}\n{result.stderr}"
-    assert names in result.stderr, result.stderr
-    # Each refusal names the repair that answers it: answers repair an item, never a template.
-    assert repair in result.stderr, result.stderr
-    for other in {ANSWERS_REPAIR, TEMPLATE_REPAIR, CHECKOUT_REPAIR} - {repair}:
-        assert other not in result.stderr, result.stderr
-    traced = trace.read_text(encoding="utf-8")
-    assert " start " not in traced, f"a refused flow reached the engine's launch:\n{traced}"
-    left = sorted(
-        str(one.relative_to(checkout))
-        for one in (checkout / ".plans").rglob("*.md")
-        if str(one.relative_to(checkout)) not in SEEDED_PLAN_RECORDS
-    )
-    assert left == [], f"a refused flow left records where the next run reads them: {left}"
-
-
-@pytest.mark.parametrize("section", ["What", "Why"])
-def test_the_finish_plan_recipe_refuses_a_brief_stating_a_section_twice(
-    tmp_path: Path, section: str
-) -> None:
-    """A brief with two sections of one name gives the writer's task two answers.
-
-    The recipe composes the design-document task's What and Why from the brief, so a brief
-    stating either twice is refused by name rather than read for whichever came first — and
-    nothing is created, launched or kept.
-    """
-    checkout, trace = _checkout(tmp_path)
-    brief = checkout / BRIEF
-    brief.write_text(
-        brief.read_text(encoding="utf-8") + f"\n## {section}\nA second answer.\n",
-        encoding="utf-8",
-    )
-
-    stderr = _refused_before_the_launch(checkout, trace, {})
-
-    assert f"states ## {section} 2 times" in stderr, stderr
-    traced = trace.read_text(encoding="utf-8")
-    assert "onetaskgraph task create" not in traced, f"the store was asked anyway:\n{traced}"
 
 
 #: A commands-only envelope, the shape a manager sends all run long: no verdict to bind.
@@ -2562,10 +1824,27 @@ BOARD_CREDENTIAL = "GH_PROJECTS_TOKEN"
 PLANTED_CREDENTIAL = "not-a-real-token-planted-by-this-journey"
 
 #: Records whether the board credential reached the delegated command, which the shared
-#: trace cannot say: it records argv, and a credential is not on one.
+#: trace cannot say: it records argv, and a credential is not on one. As the plan store it
+#: answers a document listing with one design document, which `just approve-design` reads
+#: before it attests.
 CREDENTIAL_RECORDING_UV = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "${GH_PROJECTS_TOKEN-<unset>}" >>"$TRACE_FILE"
+case "$*" in
+  "document list "*)
+    printf '{"items":[{"id":"plans:example-design","item":{"metadata":'
+    printf '{"onetaskgraph.template":{"template":"onepipeline:design-doc"}}}}]}\n' ;;
+  "task list "*)
+    printf '{"items":[],"errors":[],"next":null}\n' ;;
+  "project show "*)
+    printf '{"items":[{"id":"plans:example","item":{"content":"The brief."}}],"errors":[]}\n' ;;
+  "project attestation check "*)
+    printf '{"kind":"plan-review","state":"valid","tasks":[]}\n' ;;
+  *"--bar-fingerprint"*)
+    printf 'sha256:stand-in-bar\n' ;;
+  "template resolve "*)
+    printf '{"digest":"sha256:stand-in"}\n' ;;
+esac
 """
 
 
@@ -2577,13 +1856,14 @@ class BoardRecipe(NamedTuple):
 
 
 #: Which board recipes read the plan store, and the argument each takes. `just plans` is
-#: the reader, the other four are this repository's own commands over the same store.
+#: the reader, the other five are the planning road's recipes over the same store.
 BOARD_RECIPES = (
     BoardRecipe("plans", ("project", "list")),
     BoardRecipe("check-plan", ("plans:example",)),
+    BoardRecipe("review-plan", ("plans:example",)),
     BoardRecipe("copy-plan", ("authoring:example",)),
     BoardRecipe("approve-design", ("plans:example",)),
-    BoardRecipe("approve-spikes", ("authoring:example",)),
+    BoardRecipe("finish-plan", ("plans:example",)),
 )
 
 
@@ -2623,10 +1903,16 @@ def _board_checkout(tmp_path: Path, credentials: str | None) -> tuple[Path, Path
     (checkout / "bin/uv").chmod(0o755)
     # `just plans` reads the CLI out of this checkout's own environment rather than
     # through `uv`, so the recorder stands there too.
-    store = checkout / ".venv" / "bin" / "onetaskgraph"
-    store.parent.mkdir(parents=True, exist_ok=True)
-    store.write_text(CREDENTIAL_RECORDING_UV, encoding="utf-8")
-    store.chmod(0o755)
+    # So do the plan recipes that reach the engine's plan load and the judge-only review's
+    # graph runner, each of which this checkout's own install provides.
+    for recorder in (
+        checkout / ".venv" / "bin" / "onetaskgraph",
+        checkout / ".venv" / "bin" / "oneagentgraph",
+        Path(_at(checkout, ENGINE)),
+    ):
+        recorder.parent.mkdir(parents=True, exist_ok=True)
+        recorder.write_text(CREDENTIAL_RECORDING_UV, encoding="utf-8")
+        recorder.chmod(0o755)
     return checkout, trace
 
 
@@ -2667,10 +1953,12 @@ def test_a_board_command_that_fails_without_a_credential_names_the_file_that_sup
     neither of them named.
     """
     checkout, trace = _board_checkout(tmp_path, None)
-    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
-    (checkout / "bin/uv").chmod(0o755)
+    (checkout / ".venv/bin/onetaskgraph").write_text(
+        "#!/usr/bin/env bash\nexit 1\n", encoding="utf-8"
+    )
+    (checkout / ".venv/bin/onetaskgraph").chmod(0o755)
 
-    result = _run(checkout, trace, "check-plan", "plans:example")
+    result = _run(checkout, trace, "copy-plan", "plans:example")
 
     assert result.returncode != 0
     assert str(checkout / ".env") in result.stderr, (
@@ -2694,10 +1982,12 @@ def test_a_board_command_that_fails_with_its_credential_present_gets_no_note_and
     than one the wrapper composed.
     """
     checkout, trace = _board_checkout(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
-    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 7\n", encoding="utf-8")
-    (checkout / "bin/uv").chmod(0o755)
+    (checkout / ".venv/bin/onetaskgraph").write_text(
+        "#!/usr/bin/env bash\nexit 7\n", encoding="utf-8"
+    )
+    (checkout / ".venv/bin/onetaskgraph").chmod(0o755)
 
-    result = _run(checkout, trace, "check-plan", "plans:example")
+    result = _run(checkout, trace, "copy-plan", "plans:example")
 
     assert result.returncode == 7, (
         f"the command's own status was not passed through: {result.returncode}\n{result.stderr}"
@@ -2720,10 +2010,12 @@ def test_a_board_refusal_tells_an_existing_env_file_apart_from_a_missing_one(
     file that is already there and reads as the pointer being wrong about the checkout.
     """
     checkout, trace = _board_checkout(tmp_path, "SOMETHING_ELSE=unrelated\n")
-    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
-    (checkout / "bin/uv").chmod(0o755)
+    (checkout / ".venv/bin/onetaskgraph").write_text(
+        "#!/usr/bin/env bash\nexit 1\n", encoding="utf-8"
+    )
+    (checkout / ".venv/bin/onetaskgraph").chmod(0o755)
 
-    result = _run(checkout, trace, "check-plan", "plans:example")
+    result = _run(checkout, trace, "copy-plan", "plans:example")
 
     assert result.returncode != 0
     assert "defines no such name" in result.stderr, (
@@ -2770,13 +2062,15 @@ def test_a_board_refusal_names_each_absent_credential_once_and_no_present_one(
         f"      token_env: {SECOND_BOARD_CREDENTIAL}\n",
         encoding="utf-8",
     )
-    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
-    (checkout / "bin/uv").chmod(0o755)
+    (checkout / ".venv/bin/onetaskgraph").write_text(
+        "#!/usr/bin/env bash\nexit 1\n", encoding="utf-8"
+    )
+    (checkout / ".venv/bin/onetaskgraph").chmod(0o755)
 
     result = _run(
         checkout,
         trace,
-        "check-plan",
+        "copy-plan",
         "plans:example",
         env={SECOND_BOARD_CREDENTIAL: PLANTED_CREDENTIAL},
     )
@@ -2824,13 +2118,15 @@ def test_a_refusal_names_an_absent_linear_api_key_as_it_names_an_absent_board_to
         "      team: ENG\n",
         encoding="utf-8",
     )
-    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
-    (checkout / "bin/uv").chmod(0o755)
+    (checkout / ".venv/bin/onetaskgraph").write_text(
+        "#!/usr/bin/env bash\nexit 1\n", encoding="utf-8"
+    )
+    (checkout / ".venv/bin/onetaskgraph").chmod(0o755)
 
     result = _run(
         checkout,
         trace,
-        "check-plan",
+        "copy-plan",
         "plans:example",
         env={SECOND_BOARD_CREDENTIAL: PLANTED_CREDENTIAL},
     )
@@ -2857,10 +2153,12 @@ def test_a_board_refusal_tells_an_empty_credential_line_apart_from_an_absent_one
     the value is, which is nothing here and a credential everywhere else.
     """
     checkout, trace = _board_checkout(tmp_path, f"{BOARD_CREDENTIAL}=\n")
-    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
-    (checkout / "bin/uv").chmod(0o755)
+    (checkout / ".venv/bin/onetaskgraph").write_text(
+        "#!/usr/bin/env bash\nexit 1\n", encoding="utf-8"
+    )
+    (checkout / ".venv/bin/onetaskgraph").chmod(0o755)
 
-    result = _run(checkout, trace, "check-plan", "plans:example")
+    result = _run(checkout, trace, "copy-plan", "plans:example")
 
     assert result.returncode != 0
     assert "without a value" in result.stderr, (
@@ -2885,10 +2183,12 @@ def test_a_board_refusal_says_an_exported_empty_name_beats_the_files_value(
     what to fix, where it is set, rather than send somebody to a file that is correct.
     """
     checkout, trace = _board_checkout(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
-    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
-    (checkout / "bin/uv").chmod(0o755)
+    (checkout / ".venv/bin/onetaskgraph").write_text(
+        "#!/usr/bin/env bash\nexit 1\n", encoding="utf-8"
+    )
+    (checkout / ".venv/bin/onetaskgraph").chmod(0o755)
 
-    result = _run(checkout, trace, "check-plan", "plans:example", env={BOARD_CREDENTIAL: ""})
+    result = _run(checkout, trace, "copy-plan", "plans:example", env={BOARD_CREDENTIAL: ""})
 
     assert result.returncode != 0
     assert "already exported empty" in result.stderr, (
@@ -2982,7 +2282,7 @@ def test_a_board_recipe_refuses_when_the_credentials_helper_cannot_be_loaded(
             # error is what an interrupted edit leaves behind.
             helper.write_text("export_host_credentials() {\n", encoding="utf-8")
 
-    result = _run(checkout, trace, "check-plan", "plans:example")
+    result = _run(checkout, trace, "copy-plan", "plans:example")
 
     assert result.returncode != 0
     assert str(helper) in result.stderr, (
@@ -2993,59 +2293,6 @@ def test_a_board_recipe_refuses_when_the_credentials_helper_cannot_be_loaded(
         "the command ran without the checkout's credentials established, so the store "
         "was handed whatever this process held"
     )
-
-
-def test_a_launcher_names_its_flow_first_and_never_an_id_it_cannot_vouch_for(
-    tmp_path: Path,
-) -> None:
-    """The first line of `just plan` is its flow's watch, and only for an id the engine mints.
-
-    The receipt is what a manager copies to arm the watch, so it names the flow in the
-    recipe's own form; an id outside the alphabet the engine mints from — a control
-    sequence, a shell word — is withheld rather than printed into a terminal or a command.
-    """
-    checkout, trace = _checkout(tmp_path)
-    named = _run(checkout, trace, "plan", BRIEF, "--no-design-doc")
-    assert named.returncode == 0, named.stderr
-    assert named.stderr.splitlines()[0] == (
-        "flow cursor-shape: watch it with: just watch --flow cursor-shape"
-    ), named.stderr
-
-    unsafe = _run(
-        checkout,
-        trace,
-        "plan",
-        BRIEF,
-        "--name",
-        "cursor-shape-2",
-        "--no-design-doc",
-        env={"FAKE_FLOW_ID": "bad\x1b[2J; rm -rf ~"},
-    )
-    assert unsafe.returncode == 0, unsafe.stderr
-    assert "watch --flow" not in unsafe.stderr, unsafe.stderr
-
-    # A re-entry marker some unrelated process left in the environment names a launcher
-    # that is not this one's parent, so the launcher still enters a flow of its own.
-    trace.write_text("", encoding="utf-8")
-    stale = _run(
-        checkout,
-        trace,
-        "plan",
-        BRIEF,
-        "--name",
-        "cursor-shape-3",
-        "--no-design-doc",
-        env={"ORCHESTRATOR_FLOW_ENTERED": "1:inherited-flow"},
-    )
-    assert stale.returncode == 0, stale.stderr
-    assert stale.stderr.splitlines()[0] == (
-        "flow cursor-shape-3: watch it with: just watch --flow cursor-shape-3"
-    ), stale.stderr
-    assert (
-        trace.read_text(encoding="utf-8")
-        .splitlines()[0]
-        .startswith(_at(checkout, f"{ENGINE} flow run "))
-    ), trace.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("board", BOARD_RECIPES, ids=[board.recipe for board in BOARD_RECIPES])

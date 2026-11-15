@@ -15,7 +15,7 @@ it moves this gate out of every memoized tier into the uncached
 `.venv`, which no `nx.json` input hashes — is outside this workspace. A project of its own
 would give the gate a key over none of what it reads, and a memoized green would replay
 across the very release change it exists to catch; every `reads_checkouts` gate over an
-installed CLI here (`tests/test_adoption_guard.py`, `tests/test_watch_surface_drift.py`)
+installed CLI here (`tests/test_watch_surface_drift.py`)
 is tiered the same way. It runs no shell: it reads `--help` from one binary.
 """
 

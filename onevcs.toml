@@ -1,0 +1,9 @@
+# This repository's own default publication policy, read by `onevcs` (0.67.0 and later)
+# from the checkout whenever it resolves how a change to this identity publishes: a
+# registration, `onevcs rules check`, and every publication. A host-overlay rule matching
+# the identity overrides a field; see docs/host-setup.md section 7.
+schema_version = 2
+
+[policy]
+publication = "local-direct"
+approvals = "none"

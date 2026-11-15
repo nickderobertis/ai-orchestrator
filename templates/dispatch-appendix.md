@@ -12,6 +12,13 @@ anyway. That is measured rather than estimated: one node in this workstream spen
 84 minutes on three rounds of everything its repository could run, to reach lint findings
 a diff-scoped run reports in two.
 
+**Read the lint rules for what you will change before you change it.** Before
+implementing, run `llmlint rules --files <the paths you expect to change>` in the
+repository you work in — or `llmlint rules --diff <base>` once you have changes — and work
+to the rules it prints: they are the judged lint your change meets on its merge path, each
+with the description its judge reads, so a rule met on the first draft costs no round of
+findings later.
+
 **Investigate performance within existing budgets.** Suspect the current change first
 when performance degrades, before intermittent slowness or the outside world. For a
 performance problem such as a CI timeout, read the PR report first through existing

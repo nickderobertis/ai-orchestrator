@@ -1,0 +1,51 @@
+---
+onetaskgraph_template: 1
+description: The design-document writer's task of a planning run.
+variables:
+  plan:
+    description: The qualified id of the reviewed plan the document describes.
+    type: text
+    required: true
+  native:
+    description: The plan project's native id.
+    type: text
+    required: true
+  brief_text:
+    description: The manager's brief, as source material for the document's What and Why.
+    type: text
+    required: true
+---
+Write the design document a person reviews the plan `{{ plan }}` as — terse prose, complete
+interfaces — and store it as the project document `{{ native }}-design` of
+`{{ plan }}`, rendered from the `design-doc` template:
+`onepipeline template resolve design-doc --json | onetaskgraph document create ... --template-loader - --answers <file> --no-interactive`
+for a new document, `onetaskgraph document render <id> --template-loader - --answers <file>`
+for one that exists. `onetaskgraph template variables --template-loader -` over the same
+resolution lists the answers it takes; the guidance comments in its chain say how to write
+each.
+
+{# llmlint: ignore-block[changed_behavior_has_e2e] A planner or design writer carries this out by its own reading of the store, which the suite never scripts a verdict for: it doubles the model's turn, so a journey could only assert what its own script chose. What the host decides around it is driven: the planning journeys hold that this step runs with this task, at its place in the flow, over the records the store holds. #}
+- **Planned tasks.** Answer `graph` with exactly the JSON
+  `onetaskgraph project graph {{ plan }} --format json --group-by orchestrator.unit` prints,
+  and `delivers` with one short phrase per task id. When the plan has more than one task and
+  a dependency edge, render the same graph's Mermaid text (the command without
+  `--format json`) to a PNG with `just render-diagram <source.mmd> <image.png>`, answer
+  `dag_image` with the image's file name and store it with `--asset <image.png>`.
+- **Budgets.** Answer `plan_budgets` with the project's `orchestrator.plan-budgets` metadata
+  and `budgets` with every task's `orchestrator.budgets` records, as the store holds them,
+  each budget with its `node` and `location`; invent none.
+{# llmlint: ignore-end[changed_behavior_has_e2e] #}
+- **Accepted opaque content.** Answer `accepted_opaque` from the project's
+  `onepipeline.export_edges` metadata, verbatim, or `[]`.
+- **Length.** Keep the stored body under 45,000 characters.
+
+What the planner was asked to plan, for the document's What and Why — restate it as the
+work's impact, never quote it or attribute it:
+
+{{ brief_text }}
+
+## Acceptance criteria
+
+- The document is stored as the project document `{{ native }}-design` of `{{ plan }}`, rendered from the `design-doc` template with `onepipeline:design-doc` provenance, answering every variable it lists in the shape each describes.
+- Its `graph` answer is what `onetaskgraph project graph {{ plan }} --format json --group-by orchestrator.unit` prints, and every image it references is an asset of the document.
+- The dispatch reports where the store put the document.

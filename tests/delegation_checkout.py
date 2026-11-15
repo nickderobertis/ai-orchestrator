@@ -20,10 +20,8 @@ from pathlib import Path
 
 import follow_up_variables
 import plan_root_variable
-from project_fixtures import budgeted, designed, no_budgets
 
 from orchestrator import npm_installs
-from orchestrator.plan_records import write_plan_project
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,36 +48,20 @@ WRAPPER_SCRIPTS = (
     # config names the second as both run-end hooks.
     "orchestrate.sh",
     "run-ended.sh",
-    # `just plan` writes its one-node plan through this one, and refuses to launch at
-    # all unless the wrapper the seam names is there for the planner to ask questions
-    # with. Every launch takes that seam, `onepipeline.sh` included, so the helper that
-    # establishes it and the wrapper it names are both part of a runnable checkout.
-    "plan.sh",
-    # `just plan` hands over to this one once its planner has settled, and `just
-    # finish-plan` is it directly: review the plan, check it, launch the document, copy
-    # both up, report where they landed. The third is the grammar both of them read a
-    # brief and their shared options through, and the fourth is the review step itself.
-    "finish-plan.sh",
-    "plan-brief.sh",
-    "review-plan.sh",
+    # The planning recipes' two wrappers: the review command every review step and the
+    # plan-edit hook run, and the launch check `just orchestrate`'s launch config registers.
+    "review-plan-item.sh",
+    "plan-attestation-check.sh",
     "credentials-env.sh",
     # Every board command goes through this one, which is where this checkout's own
     # credential file is read for a command that is not a launch.
     "plan-store.sh",
     "ask-manager-env.sh",
     "ask-manager.sh",
-    # `just plan` writes its project under the plan-authoring root this one resolves, so
-    # a checkout without it cannot reach a verb at all. The root itself is stated in the
-    # environment below rather than discovered, which keeps that resolution — and the
-    # project the launch writes — inside this throwaway checkout.
-    "plan-root-env.sh",
     # Every launch exports the follow-up drafting command, the first, and `just follow-up`
     # runs it as the manager through the second.
     "follow-up-draft.sh",
     "follow-up.sh",
-    # `just plan` and `just finish-plan` each re-execute inside a flow the launching
-    # session owns through this one.
-    "launch-flow.sh",
     # This host's template root, which the launch wrapper names on every verb and which
     # the dispatch-environment definition below establishes for a dispatch; it refuses a
     # checkout whose `templates/` carries no registration.
@@ -380,22 +362,10 @@ exit "${{FAKE_ENGINE_EXIT:-0}}"
     return checkout, trace
 
 
-#: The recipes whose tail reads the plan-level budget answers of the plan a brief names, and
-#: holds the design document its doubled launch stands for to them before it copies.
-BUDGETED_RECIPES = ("plan", "finish-plan")
-
-#: What that seeding writes under the checkout, before the recipe runs: the plan records a
-#: journey reading back what a refused recipe wrote discounts, because the row wrote them.
-SEEDED_PLAN_RECORDS = frozenset(
-    {
-        ".plans/documents",
-        ".plans/projects",
-        *(
-            f".plans/{kind}/{PLAN_PROJECT.partition(':')[2]}{suffix}.md"
-            for kind, suffix in (("projects", ""), ("documents", "-design"))
-        ),
-    }
-)
+#: What a row's setup writes under the checkout before the recipe runs, which a journey
+#: reading back what a refused recipe wrote discounts: nothing, since no recipe here reads a
+#: seeded plan any more.
+SEEDED_PLAN_RECORDS: frozenset[str] = frozenset()
 
 
 def run_recipe(
@@ -428,37 +398,6 @@ def run_recipe(
     plans = checkout / ".plans"
     plans.mkdir(exist_ok=True)
     environment[plan_root_variable.name()] = str(plans)
-    # The tail reads the plan-level budget answers of the plan its brief names before it
-    # composes the design-document task, so the plan the brief a tail runs on names states
-    # them, as every plan does. The colliding brief's plan is left alone: no row's tail
-    # reaches it, and the rows that use it hold the recipe to writing nothing of it.
-    native = PLAN_PROJECT.partition(":")[2]
-    described = plans / "projects" / f"{native}.md"
-    seeded = described.exists() and "orchestrator.plan-budgets" in described.read_text(
-        encoding="utf-8"
-    )
-    # llmlint: ignore-block[shell_test_tiers_stay_split] This is seeding, not the layer under
-    # test: the recipe still meets only the doubled `uv` and engine, while the description it
-    # reads is written beforehand by the pinned store, because the tail refuses a body that
-    # is not its template's rendering and a hand-written one never is. The store is the
-    # install `uv.lock` names and `support-project-fixtures` puts its helper in this key.
-    if args and args[0] in BUDGETED_RECIPES and not seeded:
-        write_plan_project(plans, {"name": native, "tasks": []}, native_id=native)
-        budgeted("authoring", native, no_budgets([]), environment)
-        # And the design document a settled writer run leaves, which the doubled engine's
-        # `start` never writes: its budget answers are what `python -m
-        # orchestrator.plan_budgets` prints for a plan of no task, which the tail holds it to.
-        designed(
-            "authoring",
-            native,
-            [],
-            environment,
-            budget_answers={"predates_budgets": "", "plan_budgets": no_budgets([]), "budgets": []},
-            # A plan of no task changes no unit, which the tail holds the document's
-            # Architecture to through the plan's graph.
-            answers={"units": []},
-        )
-    # llmlint: ignore-end[shell_test_tiers_stay_split]
     # The follow-up drafts root, stated for the same reason: an unstated one resolves to the
     # real `.follow-ups` of the tree this suite runs in. The plugin and the drafting command
     # are cleared, so an enclosing launch's values are not what these rows measure.

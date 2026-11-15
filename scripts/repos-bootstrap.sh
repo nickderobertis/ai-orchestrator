@@ -36,8 +36,8 @@ checkout's HEAD or bootstrap inputs, one caller at a time per checkout.
 
   --checkouts FILE  Read the checkout list from FILE (default: the file
                     ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS names, else this host's
-                    ${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts
-                    when it exists, else config/onevcs.checkouts).
+                    ${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts,
+                    which must exist; see docs/host-setup.md).
   --detach          Start each bootstrap that is due as a job detached from this
                     process and return at once, reporting the jobs earlier calls
                     started instead of waiting on them. Session setup runs this.
@@ -48,14 +48,16 @@ under `${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/repos-bootstrap/`.
 USAGE
 }
 
-checkouts_file=$(default_checkouts_file "$repo_root")
+checkouts_file=$(default_checkouts_file)
+checkouts_named=false
 if [[ -n ${!CHECKOUTS_VARIABLE:-} ]]; then
     checkouts_file=${!CHECKOUTS_VARIABLE}
+    checkouts_named=true
 fi
 detach=0 job_checkout=""
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --checkouts) [[ $# -ge 2 ]] || { usage; exit 2; }; checkouts_file=$2; shift 2 ;;
+        --checkouts) [[ $# -ge 2 ]] || { usage; exit 2; }; checkouts_file=$2; checkouts_named=true; shift 2 ;;
         --detach) detach=1; shift ;;
         # Internal: the detached job `--detach` starts, run with the checkout's lock
         # already held on descriptor 9. Not in the usage, because it is how `--detach`
@@ -67,6 +69,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ -z $job_checkout && $checkouts_named == false && ! -f $checkouts_file ]]; then
+    missing_checkouts_list repos-bootstrap "$checkouts_file"
+    exit 2
+fi
 if [[ -z $job_checkout && ! -f $checkouts_file ]]; then
     echo "repos-bootstrap: checkout list $checkouts_file does not exist" >&2
     exit 2
@@ -117,7 +123,7 @@ fi
 # sibling carrying that same odd spelling — this repository again — and a local or malformed
 # origin equals nothing and runs. A false skip needs an origin naming another repository
 # that reduces to exactly `github.com/nickderobertis/ai-orchestrator`, and no form git
-# accepts does; every origin `config/onevcs.checkouts` registers is `https://github.com/…`.
+# accepts does.
 origin_identity() {
     local toplevel origin
     toplevel=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || return 0

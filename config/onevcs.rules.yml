@@ -1,99 +1,26 @@
-# How each public repository on this host publishes a change.
+# The base every host's onevcs rules are composed over: no rule, and the reviewed default.
 #
-# `onevcs` reads the installed rules from `$ONEVCS_HOME/rules.yml` (`~/.onevcs/rules.yml`
-# by default); `just repos-apply` composes this tracked base with the host's own overlay,
-# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml`, through
-# `onevcs rules apply --base ... --overlay ...`, and installs the result there. A private
-# repository's rule lives only in that overlay, outside every checkout, declaring the
-# identity's `visibility: private` so the host is never asked; nothing tracked names one.
-# Editing these files and re-running that recipe is how routing changes — there is no
-# command that writes a policy, and `onevcs rules check <repo>` reports which rule a
-# repository matched and the policy that followed.
+# A repository declares its own default publication policy in the `[policy]` of the
+# `onevcs.toml` at its root — `publication`, `approvals`, and optionally `base_merge`,
+# `drafts` and `checks: {wait_seconds}`, each spelled as a rule spells it — and `onevcs`
+# reads it from the checkout. A host rule matching the identity overrides that declaration
+# field by field, and `default:` below applies to a field neither sets.
 #
-# First match wins, and every rule here names one repository outright. A repository
-# no rule matches falls through to `default:`, which is the reviewed path — so
-# forgetting a rule costs a pull request nobody asked for rather than a direct merge
-# nobody reviewed. `just repos-apply` fails on any registered checkout that lands
-# there, because the default is safe but is not this host's policy for any of them.
+# This tracked file names no repository. A host's rules live in its overlay,
+# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml`, outside every
+# checkout, and only for two reasons: to override what a repository declares, or for a
+# repository that declares nothing — every private one among them, declaring its
+# `visibility: private` so the host is never asked. `just repos-apply` composes this base
+# with that overlay through `onevcs rules apply --base ... --overlay ...` and installs the
+# result at `$ONEVCS_HOME/rules.yml` (`~/.onevcs/rules.yml` by default); `onevcs rules
+# check <repo>` names the source of each resolved field — a rule, `the repository
+# declaration <path>`, or the default — and `docs/host-setup.md` section 7 is how a host
+# registers, creates and overrides a repository.
 #
-# The two fields carry what the pre-adoption registry held per identity:
-#
-# | pre-adoption                        | here                        |
-# | ----------------------------------- | --------------------------- |
-# | `workflow: local`, strategy direct  | `publication: local-direct` |
-# | `workflow: remote`, strategy auto   | `publication: change-auto`  |
-# | `workflow: remote`, strategy none   | `publication: change-open`  |
-# | `repo_type: single-owner`           | `approvals: none`           |
-# | `repo_type: team`                   | `approvals: required`       |
-#
-# `tests/e2e/test_repo_registry_apply_e2e.py` holds every row of that mapping against
-# `tests/fixtures/pre-adoption-repos.json`, so a rule edited to disagree with the
-# registry this host was migrated from fails the gate rather than changing a merge
-# path quietly.
-#
-# ## What verifies a change, now that nothing here does
-#
-# This file used to carry a third field. A `gate:` named a command `onevcs` ran in
-# the branch's own clone before it would publish, and **onevcs 0.11.0 removed the
-# concept**: a rule and the default are `{publication, approvals}`, and a stray
-# `gate:` at `version: 3` is refused by name as an unknown field. Versions 1 and 2
-# still parse — a `gate:` there is accepted, ignored, and reported once on stderr — so
-# a host that has not migrated keeps publishing rather than breaking.
-#
-# Since onevcs 0.36.0 a rule may also carry an optional `drafts:` mapping. This file
-# names none, because no identity on this host is known to skip CI on drafts, so every
-# change request a publication opens is a draft while its required checks run and what
-# a green one becomes follows from `publication` and `approvals`, as onevcs's
-# `docs/contract.md` states (`onevcs rules check <repo>` prints the resolved lines).
-#
-# A rule may also carry `base_merge` and `checks: {wait_seconds}`. No rule names
-# `base_merge`, because its default fits this host: change-request identities merge
-# a moved base on conflict, local-direct ones always.
-#
-# `checks: {wait_seconds}` is how long a publication watches its change request's
-# required checks before ending `checks-unsettled`, and onevcs's default of 3600 s
-# does not fit every identity here: where required checks routinely take longer than
-# an hour, every publication ends with no verdict. So each change-request identity
-# whose slowest required-check completion across its ten most recent pull-request CI
-# runs, plus a 25% margin, exceeds 3600 s carries a `checks: {wait_seconds}` sized
-# from it, with the recorded maximum and margin beside it: the rules below that carry
-# one are exactly those identities, and every other identity stays on the default.
-# The measurements — which CI runs, read at which cutoff, and how long each took from
-# creation to its last required check — are `config/onevcs.checks-wait.yml`, which
-# is where to re-measure before re-sizing.
-# `onevcs rules check <repo>` prints the resolved lines, as it does for `drafts:`.
-#
-# The verifier that remains is the repository's own, and it is the one that could
-# always refuse the merge:
-#
-#   - **Remote-publishing identities** — every rule below but the `local-direct`
-#     ones — merge when GitHub's required status checks pass. Those checks are the
-#     merge path. A
-#     second tier run here front-ran them and threw the answer away: it judged a
-#     tree the required checks were about to judge again, on a different runner,
-#     and its verdict bound nothing. Where it ran *less* than they do it was worse
-#     than nothing, because it read as verification — a `nick-derobertis-site`
-#     branch passed this file's gate, published as PR #77, and sat blocked on the
-#     required `llmlint` check that gate never ran.
-#   - **The `local-direct` identities** — open no change request, so they have no
-#     required checks. Verification instead comes from an executable `pre-push` hook,
-#     when the checkout has one, which `onevcs` reaches by carrying the lender's
-#     `core.hooksPath` into the disposable publication clone. `ai-orchestrator` has
-#     that hook, and so may a host-local identity the overlay below names;
-#     `spanish-language-tutor` has none yet, so its merge-path audit truthfully
-#     reports no coverage.
-#
-# `just repos --audit-gate-coverage` reports what those required checks are, per
-# identity, read off each repository's own branch protection and rulesets at the
-# moment it is asked — there is no tracked copy of that list: with
-# nothing here front-running them, *every* required check is one only the merge path
-# runs, and every one of them can refuse a merge. That is not a loss of coverage —
-# it is the coverage stated honestly for the first time.
-#
-# One thing this removal does **not** touch, because the two are easy to confuse:
-# `onevcs repos`'s third column is `Identity.gate`, the registry's own detection of
-# what a checkout verifies with. That is a property of a checkout rather than a
-# policy this file sets, and it stays.
+# A rule and the default are `{publication, approvals}` plus those optional keys; `gate:`
+# went with onevcs 0.11.0 and is refused at `version: 3`. What verifies a change is the
+# repository's own merge path — its required checks, or its `pre-push` hook for a
+# `local-direct` one — which `just repos --audit-gate-coverage` reports per identity.
 version: 3
 
 # The prefix every provenance trailer key on a preserved branch is spelled under.
@@ -105,162 +32,14 @@ version: 3
 # unset strands every preserved branch that predates the adoption.
 trailer_prefix: Orchestrator-
 
-rules:
-  # Local-first publication paths: merged in the local checkout and pushed, never
-  # through a pull request. `local-direct` is the only policy here that opens no
-  # change request, so these are the rules to be most careful editing. Their
-  # verifier is a hook, when present, rather than a set of required checks.
-  - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}
-    publication: local-direct
-    approvals: none
 
-  - match: {host: github.com, owner: nickderobertis, name: allowlister}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 3900}  # recorded max 3011 s (run 38740769731) + 25% margin
+rules: []
 
-  - match: {host: github.com, owner: nickderobertis, name: allowlister-remote}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 3900}  # recorded max 3015 s (run 38754715610) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: allowlister-terminal-approval-plugin}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: cargo-prune-superseded}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 29700}  # recorded max 23722 s (run 38471962501) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: cloud-agent-dev-env}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: crozier}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 11100}  # recorded max 8751 s (run 39401431634) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: dero-skills}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: github-graphql-node-count}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: github-secrets}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 6600}  # recorded max 5100 s (run 38763641857) + 25% margin
-
-  # Its base branch is `master`, which the audit names beside the checks it reports
-  # for it: the required checks are the ones declared on the branch a change here
-  # actually merges into.
-  - match: {host: github.com, owner: nickderobertis, name: nick-derobertis-site}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: llmlint}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: notignored}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 8100}  # recorded max 6321 s (run 39155169357) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: oneagentgraph}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 6900}  # recorded max 5447 s (run 39352027435) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: onebudgetspec}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 10500}  # recorded max 8342 s (run 38410505674) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: oneharness}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 28200}  # recorded max 22542 s (run 39387864484) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: oneharness-ui}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 14700}  # recorded max 11607 s (run 38455397883) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: onejudge}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 5700}  # recorded max 4365 s (run 38699368150) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: onemessagebus}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 6000}  # recorded max 4788 s (run 39142284001) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: onepipeline}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 14700}  # recorded max 11709 s (run 42823350718) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: onepipeline-ui}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 27300}  # recorded max 21761 s (run 39382834193) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: onebudgetspec-github-action}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: onebudgetspec-plugin-onevcs}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: onefollowup}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: onetaskgraph}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 6300}  # recorded max 4807 s (run 39466309432) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: onetaskgraph-ui}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: onevcs}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 8700}  # recorded max 6738 s (run 39445587713) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: printobserver}
-    publication: change-auto
-    approvals: none
-    checks: {wait_seconds: 6300}  # recorded max 4960 s (run 38912988989) + 25% margin
-
-  - match: {host: github.com, owner: nickderobertis, name: privateterms}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: screencomp}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: skilltest}
-    publication: change-auto
-    approvals: none
-
-  - match: {host: github.com, owner: nickderobertis, name: spanish-language-tutor}
-    publication: local-direct
-    approvals: none
-
-# The policy for a repository no rule above names: reviewed, approved, and verified
-# by the host's own required checks. This is `onevcs`'s own built-in default,
-# restated so that reading this file tells you what an unlisted repository gets.
+# The policy for a field no rule and no repository declaration sets: reviewed, approved,
+# and verified by the host's own required checks. This is `onevcs`'s own built-in
+# default, restated so that reading this file tells you what an undeclared repository
+# gets. `just repos-apply` fails on any registered checkout whose `publication` or
+# `approvals` lands here, because the default is safe but is nobody's configured policy.
 default:
   publication: change-open
   approvals: required

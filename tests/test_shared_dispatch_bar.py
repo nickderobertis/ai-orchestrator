@@ -59,8 +59,10 @@ from test_dispatch_appendix import (
     WIDE_BAR,
 )
 
-from orchestrator.criteria_guard import CRITERIA_HEADING
 from orchestrator.root import REPO_ROOT
+
+#: The heading a task states the criteria its judge decides against under.
+CRITERIA_HEADING = "## Acceptance criteria"
 
 #: The whole shared completion bar, so that changing it is a change to this file too.
 #: What is left of it is the task's own criteria plus one clause about the tree the

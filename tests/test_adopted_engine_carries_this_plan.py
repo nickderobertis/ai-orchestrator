@@ -536,9 +536,8 @@ GRAPHQL_WRITEBACK_QUOTA_LANDINGS = (
 #: recorded under the node id for the reason `Landing.node` gives.
 #: `tests/e2e/launch_monitor_observer/test_turn_end_note_leaves_the_run_journalling_e2e.py` and
 #: `tests/e2e/publish_and_landing/test_redispatch_names_the_published_tip_e2e.py` drive the
-#: first two through `just orchestrate`, and
-#: `tests/plan_tooling/plan_copy/test_plan_copy_destination_ids_e2e.py` the copy the third
-#: relinks.
+#: first two through `just orchestrate`; the copy the third relinks is onetaskgraph's to
+#: prove.
 LIVE_NOTE_AND_REDISPATCH_TIP_LANDINGS = (
     Landing(
         node="op-redispatch-tip",
@@ -846,8 +845,6 @@ IMAGE_ASSETS_LANDINGS = (
 #: dead one had claimed exactly once — the second also relinking the onevcs release whose
 #: publication watch counts a required context with no run as pending and the onetaskgraph
 #: release whose re-copy keeps what only the destination holds.
-#: `tests/e2e/board_copy_approval/test_board_copy_design_approval_e2e.py` drives that
-#: plan-store release's CLI through an approval and a re-copy.
 FOLLOW_UP_FIXES_LANDINGS = (
     Landing(
         node="op-cancel-preempts-note",

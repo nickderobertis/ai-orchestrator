@@ -65,15 +65,30 @@ variables:
     type: list
     items: string
     required: true
+  graph:
+    description: >-
+      The plan's tasks and their dependencies exactly as `onetaskgraph project graph
+      <project> --format json --group-by orchestrator.unit` prints them: the Planned tasks
+      table lists every node, its unit (`group`) and the titles it depends on, from this.
+    type: object
+    required: false
+    default: {}
+  delivers:
+    description: >-
+      What each task delivers, as a short phrase on one line, keyed by the task's qualified
+      id as `graph` names it.
+    type: object
+    required: false
+    default: {}
   planned_tasks:
     description: >-
-      One object per task of the plan, in the order the table lists them, with five string
-      keys: `task` (its title), `unit` (the `name` of the unit it changes), `delivers` (what
-      it delivers), `depends_on` (the titles it depends on, or `none`) and `location` (where
-      the task lives). Each value is rendered as one table cell on one line.
+      Kept for documents written before `graph`: one object per task with five string keys,
+      `task`, `unit`, `delivers`, `depends_on` and `location`. A new document answers `graph`
+      and `delivers` instead and leaves this `[]`.
     type: list
     items: object
-    required: true
+    required: false
+    default: []
   dag_image:
     description: >-
       The bare file name of the image asset of this document that draws the plan's tasks
@@ -82,33 +97,20 @@ variables:
     type: text
     required: false
     default: ""
-  # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The budget answers restate what `python -m orchestrator.plan_budgets <project>` prints, whose shape `orchestrator/plan_budgets.py` states once; `tests/test_design_doc_template.py` fails the moment these three variables or the keys they name part from it.
-  predates_budgets:
-    description: >-
-      The reason `config/budgets-migration.yaml` gives for this plan when it names the plan,
-      and `""` for every other plan.
-    type: text
-    required: false
-    default: ""
   plan_budgets:
     description: >-
       The plan's plan-level budget answers, its project's `orchestrator.plan-budgets`
-      record as `python -m orchestrator.plan_budgets <project>` prints it, or `{}` for a
-      plan with no project analysis, including one that predates budgets. Its keys are
-      `overview`, `sizing`, `workload`,
-      `ten_x_summary`, `ten_x`, `checklist`, `repo_wide_effects`, `realistic_data` and
-      `spike_findings` and modern `schema_version` (integer literal 2), as the `plan-description` template declares them.
+      metadata as the plan store holds it, or `{}` for a plan with no project analysis: the
+      shape the `plan-description` template's `plan_budgets` schema declares.
     type: object
     required: false
     default: {}
   budgets:
     description: >-
-      Every budget of every task of the plan, as `python -m orchestrator.plan_budgets
-      <project>` prints them, or `[]`: each object is the budget as its task's
-      `orchestrator.budgets` record holds it — `id`, `name`, `basis`, `repository`, `file`,
-      `file_change`, `measure`, `inner_measure_reason`, `unit`, `direction`, `threshold`,
-      `workload`, `evidence` and `command`, plus modern `schema_version`, `source` and
-      `check_runtime_seconds` — with four keys added, `node` (the id of the task
+      Every budget of every task of the plan, read from the tasks' `orchestrator.budgets`
+      metadata, or `[]`: each object is the budget as its task's `orchestrator.budgets`
+      record holds it, the shape the `plan-task-budgets` template's schema declares, with
+      four keys added, `node` (the id of the task
       that owns it), `location` (where the plan store reports that task), `anchor` (the
       anchor of the budget's heading in that task, or `""` for a legacy budget) and `link`
       (the destination of the budget's reference link: a local task's file relative to this
@@ -117,11 +119,10 @@ variables:
     items: object
     required: false
     default: []
-  # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
   visual_changes:
     description: >-
       One object per visual change the plan expects, in the order the plan's
-      current report (resolved by `orchestrator/spike_plan.py`) lists them, with required non-empty string keys: `name` (the change's short
+      visual spike's report lists them, with required non-empty string keys: `name` (the change's short
       heading), `description` (what is changing, in plain words), `after` and optional `before` (each
       the bare file name of an image asset of this document, as its content references it
       with `./<name>`). Only absence of `before` selects a single image; null, empty
@@ -132,7 +133,7 @@ variables:
     default: []
   accepted_opaque:
     description: >-
-      Copy verbatim from python -m orchestrator.plan_budgets: ordered export edges,
+      Copy verbatim from the project's `onepipeline.export_edges` metadata: ordered export edges,
       each with `source`, `to` and `accepted_opaque` (an ordered list of opaque pattern strings).
     type: list
     items: object
@@ -171,8 +172,8 @@ variables:
   LENGTH. A document is about as long as the design document this template replaces would
   be for the same plan. Exactness is spent on what is hard to undo, and everything else is
   said in a sentence. A high-cost decision's content is about 1,200 characters or less,
-  examples excluded. The whole document's composed issue body, as `python -m
-  orchestrator.task_body <source:project>` measures it, is under 45,000 characters, reached
+  examples excluded. The whole document's composed issue body, as `onetaskgraph document
+  copy --dry-run` sizes it, is under 45,000 characters, reached
   through terser writing and never by dropping what the approver needs. A plan that cannot
   be documented under 45,000 characters without losing needed content stays under GitHub's
   65,536-character refusal, and its writer reports the measured figure rather than
@@ -268,8 +269,7 @@ variables:
   The images are illustrative captures from a throwaway, mocked spike, not a preview of the
   finished work, which may differ where production concerns require.
 
-  The `visual_changes` answer restates the plan's current visual report, resolved by
-  `orchestrator/spike_plan.py`, answer for answer,
+  The `visual_changes` answer restates the plan's visual spike report, answer for answer,
   and each image it names is an asset of this document; the writer invents none. A plan
   with no visual change answers `[]` and this document has no Visual changes section.
 #}
@@ -423,9 +423,9 @@ variables:
   budget answer saved before `link` existed is linked at its `location`, with `#` and its
   `anchor` when it carries one, so a document saved then still renders its own body.
 
-  The answers `predates_budgets`, `plan_budgets` and `budgets` are exactly what `python -m
-  orchestrator.plan_budgets <project>` prints for the plan: copy them, and invent none. The
-  finish-plan flow refuses a document whose budget answers differ from that output. A plan
+  The answers `plan_budgets` and `budgets` are exactly the plan's records: the project's
+  `orchestrator.plan-budgets` metadata and every task's `orchestrator.budgets`, each budget
+  with its task and where the store reports it. Copy them, and invent none. A plan
   with no added or changed task budget renders no Budgets section, even when it has
   unchanged budgets, effects, omissions, spike findings or a migration reason. Only budgets
   whose `file_change` is exactly `add` or `change` appear in the table and numbered links.
@@ -483,7 +483,7 @@ variables:
 {% endif %}
 {% endblock %}
 {% block accepted_opaque_guidance %}
-{# Copy the export grants from orchestrator.plan_budgets verbatim; never invent a pattern. #}
+{# Copy the export grants from the project's `onepipeline.export_edges` verbatim; never invent a pattern. #}
 {% endblock %}
 {% block accepted_opaque %}
 {% if accepted_opaque %}
@@ -517,9 +517,9 @@ The export may carry files these patterns match although their contents cannot b
   Unit column names the unit the task changes. Where it lives is the location the plan store
   reports for the task, never one composed by hand.
 
-  The flow derives every row's `task`, `unit`, `depends_on` and `location` from the plan's
-  own graph, and the Architecture's unit names from the same rows, so the writer copies
-  those and authors only `delivers`. For a plan of more than one task with at least one
+  Every row's task, unit and dependencies render from the `graph` answer, the plan store's
+  own reading of the plan, and the Architecture's unit names are that graph's groups, so the
+  writer authors only `delivers`. Where it lives is the qualified id the store names. For a plan of more than one task with at least one
   dependency edge, the flow also renders that graph, each task inside its unit's box, and
   the section opens with it: `dag_image` names that generated image and the document holds
   it as an asset. The writer never draws, edits or replaces it, and a plan of one task or of
@@ -534,6 +534,23 @@ The export may carry files these patterns match although their contents cannot b
 ![Dependency graph of the plan's tasks](./{{ dag_image }})
 
 {% endif %}
+{% if graph.nodes is defined %}
+<details>
+<summary>All {{ graph.nodes | rejectattr("external") | list | length }} planned tasks</summary>
+
+| Task | Unit | What it delivers | Depends on | Where it lives |
+| --- | --- | --- | --- | --- |
+{% for node in graph.nodes if not node.external %}
+{% set deps = namespace(titles=[]) %}
+{% for edge in graph.edges if edge.to == node.id %}
+{% for other in graph.nodes if other.id == edge["from"] %}
+{% set deps.titles = deps.titles + [other.title] %}
+{% endfor %}
+{% endfor %}
+| {{ cell(node.title) }} | {{ cell(node.group or "none") }} | {{ cell(delivers[node.id] | default("")) }} | {{ cell(deps.titles | join("; ") or "none") }} | {{ cell(node.id) }} |
+{% endfor %}
+
+{% else %}
 <details>
 <summary>All {{ planned_tasks | length }} planned tasks</summary>
 
@@ -543,5 +560,6 @@ The export may carry files these patterns match although their contents cannot b
 | {{ cell(row.task) }} | {{ cell(row.unit) }} | {{ cell(row.delivers) }} | {{ cell(row.depends_on or "none") }} | {{ cell(row.location) }} |
 {% endfor %}
 
+{% endif %}
 </details>
 {% endblock %}

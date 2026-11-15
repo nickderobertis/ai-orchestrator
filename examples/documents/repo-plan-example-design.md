@@ -3,8 +3,7 @@ title: 'Design: repo-plan-example'
 project: repo-plan-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:102de0e7ec9d17f43c286db96673ed970aa1e0b2d444f9ee5085351344f8eee5
-  "onetaskgraph.template": {"answers_digest":"sha256:7fa0efd8f1550e7f4ebb7fe510dfb94f094db89ddacab9c8509fb1619e79560c","body_digest":"sha256:87242bed5f58680ad5ced6d53f9cfaa6a4bb9bf4c602870516076dc985e2eccb","digest":"sha256:b3081e2663074adf631864ea2a51e4148e6a82407f8fc9b893f85a2c6aef6634","template":"onepipeline:design-doc"}
-  "orchestrator.design-approval": {"approved_at":"2026-10-09T00:49:56.727632+00:00","key":"57a16b09431de7254340f0092b375c52f8ac484eb7f4172d3cf2957ac339f010"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:763bb11c19b455f09ca3ace8d770fcbab2602aa0270227d94586cd07fc2574ca","answers_digest":"sha256:4a1ada9a2207fbe04d715d6c1fe6e66e8ad8636705ba87a57643a0bce996095a"}
 ---
 ## What
 
@@ -41,7 +40,12 @@ One response shape, published by the service and read by every other unit.
 
 **Reversible:**
 
-- **Dashboard access.** The admin page refuses a viewer without the `admin` role.
+<details>
+<summary>Dashboard access</summary>
+
+The admin page refuses a viewer without the `admin` role.
+
+</details>
 
 ### Client library — `some-client`
 
@@ -84,12 +88,17 @@ The published documentation describes the endpoint that actually exists.
 
 ## Planned tasks
 
+<details>
+<summary>All 4 planned tasks</summary>
+
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 | feat(api): add /health endpoint | Service | the endpoint | none | examples/tasks/repo-plan-example/api.md |
 | feat(client): add health() method | Client library | the client method | the endpoint | examples/tasks/repo-plan-example/client.md |
 | feat(admin): add dashboard | Service | the page, and a person's approval of it | the endpoint | examples/tasks/repo-plan-example/dashboard.md |
 | docs(api): document /health | Documentation | the published description | none | examples/tasks/repo-plan-example/docs.md |
+
+</details>
 
 
 <!-- onetaskgraph:template-answers
@@ -100,6 +109,7 @@ acceptance_criteria:
   The dashboard shows every field the response carries, and refuses a viewer who may not
   see it.
 - The documentation describes the endpoint that actually exists.
+accepted_opaque: []
 architecture: |-
   Four pieces of work across three repositories. The endpoint lands first because everything
   else reads it; the client method and the dashboard are then built at the same time, and the
@@ -125,6 +135,10 @@ budgets:
   threshold: 50
   unit: ms
   workload: 200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes.
+dag_image: ''
+delivers: {}
+goals: []
+graph: {}
 plan_budgets:
   checklist:
   - budget: health-endpoint-p95-latency
@@ -182,7 +196,6 @@ planned_tasks:
   location: examples/tasks/repo-plan-example/docs.md
   task: 'docs(api): document /health'
   unit: Documentation
-predates_budgets: ''
 units:
 - decisions:
   - artifact: |-
@@ -219,6 +232,7 @@ units:
   repository: some-docs
   reversible: []
   summary: The published documentation describes the endpoint that actually exists.
+visual_changes: []
 what: |-
   A health endpoint on the service, the client method that calls it, an admin page that
   shows what it returns, and the documentation for all three — each landing in the

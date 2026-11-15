@@ -106,8 +106,11 @@ from test_dispatch_appendix import (
 )
 from waits import timeout as e2e_timeout
 
-from orchestrator.criteria_guard import APPENDIX
 from orchestrator.root import REPO_ROOT
+
+#: The operational notes every dispatched task carries, by way of the `plan-task` template
+#: that includes them.
+APPENDIX = Path("templates") / "dispatch-appendix.md"
 
 #: The stand-in for the paid model at the seam a two-party member spawns it through,
 #: the stand-in one layer lower for the provider a single-sided member runs in library,

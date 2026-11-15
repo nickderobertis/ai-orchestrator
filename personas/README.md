@@ -84,7 +84,7 @@ Three consequences. The first two were read by launching a plan whose two nodes 
 `engineer` and `reviewer` and reading the completion criterion each dispatch's supervisor
 was handed, on an earlier engine; that hand launch has not been repeated, so the
 `reviewer` quotation below is its reading. On the adopted release they are re-measured
-against onepipeline 0.110.2 and the oneagentgraph it links by the two journeys named
+against onepipeline 0.113.1 and the oneagentgraph it links by the two journeys named
 below, on the suite's real launch of an `engineer` node: the shipped set, and the
 shared bar in the criterion that node's supervisor was handed. Do **not** argue one of them forward from a source file that stayed
 byte-identical: the accounts that did named `src/agentgraph.rs` and `src/graph.rs`,
@@ -98,8 +98,8 @@ completion criterion out of a real dispatch.
 - Editing a flat file here whose name a built-in claims does not change what a node
   naming that role is dispatched with. Those files are a catalog and a validation
   target, not the dispatch input — which is why `engineer.yaml` is gone rather than
-  maintained, and why `orchestrator/criteria_guard.py` resolves a node's bar out of
-  the `oneagentgraph` `onepipeline` links instead of out of this directory.
+  maintained, and why `scripts/review-plan-item.sh` judges a node under its persona as
+  `oneagentgraph` resolves it rather than out of this directory.
 - A built-in role's own `user.done_when` is enforced **alongside**
   `config/onejudge.base.yaml`'s, not instead of it. The `reviewer` node's supervisor
   was given "Both of these must hold: 1. every acceptance criterion stated in the
@@ -195,7 +195,7 @@ authoritative spec for all of it.
 Two different ones, and what they have to agree on is the persona **shape**.
 `just validate-personas` runs the oneagentgraph **CLI** that
 `config/oneagentgraph.version` pins; what reads a persona at **dispatch** is the
-oneagentgraph `onepipeline` links, which is `0.13.0` at onepipeline v0.110.2. Read that
+oneagentgraph `onepipeline` links, which is `0.13.0` at onepipeline v0.113.1. Read that
 from what the release *resolved*, never from its `Cargo.toml` requirement — that
 requirement is a caret one and permits versions the build did not resolve, so it is
 not evidence of what a dispatch reads. The installed binary is the source and

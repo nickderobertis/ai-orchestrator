@@ -28,10 +28,136 @@ import boundary_home
 import plan_fixture_source
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import design_chain, plan_budgets
-from orchestrator.plan_records import write_plan_project
 from orchestrator.record_shapes import hosted_origin
 from orchestrator.root import REPO_ROOT
+
+#: The plan-store record keys and templates a plan's budgets live under, as this host's
+#: `templates/plan-description.md.j2` and `templates/plan-task-budgets.md.j2` declare them.
+PLAN_RECORD = "orchestrator.plan-budgets"
+TASK_RECORD = "orchestrator.budgets"
+DESCRIPTION_TEMPLATE = "plan-description"
+DESCRIPTION_REFERENCE = f"onepipeline:{DESCRIPTION_TEMPLATE}"
+TEMPLATE_ROOT = REPO_ROOT / "templates"
+TASK_PARTIAL = TEMPLATE_ROOT / "plan-task-budgets.md.j2"
+
+#: The scratch source a plan is written through: a private local Markdown source declared
+#: over the root a caller names, for that one invocation.
+_WRITER_SOURCE = "plan-records"
+
+
+def _store(
+    root: Path, *arguments: str, stdin: str | None = None, source: str = _WRITER_SOURCE
+) -> dict[str, Any]:
+    """Run the locked plan store against the private local source ``source`` over ``root``.
+
+    Answers the store's `--json` document as parsed, `Any`-valued because its callers read
+    the record ids it reports by key and the store's own CLI declares no typed answer.
+    """
+    settings = [
+        f"sources.{source}.plugin=local-md",
+        f"sources.{source}.config.root={root.resolve()}",
+        f"sources.{source}.visibility=private",
+    ]
+    done = subprocess.run(
+        [str(ONETASKGRAPH_BIN), *(word for one in settings for word in ("--set", one))]
+        + [*arguments, "--json", "--no-interactive"],
+        cwd=REPO_ROOT,
+        input=stdin,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        raise AssertionError(f"the plan store refused {arguments[:3]}: {done.stderr}")
+    answer = json.loads(done.stdout)
+    assert isinstance(answer, dict)
+    return answer
+
+
+# llmlint: ignore[suppressions_justified] A plan fixture is the engine's open plan shape.
+def write_plan_project(
+    root: Path,
+    plan: Mapping[str, Any],
+    *,
+    native_id: str | None = None,
+    source: str = _WRITER_SOURCE,
+) -> str:
+    """Write the engine-shaped ``plan`` under the local Markdown ``root`` through the store.
+
+    Written through a scratch source over ``root`` unless ``source`` names the configured
+    source a launch will read it through: a task that delivers a ticket records that
+    relation under the source it was written through, so a plan whose tasks deliver
+    tickets is written through the source its run reads.
+
+    Each task through `task create`, dependencies first, its fields as the engine's
+    reserved `onepipeline.<field>` metadata (its `unit` as `orchestrator.unit`, a hosted
+    `repo` as the record's own repositories), then the project, its plan-level fields as
+    the same reserved keys. A project the root already holds is replaced whole. Answers the
+    project's native id.
+    """
+    name = plan["name"]
+    project = re.sub(r"[^a-z0-9-]+", "-", (native_id or name).lower()).strip("-")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "projects" / f"{project}.md").unlink(missing_ok=True)
+    for record in sorted((root / "tasks").rglob("*.md")) if (root / "tasks").is_dir() else []:
+        if f'\nproject: "{project}"\n' in record.read_text(encoding="utf-8") or (
+            f"\nproject: {project}\n" in record.read_text(encoding="utf-8")
+        ):
+            record.unlink()
+    nodes = [dict(task) for task in plan["tasks"]]
+    ids = {node["id"] for node in nodes}
+    created: dict[str, str] = {}
+    waiting = nodes
+    while waiting:
+        ready = [
+            node
+            for node in waiting
+            if all(dep in created for dep in node.get("deps", []) if dep in ids)
+        ]
+        if not ready:
+            raise ValueError("the fixture plan's tasks depend on each other in a cycle")
+        for node in ready:
+            fields = dict(node)
+            node_id = fields.pop("id")
+            body = str(fields.pop("task", "")).rstrip()
+            title = fields.pop("title", node_id)
+            deps = fields.pop("deps", [])
+            repo = fields.pop("repo", None)
+            delivers = fields.pop("delivers", [])
+            unit = fields.pop("unit", None)
+            arguments = ["task", "create", source, "--project", project]
+            arguments += ["--title", title, "--status", "todo"]
+            metadata: dict[str, object] = {"onepipeline.id": node_id}
+            metadata |= {f"onepipeline.{key}": value for key, value in fields.items()}
+            cross = [dep for dep in deps if dep not in ids]
+            if cross:
+                metadata["onepipeline.deps"] = cross
+            if unit is not None:
+                metadata["orchestrator.unit"] = unit
+            if repo is not None:
+                hosted = hosted_origin(repo)
+                if hosted is not None:
+                    arguments += ["--repository", hosted]
+                else:
+                    metadata["onepipeline.repo"] = repo
+            for key, value in metadata.items():
+                arguments += ["--metadata", f"{key}={json.dumps(value)}"]
+            for dep in deps:
+                if dep in ids:
+                    arguments += ["--depends-on", f"{source}:{created[dep]}"]
+            for ticket in delivers:
+                arguments += ["--delivers", ticket]
+            answer = _store(root, *arguments, stdin=body, source=source)
+            created[node_id] = str(answer["items"][0]["id"]).removeprefix(f"{source}:")
+        waiting = [node for node in waiting if node["id"] not in created]
+    arguments = ["project", "create", source, "--id", project, "--title", name]
+    arguments += ["--body-file", "/dev/null"]
+    for key, value in plan.items():
+        if key not in {"name", "tasks"}:
+            arguments += ["--metadata", f"onepipeline.{key}={json.dumps(value)}"]
+    _store(root, *arguments, source=source)
+    return project
+
 
 _PROJECT_SEQUENCE = itertools.count()
 
@@ -67,11 +193,11 @@ def helper(name: str) -> Path:
 _FAKE_CODEX = helper("fake_codex.py")
 _PAID_PROVIDER_GUARD = helper("no-paid-provider")
 
-#: What the scripted reviewer answers. One passing verdict, repeated for every task:
-#: `tests/e2e/fake_codex.py` reuses its last scripted answer once the list runs out. It
-#: carries no findings because a finding *is* a refused criterion, and the verdict schema
-#: admits a pass only where it names none.
-_PASSING_VERDICT = json.dumps({"passes": True, "findings": []})
+#: What the scripted reviewer answers: the judge-only run's supervisor decision, a pass,
+#: repeated for every record — `tests/e2e/fake_codex.py` reuses its last scripted answer
+#: once the list runs out. The plan checklist's llmlint batches are answered apart from it,
+#: every rule holding.
+_PASSING_VERDICT = json.dumps({"completion": True, "reason": "the stand-in reviewer passes it"})
 
 #: Where the review turns this fixture spends keep their harness history, so they do not
 #: land in the host's. One directory per process that imports this module, created at
@@ -267,15 +393,11 @@ def budgeted(
         created = subprocess.run(
             [str(ONETASKGRAPH_BIN), "project", "create", source, "--id", native]
             + ["--title", title, "--template-loader", "-", "--answers", written.name]
-            + (
-                ["--metadata", f"{plan_budgets.PLAN_RECORD}={json.dumps(answers)}"]
-                if analysis
-                else []
-            )
+            + (["--metadata", f"{PLAN_RECORD}={json.dumps(answers)}"] if analysis else [])
             + ["--no-interactive"],
             cwd=REPO_ROOT,
             env=None if environment is None else dict(environment),
-            input=_resolved(plan_budgets.DESCRIPTION_TEMPLATE, environment),
+            input=_resolved(DESCRIPTION_TEMPLATE, environment),
             text=True,
             capture_output=True,
             check=False,
@@ -290,7 +412,7 @@ def store_written(plan: Mapping[str, Any], *, native_id: str | None = None) -> d
     """The records the pinned store writes for ``plan``, by root-relative path.
 
     For a stand-in planner that writes its plan's records as files: they are created by
-    `orchestrator/plan_records.py` through the store's own `project create` and `task
+    :func:`write_plan_project` through the store's own `project create` and `task
     create` in a scratch root, and read back as the store wrote them, so the stand-in leaves
     exactly what a planner's own store commands leave rather than a shape only it produces.
     The repositories the plan names are registered public in a scratch `onevcs` state root
@@ -314,7 +436,7 @@ def described_record(
     """``native``'s project record, describing ``answers``, as a local Markdown store keeps it.
 
     For a stand-in planner that writes its plan's records as files: the record is the
-    pinned store's own, created through `orchestrator/plan_records.py` and then `budgeted`
+    pinned store's own, created through :func:`write_plan_project` and then `budgeted`
     into a scratch local source of its own and read back, so the stand-in leaves exactly what
     a planner's `project create` leaves. Answers its path under a source's root, and its
     content.
@@ -341,15 +463,29 @@ def described(answers: Mapping[str, object]) -> dict[str, object]:
     return {
         "content": _rendered_description(json.dumps(answers, sort_keys=True)),
         "metadata": {
-            plan_budgets.PLAN_RECORD: dict(answers),
-            "onetaskgraph.template": {"template": plan_budgets.DESCRIPTION_REFERENCE},
+            PLAN_RECORD: dict(answers),
+            "onetaskgraph.template": {"template": DESCRIPTION_REFERENCE},
         },
     }
 
 
 @functools.cache
 def _rendered_description(answers: str) -> str:
-    return plan_budgets.render_description(json.loads(answers))
+    with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as written:
+        written.write(answers)
+        written.flush()
+        rendered = subprocess.run(
+            [str(ONETASKGRAPH_BIN), "template", "render", "--template-loader", "-"]
+            + ["--answers", written.name, "--no-interactive"],
+            cwd=REPO_ROOT,
+            input=_resolved(DESCRIPTION_TEMPLATE),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    if rendered.returncode != 0:
+        raise AssertionError(f"the plan description did not render: {rendered.stderr}")
+    return rendered.stdout
 
 
 def budget_section(budgets: list[dict[str, object]]) -> str:
@@ -362,8 +498,8 @@ def budget_section(budgets: list[dict[str, object]]) -> str:
         json.dump({"budgets": budgets}, written)
         written.flush()
         rendered = subprocess.run(
-            [str(ONETASKGRAPH_BIN), "template", "render", str(plan_budgets.TASK_PARTIAL)]
-            + ["--search-path", str(plan_budgets.TEMPLATE_ROOT)]
+            [str(ONETASKGRAPH_BIN), "template", "render", str(TASK_PARTIAL)]
+            + ["--search-path", str(TEMPLATE_ROOT)]
             + ["--answers", written.name, "--no-interactive"],
             cwd=REPO_ROOT,
             text=True,
@@ -426,7 +562,7 @@ def owning(
         if rendered.returncode != 0:
             raise AssertionError(f"the fixture's task was not rendered: {rendered.stderr}")
     recorded = subprocess.run(
-        [str(ONETASKGRAPH_BIN), "task", "metadata", "set", task, plan_budgets.TASK_RECORD]
+        [str(ONETASKGRAPH_BIN), "task", "metadata", "set", task, TASK_RECORD]
         + [json.dumps(budgets)],
         cwd=REPO_ROOT,
         env=env,
@@ -470,18 +606,41 @@ def register_stand_in(home: Path, origin: str, checkout: Path) -> Path:
     return checkout
 
 
+def _plan_repository(project: str, environment: Mapping[str, str]) -> str | None:
+    """The one origin every task of ``project`` names, or ``None`` when they name no one."""
+    source, native = project.split(":", 1)
+    listed = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "task", "list", "--source", source, "--project", native]
+        + ["--limit", "1000", "--json", "--no-interactive"],
+        cwd=REPO_ROOT,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if listed.returncode != 0:
+        return None
+    items = json.loads(listed.stdout)["items"]
+    named = {tuple(held["item"].get("repositories") or []) for held in items}
+    match sorted(named):
+        case [(origin,)]:
+            return str(origin)
+        case _:
+            return None
+
+
 def resolving(project: str, base: Mapping[str, str] | None = None) -> dict[str, str]:
     """The environment ``project``'s design-doc chain resolves in, from ``base``.
 
     A plan whose tasks all name one repository resolves through that repository's
-    registered checkout (`orchestrator/design_chain.py`), and a fixture plan may name an
+    registered checkout, and a fixture plan may name an
     origin no registry here holds. Its approval and its launch then read a registry of this
     process's own, where that origin is a layerless stand-in — the chain such a checkout
     without an override of its own resolves to. ``base`` defaults to this process's
     environment, and is answered unchanged when its registry already resolves the origin.
     """
     environment = dict(os.environ if base is None else base)
-    repository = design_chain.plan_repository(project)
+    repository = _plan_repository(project, environment)
     if repository is None:
         home = boundary_home.registered_home(
             Path(_STAND_IN_DIR.name), public=boundary_home.FIXTURE_REPOSITORIES
@@ -504,18 +663,78 @@ def resolving(project: str, base: Mapping[str, str] | None = None) -> dict[str, 
     return boundary_home.environment(environment, home)
 
 
-def approved(project: str) -> str:
-    """Record the user's approval of ``project``'s design document, and answer its id.
+@functools.cache
+def review_bar() -> str:
+    """The bar a plan review attests under: the planner member's judge fingerprint."""
+    return subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "oneagentgraph"), "run", "graphs/planner.yaml"]
+        + ["--judge-only", "--member", "worker", "--bar-fingerprint"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
 
-    Through the real recipe rather than in process, and that is not only for realism: the
-    approval key covers the design-doc template's chain digest as the pinned engine
-    resolves it now, and the tier's answer does not depend on what that template says,
-    only on the approval having been recorded under whatever it currently is.
+
+#: The engine-owned keys `scripts/review-plan-item.sh` leaves out of a review's digest.
+SETTLEMENT_EXCLUDES = (
+    "--exclude",
+    "onepipeline.projected_status",
+    "--exclude",
+    "onepipeline.settlement",
+)
+
+
+def attested_reviewed(project: str, environment: Mapping[str, str] | None = None) -> str:
+    """Record a `plan-review` attestation on every task of ``project`` and on the project.
+
+    Through the store's own `attest` verbs, under the bar `just review-plan` attests under,
+    which is the state a review that passed leaves: a journey about something other than the
+    review starts from it without spending a judged turn. Answers the project's id.
     """
+    env = dict(os.environ if environment is None else environment)
+    source, native = project.split(":", 1)
+    listed = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "task", "list", "--source", source, "--project", native]
+        + ["--limit", "1000", "--json", "--no-interactive"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    records = [("task", held["id"]) for held in json.loads(listed.stdout)["items"]]
+    for kind, item in [*records, ("project", project)]:
+        done = subprocess.run(
+            [str(ONETASKGRAPH_BIN), kind, "attest", item, "--kind", "plan-review"]
+            + ["--by", "review-plan", "--bar", review_bar(), *SETTLEMENT_EXCLUDES]
+            + ["--no-interactive"],
+            cwd=REPO_ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if done.returncode != 0:
+            raise AssertionError(f"the fixture could not attest {item}: {done.stderr}")
+    return project
+
+
+def approved(project: str) -> str:
+    """Make ``project`` launchable: every record reviewed, its design document approved.
+
+    `just orchestrate`'s registered check refuses a plan unless every task and the project
+    carry a valid `plan-review` attestation and its design document a valid
+    `design-approval`. The review is attested through the store's own verb
+    (:func:`attested_reviewed`); the approval through the real `just approve-design`, the
+    recipe a person runs. Answers the project's id.
+    """
+    environment = resolving(project)
+    attested_reviewed(project, environment)
     recording = subprocess.run(
         ["just", "approve-design", project],
         cwd=REPO_ROOT,
-        env=resolving(project),
+        env=environment,
         text=True,
         capture_output=True,
         check=False,
@@ -614,7 +833,7 @@ def designed(
     root of its own; the planned tasks are the one answer a journey states, because each
     row's location is where that journey's store put the task. Every row changes the one
     unit the fixture is, unless it names its own. ``budget_answers`` are the document's
-    budget answers, as `python -m orchestrator.plan_budgets` prints them, when given;
+    budget answers (`plan_budgets` and `budgets`), when given;
     ``answers`` replace any of the others, and each of ``assets`` is given with `--asset`.
     """
     if environment is None:
@@ -676,11 +895,11 @@ def project_from_plan(plan: Path, name: str | None = None, *, approve: bool = Tr
 def reviewed(project: str) -> str:
     """Review ``project`` through the real `just review-plan`, and answer its id.
 
-    A plan reaching `just check-plan` green is one something has already reviewed, so a
-    journey about any *other* refusal has to start from that state. It is reached the
-    way an operator reaches it — the real recipe, the real script, the real
-    `oneharness` CLI and its response schema — rather than by writing the record
-    directly, so no journey built on this begins from state the exercised interface
+    A plan `just orchestrate` launches is one something has already reviewed, so a journey
+    about any *other* refusal has to start from that state. It is reached the way an
+    operator reaches it — the real recipe, the real `scripts/review-plan-item.sh`, the real
+    judge-only run and llmlint — rather than by writing the attestation directly, so no
+    journey built on this begins from state the exercised interface
     cannot produce. Only the paid provider is scripted, at the seam every other journey
     here scripts it at.
     """
@@ -692,8 +911,8 @@ def reviewed(project: str) -> str:
     environment["PATH"] = f"{_PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([_PASSING_VERDICT])
     environment["XDG_STATE_HOME"] = str(_HISTORY)
-    # The review's plan checklist keeps its history pointer file under the runs root, so
-    # it is given this process's own rather than whichever one the caller's names.
+    # The review keeps its run state under the runs root, so it is given this process's own
+    # rather than whichever one the caller's names.
     environment["ONEPIPELINE_RUNS_DIR"] = str(_HISTORY / "runs")
     reviewing = subprocess.run(
         ["just", "review-plan", project],

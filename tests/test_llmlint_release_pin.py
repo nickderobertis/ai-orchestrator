@@ -109,9 +109,9 @@ def test_the_installed_rules_command_names_a_plan_checklist_rule_for_a_task_path
 ) -> None:
     """The installed binary lists the checklist's rules for a task document not yet written.
 
-    Run as `scripts/plan-checklist.sh` runs llmlint: from this checkout's root, so the
-    checklist's `oneharness.config` resolves, with `--cwd` at a plan-authoring root —
-    here an empty one, since the path is asked about before anything is written.
+    Run as `just plan` runs llmlint for the planner's task: from this checkout's root, so
+    the checklist's `oneharness.config` resolves, with `--cwd` at an empty directory, since
+    the path is asked about before anything is written.
     """
     tool_dir, _ = _installed_or_skip()
     binary = tool_dir / LLMLINT_DISTRIBUTION / "bin" / "llmlint"

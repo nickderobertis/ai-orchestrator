@@ -63,21 +63,35 @@ from github_board import (
     _StatusOption,
     _write_inputs,
 )
-from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask, TaskDetail
+from onetaskgraph_sdk import (
+    CopyReport,
+    ProjectAttestationCheck,
+    QueryResponseOfQualifiedTask,
+    TaskDetail,
+)
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
 from plan_store_pin import (
     PACING_FLOOR,
     adopted_release,
     held_below_the_pacing_floor,
 )
-from project_fixtures import budgeted, designed, graph_image, no_budgets, reviewed
+from project_fixtures import (
+    attested_reviewed,
+    budgeted,
+    designed,
+    graph_image,
+    no_budgets,
+    review_bar,
+    reviewed,
+    write_plan_project,
+)
 from published_tools import LOCKED_INSTALLS_PATH, ONETASKGRAPH_BIN
 from sibling_facts import registered_checkouts
+from test_orchestrate_launch_e2e import REQUIRE_RENDERED_ENV
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_check, plan_store
-from orchestrator.plan_records import write_plan_project
+from orchestrator import plan_store
 from orchestrator.record_shapes import PlanDocument, PlanNode
 from orchestrator.root import REPO_ROOT
 
@@ -99,9 +113,11 @@ def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
 #: The engine's human item store, which it keeps beside the runs under a runs root once
 #: `.onepipeline/config.yaml` turns human items on; it is no run.
 ITEM_STORE = "human-items"
+
 #: What `just follow-ups` names the follow-up run the success hook launches beside a run
 #: that ends with every node done, so a count of the launched run leaves it out.
 FOLLOW_UPS_SUFFIX = "-follow-ups"
+
 
 ADOPTED = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
 _NodeId = NewType("_NodeId", str)
@@ -375,6 +391,8 @@ def _write_local_project(root: Path) -> None:
     assert recording.returncode == 0, (
         f"the fixture could not approve {LOCAL_QUALIFIED}: {recording.stdout}{recording.stderr}"
     )
+    # Reviewed as a passing `just review-plan` leaves it, which the launch check reads.
+    attested_reviewed(LOCAL_QUALIFIED, {**os.environ, AUTHORING_ROOT_ENV: str(root)})
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey's placement in its module's tier, now `launch-monitor-observer:test`, predates this change, which only accounts  # noqa: E501
@@ -784,9 +802,8 @@ def _copy_to_the_board(
     for setting, value in pacing.items():
         environment[f"ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__{setting.upper()}"] = value
     # llmlint: ignore-block[tests_mirror_real_usage] `just plans` is an operator recipe,
-    # not a private seam below one: `just copy-plan` adds a review pre-flight and then
-    # runs this very verb with its streams uncaptured, so what an operator reads is
-    # identical, and its own journey is `tests/plan_tooling/plan_copy/test_copy_plan_recipe_e2e.py`.
+    # not a private seam below one: `just copy-plan` runs this very verb with
+    # `--documents` and its streams uncaptured, so what an operator reads is identical.
     return subprocess.run(
         ["just", "plans", "project", "copy", LOCAL_QUALIFIED, "--to", "plans"],
         cwd=REPO_ROOT,
@@ -1283,6 +1300,122 @@ def test_a_copy_onto_the_board_reports_what_it_spent(tmp_path: Path) -> None:
     )
 
 
+#: The plan the review-through-a-copy journey authors: one task depending on the other, as
+#: every real plan's tasks do, and the attestation its review records on each.
+REVIEWED_PROJECT = _ProjectId("reviewed")
+REVIEWED_UPSTREAM = "feat: upstream"
+REVIEWED_DOWNSTREAM = "feat: downstream"
+REVIEW_KIND = "plan-review"
+REVIEW_BAR = "plan-bar-fingerprint"
+
+
+def _review_states(environment: dict[str, str], project: str) -> dict[str, str]:
+    """Each task of ``project`` mapped to what `project attestation check --tasks` answers.
+
+    Read without `_store`'s exit assertion, because the check exits 3 whenever a record is
+    not valid, and that answer — each state and its reason — is what a failure has to show.
+    """
+    checked = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            *("project", "attestation", "check", project),
+            *("--kind", REVIEW_KIND, "--bar", REVIEW_BAR, "--tasks", "--json"),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert checked.returncode in (0, 3), checked.stdout + checked.stderr
+    report = ProjectAttestationCheck.model_validate_json(checked.stdout)
+    return {
+        entry.id.root: entry.state.value + (f" ({entry.reason.value})" if entry.reason else "")
+        for entry in report.tasks
+    }
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The edge this journey runs
+# behind is the one every board journey in this module already pays — the installed
+# plan-store CLI against the module's loopback board, in `launch-monitor-observer:test` —
+# and the task adopting the store this proves names this module as its home; re-homing
+# the module's journeys is enforcement configuration this change may not move.
+def test_a_plan_review_stays_valid_on_the_board_copy_of_a_task_with_a_dependency(
+    tmp_path: Path,
+) -> None:
+    """A task's `plan-review` survives the copy that puts its plan on the board.
+
+    The launch gate refuses a task whose plan review is not valid, and onetaskgraph 0.14.15
+    voided the review of every task with a dependency once the plan was copied onto the
+    board, because the copy renumbers the dependency edge the digest covers — so every real
+    plan was refused at launch. Driven through the installed `.venv/bin/onetaskgraph`: the
+    review is attested on both tasks of an authoring plan, the plan is copied with its
+    documents onto the loopback GitHub Projects board, and the copy is checked.
+    """
+    write_plan_project(
+        tmp_path,
+        {
+            "schema_version": 3,
+            "name": REVIEWED_PROJECT,
+            "tasks": [
+                {
+                    "id": "upstream",
+                    "persona": "engineer",
+                    "title": REVIEWED_UPSTREAM,
+                    "task": "## What\nBuild the base.\n",
+                },
+                {
+                    "id": "downstream",
+                    "persona": "engineer",
+                    "title": REVIEWED_DOWNSTREAM,
+                    "deps": ["upstream"],
+                    "task": "## What\nBuild on the base.\n",
+                },
+            ],
+        },
+    )
+    authored = f"{AUTHORING_SOURCE}:{REVIEWED_PROJECT}"
+    with _serving_board() as remote:
+        environment = _plan_environment(tmp_path)
+        environment.update(remote)
+        # How fast a copy writes is the pacing journey's subject, not this one's.
+        environment["ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = "0"
+        tasks = _listed(environment, "--project", authored)
+        assert len(tasks) == 2, tasks
+        for task in tasks:
+            _store(
+                environment,
+                *("task", "attest", task, "--kind", REVIEW_KIND),
+                *("--by", "plan-review judge", "--bar", REVIEW_BAR),
+            )
+        assert set(_review_states(environment, authored).values()) == {"valid"}
+
+        report = CopyReport.model_validate_json(
+            _store(environment, "project", "copy", authored, "--to", "plans", "--documents")
+        )
+        placed = {
+            outcome.root.source.root: outcome.root.destination.root
+            for outcome in report.items
+            if getattr(outcome.root, "destination", None) is not None
+        }
+        board_project = placed[authored]
+        upstream, downstream = (
+            placed[task] for task in sorted(tasks, key=lambda task: "downstream" in task)
+        )
+        # The edge reached the board, so the digest the copy is checked against covers one.
+        edges = _store(environment, "task", "deps", downstream)
+        assert upstream in edges, f"the copy of {downstream} carries no edge to {upstream}: {edges}"
+
+        on_board = _review_states(environment, board_project)
+
+    assert on_board == {upstream: "valid", downstream: "valid"}, (
+        f"the board copy of {authored} answers {on_board} where both reviews must stay valid"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
 #: The project, task and metadata value the native-query journey files, named once so the
 #: task it creates and every query asking for it agree on one spelling.
 FILED_PROJECT = _ProjectId("filed")
@@ -1655,6 +1788,23 @@ def test_a_queued_task_onto_a_plans_board_without_a_queued_option_is_refused_by_
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
+# llmlint: ignore[e2e_not_mocked] The live `followups` board is the one boundary these
+# journeys must not reach: every session's verified tickets accumulate there, and a write
+# needs a credential no test may use. What is doubled stops at the wire — the installed
+# CLI, `board-status` and the committed configuration are real.
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
+# inputs as every journey beside it — the installed plan-store CLI driven against the
+# loopback board — so `nx affected` already selects this module together, and a project of
+# one function would buy no selection. It runs in `launch-monitor-observer:test`,
+# keyed `launchMonitorObserverWorkspace`.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason:
+
+
+# llmlint: ignore-block[e2e_not_mocked] The one boundary doubled is GitHub's Projects API, for
+# the reason the block around `_Board` above gives; the installed `onetaskgraph`, the committed
+# `followups` source and this checkout's `board-status` are real, and read off their output.
 def _status_writes(requests: list[_GraphQLRequest]) -> list[object]:
     """The value of every Status field write among ``requests``."""
     return [
@@ -1719,6 +1869,18 @@ def test_the_cache_rules_agents_md_restates_are_the_adopted_stores_and_this_host
             ):
                 pinned.append(f"{module.name}:{node.lineno}")
     assert pinned == [], f"a store read in orchestrator/ is pinned now: {pinned}"
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell test: a Python journey
+
+
+# llmlint: ignore-block[budgets_scoped_to_minimal_tree] The budget sits in orchestrator/budgets.yaml beside follow-up-run-points and ticket-lifecycle-points, whose journeys are this module's: all three price the loopback board through tests/github_board.py, and orchestrator:budgets reads the telemetry this project's test target records, an edge orchestrator/project.json states; orchestrator/ holds the package alone, as that budgets file says.  # noqa: E501 - llmlint reads a directive and its reason off one line
+
+
+# llmlint: ignore-end[budgets_scoped_to_minimal_tree]
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 @pytest.mark.reads_checkouts
@@ -1841,16 +2003,6 @@ TERMINAL_WRITES: dict[_Terminal, _TerminalWrite] = {
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
-# inputs as every journey beside it — the installed plan-store CLI driven against the
-# loopback board — so `nx affected` already selects this module together, and a project of
-# one function would buy no selection. It runs in `launch-monitor-observer:test`,
-# keyed `launchMonitorObserverWorkspace`.
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason:
-# the edge it pays is the one every other CLI-spawning journey in this file already pays.
-# llmlint: ignore-block[e2e_not_mocked] The one boundary doubled is GitHub's Projects API, for
-# the reason the block around `_Board` above gives; the installed `onetaskgraph` and the
-# committed `plans` and `followups` sources are real, and read off their output.
 @contextmanager
 def _serving_source(
     tmp_path: Path, source: _BoardSource, options: tuple[_StatusOption, ...] | None = None
@@ -1975,6 +2127,14 @@ def test_a_terminal_write_onto_a_board_without_its_mapped_option_is_refused_by_n
 
 
 # llmlint: ignore-end[e2e_not_mocked]
+
+
+# llmlint: ignore-block[e2e_not_mocked] The one boundary doubled is GitHub's Projects API, for
+
+
+# llmlint: ignore-end[e2e_not_mocked]
+
+
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
@@ -2393,6 +2553,24 @@ TICKET = "the ticket"
 GATE_POLL_SECONDS = 0.05
 
 
+@contextmanager
+def _process_environment(environment: Mapping[str, str]) -> Iterator[None]:
+    """Run the block with this process's environment set to ``environment``, then restore it.
+
+    The fixture writer runs the store in this process's environment, and a task delivering a
+    board's ticket is kept in step with that ticket on create, so the write has to see the
+    served boards the launch does.
+    """
+    before = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(environment)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(before)
+
+
 #: The accepted ticket the delivering plan's node delivers, as the drafts source holds it
 #: before it is copied onto `followups`.
 ACCEPTED_TICKET = "drafts:accepted-ticket"
@@ -2417,12 +2595,20 @@ def _accepted_ticket(drafts: Path) -> None:
     )
 
 
-def _write_delivering_plan(root: Path, delivers: str) -> None:
-    """Write and approve the two-node plan, its second node delivering ``delivers``.
+def _write_delivering_plan(root: Path, delivers: str, environment: Mapping[str, str]) -> None:
+    """Write, review and approve the two-node plan, its second node delivering ``delivers``.
 
     Approved through the real recipe for the reason `_write_local_project` gives: a launch
     is refused without an approved design document, and nothing here is about that gate.
+    Written in ``environment``, the launch's, because the ticket it delivers is on a board
+    only that environment serves.
     """
+    with _process_environment(environment):
+        _write_delivering_plan_records(root, delivers)
+    attested_reviewed(DELIVERING_QUALIFIED, {**environment, AUTHORING_ROOT_ENV: str(root)})
+
+
+def _write_delivering_plan_records(root: Path, delivers: str) -> None:
     write_plan_project(
         root,
         {
@@ -2449,6 +2635,7 @@ def _write_delivering_plan(root: Path, delivers: str) -> None:
                 },
             ],
         },
+        source=AUTHORING_SOURCE,
     )
     designed(
         AUTHORING_SOURCE,
@@ -2682,7 +2869,7 @@ def _prepare_claiming_launch(
     _accepted_ticket(drafts)
 
     (filed,) = _copied_onto(environment, "task", "copy", ACCEPTED_TICKET, "--to", FOLLOWUPS_SOURCE)
-    _write_delivering_plan(tmp_path, str(filed["destination"]))
+    _write_delivering_plan(tmp_path, str(filed["destination"]), environment)
     copied = _copied_onto(environment, "project", "copy", DELIVERING_QUALIFIED, "--to", "plans")
     _copied_onto(
         environment,
@@ -2743,11 +2930,7 @@ def _run_id(runs: Path) -> str:
     deadline = time.monotonic() + e2e_timeout(180)
     while time.monotonic() < deadline:
         minted = (
-            [
-                held.name
-                for held in runs.iterdir()
-                if held.name != ITEM_STORE and not held.name.endswith(FOLLOW_UPS_SUFFIX)
-            ]
+            [held.name for held in runs.iterdir() if held.name != ITEM_STORE]
             if runs.is_dir()
             else []
         )
@@ -2895,6 +3078,9 @@ def test_settlement_write_back_preserves_the_authored_project_description(
     """
     _write_local_project(tmp_path)
     _author_project_body(tmp_path, LOCAL_PROJECT, AUTHORED_PROJECT_BODY)
+    # The authored description is new content, so its review is re-earned as a manager's
+    # `just review-plan` would, before the launch check reads it.
+    attested_reviewed(LOCAL_QUALIFIED, {**os.environ, AUTHORING_ROOT_ENV: str(tmp_path)})
     environment = _launch_environment(tmp_path / "execution", oneharness_bin)
     environment.update(_prepare_plan_sources(tmp_path))
     environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
@@ -3010,7 +3196,7 @@ def _rendering_environment(root: Path) -> dict[str, str]:
     names on every verb it runs.
     """
     environment = _plan_environment(root)
-    environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
+    environment.pop(REQUIRE_RENDERED_ENV, None)
     environment["PATH"] = f"{LOCKED_INSTALLS_PATH}{os.pathsep}{environment['PATH']}"
     environment["ONEPIPELINE_TEMPLATE_ROOT"] = str(REPO_ROOT / "templates")
     return environment
@@ -3134,12 +3320,40 @@ def _recipe(environment: Mapping[str, str], *arguments: str) -> subprocess.Compl
     )
 
 
-def _rendered_task(qualified: str) -> plan_store.StoreTask:
-    """One of :data:`RENDERED_PROJECT`'s tasks, read through the store as `check-plan` reads it."""
-    (task,) = [
-        one for one in plan_store.read_tasks(RENDERED_QUALIFIED) if one.qualified_id == qualified
+class _RenderedTask(NamedTuple):
+    """One stored task, in the fields the regeneration journeys compare."""
+
+    qualified_id: str
+    node_id: object
+    deps: tuple[object, ...]
+    content: str | None
+    metadata: Mapping[str, object]
+
+
+def _rendered_task(qualified: str) -> _RenderedTask:
+    """One of :data:`RENDERED_PROJECT`'s tasks, read through the store's own SDK verbs.
+
+    Its dependencies are the node ids of the tasks its edges in the store's `project graph`
+    come from, which is how the engine reads a plan's edges.
+    """
+    source, native = RENDERED_QUALIFIED.split(":", 1)
+    held = [
+        task
+        for page in plan_store.every_page(
+            RENDERED_QUALIFIED, plan_store.client().task_list, source=[source], project=native
+        )
+        for task in page.items
     ]
-    return task
+    nodes = {task.id.model_dump(): task.item.metadata.get("onepipeline.id") for task in held}
+    graph = plan_store.sdk(plan_store.client().project_graph(RENDERED_QUALIFIED, complete=True))
+    (task,) = [one for one in held if one.id.model_dump() == qualified]
+    return _RenderedTask(
+        qualified,
+        nodes[qualified],
+        tuple(nodes[edge.from_.root] for edge in graph.edges if edge.to.root == qualified),
+        task.item.content,
+        task.item.metadata,
+    )
 
 
 def _stored_answers(environment: Mapping[str, str], qualified: str) -> dict[str, object]:
@@ -3164,19 +3378,40 @@ def _record_of(root: Path, qualified: str) -> Path:
 
 
 def _copied(reported: str) -> dict[str, str]:
-    """Each copied record's destination id by its source id, off `just copy-plan`'s report."""
-    return {
-        str(entry["source"]): str(entry["destination"])
-        for entry in (json.loads(line) for line in reported.splitlines() if line.startswith("{"))
-        if entry.get("destination")
-    }
+    """Each copied record's destination id by its source id, off `just copy-plan`'s report.
+
+    The store's own text report: one `<source>  <destination>  <action>` line per record.
+    """
+    rows = (line.split() for line in reported.splitlines())
+    return {row[0]: row[1] for row in rows if len(row) >= 3 and ":" in row[0] and ":" in row[1]}
 
 
-def _remedy(qualified: str) -> str:
-    return (
-        "onepipeline template resolve plan-task --json | onetaskgraph task render "
-        f"{qualified} --template-loader -"
+def _review_states(environment: Mapping[str, str], project: str) -> dict[str, str]:
+    """Each task's `plan-review` state under the current bar: what the launch check reads."""
+    checked = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "project",
+            "attestation",
+            "check",
+            project,
+            "--kind",
+            "plan-review",
+            "--tasks",
+            "--bar",
+            review_bar(),
+            "--json",
+            "--no-interactive",
+        ],
+        cwd=REPO_ROOT,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
     )
+    assert checked.returncode in (0, 3), checked.stdout + checked.stderr
+    return {str(one["id"]): str(one["state"]) for one in json.loads(checked.stdout)["tasks"]}
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker, expensive_tests_stay_behind_their_own_edge] Same subject and same inputs as every journey beside them — the installed plan-store CLI and engine driven through this checkout's recipes, against the loopback board and the local project writer this module owns — so `nx affected` already selects the module together, and a project of three functions would be keyed on the same files. They run in `launch-monitor-observer:test`, keyed `launchMonitorObserverWorkspace`, the edge every launch and board journey in this file pays.  # noqa: E501
@@ -3185,6 +3420,13 @@ def _remedy(qualified: str) -> str:
 # repository plans on — and the paid model is the other; the recipes, the pinned engine and
 # plan store and the records they write are all real.
 # llmlint: ignore-block[tests_mirror_real_usage] The issue body is what a reader of the
+def _remedy(qualified: str) -> str:
+    return (
+        "onepipeline template resolve plan-task --json | onetaskgraph task render "
+        f"{qualified} --template-loader -"
+    )
+
+
 # issue sees, and the store answers a task's content with its metadata slot parsed away, so
 # the wire body — and whether a re-copy filed a second issue — can only be read where the
 # fixture holds them; the item a copy reached is also asserted through the store's own copy
@@ -3215,7 +3457,7 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
     name, value = REGENERATED_ANSWER
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
-        first = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "--to", "plans")
+        first = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "plans")
         assert first.returncode == 0, first.stdout + first.stderr
         destinations = _copied(first.stdout)
         issued = {issue.title: issue for issue in BOARD.issues_created_and_kept()}
@@ -3238,10 +3480,11 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
         assert rendered.returncode == 0, rendered.stdout + rendered.stderr
         after = _rendered_task(changed)
 
-        unreviewed = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
+        unreviewed = _review_states(environment, RENDERED_QUALIFIED)
         reviewed(RENDERED_QUALIFIED)
+        rereviewed = _review_states(environment, RENDERED_QUALIFIED)
         rechecked = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
-        second = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "--to", "plans")
+        second = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "plans")
         assert second.returncode == 0, second.stdout + second.stderr
         reissued = {issue.title: issue for issue in BOARD.issues_created_and_kept()}
         # Its document opens with the plan's graph, which the board serves from where it
@@ -3251,7 +3494,7 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
         launching = _launch_environment(tmp_path / "execution", oneharness_bin)
         launching.update(_prepare_plan_sources(root))
         launching.update(remote)
-        launching.pop(plan_check.REQUIRE_RENDERED_ENV, None)
+        launching.pop(REQUIRE_RENDERED_ENV, None)
         launching[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
         launched = _recipe(
             launching, "orchestrate", destinations[RENDERED_QUALIFIED], "--dag-graph", "off"
@@ -3276,8 +3519,10 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
     assert str(RENDERED_ANSWERS[RENDERED_SECOND.node][name]) not in after.content
     assert _stored_answers(environment, changed)[name] == value
 
-    assert unreviewed.returncode == 1, unreviewed.stdout + unreviewed.stderr
-    assert "no review record for its current authored content" in unreviewed.stderr
+    # The regenerated task's review went void with its content, and `just review-plan`
+    # re-earned it: the record the launch check reads.
+    assert unreviewed[changed] == "void", unreviewed
+    assert set(rereviewed.values()) == {"valid"}, rereviewed
     assert rechecked.returncode == 0, rechecked.stdout + rechecked.stderr
 
     assert _copied(second.stdout) == destinations, second.stdout
@@ -3303,132 +3548,10 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
     (run,) = [
         held
         for held in Path(launching["ONEPIPELINE_RUNS_DIR"]).iterdir()
-        if held.is_dir() and held.name != ITEM_STORE and not held.name.endswith(FOLLOW_UPS_SUFFIX)
+        if held.is_dir() and held.name != ITEM_STORE
     ]
     record = json.loads((run / "launch.json").read_text("utf-8"))
     assert record["require_rendered"] is True, record
-
-
-#: The two files a `plan-task` rendering here is made from, each of which a stale-rendering
-#: case below changes: the template itself, and the operational appendix it includes.
-MOVED_TEMPLATE, MOVED_APPENDIX = "plan-task.md.j2", "dispatch-appendix.md"
-
-
-def _moved_template_root(tmp_path: Path, changed: str) -> Path:
-    """A host root that differs from this checkout's in ``changed`` alone.
-
-    Rendering from it is what a task rendered *before* that file changed in `templates/`
-    looks like from here: its provenance names `onepipeline:plan-task` under a chain digest
-    the checkout no longer resolves. Every other file is linked rather than copied, and a
-    changed appendix is written whole rather than edited, because the appendix is prose
-    this tier's key does not cover and the engine is what reads it.
-    """
-    moved = tmp_path / f"moved-{changed}"
-    moved.mkdir()
-    for entry in (REPO_ROOT / "templates").iterdir():
-        if entry.name != changed:
-            (moved / entry.name).symlink_to(entry)
-        elif changed == MOVED_TEMPLATE:
-            (moved / entry.name).write_text(
-                entry.read_text(encoding="utf-8").replace(
-                    "## Why\n", "## Why\n\n<!-- moved -->\n", 1
-                ),
-                encoding="utf-8",
-            )
-        else:
-            (moved / entry.name).write_text(
-                "## Additional info\n\n### Operational notes\n\nA rule added since.\n",
-                encoding="utf-8",
-            )
-    return moved
-
-
-class _StaleCase(NamedTuple):
-    """One stale rendering: the render from a root where one file differs from this
-    checkout's, `just check-plan` over it, the regenerate from this checkout's own root, and
-    `just check-plan` over what that left."""
-
-    rendered_before: subprocess.CompletedProcess[str]
-    refused: subprocess.CompletedProcess[str]
-    regenerated: subprocess.CompletedProcess[str]
-    accepted: subprocess.CompletedProcess[str]
-
-
-def test_a_hand_edited_or_stale_rendering_is_refused_until_task_render_regenerates_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`just check-plan` refuses a task that is not the rendering in force, naming the pipe.
-
-    A hand edit to a rendered body, and a rendering made before either `plan-task.md.j2` or
-    the operational appendix it includes changed, are each refused through the engine with
-    the regenerate that repairs them; a `task render` with the answers unchanged then clears
-    each, and the plan is accepted again without another review, because the content is the
-    content that was reviewed.
-    """
-    root = tmp_path / "authoring"
-    root.mkdir()
-    monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root))
-    environment = _rendering_environment(root)
-    tasks = _write_rendered_project(tmp_path, root, environment)
-    reviewed(RENDERED_QUALIFIED)
-    target = tasks[RENDERED_FIRST.node]
-    record = _record_of(root, target)
-    rendered = record.read_text(encoding="utf-8")
-    as_reviewed = _rendered_task(target)
-    edited_from = str(RENDERED_ANSWERS[RENDERED_FIRST.node]["why"])
-    assert edited_from in rendered
-
-    # The body's own occurrence alone: the record keeps the answers below the body too, and
-    # an edit that changed them as well would be refused for another reason entirely.
-    record.write_text(
-        rendered.replace(edited_from, "A person cannot see past the first screen.", 1),
-        encoding="utf-8",
-    )
-    hand_edited = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
-    cleared_edit = _through_the_template(
-        environment, "render", target, "--template-loader", "-", "--no-interactive"
-    )
-    after_edit = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
-
-    stale_cases: dict[str, _StaleCase] = {}
-    for changed in (MOVED_TEMPLATE, MOVED_APPENDIX):
-        moved = _moved_template_root(tmp_path, changed)
-        stale_cases[changed] = _StaleCase(
-            rendered_before=_through_the_template(
-                {**environment, "ONEPIPELINE_TEMPLATE_ROOT": str(moved)},
-                "render",
-                target,
-                "--template-loader",
-                "-",
-                "--no-interactive",
-            ),
-            refused=_recipe(environment, "check-plan", RENDERED_QUALIFIED),
-            regenerated=_through_the_template(
-                environment, "render", target, "--template-loader", "-", "--no-interactive"
-            ),
-            accepted=_recipe(environment, "check-plan", RENDERED_QUALIFIED),
-        )
-
-    assert hand_edited.returncode == 1, hand_edited.stdout + hand_edited.stderr
-    assert "body differs from its rendering" in hand_edited.stderr, hand_edited.stderr
-    assert _remedy(target) in hand_edited.stderr, hand_edited.stderr
-    assert cleared_edit.returncode == 0, cleared_edit.stdout + cleared_edit.stderr
-    assert after_edit.returncode == 0, after_edit.stdout + after_edit.stderr
-
-    for changed, case in stale_cases.items():
-        assert case.rendered_before.returncode == 0, (changed, case.rendered_before.stderr)
-        assert case.refused.returncode == 1, (changed, case.refused.stdout + case.refused.stderr)
-        refusal = case.refused.stderr
-        assert "template changed since rendering" in refusal, (changed, refusal)
-        assert str(REPO_ROOT / "templates" / MOVED_TEMPLATE) in refusal, (changed, refusal)
-        assert _remedy(target) in refusal, (changed, refusal)
-        assert case.regenerated.returncode == 0, (changed, case.regenerated.stderr)
-        assert case.accepted.returncode == 0, (changed, case.accepted.stdout + case.accepted.stderr)
-    regenerated = _rendered_task(target)
-    assert (regenerated.content, regenerated.metadata) == (
-        as_reviewed.content,
-        as_reviewed.metadata,
-    )
 
 
 def test_a_hand_written_plan_is_refused_by_check_plan_and_at_launch_unless_the_caller_names_false(
@@ -3443,16 +3566,16 @@ def test_a_hand_written_plan_is_refused_by_check_plan_and_at_launch_unless_the_c
     """
     _write_local_project(tmp_path)
     environment = _plan_environment(tmp_path)
-    environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
+    environment.pop(REQUIRE_RENDERED_ENV, None)
     checked = _recipe(environment, "check-plan", LOCAL_QUALIFIED)
 
     launching = _launch_environment(tmp_path / "execution", oneharness_bin)
     launching.update(_prepare_plan_sources(tmp_path))
-    launching.pop(plan_check.REQUIRE_RENDERED_ENV, None)
+    launching.pop(REQUIRE_RENDERED_ENV, None)
     launching[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
     refused = _recipe(launching, "orchestrate", LOCAL_QUALIFIED, "--dag-graph", "off")
     unreadable = [
-        _recipe({**named, plan_check.REQUIRE_RENDERED_ENV: "yes"}, *verb)
+        _recipe({**named, REQUIRE_RENDERED_ENV: "yes"}, *verb)
         for named, verb in (
             (environment, ("check-plan", LOCAL_QUALIFIED)),
             (launching, ("orchestrate", LOCAL_QUALIFIED, "--dag-graph", "off")),
@@ -3475,10 +3598,11 @@ def test_a_hand_written_plan_is_refused_by_check_plan_and_at_launch_unless_the_c
     probe = f"{LOCAL_QUALIFIED.partition(':')[0]}:"
     for said in (checked, refused):
         assert said.returncode != 0, said.stdout + said.stderr
-        assert "not rendered: no provenance" in said.stderr, said.stderr
+        reported = said.stdout + said.stderr
+        assert "not rendered: no provenance" in reported, reported
         assert (
             "onepipeline template resolve plan-task --json | onetaskgraph task render " + probe
-            in said.stderr
+            in reported
         )
     for said in unreadable:
         assert said.returncode == 2, said.stdout + said.stderr
@@ -3487,11 +3611,7 @@ def test_a_hand_written_plan_is_refused_by_check_plan_and_at_launch_unless_the_c
         )
     assert not refused_runs, f"a refused launch minted {refused_runs}"
     assert kept.returncode == 0, kept.stdout + kept.stderr
-    (run,) = [
-        held
-        for held in runs.iterdir()
-        if held.is_dir() and held.name != ITEM_STORE and not held.name.endswith(FOLLOW_UPS_SUFFIX)
-    ]
+    (run,) = [held for held in runs.iterdir() if held.is_dir() and held.name != ITEM_STORE]
     record = json.loads((run / "launch.json").read_text("utf-8"))
     assert record.get("require_rendered", False) is False, record
 

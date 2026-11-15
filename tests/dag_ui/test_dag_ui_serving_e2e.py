@@ -244,6 +244,10 @@ class Served:
         )
         return self._answer(request)
 
+    def delete(self, path: str) -> int:
+        """Retire what ``path`` names, answering only the status: the route has no body."""
+        return self._answer(urllib.request.Request(f"{self.base}{path}", method="DELETE")).status
+
     def _answer(self, request: urllib.request.Request) -> Answer:
         try:
             with urllib.request.urlopen(request, timeout=e2e_timeout(10)) as response:
@@ -618,6 +622,81 @@ def test_the_timeline_this_repository_documents_is_what_the_reader_answers(
     for kind, span in spans.items():
         assert span["started_at"], kind
         assert "ended_at" in span, kind
+
+
+#: The node of `REPORTED_RUN` whose own timeline the first-screen journey opens: the one
+#: that ran and failed, among five its failure skipped, so a node view answering some
+#: other node's status, or every node as one status, reads differently from the truth.
+FIRST_SCREEN_NODE = "basis"
+#: The first-screen subscriptions the view sends, one per view it opens a run on: Graph
+#: subscribes `detail`, Overall `timeline` at run scope, and a node's timeline `timeline`
+#: at node scope (onepipeline-ui's `docs/contract.md`, "POST /api/v2/subscriptions").
+FIRST_SCREEN_VIEWS: dict[str, dict[str, str]] = {
+    "Graph": {"type": "detail", "run_id": REPORTED_RUN},
+    "Overall": {"type": "timeline", "run_id": REPORTED_RUN, "scope": "run"},
+    "node timeline": {
+        "type": "timeline",
+        "run_id": REPORTED_RUN,
+        "scope": "node",
+        "node": FIRST_SCREEN_NODE,
+    },
+}
+
+
+def _node_statuses(detail: dict[str, object]) -> dict[str, dict[str, str]]:
+    """Every node status one run detail carries, from both places the view reads one.
+
+    The run's node rows feed the header and the node list; the graph's `node_status`
+    colours the Graph view. A first answer is a different read of the journal from the
+    complete document, so each is compared on its own rather than one standing for both.
+    """
+    run = detail["run"]
+    graph = detail["graph"]
+    assert isinstance(run, dict) and isinstance(graph, dict), detail.keys()
+    return {
+        "run.nodes": {row["node"]: row["status"] for row in run["nodes"]},
+        "graph.node_status": dict(graph["node_status"]),
+    }
+
+
+def test_the_first_screen_answer_carries_the_node_statuses_the_complete_read_does(
+    served_recorded: Served,
+) -> None:
+    """The view's own first-screen request, on the origin `just dag-ui` serves.
+
+    The adopted release answers a run view's subscription from a selective read of the
+    journal so a large run's first screen opens in under a second, rather than from the
+    complete read `GET /api/v2/runs/{run}` serves. A faster read that answered a
+    different node status would put a wrong first screen in front of an operator, so
+    each first answer — Graph, Overall and one node's timeline — is held to what the
+    complete read on the same origin says about every node.
+    """
+    status, body, _ = served_recorded.get(f"/api/v2/runs/{REPORTED_RUN}")
+    assert status == 200, body
+    complete = _node_statuses(json.loads(body))
+    assert set(complete["run.nodes"].values()) == {"failed", "skipped"}, complete
+
+    for view_name, view in FIRST_SCREEN_VIEWS.items():
+        status, body, content_type = served_recorded.post("/api/v2/subscriptions", {"view": view})
+
+        assert status == 201, f"{view_name}: {body!r}"
+        assert content_type == "application/json", view_name
+        answer = json.loads(body)
+        assert answer["view"] == view, view_name
+        initial = answer["initial"]
+        assert initial["type"] == "snapshot", f"{view_name}: {initial['type']}"
+        snapshot = initial["snapshot"]
+        # The first answer waits on neither the sidebar nor the complete read: its rows
+        # arrive as the stream's first frame instead.
+        assert snapshot["sidebar"] is None, f"{view_name} waited on the sidebar"
+        visible = snapshot["visible"]
+        assert {key: visible[key] for key in view} == view, view_name
+
+        assert _node_statuses(visible["detail"]) == complete, (
+            f"the {view_name} first screen answers node statuses that differ from what "
+            f"GET /api/v2/runs/{REPORTED_RUN} reports on the same origin"
+        )
+        assert served_recorded.delete(f"/api/v2/subscriptions/{answer['subscription']}") == 204
 
 
 def _at(timestamp: str) -> datetime:

@@ -289,7 +289,6 @@ def test_the_shutdown_the_page_describes_is_the_one_the_contract_promises() -> N
 ACTION_ITEMS_AVAILABILITY = {
     "there is no sample mode": "There is no sample mode",
     "`503 human_items_unavailable`": "`503 human_items_unavailable`",
-    "`Re-read the current document`": "Re-read the current document",
     "`on_behalf_of: null`": "always `on_behalf_of: null`",
     "the host-wide queue": (
         "Lists and details are host-wide, independent of the server's acting session"

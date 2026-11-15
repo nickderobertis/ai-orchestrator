@@ -30,8 +30,11 @@ BUDGETS_DOC = "docs/budgets.md"
 #: The rules the checklist words itself: the nine checks moved out of the planner's judge —
 #: the last of them the rule that replaced the one demanding a budget owner's criteria name
 #: each budget, once a task's budgets derived their own criteria — then the two that make a
-#: plan state the facts a re-declared fragment rule judges, and last the one no judge held
+#: plan state the facts a re-declared fragment rule judges, then the one no judge held
 #: before it: which side of a contract owns the knowledge each decision it encodes rests on.
+#: Last are the four the planning cutover moved into the checklist from the deterministic
+#: guards it retired: a criterion about the worker's draft needs its grant, criteria state
+#: properties, a task names its unit, and a checklist budget has its owner.
 NEW_RULES = (
     "plan_criteria_satisfiable_inside_the_dispatch",
     "plan_criteria_require_realistic_tests",
@@ -45,8 +48,12 @@ NEW_RULES = (
     "plan_budget_names_its_telemetry_source",
     "plan_budget_measurement_is_decided",
     "seam_decisions_rest_with_their_owner",
+    "plan_criteria_draft_needs_its_grant",
+    "plan_criteria_state_properties",
+    "plan_task_names_its_unit",
+    "plan_checklist_budgets_have_owners",
 )
-COMPLETENESS_RULES = NEW_RULES[-3:-1]
+COMPLETENESS_RULES = NEW_RULES[9:11]
 #: The fragment rules re-declared for plans, whose wording stays upstream.
 FRAGMENT_RULES = (
     "budgets_track_product_owner_outcomes",
@@ -75,7 +82,7 @@ MOVED_FROM_THE_BAR = {
     ),
     "budgets_track_product_owner_outcomes": ("second unit", "another budget's figure"),
     "budgets_reuse_gate_telemetry": ("scenario of its own", "standalone-measurement"),
-    # Left without moving: `orchestrator/plan_budgets.py` refuses that shape itself.
+    # Left without moving: the `plan-description` template's schema refuses that shape itself.
     "every concern answered": ("every concern of the checklist",),
 }
 #: The checks that need judgment and stay with the reviewer, by a phrase each one states.
@@ -218,7 +225,8 @@ def test_the_checklist_words_exactly_the_rules_the_planners_judge_gave_up() -> N
     worded = [rule["name"] for rule in _rules() if not rule.get("override")]
     assert sorted(worded) == sorted(NEW_RULES), (
         f"{CONFIG} words {sorted(worded)} itself, where it words exactly the nine checks "
-        "moved out of the planner's judge, the two completeness rules and the seam-ownership rule"
+        "moved out of the planner's judge, the two completeness rules, the seam-ownership rule "
+        "and the four the planning cutover moved in"
     )
     for rule in _rules():
         assert rule.get("agent") == "plan", f"{rule['name']} is not judged under the plan agent"

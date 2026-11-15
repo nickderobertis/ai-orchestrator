@@ -88,9 +88,9 @@ A run sits in its **effective group**, which the engine resolves: the `--group` 
 launch named, else the origin of the board copy it was launched from, else its own
 project, as any label overlay `onepipeline label` wrote leaves it. Every launch path
 here passes the engine's `--label kind=<kind>` — `main` from `just orchestrate`;
-`planning`, `spikes`, `spike-brief`, `finalize` and `design` from the planning flow,
-each grouped under the brief's declared plan project; `follow-ups` from the follow-up
-recipes — so a plan's runs sit together under
+`planning` from `just plan` and `just finish-plan` and `spikes` from a planning run's
+spikes run, each grouped under its own project; `follow-ups` from the follow-up recipes,
+each grouped by its own project — so a plan's runs sit together under
 that plan and the view's kind filter, built from the kinds the runs carry, tells them
 apart. A run with no group sits under **Other runs**. Opening a project selects its
 newest run; there is no separate project page.
@@ -122,13 +122,10 @@ items. Each item shows its **source** — the plan and run it came from, the man
 for a question raised outside a run, or the host — and whether it blocks work, as
 "blocks N steps in <plan>", "blocks all of <plan>" or "blocks all work on this host";
 the scope behind that is the engine's internal record, never a filter or a column.
-Completing a design-review task here is an ordinary **Complete**: it approves the
-document version the task stored when it was raised, through the same authority `just
-approve-design` runs, and a document changed since is refused with `Re-read the current
-document`, the obsolete task dismissed and one raised for the current version. **Reopen**
-puts a resolved item back, and on a completed design review first runs the undo that
-removes its approval, showing that undo's refusal when the plan has already launched; each
-item says whether it can be reopened and, where it cannot, why. A note is a completed
+Completing a planning run's `approve-design` task here is an ordinary **Complete**: it
+attests that step, and records no approval, which is `just approve-design`'s alone.
+**Reopen** puts a resolved item back; each item says whether it can be reopened and, where
+it cannot, why. A note is a completed
 item's comment or a dismissed item's reason. A write here records actor
 `browser:session:<id>` when the server has an acting session, or `browser` when it has
 none, with `on_behalf_of: null`, which tells a press in the browser from a manager's
@@ -157,7 +154,7 @@ they would affect another manager already watching or driving the run, and each 
 route answers `404 removed_route`.
 What the browser never does is launch: a plan is authored and launched from a terminal, and
 everything here is *post*-launch. Which is also why **a planning run's channel is
-answerable from the browser like any other** — `just plan`'s two launches are
+answerable from the browser like any other** — a planning run and its spikes run are
 ordinary runs with ordinary channels, and a reply is the same post-launch route
 whatever the run is planning.
 
@@ -298,7 +295,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.81.2**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.83.2**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, the run's **Channel** tab with its byte-for-byte
 reply composer and `attest`, the per-run **Stop** with the owner-naming refusal, and the

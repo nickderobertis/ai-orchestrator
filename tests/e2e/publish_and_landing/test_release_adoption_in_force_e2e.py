@@ -29,7 +29,7 @@ loader that reads a plan:
   the override is in force here. The host adopts it only when `just repos-apply` runs
   there, which is after the change carrying it lands, so a live-host assertion that it
   already resolves would refuse the very publication that introduces or edits the file
-  — the same shape as an identity the tracked list names that the registry does not
+  — the same shape as an identity the host's list names that the registry does not
   yet hold, and given the same treatment: outside the claim, reported as a skip naming
   the remedy, never failed;
 * the `onevcs` the adopted engine **links**, which is what a dispatch publishes
@@ -257,7 +257,7 @@ def _registry_identities() -> frozenset[str]:
     """Every identity this host's `onevcs` registry actually holds.
 
     `onevcs repos` prints one unindented `identity<TAB>…` line per repository above
-    its indented checkouts, and that listing — rather than the tracked list — is what
+    its indented checkouts, and that listing — rather than any checkout list — is what
     "registered here" means to every other `onevcs` verb.
     """
     listed = _onevcs("repos")
@@ -505,7 +505,7 @@ def test_this_host_resolves_what_the_tracked_override_configures() -> None:
     running the apply script after the change carrying it lands, so a failure here
     would refuse exactly that change, on this host and every other, until somebody
     applied it by hand. That state is reported as a skip naming the remedy — the same
-    treatment the journey above gives an identity the tracked list names and the
+    treatment the journey above gives an identity the host's list names and the
     registry does not yet hold.
     """
     outside = _override_not_in_force()

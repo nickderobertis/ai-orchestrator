@@ -30,8 +30,7 @@ QUOTED_BY_TESTS = "tests/"
 RETIRED_RULE = "plan_budget_owner_criteria_" + "name_budget_and_workload"
 
 #: Verbatim records of checklist runs taken before the rule was retired, which name it as the
-#: run recorded it and are never edited: `tests/test_plan_checklist_budgets.py` reads them as
-#: its workload.
+#: run recorded it and are never edited.
 RECORDED_RUNS = "tests/fixtures/plan-checklist-budgets/"
 
 

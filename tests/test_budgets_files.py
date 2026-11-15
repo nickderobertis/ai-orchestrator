@@ -10,10 +10,10 @@ such as a CI runner — while a failed gate or an errored measurement still refu
 project's own `budgets.yaml` is measured by its `budgets` and `budgets-host` Nx targets,
 which a project declares only by opting in, so the file and the targets are held together
 here; the root project never declares them, because the root file is the hook's to check,
-once, after the gate it measures. And the vocabulary this host's task-budgets partial and
-`orchestrator/plan_budgets.py` copy from onebudgetspec — the `direction` values and the file
-name — is read from the installed library's own `onebudgetspec schema`, so a release that
-moved either fails here.
+once, after the gate it measures. And the vocabulary this host's task-budgets partial copies
+from onebudgetspec — the `direction` values, the id pattern and the file name, in its words
+and in its answer schema — is read from the installed library's own `onebudgetspec schema`,
+so a release that moved any of them fails here.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] The installed onebudgetspec is run twice
 here, `schema` and `validate`, each in milliseconds and reading nothing outside this
@@ -37,10 +37,11 @@ import yaml
 from nx_inputs import BUDGET_HOST_SCOPED, BUDGET_SCOPED, project_declarations
 
 from orchestrator import npm_installs
-from orchestrator.plan_budgets import BUDGET_ID_PATTERN, BUDGETS_FILE, Direction
 from orchestrator.root import REPO_ROOT
 
-ROOT_BUDGETS = REPO_ROOT / "budgets.yaml"
+#: onebudgetspec's one budgets file name, held to the installed library below.
+BUDGETS_FILE = "budgets.yaml"
+ROOT_BUDGETS = REPO_ROOT / BUDGETS_FILE
 TEMPLATE = REPO_ROOT / "templates" / "plan-task-budgets.md.j2"
 
 #: The budget holding a design document's budget summary short enough to approve from.
@@ -233,8 +234,9 @@ def test_the_library_measures_the_summary_of_the_committed_fixture(
         ("no-python", "is not this checkout's locked interpreter"),
         ("no-scratch", "a scratch directory for the template's loader"),
         ("no-template", "the pinned engine did not resolve"),
-        ("malformed-fixture", "fixture does not hold exactly the three budget answers"),
-        ("malformed-record", "fixture's answers are malformed"),
+        ("malformed-fixture", "fixture does not hold the design document's"),
+        ("malformed-record", "the fixture's budget 0 lacks numeric threshold"),
+        ("malformed-checklist", "the fixture's plan-level `checklist` is not a list"),
         ("missing-answer", "the pinned plan store did not render"),
         ("no-section", "the rendering carries no '## Budgets' section"),
         ("unwritable-result", "the result could not be written"),
@@ -255,7 +257,6 @@ def test_the_summary_command_reports_failure_without_leaving_scratch(
     (root / "templates").mkdir()
     for name in ("templates.yaml", "design-doc.md.j2"):
         shutil.copy2(REPO_ROOT / "templates" / name, root / "templates" / name)
-    (root / "orchestrator").symlink_to(REPO_ROOT / "orchestrator", target_is_directory=True)
     binaries = root / ".venv" / "bin"
     binaries.mkdir(parents=True)
     installed = Path(sys.prefix)
@@ -300,7 +301,9 @@ def test_the_summary_command_reports_failure_without_leaving_scratch(
                 case "malformed-fixture":
                     answers.pop("budgets")
                 case "malformed-record":
-                    answers["plan_budgets"]["sizing"] = 42
+                    answers["budgets"][0]["threshold"] = "fast"
+                case "malformed-checklist":
+                    answers["plan_budgets"]["checklist"] = {"not": "a list"}
                 case _:
                     answers["budgets"] = []
                     answers["plan_budgets"]["checklist"] = []
@@ -386,8 +389,16 @@ def test_a_project_declares_the_budgets_targets_exactly_when_it_holds_its_own_bu
         )
 
 
+def _budget_schema() -> dict[str, object]:
+    """The per-budget object schema the task-budgets partial declares for its `budgets`."""
+    front = TEMPLATE.read_text(encoding="utf-8").split("---\n")[1]
+    declared = yaml.safe_load(front)["variables"]["budgets"]["schema"]["items"]
+    assert isinstance(declared, dict)
+    return declared
+
+
 def test_the_direction_vocabulary_and_file_name_are_the_installed_librarys() -> None:
-    """The template's and `plan_budgets.py`'s copies, against `onebudgetspec schema`."""
+    """The template's copies, in words and in its schema, against `onebudgetspec schema`."""
     schema = _schema()
     directions = [choice["const"] for choice in schema["$defs"]["Direction"]["oneOf"]]
     (file_name,) = re.findall(r"`([^`]+)`", schema["description"])
@@ -403,10 +414,17 @@ def test_the_direction_vocabulary_and_file_name_are_the_installed_librarys() -> 
     )
     assert list(template_directions.groups()) == directions, template_directions.group(0)
     assert template_file.group(1) == file_name, template_file.group(0)
-    assert list(Direction) == directions
-    assert file_name == BUDGETS_FILE
+    assert file_name == BUDGETS_FILE, f"onebudgetspec names {file_name}, this suite {BUDGETS_FILE}"
+    properties = _budget_schema()["properties"]
+    assert isinstance(properties, dict)
+    assert properties["direction"]["enum"] == directions
+    assert re.search(properties["file"]["pattern"], file_name)
 
 
 def test_the_budget_id_pattern_is_the_installed_librarys() -> None:
-    """`plan_budgets.py`'s copy, which a schema-2 budget's heading anchor rests on."""
-    assert _schema()["$defs"]["Budget"]["properties"]["id"]["pattern"] == BUDGET_ID_PATTERN
+    """The template schema's copy, which a schema-2 budget's heading anchor rests on."""
+    properties = _budget_schema()["properties"]
+    assert isinstance(properties, dict)
+    assert (
+        _schema()["$defs"]["Budget"]["properties"]["id"]["pattern"] == (properties["id"]["pattern"])
+    )

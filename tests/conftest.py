@@ -39,11 +39,6 @@ import pytest_temp_root
 import yaml
 from nx_inputs import (
     ASK_SEAM_JOURNEYS,
-    BOARD_COPY_APPROVAL_ROOT,
-    BOARD_COPY_APPROVAL_WORKSPACE,
-    BOARD_COPY_QUOTA_HANDOVER_ROOT,
-    BOARD_COPY_QUOTA_HANDOVER_SCOPED,
-    BOARD_COPY_QUOTA_HANDOVER_WORKSPACE,
     CHECKOUT_SCOPED,
     CODE_SCOPED,
     DAG_UI_ROOT,
@@ -72,8 +67,6 @@ from nx_inputs import (
     POST_CHECKOUT_PROVISIONING_WORKSPACE,
     PRE_PUSH_PROVISIONING_ROOT,
     PRE_PUSH_PROVISIONING_WORKSPACE,
-    PROJECT_STORE_RACE_ROOT,
-    PROJECT_STORE_RACE_WORKSPACE,
     RECIPE_SCOPED,
     RENDER_DIAGRAM_ROOT,
     RENDER_DIAGRAM_WORKSPACE,
@@ -113,7 +106,6 @@ from short_state import (  # noqa: F401 - registered by being named here
 )
 from waits import install_default_bounds
 
-from orchestrator import plan_check
 from orchestrator.root import REPO_ROOT
 
 # Every blocking call this suite makes gets a finite bound here, at import, and the one
@@ -275,7 +267,6 @@ OWNED_PROJECTS = {
     SESSION_SETUP_PYPI_ROOT: OwnedProject(
         key=SESSION_SETUP_PYPI_WORKSPACE, docs_tier=False, target=SESSION_SETUP_PYPI_SCOPED
     ),
-    PROJECT_STORE_RACE_ROOT: OwnedProject(key=PROJECT_STORE_RACE_WORKSPACE, docs_tier=False),
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers
@@ -286,8 +277,8 @@ OWNED_PROJECTS = {
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
-    # the tiers it describes; the plan-store-assets, plan-store-dependency-read,
-    # board-copy-quota-handover and render-diagram entries sit beside the others' rather than
+    # the tiers it describes; the plan-store-assets, plan-store-dependency-read
+    # and render-diagram entries sit beside the others' rather than
     # in a domain of their own because the catalog is the domain.
     PLAN_STORE_ASSETS_ROOT: OwnedProject(key=PLAN_STORE_ASSETS_WORKSPACE, docs_tier=False),
     PLAN_STORE_DEPENDENCY_READ_ROOT: OwnedProject(
@@ -295,22 +286,10 @@ OWNED_PROJECTS = {
         docs_tier=False,
         target=PLAN_STORE_DEPENDENCY_READ_SCOPED,
     ),
-    BOARD_COPY_QUOTA_HANDOVER_ROOT: OwnedProject(
-        key=BOARD_COPY_QUOTA_HANDOVER_WORKSPACE,
-        docs_tier=False,
-        target=BOARD_COPY_QUOTA_HANDOVER_SCOPED,
-    ),
     RENDER_DIAGRAM_ROOT: OwnedProject(key=RENDER_DIAGRAM_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     UNPUBLISHED_VIEW_ROOT: OwnedProject(key=UNPUBLISHED_VIEW_WORKSPACE, docs_tier=False),
     UNFINISHED_ROOT: OwnedProject(key=UNFINISHED_WORKSPACE, docs_tier=False),
-    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
-    # catalog of test projects, where every project has its entry, and
-    # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
-    # the tiers it describes; the board-copy-approval entry sits beside the others' because
-    # the catalog is the domain.
-    BOARD_COPY_APPROVAL_ROOT: OwnedProject(key=BOARD_COPY_APPROVAL_WORKSPACE, docs_tier=False),
-    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
@@ -610,7 +589,7 @@ def _test_plan_store_cache(tmp_path_factory: pytest.TempPathFactory) -> Iterator
 def _hand_written_fixture_plans() -> Iterator[None]:
     """Load this suite's hand-written fixture plans without `require_rendered`.
 
-    Every plan-loading launch `scripts/onepipeline.sh` and `just check-plan` make names
+    Every plan-loading launch `scripts/onepipeline.sh` makes names
     `--require-rendered true` unless the caller named the flag or exported the engine's own
     variable beneath it, and almost every journey here launches or checks a plan whose tasks
     it wrote by hand, about something other than how a task is rendered. So the variable is
@@ -620,7 +599,7 @@ def _hand_written_fixture_plans() -> Iterator[None]:
     environment, for the reason the plan-store roots above give.
     """
     with pytest.MonkeyPatch.context() as patched:
-        patched.setenv(plan_check.REQUIRE_RENDERED_ENV, "false")
+        patched.setenv("ONEPIPELINE_REQUIRE_RENDERED", "false")
         yield
 
 

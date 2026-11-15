@@ -1,0 +1,70 @@
+---
+onetaskgraph_template: 1
+description: The planner's draft task of a planning run, composed from the manager's brief.
+variables:
+  plan:
+    description: The qualified id of the plan project to write, `authoring:<native id>`.
+    type: text
+    required: true
+  brief:
+    description: The path of the manager's brief.
+    type: text
+    required: true
+  brief_text:
+    description: The brief's whole text.
+    type: text
+    required: true
+  checklist:
+    description: The plan checklist's rules as `llmlint rules --format markdown` prints them.
+    type: text
+    required: true
+---
+{{ brief_text }}
+
+## Where the plan goes
+
+Write the plan as the project `{{ plan }}` in the `authoring` source: its description
+rendered from the `plan-description` template and each task from the `plan-task` template,
+both as `onepipeline template resolve <name> --json` resolves them, piped into
+`onetaskgraph project create` and `onetaskgraph task create` with `--template-loader -`.
+Give every task the `orchestrator.unit` metadata naming the unit it changes, and its
+`orchestrator.budgets` record as its `budgets` answer. The brief above is
+`{{ brief }}`.
+
+**Spikes.** When a decision needs a measurement before it can be planned, create the spikes
+project `{{ plan }}-spikes` from this host's `templates/planning/spikes.md.j2` (answer `plan`
+with `{{ plan }}` and `native` with the part after its source, give it the title
+`<native id>-spikes` and `--metadata onepipeline.schema_version=3`), then add one lifecycle task per spike to it, with the node id
+`spike-<topic>`, `onepipeline.publish: "preserve"`, its `repo` and `execution_checkout`, a
+dependency on that project's `approve-spikes` task. The planning run's `finalize` step
+reworks the plan from their reports once the spikes run completes. Each spike writes its report as the document `<native id>-<spike id>-report` of
+`{{ plan }}` from the `spike-report` template. A plan that needs no measurement creates no
+spikes project, and the flow then runs no spikes and asks nobody to approve any.
+
+**Repositories that span visibilities.** When the brief's `Repositories:` line names
+repositories `onevcs boundary inspect` reads as both public and private, run
+`onepipeline boundary guidance` and write the plan as it says: one private project in
+`authoring`, created with `--classification private`, each public node named in neutral
+words and each node rendered with its `boundary` answer.
+
+## The plan checklist this plan is judged against
+
+The review after this draft judges the plan's description and every task against these
+rules, so write them to these rules on the first draft:
+
+{{ checklist }}
+
+## Acceptance criteria
+
+- `{{ plan }}` holds the plan the brief asks for: its description rendered from `plan-description` and every task rendered from `plan-task`, each with its `orchestrator.unit` and its budget record.
+- Every task and the description are written to the plan checklist's rules above.
+- Where the plan needs a measurement, `{{ plan }}-spikes` holds a spike task for it from the spikes template; otherwise no spikes project exists.
+
+## Additional info
+
+**This dispatch works in a checkout it does not own, so it commits nothing.** It is a direct
+node, dispatched into the checkout the flow was launched from — the shared canonical checkout
+that several orchestrators use — rather than into a worktree of its own. So it may write only
+to gitignored paths, may not commit, may not cut a branch, and may not leave the checkout on
+any branch but its base. A clean `git status` is the correct and complete outcome: what it
+writes to the plan store is the deliverable.

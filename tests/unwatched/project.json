@@ -8,18 +8,14 @@
     "type:tests"
   ],
   "implicitDependencies": [
-    "support-budget-telemetry",
     "support-conftest",
     "support-fake-backend",
     "support-fake-codex",
     "support-harness-indirections",
     "support-no-paid-provider",
-    "support-nx-workspace",
     "support-plan-fixture-source",
     "support-probe-run-root",
     "support-project-fixtures",
-    "support-run-snapshot",
-    "support-scratch-identity",
     "support-served-recipe",
     "support-short-state",
     "support-waits"
@@ -61,15 +57,11 @@
       "{workspaceRoot}/scripts/onepipeline.sh",
       "{workspaceRoot}/config/onepipeline.launch.yaml",
       "{workspaceRoot}/scripts/orchestrate.sh",
-      "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/scripts/session-setup.sh",
       "{workspaceRoot}/.claude/settings.json",
-      "{workspaceRoot}/orchestrator/human_items.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/root.py",
-      "{workspaceRoot}/orchestrator/plan_units.py",
-      "{workspaceRoot}/orchestrator/plan_records.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/tests/unwatched/project.json",
       "{workspaceRoot}/tests/unwatched/test_unwatched_and_stop_hook_e2e.py",
@@ -82,36 +74,23 @@
       "{workspaceRoot}/oneharness.dispatch.toml",
       "{workspaceRoot}/oneharness.identities.toml",
       "{workspaceRoot}/oneharness.judge.toml",
-      "{workspaceRoot}/oneharness.plan-review.toml",
-      "{workspaceRoot}/oneharness.plan-review-whole.toml",
       "{workspaceRoot}/oneharness.llmlint.toml",
-      "{workspaceRoot}/tests/plan_tooling/plan_flow/spike_flow_engine.py",
-      "{workspaceRoot}/tests/plan_tooling/plan_flow/copy_quoted_rows.py",
-      "{workspaceRoot}/tests/unwatched/budgets.yaml",
-      "{workspaceRoot}/tests/unwatched/test_flow_stop_hook_e2e.py",
       "{workspaceRoot}/scripts/ask-manager.sh",
-      "{workspaceRoot}/scripts/finish-plan.sh",
-      "{workspaceRoot}/scripts/launch-flow.sh",
       "{workspaceRoot}/scripts/lock-timeout.sh",
-      "{workspaceRoot}/scripts/plan-check.sh",
-      "{workspaceRoot}/scripts/plan-checklist.sh",
-      "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
-      "{workspaceRoot}/scripts/plan.sh",
       "{workspaceRoot}/scripts/registered-checkouts.sh",
-      "{workspaceRoot}/scripts/render-diagram.sh",
       "{workspaceRoot}/scripts/require-provisioned.sh",
-      "{workspaceRoot}/scripts/review-plan.sh",
-      "{workspaceRoot}/personas/planner.yaml",
-      "{workspaceRoot}/personas/design-doc.yaml",
       "{workspaceRoot}/scripts/apply-repo-registry.sh",
-      "{workspaceRoot}/scripts/setup-llmlint.sh"
+      "{workspaceRoot}/scripts/setup-llmlint.sh",
+      "{workspaceRoot}/config/onepipeline.workflows.yaml",
+      "{workspaceRoot}/scripts/plan-attestation-check.sh",
+      "{workspaceRoot}/scripts/review-plan-item.sh"
     ]
   },
   "targets": {
     "test": {
-      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] unwatchedWorkspace keys this target on config/, graphs/, orchestrator/ and templates/ whole because tests/unwatched/test_flow_stop_hook_e2e.py runs a real `just plan` flow, whose review, plan check, checklist and launch read each of those trees as a whole (the same four plan-tooling-plan-flow keys its journeys of this flow on), and it copies them into the checkout it runs in: a key narrower than that copy would replay a verdict over files that changed it.",
-      "command": "rm -rf .telemetry/unwatched/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/unwatched/test NO_COLOR=1 uv run pytest tests/unwatched --no-cov -n 4 --dist loadgroup",
+      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] unwatchedWorkspace keys this target on config/, graphs/, orchestrator/ and templates/ whole because every `just orchestrate` launch these journeys make runs the launch check its launch config registers, which resolves graphs/planner.yaml's judge bar (its persona, base config and llmlint checklist under config/) and the design-doc template under templates/, and the launch wrapper reads orchestrator/ helpers; a key narrower than what that path opens would replay a verdict over files that changed it.",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/unwatched --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
@@ -122,35 +101,7 @@
           "dependencies": true
         }
       ],
-      "outputs": [
-        "{workspaceRoot}/.telemetry/unwatched/test"
-      ]
-    },
-    "budgets": {
-      "dependsOn": [
-        "test"
-      ],
-      "options": {
-        "cwd": ".",
-        "env": {
-          "BUDGET_TELEMETRY_SOURCES": ".telemetry/unwatched/test"
-        }
-      },
-      "inputs": [
-        "{projectRoot}/budgets.yaml",
-        "{workspaceRoot}/config/onebudgetspec.version",
-        "{workspaceRoot}/scripts/budgets.sh",
-        {
-          "input": "testSupport",
-          "projects": [
-            "support-budget-telemetry"
-          ]
-        },
-        {
-          "dependentTasksOutputFiles": "**/*.json"
-        }
-      ]
-    },
-    "budgets-host": {}
+      "outputs": []
+    }
   }
 }

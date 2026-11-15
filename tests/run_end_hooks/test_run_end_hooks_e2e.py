@@ -34,7 +34,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import NamedTuple, TypedDict
 
@@ -482,18 +481,6 @@ def test_a_failed_run_retried_to_completion_launches_follow_up_verification(
         adopted = _just(bench, "orchestrate", "--adopt", run)
         assert adopted.returncode == 0, adopted.stdout + adopted.stderr
         assert _settlement(Launch(adopted, run)) == {"run_id": run, "settlement": "complete"}
-        # The ledger the engine wrote over a retry is one `just plan`'s spike stage reads a
-        # run's settlement from: the superseded node answered for by its replacement.
-        read = subprocess.run(  # noqa: S603 - this checkout's own reader
-            [sys.executable, "-m", "orchestrator.spike_flow", "settled", run],
-            cwd=REPO_ROOT,
-            env=bench.environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert (read.returncode, read.stdout.split()) == (0, [f"{NODE}-2"]), read.stderr
-
         success_log = (bench.runs / run / "hooks" / "success.log").read_text(encoding="utf-8")
         matched = LAUNCHED.search(success_log)
         assert matched is not None, success_log
@@ -833,9 +820,7 @@ def _copied_hook(tmp_path: Path) -> Path:
     """The hook, in a checkout that carries no `.venv`."""
     scripts = tmp_path / "bare-checkout" / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("run-ended.sh",):
-        copied = scripts / name
-        shutil.copy2(REPO_ROOT / "scripts" / name, copied)
+    shutil.copy2(REPO_ROOT / "scripts" / "run-ended.sh", scripts / "run-ended.sh")
     return scripts / "run-ended.sh"
 
 

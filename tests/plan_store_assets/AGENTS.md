@@ -5,7 +5,7 @@
   Linear's file upload — are proven in onetaskgraph's own suite against loopback
   endpoints, and no dispatch here holds a board credential; what this project owns is that
   the plan-store CLI this host locks carries an asset through a copy at all.
-- **A project of its own** so a change to the planning scripts, personas or harness never
+- **A project of its own** so a change to the planning templates, personas or harness never
   re-runs a journey whose only subject is the locked store.
 - **Images are generated, never committed**, from seeded pseudo-random pixels: compression
   cannot shrink one below a real screenshot's size, and no two are alike, so a copy that

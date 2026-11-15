@@ -11,9 +11,7 @@ the tracked records to byte-for-byte what they were before it ran.
 
 from __future__ import annotations
 
-import json
 import os
-import shlex
 import shutil
 import subprocess
 from collections.abc import Iterator, Mapping
@@ -22,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plan_sources import read_plan_sources
-from project_fixtures import resolving
+from project_fixtures import attested_reviewed, resolving
 
 from orchestrator.root import REPO_ROOT
 
@@ -95,100 +93,34 @@ def isolated_examples(directory: Path) -> Iterator[ExampleCopy]:
 
 
 def _approved_in_the_copy(root: Path) -> None:
-    """Bring each example's design document in the copy under the chain in force, approved.
+    """Make each example in the copy launchable: reviewed, and its design document approved.
 
-    Approving a design document is a person's act, so a change to the design-doc template
-    leaves the tracked examples' approvals stale until somebody runs `just approve-design`
-    on them — `tests/test_design_approval.py` holds them to exactly that — and a launch of a
-    stale one is refused. A journey launching an example is about the launch, so in its own
-    copy, and nowhere else, each document is regenerated through the chain in force and
-    approved through the real recipe: the copy then stands where the tracked examples will
-    once a person has approved them, and `ExampleCopy.assert_tracked_untouched` proves the
-    tracked records were not. A plan whose graph has an edge has its document regenerated
-    opening with that graph, which approval requires of it.
+    Reviewing a plan and approving its design document are a person's acts, and a template or
+    judge-bar change leaves the tracked examples' attestations void until somebody re-earns
+    them; `just orchestrate`'s launch check refuses a plan whose attestations are not valid. A
+    journey launching an example is about the launch, so in its own copy, and nowhere else,
+    each example's records are attested as a passing review leaves them and its document is
+    approved through the real `just approve-design`; `ExampleCopy.assert_tracked_untouched`
+    proves the tracked records were not touched.
     """
     base = {**os.environ, ROOT_VARIABLE: str(root)}
     for record in sorted((root / "projects").glob("*.md")):
-        project = f"{SOURCE}:{record.stem}"
-        environment = resolving(project, base)
-        stated = subprocess.run(
-            [str(REPO_ROOT / ".venv" / "bin" / "python"), "-m", "orchestrator.design_chain"]
-            + [project],
-            cwd=REPO_ROOT,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout
-        resolve = shlex.split(stated)
-        loader = subprocess.run(
-            [str(REPO_ROOT / "node_modules" / ".bin" / resolve[0]), *resolve[1:]]
-            + ["--template-root", str(REPO_ROOT / "templates")],
-            cwd=REPO_ROOT,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout
-        for command in (
-            [str(REPO_ROOT / ".venv" / "bin" / "onetaskgraph"), "document", "render"]
-            + [f"{project}-design", "--template-loader", "-", "--no-interactive"]
-            + _graphed(project, root, environment),
-            ["just", "approve-design", project],
-        ):
-            done = subprocess.run(
-                command,
-                cwd=REPO_ROOT,
-                env=environment,
-                input=loader,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            if done.returncode != 0:
-                raise AssertionError(
-                    f"the copy of {project} could not be brought under the chain in force: "
-                    f"{done.stdout}{done.stderr}"
-                )
+        approved_in(f"{SOURCE}:{record.stem}", base)
 
 
-def _graphed(project: str, root: Path, environment: dict[str, str]) -> list[str]:
-    """The flags that open ``project``'s Planned tasks with its graph, when its plan has one.
-
-    The graph is the plan store's own `project graph --group-by orchestrator.unit` of the
-    copied plan, drawn by the real `just render-diagram`, as `just finish-plan` draws it; a
-    plan of one task or of no dependency edge shows none, and gets no flag.
-    """
-    drawn = root.parent / f"{project.partition(':')[2]}-graph"
-    drawn.mkdir(exist_ok=True)
-    for form, kept in (("mermaid", "plan-graph.mmd"), ("json", "plan-graph.json")):
-        read = subprocess.run(
-            [str(REPO_ROOT / ".venv" / "bin" / "onetaskgraph"), "project", "graph", project]
-            + ["--format", form, "--group-by", "orchestrator.unit"],
-            cwd=REPO_ROOT,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=True,
+def approved_in(project: str, base: dict[str, str]) -> None:
+    """Attest ``project``'s review and approve its design document, under ``base``."""
+    environment = resolving(project, base)
+    attested_reviewed(project, environment)
+    done = subprocess.run(
+        ["just", "approve-design", project],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        raise AssertionError(
+            f"the copy of {project} could not be approved: {done.stdout}{done.stderr}"
         )
-        (drawn / kept).write_text(read.stdout, encoding="utf-8")
-    derived = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "python"), "-m", "orchestrator.planned_tasks"]
-        + [project, "--graph", str(drawn / "plan-graph.json")],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    if not json.loads(derived.stdout)["image"]:
-        return []
-    subprocess.run(
-        ["just", "render-diagram", str(drawn / "plan-graph.mmd"), str(drawn / "plan-dag.png")],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    return ["--var", "dag_image=plan-dag.png", "--asset", str(drawn / "plan-dag.png")]

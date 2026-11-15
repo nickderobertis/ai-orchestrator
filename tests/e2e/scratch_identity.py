@@ -66,8 +66,8 @@ default:
 #: the fixtures that call this are module-scoped, so they run before it has.
 GIT_IDENTITY = ("-c", "user.email=test@example.com", "-c", "user.name=ai-orchestrator-test")
 
-#: The origin `scripts/plan-brief.sh` names as a planning flow's default publication
-#: repository — this repository's own, as `onevcs` files it. A journey driving `just
+#: The origin a planning flow's default publication repository was named by — this
+#: repository's own, as `onevcs` files it. A journey driving `just
 #: plan` or `just finish-plan` as an operator types them seeds a scratch identity under
 #: this origin, so the record the recipe writes when nobody tells it anything is one its
 #: launch can resolve, in a registry that is never this host's.
@@ -392,7 +392,7 @@ def rules_for_hosted(
     `local-direct` for the reason :data:`RULES` is: it keeps the publication off `gh`,
     which a scratch identity has no change request on and this machine no credential
     for. A hosted identity cannot be matched by `path`, so the rule names the two halves
-    of its origin the way `config/onevcs.rules.yml` names this host's own.
+    of its origin the way a host-overlay rule names one.
     """
     rules = RULES.replace('match: {path: "*"}', f"match: {{host: {host}, owner: {owner}}}")
     rules = rules.replace("version: 3", "version: 4")

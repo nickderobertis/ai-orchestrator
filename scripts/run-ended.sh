@@ -9,12 +9,14 @@
 # host does with it.
 #
 #   * **success** — every node ended `done`, so the main work is complete and what is left
-#     is discarding the plan's spike branches and verifying what the run drafted. Every
-#     spike branch the plan names — each `*/<plan native id>/spike-*` branch on the origin
-#     of a repository the run's nodes change, which `orchestrator/spike_branches.py` lists —
-#     is discarded with `just reclaim-branch <branch> --repo <repository> --discard`, one
-#     line reporting each outcome; a branch it cannot discard, or a repository it cannot
-#     list, is reported and stops neither the others nor the follow-up run. Then it runs
+#     is discarding the plan's spike branches and verifying what the run drafted. The
+#     plan's spikes ran as the run of its `<plan>-spikes` project, so every branch
+#     `onepipeline unpublished --host --format json` names as preserved by a run of that
+#     project — `<native id>-spikes`, or `-<n>` after it — is discarded with `just
+#     reclaim-branch <branch> --repo <identity> --discard`, the plan being the project the
+#     run was launched from (`onepipeline status --json`'s `group`) or the one its
+#     `onetaskgraph.origin` names when it is a copy; one line reports each outcome, and a
+#     branch it cannot discard stops neither the others nor the follow-up run. Then it runs
 #     `just follow-ups <run-id>` in this checkout, which creates the `follow-ups` plan from
 #     its template and launches it detached — the hook is awaited and a follow-up run
 #     outlives its deadline — and turns the recipe's line into the one a manager reads:
@@ -39,9 +41,9 @@
 # wherever the launch put it.
 #
 # This is the only thing in this repository that launches `just follow-ups`; a manager
-# typing it is the only other way it runs. `just plan` and `just finish-plan` name no hook,
-# and the follow-up recipes launch with both hooks blank, so a planning run and a follow-up
-# run never launch one.
+# typing it is the only other way it runs. `just plan`, `just finish-plan` and the follow-up
+# recipes launch under `config/onepipeline.workflows.yaml`, which registers no run-end hook,
+# so a planning run and a follow-up run never launch one.
 # `tests/run_end_hooks/test_run_end_hooks_e2e.py` drives both modes through a real launch.
 set -euo pipefail
 
@@ -66,38 +68,46 @@ run=${ONEPIPELINE_RUN_ID:-}
 # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
 [[ "$run" =~ $RUN_ID ]] || fail "ONEPIPELINE_RUN_ID '$run' is not a run id: a run id is one word of letters, digits, '_' and '-'" "$usage"
 
-# Discard every spike branch the plan of the run at ``$1`` names, reporting each outcome.
-# Nothing it meets ends the hook: a plan whose spikes outlive their use costs disk and a
-# listing line, while a success hook that stopped here would launch no follow-up run.
+# Discard every branch the run of this run's plan's `<plan>-spikes` project preserved,
+# reporting each outcome. Nothing it meets ends the hook: a plan whose spikes outlive their
+# use costs disk and a listing line, while a success hook that stopped here would launch no
+# follow-up run.
 discard_spike_branches() {
-    local root=$1 python listing listed=0 kind repository detail discarded reclaimed
+    local plan origin spikes listed rows reclaimed discarded branch identity
     local -a gone=()
-    python="$checkout/.venv/bin/python3"
-    [ -x "$python" ] || python=python3
-    listing=$(cd -- "$checkout" && "$python" -m orchestrator.spike_branches "$root") || listed=$?
-    if [ "$listed" -ne 0 ]; then
-        echo "run-ended: the spike branches of run $run's plan could not be listed (status $listed), so none was discarded; the diagnostic above names why; each repository lists them with: git ls-remote --heads origin '*/spike-*'" >&2
+    # Each lookup that fails stops the discard with one line saying so, and the follow-up
+    # run still launches: a spike branch kept by mistake costs disk, a wrong one discarded
+    # costs work.
+    if ! plan=$(cd -- "$checkout" && scripts/onepipeline.sh status "$run" --json | jq -er '.group'); then
+        echo "run-ended: the plan of run $run could not be read from 'onepipeline status', so no spike branch was discarded; each is listed by 'just unpublished' and discarded with 'just reclaim-branch <branch> --repo <identity> --discard'"
         return 0
     fi
-    while IFS=$'\t' read -r kind repository detail; do
-        case "$kind" in
-            branch)
-                reclaimed=0
-                discarded=$(cd -- "$checkout" && just reclaim-branch "$detail" --repo "$repository" --discard 2>&1) || reclaimed=$?
-                if [ "$reclaimed" -eq 0 ]; then
-                    gone+=("$detail of $repository")
-                else
-                    printf '%s\n' "$discarded"
-                    echo "run-ended: spike branch $detail of $repository could not be discarded ('just reclaim-branch' exited $reclaimed, for the reason above); it is kept, and 'just reclaim-branch $detail --repo $repository --discard' discards it"
-                fi
-                ;;
-            unlisted)
-                echo "run-ended: the spike branches of run $run's plan on $repository could not be listed, so none there was discarded: $detail; once that is repaired, discard each with 'just reclaim-branch <branch> --repo $repository --discard', listing them in its checkout with: git ls-remote --heads origin '*/spike-*'"
-                ;;
-        esac
-    done <<<"$listing"
-    # One line for every branch it discarded, beside a line for each it could not: the
-    # follow-up receipt after it is what a manager reads this log for.
+    if ! origin=$(cd -- "$checkout" && .venv/bin/onetaskgraph project show "$plan" --json --no-interactive |
+        jq -er '(.items // []) as $items | if (.errors // []) != [] or ($items | length) != 1 then error("not one project") else ($items[0].item.metadata["onetaskgraph.origin"] // "") end | if type == "string" and (. == "" or test("^[^:]+:.+$")) then . else error("an origin that is no qualified id") end'); then
+        echo "run-ended: project $plan could not be read from the plan store, so no spike branch was discarded; each is listed by 'just unpublished' and discarded with 'just reclaim-branch <branch> --repo <identity> --discard'"
+        return 0
+    fi
+    spikes="${origin:-$plan}"
+    spikes="${spikes#*:}-spikes"
+    # Its exit status says whether branches are owed, not whether it answered, so what it
+    # printed is what is read: an answer without its `rows`, or one whose verdict is
+    # `unanswered` because the registry could not be read, is a listing that failed.
+    listed=$(cd -- "$checkout" && scripts/onepipeline.sh unpublished --host --format json) || :
+    if ! rows=$(jq -r --arg spikes "$spikes" 'if (.rows | type) != "array" or .verdict == "unanswered" then error("no answer") else .rows[] | select((.run // "") as $r | $r == $spikes or (($r | startswith($spikes + "-")) and ($r[($spikes | length) + 1:] | test("^[0-9]+$")))) | if (.branch | type) == "string" and .branch != "" and (.identity | type) == "string" and .identity != "" then [.branch, .identity] | @tsv else error("a row names no branch or identity") end end' <<<"$listed" 2>/dev/null); then
+        echo "run-ended: the preserved branches could not be listed by 'onepipeline unpublished', so no spike branch of $spikes was discarded; each is listed by 'just unpublished' and discarded with 'just reclaim-branch <branch> --repo <identity> --discard'"
+        return 0
+    fi
+    while IFS=$'\t' read -r branch identity; do
+        [ -n "$branch" ] || continue
+        reclaimed=0
+        discarded=$(cd -- "$checkout" && just reclaim-branch "$branch" --repo "$identity" --discard 2>&1) || reclaimed=$?
+        if [ "$reclaimed" -eq 0 ]; then
+            gone+=("$branch of $identity")
+        else
+            printf '%s\n' "$discarded"
+            echo "run-ended: spike branch $branch of $identity could not be discarded ('just reclaim-branch' exited $reclaimed, for the reason above); it is kept, and 'just reclaim-branch $branch --repo $identity --discard' discards it"
+        fi
+    done <<<"$rows"
     if [ "${#gone[@]}" -ne 0 ]; then
         local IFS=","
         # llmlint: ignore[tool_output_is_signal] The task that added this discard requires the hook to report each outcome on its output, and a manager reading this log decides from it which spike branches are gone; it is one line for all of them, and the follow-up receipt stays its own line because its exact shape is what a supervisor reads the follow-up run's id from.

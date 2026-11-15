@@ -10,8 +10,8 @@
 # persona still come from the node.
 #
 # A run reaches this document only through a node that names it: `just orchestrate` still
-# attaches `graphs/node-scope.yaml`. The one launch that names it is the design-document
-# launch `scripts/finish-plan.sh` makes, whose single node carries it as `agent_graph`.
+# attaches `graphs/node-scope.yaml`. The nodes that name it are the `design` steps of
+# `templates/planning/planning.md.j2` and `finishing.md.j2`, each carrying it as `agent_graph`.
 #
 # Every ref below is relative to THIS file's directory, not the working directory.
 version: 1

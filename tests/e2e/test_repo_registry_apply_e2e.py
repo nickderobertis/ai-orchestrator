@@ -3,7 +3,8 @@
 The recipe is how a host brings its `onevcs` registry up to a configuration: it composes
 a base rules file with the host's own overlay through `onevcs rules apply`, installs the
 release override and the workspaces file beside it, registers every listed checkout it
-has, and refuses a checkout no rule matches. These journeys hold the recipe to that
+has, and refuses a checkout whose `publication` or `approvals` neither a rule nor the
+repository's own `onevcs.toml` declaration decides. These journeys hold the recipe to that
 behaviour and to nothing about which repositories any host registers: every one runs the
 real recipe and the installed `onevcs` on a synthetic checkout list and a synthetic rules
 file, passed through `--checkouts` and `--rules`, under a sandboxed `HOME`,
@@ -255,6 +256,24 @@ def reported(output: str, key: str) -> str:
     raise AssertionError(f"no {key!r} in:\n{output}")
 
 
+class Row(NamedTuple):
+    """One row of the resolved-policy table: each field and the source that decided it."""
+
+    publication: str
+    publication_source: str
+    approvals: str
+    approvals_source: str
+
+
+def table_row(output: str, identity: RepoIdentity) -> Row:
+    """The resolved-policy row `just repos-apply` printed for ``identity``."""
+    table = output.split("apply-repo-registry: resolved policy", 1)[1]
+    row = next(line for line in table.splitlines() if f" {identity} " in line)
+    found = re.search(r"\s(\S+)\s+\(([^)]*)\)\s+(\S+)\s+\(([^)]*)\)$", row)
+    assert found is not None, row
+    return Row(*found.groups())
+
+
 def listed(path: Path, *checkouts: Path | str) -> Path:
     """``path``, holding a checkout list naming each of ``checkouts``, one per line."""
     path.write_text("".join(f"{entry}\n" for entry in checkouts), encoding="utf-8")
@@ -370,16 +389,15 @@ def test_every_listed_checkout_is_registered_under_its_origins_identity(applied:
 
 def test_apply_reports_the_resolved_policy_table(applied: Applied) -> None:
     """One row per registered checkout, with the policy `onevcs` resolved for it."""
-    table = applied.result.stdout.split("apply-repo-registry: resolved policy", 1)[1]
-    rows = table.split("apply-repo-registry: release adoption", 1)[0]
     policies = {
         **BASE_POLICY,
         **{key: overlay.policy for key, overlay in OVERLAY_POLICY.items()},
     }
     for identity, policy in policies.items():
-        row = next(line for line in rows.splitlines() if f" {identity} " in line)
-        expected = rf"\s{re.escape(policy.publication)}\s+{re.escape(policy.approvals)}$"
-        assert re.search(expected, row), row
+        row = table_row(applied.result.stdout, identity)
+        assert (row.publication, row.approvals) == policy, row
+        assert row.publication_source.startswith("rule "), row
+        assert row.approvals_source == row.publication_source, row
     overlay = applied.manifest.parent / "xdg" / HOST_RULES
     assert (
         f"rules      the rules composed from 2 file(s) are at {applied.home / 'rules.yml'}"
@@ -1445,7 +1463,7 @@ def test_a_host_overlay_routes_a_private_team_identity_through_its_own_rule(
 
     unruled = apply_registry(manifest, tmp_path / "bare", rules)
     assert unruled.returncode == 1, unruled.stdout + unruled.stderr
-    assert "no rule in" in unruled.stderr and "quietharbor" in unruled.stderr, unruled.stderr
+    assert "quietharbor: publication, approvals from the default" in unruled.stderr, unruled.stderr
 
     home = tmp_path / "onevcs"
     config_home = host_config(tmp_path / "xdg")
@@ -1480,7 +1498,9 @@ def test_a_checkout_this_host_does_not_have_is_skipped(tmp_path: Path) -> None:
     assert "1 checkout(s) registered, 1 skipped" in result.stdout
 
 
-def test_a_repository_no_rule_names_fails_the_apply(tmp_path: Path) -> None:
+def test_a_repository_neither_a_rule_nor_a_declaration_names_fails_the_apply(
+    tmp_path: Path,
+) -> None:
     """Falling through to the reviewed default is safe, and is nobody's configured policy.
 
     Reporting it as a pass is how a mistyped owner or a rule nobody wrote reaches a
@@ -1491,5 +1511,158 @@ def test_a_repository_no_rule_names_fails_the_apply(tmp_path: Path) -> None:
 
     result = apply_registry(manifest, tmp_path / "home", write_rules(tmp_path / "rules.yml"))
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "no rule in" in result.stderr
-    assert "unlisted" in result.stderr
+    assert "unlisted: publication, approvals from the default" in result.stderr, result.stderr
+    assert "nor the repository's own onevcs.toml" in result.stderr, result.stderr
+
+
+#: A synthetic identity no rule names and whose checkout declares its own policy.
+DECLARED: RepoIdentity = "github.com/scratchowner/declared"
+#: The policy that checkout's `onevcs.toml` declares, at the contract's schema version.
+DECLARED_POLICY = Policy("change-auto", "none")
+DECLARATION = 'schema_version = 2\n\n[policy]\npublication = "change-auto"\napprovals = "none"\n'
+
+
+def declared_checkout(directory: Path, identity: RepoIdentity, document: str) -> Path:
+    """A checkout of ``identity`` whose base carries ``document`` as its `onevcs.toml`."""
+    directory = checkout(directory, f"https://{identity}.git")
+    (directory / "onevcs.toml").write_text(document, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=directory, check=True)
+    subprocess.run(
+        ["git", *COMMITTER, "commit", "-qm", "chore: declare the policy"], cwd=directory, check=True
+    )
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=directory, check=True
+    )
+    return directory
+
+
+def overlay_rule(identity: RepoIdentity, **fields: str) -> str:
+    """A host rules overlay holding one rule for ``identity`` that sets only ``fields``."""
+    host, owner, name = identity.split("/")
+    body = "".join(f"    {key}: {value}\n" for key, value in fields.items())
+    return (
+        "version: 4\n"
+        "rules:\n"
+        f"  - match: {{host: {host}, owner: {owner}, name: {name}}}\n"
+        f"{body}"
+        "    visibility: public\n"
+    )
+
+
+def apply_declared(
+    tmp_path: Path, document: str, overlay: str | None = None
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
+    """The real recipe over one checkout declaring ``document``, under no base rule.
+
+    The base handed to `--rules` is a rules file with no rule and the reviewed default,
+    as `config/onevcs.rules.yml` is; ``overlay``, when named, is the host's rules overlay.
+    """
+    path = declared_checkout(tmp_path / "checkouts" / "declared", DECLARED, document)
+    home = tmp_path / "onevcs"
+    config_home = tmp_path / "xdg"
+    if overlay is not None:
+        host_config(config_home, overlay)
+    result = apply_registry(
+        listed(tmp_path / "checkouts.list", path),
+        home,
+        write_rules(tmp_path / "rules.yml", {}),
+        config_home=config_home,
+    )
+    return home, result
+
+
+def test_a_checkout_declaring_its_policy_is_applied_with_no_rule(tmp_path: Path) -> None:
+    """Its `onevcs.toml` decides both fields, and the table says so for each."""
+    home, result = apply_declared(tmp_path, DECLARATION)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    row = table_row(result.stdout, DECLARED)
+    assert row == Row("change-auto", "declaration", "none", "declaration"), row
+    assert "every one decided by a rule or its declaration" in result.stdout
+    checked = onevcs(home, "rules", "check", DECLARED)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    declared_at = tmp_path / "checkouts" / "declared" / "onevcs.toml"
+    assert reported(checked.stdout, "declaration") == f"declared in {declared_at}"
+    assert f"publication: change-auto (from the repository declaration {declared_at})" in (
+        checked.stdout
+    )
+
+
+def test_a_host_overlay_rule_overrides_the_declaration_for_its_field_alone(
+    tmp_path: Path,
+) -> None:
+    """A rule setting `publication` wins for it; `approvals` is still the declaration's."""
+    home, result = apply_declared(
+        tmp_path, DECLARATION, overlay_rule(DECLARED, publication="change-open")
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    row = table_row(result.stdout, DECLARED)
+    assert row == Row("change-open", "rule 1", "none", "declaration"), row
+    checked = onevcs(home, "rules", "check", DECLARED)
+    assert "publication: change-open (from rule 1)" in checked.stdout, checked.stdout
+    assert reported(checked.stdout, "approvals") == "none", checked.stdout
+
+
+@pytest.mark.parametrize(
+    ("declared", "ruled", "expected"),
+    [
+        (
+            {"publication": "change-auto"},
+            {"approvals": "none"},
+            Row("change-auto", "declaration", "none", "rule 1"),
+        ),
+        (
+            {"approvals": "none"},
+            {"publication": "change-open"},
+            Row("change-open", "rule 1", "none", "declaration"),
+        ),
+    ],
+    ids=["declared-publication-ruled-approvals", "declared-approvals-ruled-publication"],
+)
+def test_a_declaration_and_a_rule_may_each_supply_one_field(
+    tmp_path: Path, declared: dict[str, str], ruled: dict[str, str], expected: Row
+) -> None:
+    """Neither falls to the default, so the checkout is applied with each field's source."""
+    document = "schema_version = 2\n\n[policy]\n" + "".join(
+        f'{key} = "{value}"\n' for key, value in declared.items()
+    )
+    _, result = apply_declared(tmp_path, document, overlay_rule(DECLARED, **ruled))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert table_row(result.stdout, DECLARED) == expected
+
+
+@pytest.mark.parametrize(
+    ("document", "fallen"),
+    [
+        ("schema_version = 2\n\n[policy]\n", "publication, approvals"),
+        ("schema_version = 2\n\n[policy.checks]\nwait_seconds = 3900\n", "publication, approvals"),
+        ('schema_version = 2\n\n[policy]\npublication = "change-auto"\n', "approvals"),
+    ],
+    ids=["empty-policy", "checks-only", "publication-only"],
+)
+def test_a_declaration_leaving_a_field_to_the_default_fails_the_apply(
+    tmp_path: Path, document: str, fallen: str
+) -> None:
+    """A declared document is not coverage: each field's own source is what is read.
+
+    `onevcs rules check` reads such a checkout's `declaration:` as declared, and the
+    field it leaves unset still resolves from the reviewed default.
+    """
+    home, result = apply_declared(tmp_path, document)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"declared: {fallen} from the default" in result.stderr, result.stderr
+    checked = onevcs(home, "rules", "check", DECLARED)
+    assert reported(checked.stdout, "declaration").startswith("declared in "), checked.stdout
+
+
+def test_an_unreadable_declaration_fails_the_apply_naming_the_document(tmp_path: Path) -> None:
+    document = 'schema_version = 2\n\n[policy]\npublication = "sometimes"\n'
+    _, result = apply_declared(tmp_path, document)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    declared_at = tmp_path / "checkouts" / "declared" / "onevcs.toml"
+    assert str(declared_at) in result.stderr, result.stderr
+    assert f"registering {declared_at.parent} failed" in result.stderr, result.stderr

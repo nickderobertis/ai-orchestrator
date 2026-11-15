@@ -227,161 +227,103 @@ upgrade:
 orchestrate *args:
     @./scripts/orchestrate.sh "$@"
 
-# Launch a planner on a manager-written brief: `just plan <BRIEF.md> [--name NAME]
-# [--max-turns N] [--to SOURCE] [--no-design-doc] [<onepipeline start flags>]`. Those
-# four flags are the recipe's own; everything else reaches `onepipeline start` untouched.
+# The planning road (AGENTS.md, "The plan flow"): each recipe below is a thin wrapper over
+# library verbs, the workflow itself being `templates/planning/`'s plan graphs and its policy
+# `graphs/planner.yaml`'s judge panel and `config/plan-checklist.llmlint.yml`.
 #
-# It writes the local project rather than asking a manager to remember its shape;
-# `scripts/plan.sh` states what has to be right about that shape and why. The
-# ask-manager seam every launch exports is not among them — that is
-# `scripts/onepipeline.sh`'s, for `start` and `adopt` alike — but the run id is: this
-# recipe owns the plan's `name`, so it refuses one already taken rather than letting
-# the engine mint a different id than the one it printed.
-#
-# The node it writes is a **direct** node, so the planner works in this shared checkout
-# rather than in a worktree of its own. It was a lifecycle node — a worktree cut from
-# the registered `ai-orchestrator-isolated` safety clone — until the adopted engine made
-# that shape one a planner cannot settle under: a lifecycle dispatch that commits nothing
-# to its branch settles `failed` as `empty-branch`, and the declaration that would accept
-# the empty branch settles the node without dispatching it at all
-# (https://github.com/nickderobertis/onepipeline/issues/238). A planner produces a
-# plan-store record and never a branch, so the direct shape is the honest one, and the
-# incident that once moved the default off it — a direct planner cut a branch here,
-# committed to it, and left it checked out — is answered in the task instead: every
-# launch appends the note that such a dispatch **may write only to gitignored paths, may
-# not commit, may not cut a branch, and may not leave the checkout on any branch but its
-# base**. `--repo`, `--execution-checkout` and `--direct` are refused by name;
-# `scripts/plan.sh` holds the whole of the reasoning.
-#
-# Unlike `just orchestrate` it names `--dag-graph off`: the ledger, the surfaces and
-# the DAG UI place are `onepipeline start`'s own, so what an observer would add to a
-# planning run is a monitor watching it for drift from the plan it is what writes. A
-# caller who names one keeps it, exactly as `just orchestrate` keeps a caller's own.
-#
-# **The plan it writes is one node, and the rest of the flow is `just finish-plan`.** The
-# document a person reviews the plan as has to be written from *reviewed* content, and a
-# run cannot interject a review between its own nodes — a review record is written by this
-# repository's own code and never by a dispatched agent. So when the planner has settled
-# and this launch's closeout has recorded what it authored, `just plan` hands over to
-# `scripts/finish-plan.sh`: review, check, launch the document, copy both into the
-# destination, report where that destination holds them. `--to` names that destination and
-# reaches the tail; `--no-design-doc` stops after the planner, and drops with it the
-# `Plan project: <source>:<project>` line the tail needs to find the plan at all. A
-# `--detach`ed launch keeps the planner alone and prints the command that finishes it,
-# because it hands back before the plan exists.
-[doc('Launch a planner on a manager-written brief, then review, document, copy and report the plan it writes.')]
-plan *args:
-    @./scripts/plan.sh "$@"
-
-# Finish a plan a planner has already authored: `just finish-plan <brief.md> [--to SOURCE]
-# [--name NAME] [--no-design-doc] [<onepipeline start flags>]`.
-#
-# This is the tail of the planning flow and its one implementation — `just plan` runs the
-# planner and then delegates to exactly this, so the two entry points cannot drift. Run it
-# on its own when a plan was edited after it was authored: the edit leaves that task
-# unreviewed, so the review below spends a real judged turn on it and the document is then
-# written from content something has read.
-#
-# Five steps, in the order the tooling enforces rather than the order an operator
-# remembers: review the plan, check it the way its own launch will, launch the
-# design-document node as its own one-node project, copy the plan and its documents into
-# the destination, and report where that destination holds the project and the document —
-# read back out of the store, because a destination decides its own ids and where its
-# records live.
-#
-# The refusals are told apart by exit status, because a builder that could not tell them
-# apart would retry one as the other: 1 is the review refusing the plan's criteria, 3 is
-# the pre-launch check refusing the plan, 4 is the document launch not settling, 5 is the
-# destination refusing the copy, and 2 is a flow that could not run at all.
-[doc("Review a plan, write the design document a person reads it as, copy both up, and report where they landed.")]
-finish-plan *args:
-    @./scripts/finish-plan.sh "$@"
-
-# Read a qualified plan project against the bar each of its nodes will actually be
-# judged against, and against the engine's own plan loader: `just check-plan
-# <source>:<project>`.
-#
-# The structure of a plan is decided by `onepipeline plan check`, which runs every
-# refusal `onepipeline start` would make, so a pre-dispatch refusal is a launch refusal
-# by construction. This repository's own checks run beside it as a registered `--check`
-# script, `scripts/plan-check.sh`: the review bar each node resolves to, this host's
-# operational appendix, and whether anything has reviewed the criteria. Every engine
-# `config/onepipeline.version` admits carries that verb, so there is no other path.
-# AGENTS.md carries what re-implementing the loader cost.
-#
-# Two things about the *result* are this seam's. Exit 1 is a refusal, each naming its
-# source — `engine` or the registered check — the node, the field, and the reason; exit 2
-# is a project that could not be read or a check that could not be run, so nothing was
-# judged. A plan builder branches on the difference. And it reads the project only: it
-# launches nothing, spends no provider turn, and is safe to run beside live work.
-#
-# `scripts/plan-store.sh` establishes this checkout's own board credential first; its
-# header is the one account of why.
-[doc('Refuse a plan whose node would be judged against a demand its task does not state.')]
-check-plan *args:
-    @./scripts/plan-store.sh uv run orchestrator-check-plan "$@"
-
-# Spend the judged turn that clears a plan's authored content: `just review-plan
-# <source>:<project>`.
-#
-# `just check-plan` refuses a task carrying no review record for what it currently
-# says, and this is the command that records one. It reads each unreviewed task against
-# `personas/planner.yaml`'s own bar — the judge every planner-written plan already
-# passes through, so that a plan an operator wrote by hand, or a planner's plan an
-# operator then tweaked, is read by the same reviewer rather than by nobody.
-#
-# Three things about the result. It records a **pass** and nothing else, so a refusal
-# leaves nothing behind to replay. A record it wrote is authoritative — `check-plan`
-# accepts it and spends no second turn on identical content. And it takes no flag that
-# lets a plan past that refusal, because an escape here is reached under exactly the
-# time pressure that produced the two unreviewed plans this gate exists to catch.
-#
-# Exit 1 is a refusal, naming each task and the reason; exit 2 is a plan or a review
-# turn that could not be read at all, so nothing was recorded either way.
-[doc("Review a plan's unreviewed task content against the planner's own bar and record each pass.")]
-review-plan *args:
-    @./scripts/review-plan.sh "$@"
-
-# Record the user's approval of the design document a plan is read as: `just
-# approve-design <source>:<project>`.
-#
-# This is the gate on dispatch, and the one a person is actually the subject of. A plan
-# is not what somebody outside the domain can review; the design document this host's
-# `design-doc` template (`templates/design-doc.md.j2`) renders is, and a planning run's
-# `design-doc` node writes it into the plan's own project. So the document goes to the user, and this
-# command records that they approved it — after which `just orchestrate` will launch that
-# plan, and before which it refuses to.
-#
-# The record goes onto the document in the plan store, on the board copy the user read:
-# copy up, then approve there. A re-copy of the unchanged plan — `just finish-plan` again —
-# keeps it, because the store keeps metadata only the destination holds; a key both copies
-# hold is the source's, so an approval recorded where you draft would replace the board's
-# on the next copy, and approves nothing there. It is keyed on the document's title, the
-# template's chain digest as the pinned engine resolves it now, the body digest the store
-# recorded when it rendered the document, and the SHA-256 of every image it shows, so
-# editing or regenerating the document or replacing an image's bytes leaves it unapproved and
-# changing the template leaves every approved document unapproved; a document that is not
-# the rendering its provenance records is refused, naming the regenerate that repairs it,
-# and so is one referencing an image the store does not hold, naming the image.
-#
-# There is no flag that skips this and none is coming; running it on an unchanged
-# document a second time writes nothing and says so. Exit 1 is a refusal — no design
-# document, or more than one, with nothing recorded either way.
-#
-# The install line is `just plans`'s, for its reason: a fresh worktree or a publication
-# clone fires no `SessionStart` hook, so the plan-store CLI this reads is healed into this
-# checkout's own `.venv/bin` at the release this checkout pinned.
-#
-# `scripts/plan-store.sh` establishes this checkout's own board credential first; its
-# header is the one account of why.
-[doc("Record express user approval of the current surfaced spike brief.")]
-approve-spikes *args:
-    @./scripts/plan-store.sh uv run python -m orchestrator.spike_brief "$@"
-
+# `just plan <brief.md> [destination]` creates a planning project from
+# `templates/planning/planning.md.j2` — the plan's id read from the brief's `Plan project:`
+# line, the checklist's rules as `llmlint rules` prints them — and launches it under
+# `onepipeline flow run`, so the planning run and the spikes run it starts are one flow.
 [group("planning")]
-[doc("Record the user's approval of one plan project's design document.")]
-approve-design *args:
-    @./scripts/plan-store.sh uv run orchestrator-approve-design "$@"
+[doc("Draft, spike, check, review, document and copy a plan from a brief, in one flow.")]
+plan brief destination="plans":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    brief_text=$(cat -- {{ quote(brief) }}) || { echo "plan: the brief {{ brief }} cannot be read; name a readable brief file, then retry" >&2; exit 2; }
+    plan=$(sed -n 's/^Plan project:[[:space:]]*//p' <<<"$brief_text" | head -n 1)
+    [ -n "$plan" ] || { echo "plan: {{ brief }} states no 'Plan project: <source>:<project>' line; add one naming the project the planner writes, such as 'Plan project: authoring:<name>', then retry" >&2; exit 2; }
+    native=${plan#*:}
+    id="$native-planning-$(date +%Y%m%d%H%M%S)"
+    checklist=$(llmlint rules -c config/plan-checklist.llmlint.yml --files "projects/$native.md" "tasks/$native-task.md" --format markdown) ||
+        { echo "plan: llmlint could not print the plan checklist's rules (its diagnostic is above); repair config/plan-checklist.llmlint.yml or run 'just setup-llmlint', then retry" >&2; exit 2; }
+    .venv/bin/onetaskgraph project create "${plan%%:*}" --id "$id" --title "$native-planning" \
+        --template templates/planning/planning.md.j2 --metadata onepipeline.schema_version=3 \
+        --var "plan=$plan" --var "native=$native" --var brief={{ quote(brief) }} \
+        --var "brief_text=$brief_text" --var destination={{ quote(destination) }} \
+        --var "checklist=$checklist" \
+        --no-interactive >&2
+    exec scripts/onepipeline.sh flow run --name "$native-planning" -- scripts/onepipeline.sh start "${plan%%:*}:$id" \
+        --launch-config config/onepipeline.workflows.yaml --dag-graph off --label kind=planning
+
+# `just finish-plan <source>:<project> [destination]` runs the planning road from `check`
+# onward over a plan already drafted, or edited since: `templates/planning/finishing.md.j2`,
+# created in `authoring` and launched in its own flow under the board credential, since the
+# plan it finishes may be a board copy; its design document is written from the plan's own
+# description.
+[group("planning")]
+[doc("Check, review, document and copy an already drafted plan, in one flow.")]
+finish-plan plan destination="plans":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plan={{ quote(plan) }}
+    native=${plan#*:}
+    id="$native-finishing-$(date +%Y%m%d%H%M%S)"
+    brief_text=$(scripts/plan-store.sh .venv/bin/onetaskgraph project show "$plan" --json --no-interactive | jq -er '.items[0].item.content // ""') ||
+        { echo "finish-plan: $plan could not be read from the plan store (its diagnostic is above); name a plan the store holds, then retry" >&2; exit 2; }
+    scripts/plan-store.sh .venv/bin/onetaskgraph project create authoring --id "$id" --title "$native-finishing" \
+        --template templates/planning/finishing.md.j2 --metadata onepipeline.schema_version=3 \
+        --var "plan=$plan" --var "native=$native" --var destination={{ quote(destination) }} \
+        --var "brief_text=$brief_text" \
+        --no-interactive >&2
+    exec scripts/plan-store.sh scripts/onepipeline.sh flow run --name "$native-finishing" -- scripts/onepipeline.sh start "authoring:$id" \
+        --launch-config config/onepipeline.workflows.yaml --dag-graph off --label kind=planning
+
+# `just check-plan <source>:<project>` is the engine's own plan loader with this host's one
+# registered check, the planning road's `check` step exactly: `onepipeline plan check`, whose
+# load also asks onevcs whether each release adoption can complete, and
+# `orchestrator/host_adoption_check.py`'s two host-install rules. Exit 1 is a refusal.
+[group("planning")]
+[doc("Load a plan as its launch will, with this host's install check registered.")]
+check-plan plan:
+    @scripts/plan-store.sh scripts/onepipeline.sh plan check {{ quote(plan) }} --check orchestrator/host_adoption_check.py
+
+# `just review-plan <source>:<project>` judges, with `graphs/planner.yaml`'s judge-only run,
+# every task and the project whose `plan-review` attestation is not valid under the current
+# bar, and attests each pass: an edited plan is re-reviewed by running it again, judging only
+# what changed. `scripts/review-plan-item.sh` is the command; exit 1 is a judged refusal.
+[group("planning")]
+[doc("Judge every unreviewed task and the project of a plan, attesting each pass.")]
+review-plan plan:
+    @scripts/plan-store.sh scripts/review-plan-item.sh {{ quote(plan) }}
+
+# `just approve-spikes <run>` attests the spikes run's waiting `approve-spikes` node, once
+# the user has approved the spike brief it raised, and adopts the run: a human wait pauses
+# a run and lets its driver go, so the spikes run resumes only once something drives it.
+[group("planning")]
+[doc("Attest the user's approval of a spikes run's brief and resume the run.")]
+approve-spikes run:
+    @scripts/onepipeline.sh attest {{ quote(run) }} approve-spikes
+    @scripts/onepipeline.sh adopt {{ quote(run) }} --detach
+
+# `just approve-design <source>:<project> [run]` records the user's approval on the board
+# copy's design document — `onetaskgraph document attest --kind design-approval`, under the
+# design-doc template's digest — and, given the planning run, attests its waiting
+# `approve-design` node and adopts the run so it settles. Editing the document or the template voids it; `just orchestrate`'s
+# launch check refuses the plan until it is approved again.
+[group("planning")]
+[doc("Record the user's approval of a plan's design document and release the planning run.")]
+approve-design plan run="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plan={{ quote(plan) }}
+    document=$(scripts/plan-store.sh .venv/bin/onetaskgraph document list --source "${plan%%:*}" --project "$plan" --json --no-interactive |
+        jq -er --arg plan "$plan" '[.items[] | select(.item.metadata["onetaskgraph.template"].template == "onepipeline:design-doc") | .id] | if length == 1 then .[0] else error("approve-design: \($plan) holds \(length) design documents rendered from onepipeline:design-doc, not one; write it with just finish-plan \($plan) when there is none, or remove all but the current one with the plan store, then retry") end')
+    bar=$(scripts/onepipeline.sh template resolve design-doc --json | jq -er '.digest | select(type == "string" and . != "")') ||
+        { echo "approve-design: the engine resolved no design-doc template digest to record the approval under; repair the template until 'scripts/onepipeline.sh template check design-doc' passes, then retry" >&2; exit 2; }
+    scripts/plan-store.sh .venv/bin/onetaskgraph document attest "$document" --kind design-approval --by approve-design \
+        --bar "$bar" --no-interactive
+    [ -z {{ quote(run) }} ] || { scripts/onepipeline.sh attest {{ quote(run) }} approve-design && scripts/onepipeline.sh adopt {{ quote(run) }} --detach; }
 
 # Render one Mermaid source to the PNG a design document references: `just render-diagram
 # <source.mmd> <output.png>`. The locked mermaid-cli draws it in the locked font, on the
@@ -394,50 +336,12 @@ approve-design *args:
 render-diagram *args:
     @./scripts/render-diagram.sh "$@"
 
-# Copy a cleared plan onto the board this repository plans against: `just copy-plan
-# <source>:<project> [--to SOURCE] [<onetaskgraph project copy flags>]`.
-#
-# This is the step between the two recipes above, and the reason it is a command rather
-# than a habit: a plan is drafted in a local Markdown source, cleared there by `just
-# review-plan`, and only then copied onto the `plans` board it is launched from. That
-# order is the only one that works — a review record is an entry of the task's own
-# Markdown document, so a plan authored on the board can never carry one and
-# `check-plan` refuses it for want of one. Before anything is written to the
-# destination this reads the plan and refuses it when a task carries no record for what
-# it currently says, naming each such task; it spends no judged turn and reviews
-# nothing itself.
-#
-# `--to` names a different configured destination; everything else reaches
-# `onetaskgraph project copy` untouched — `--dry-run`, `--recreate`, `--match-by` —
-# rather than being re-declared by a wrapper with no opinion about them. A `--set`
-# among them configures the copy alone, so repoint a source in `onetaskgraph.yaml` or
-# through the store's own `ONETASKGRAPH_` variables, which the pre-flight read sees too.
-#
-# Exit 1 is this recipe's own refusal with nothing written, exit 3 is the destination
-# refusing a plan every task of which carried a record, and exit 2 is a plan or a
-# toolchain that could not be read at all. A plan builder branches on the difference:
-# reading the first as the second is how "nothing has reviewed this" gets retried as an
-# outage of the board.
-#
-# The install line is `just plans`'s, for its reason: session setup runs on a
-# `SessionStart` hook that a fresh worktree and a publication clone never fire, so the
-# CLI this reads is healed into this checkout's own `.venv/bin` and is the release this
-# checkout pinned rather than whichever copy another checkout provisioned last.
-# A block rather than the line-scoped directive every sibling recipe here carries, and
-# the reason is `just`'s grammar rather than a wider claim: the offending line is the
-# `orchestrator-copy-plan` invocation, a line-scoped directive covers only the line
-# after it, and `just` refuses a comment between a `[doc(...)]` attribute and the recipe
-# it annotates — so the narrowest reachable scope is this recipe. Placed in the body
-# instead it would be echoed to the operator on every run, which is the opposite of what
-# the rule asks for.
-# llmlint: ignore-block[tool_output_is_signal] the store's per-record report — one line per project and task, naming it created, updated or unchanged — is what a copy is run to produce, so it reaches the operator whole, exactly as for the `plans` reader below. This command's own output is only its refusals, each naming the next action.
-#
-# `scripts/plan-store.sh` establishes this checkout's own board credential first; its
-# header is the one account of why.
-[doc('Copy a reviewed plan project, and its tasks, onto the plan board this repository launches from.')]
-copy-plan *args:
-    @./scripts/plan-store.sh uv run orchestrator-copy-plan "$@"
-# llmlint: ignore-end[tool_output_is_signal]
+# `just copy-plan <source>:<project> [destination]` copies a plan, its tasks and its
+# documents with `onetaskgraph project copy`; attestations travel with the copy.
+[group("planning")]
+[doc("Copy a plan, its tasks and its documents onto the plan board.")]
+copy-plan plan destination="plans":
+    @scripts/plan-store.sh .venv/bin/onetaskgraph project copy {{ quote(plan) }} --to {{ quote(destination) }} --documents --no-interactive
 
 # Read the next planner surface, with the events that led to it: `just channel-next
 # <run-id>`.
@@ -838,7 +742,7 @@ follow-ups-answer-comments *args:
     esac
 
 # Register a repository checkout alias. Publication policy and approvals come from
-# the rules file the identity matches rather than from flags here; `onevcs` detects
+# the repository's own `onevcs.toml` and any host rule overriding it, never from flags here; `onevcs` detects
 # the gate the checkout itself carries, which is a different thing and not the routing.
 register-repo *args: _provisioned
     @uv run onevcs register "$@"
@@ -857,17 +761,22 @@ repos *args:
 #
 # This is the routing answer, and `just repos` is not: that listing prints the gate
 # `onevcs register` guessed from the checkout, while what a publication actually does
-# comes from the rules file — see `docs/host-setup.md`.
+# comes from the repository's own `onevcs.toml` declaration and the host rule that
+# overrides it, each line naming its source — see `docs/host-setup.md`.
 # llmlint: ignore[tool_output_is_signal] the matched rule and the policy that followed are this viewing command's product.
 repo-policy *args: _provisioned
     @uv run onevcs rules check "$@"
 
-# Bring this host's registry up to the tracked repository configuration: register
-# every checkout in `config/onevcs.checkouts`, install `config/onevcs.rules.yml` as
-# the rules file and `config/onevcs.releases.yml` as the release override, prove every
-# registered checkout matched a rule, and report what each producer this host installs
-# resolves out of the override. Re-runnable — run it after editing any of the three
-# files, and on a new host. `--dry-run` changes nothing.
+# Bring this host's registry up to its repository configuration: register every
+# checkout in the host's own list,
+# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts` (refused naming
+# that path when missing), install `config/onevcs.rules.yml` overlaid by the host's
+# `onevcs.rules.yml` beside that list as the rules file and `config/onevcs.releases.yml`
+# as the release override, prove every registered checkout's `publication` and
+# `approvals` are each decided by a rule or by its repository's own `onevcs.toml`, and
+# report what each producer this host installs resolves out of the override.
+# Re-runnable — run it after editing the list, an overlay or a declaration, and on a
+# new host. `--dry-run` changes nothing.
 # llmlint: ignore[tool_output_is_signal] the per-checkout resolved policy and per-producer release adoption this prints are what an operator applies the configuration to read.
 repos-apply *args:
     @./scripts/apply-repo-registry.sh "$@"
