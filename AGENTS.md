@@ -208,7 +208,7 @@ repointed either, because a later run comments on an earlier run's issue there.
 **Private work never reaches a public board.** A host's onetaskgraph user layer, outside
 every checkout, declares where private work lands and declares those sources `visibility:
 private`. A plan naming any private repository is one private coordinating plan, homed with
-every task in the private source; launch the home id `just finish-plan` reports. `just
+every task in the private source; launch its copy there. `just
 plans sources route <source> --repository <origin>` answers where an item lands.
 
 **A board field is set up through the plan-store verb, never by a hand-written
@@ -217,11 +217,9 @@ plans sources route <source> --repository <origin>` answers where an item lands.
 --apply`.
 
 **It is not authored there.** A plan is drafted in the gitignored `authoring` source,
-`.plans/`, reviewed there, documented, copied onto the board with its documents, approved
-there and launched from it; `just plan` runs that sequence after the planner, and `just
-finish-plan <brief>` is its tail for a plan edited later. The approval is recorded on the
-board copy because that is what the user judged, and a plan nothing reviewed is refused
-before it reaches a dispatch.
+`.plans/`, and [the plan flow](#the-plan-flow) reviews and documents it, copies both onto
+the board and has the user approve the copy, because that is what they judged; it launches
+from there, and a plan nothing reviewed is refused before it reaches a dispatch.
 
 <!-- llmlint: ignore[agents_md_durable_and_terse] This adoption's acceptance criteria require the withdrawn-task launch rule in both AGENTS.md and docs/orchestration.md; this is the required manager statement, while the detailed guide owns the copy-status policy. -->
 A launch omits withdrawn board tasks (closed as not planned) and refuses any
@@ -278,12 +276,10 @@ them reach you; `manager` names the session role and is never a command.
    and what every node's `## Why` is written from. Name the repository and the
    qualified project id the plan must create on its own `Plan project:
    <source>:<project>` line, and brief every planner to write into the `authoring`
-   source; a plan of another repository stays local and launches from there (`--to`,
-   or `--no-design-doc` for a planner alone). A plan spanning public and private
-   repositories names them as normalized origins on one `Repositories:` line: only a
-   line `onevcs` reads as both visibilities hands the planner the engine's own
-   `onepipeline boundary guidance`, so any other brief dispatches byte for byte what it
-   did without the line (`tests/plan_tooling/plan_flow/test_boundary_guidance_e2e.py`).
+   source; a plan of another repository stays local and launches from there. A plan
+   spanning public and private repositories names them as normalized origins on one
+   `Repositories:` line, which the draft reads with `onevcs boundary inspect` and, when
+   it spans both visibilities, plans by the engine's own `onepipeline boundary guidance`.
    Whatever reaches a public destination — the brief's words a plan carries, its
    description, a public node's text — names nothing private, not even an inventory of
    the repositories you checked. Do not hand it contracts, acceptance
@@ -335,13 +331,12 @@ them reach you; `manager` names the session role and is never a command.
    **What goes to the user is the design document, and their approval of it is what
    gates dispatch.** A plan is not a thing a person can usefully review, and walking
    them through it node by node is a reading they cannot argue with; the design
-   document the flow's second launch writes is. Its format — terse prose, complete
+   document the flow writes is. Its format — terse prose, complete
    interfaces — is stated once, in the guidance comments of
    [`templates/design-doc.md.j2`](templates/design-doc.md.j2), which a repository's own
    layer may override and which defines the reversibility levels (trivial, low cost, high
    cost) its decisions are graded by. Put the board copy in front of them, answer what they ask, and record their decision with
-   `just approve-design <source>:<project>`; `just orchestrate` refuses a plan whose
-   document is missing or unapproved.
+   `just approve-design <source>:<project>`.
    Write an `accepted_opaque` pattern onto an export edge only where the manager’s brief or a manager ruling names it on the user’s word, never propose one as a planner or worker unasked; the design document’s **Accepted opaque content** section is where the user sees and approves it.
    Its per-unit **Architecture** — each high-cost decision with its exact contract — is
    where your own reading of the seams goes. A seam is
@@ -357,15 +352,14 @@ them reach you; `manager` names the session role and is never a command.
    Send a plan back to its planner when the repair is decomposition; fixing it in
    place is the same over-reach as planning it yourself and lands work no plan-quality
    judge reviewed. A plan you wrote or tweaked is unreviewed until `just review-plan
-   <source:project>` has read it, and `just check-plan` refuses it by name until then;
-   a planner-written plan you did not touch is already recorded.
+   <source:project>` has judged what changed, and the launch refuses it until then.
 
    <!-- llmlint: ignore-block[agents_md_durable_and_terse, determinism_vs_judgment] The one statement of how a manager changes a planned task, which the approved cut keeps with its pipe: the pipe is two published verbs, `onetaskgraph task render` fed `onepipeline template resolve`, with no recipe over them to point at, because this repository is their canonical example rather than a wrapper layer, and the order across the authoring copy, its review and the board copy is the judgment the pipe cannot carry. -->
    **A task is changed by regenerating it, never by editing its body**, in the
    `authoring` copy: `onetaskgraph task answers <id>` prints what it was answered, and
    `onepipeline template resolve plan-task --json | onetaskgraph task render <qualified
    id> --template-loader - --var NAME=VALUE --no-interactive` (or `--answers FILE`)
-   regenerates it in place; then `just review-plan`, `just finish-plan` and the launch.
+   regenerates it in place; then `just finish-plan` and the launch.
    <!-- llmlint: ignore-end[agents_md_durable_and_terse, determinism_vs_judgment] -->
 5. **Pick or create personas.** Prefer precise task prose over encoding subtask detail
    in a new persona; there is no test-only persona, so a node closing a coverage gap
@@ -496,14 +490,12 @@ as a question item where the user's goal is at stake.
 channel: answer it yourself; where only the user can, raise it as a question item, with
 choices where they fit, and relay the answer it records back on that run's channel. Complete an item for the user only after they decided in this chat —
 `just human-items complete <item>`, approved on its own, like `just approve-design`, because
-completing a design review records their approval; the receipt records this session acting
+completing an item attests a step for them; the receipt records this session acting
 for them. Dismiss what nothing needs with `just
 human-items dismiss <item> [--reason TEXT]`; a run's end dismisses its own as "the run
 ended", and a resolution made while you were away reaches your next `just human-items
 watch` once. `just human-items reopen <item>` puts a completed or dismissed item back and
-returns its hold, unless a person's answer or a run settled it; reopening a completed design
-review removes its approval and is refused once the plan has launched, because removing it
-would not stop the run. `just human-items note <item>`, its text given as `--text`, comments on a completed item or
+returns its hold, unless a person's answer or a run settled it. `just human-items note <item>`, its text given as `--text`, comments on a completed item or
 states a dismissed one's reason, and releases nothing. Each arrives on a tied run's channel
 as a non-blocking `human-item` surface, so read it as what a person did. A plan states each `kind: human` node's item in `onepipeline.human_item`, its
 priority always explicit and separate from a plan-store task's own priority, which a
@@ -741,8 +733,8 @@ read with `just channel-next --flow <ID>` and answered with `just channel-reply 
   `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` — 30 seconds by the engine's default — and the edit is
   durable, so never send it again; `dropped` means a bus hook discarded the whole envelope:
   exit 0, `reply` 0, and nothing queued, applied or delivered. A refusal exits 2 with
-  nothing appended. Task prose in an envelope is criteria, reviewed before any of it is
-  applied, so a refusal refuses the whole envelope; a `note`'s `text` is never reviewed.
+  nothing appended. Task prose in an envelope is criteria, judged before any of it is
+  applied, so a refusal refuses the whole envelope.
 - **Steer a running dispatch with a `note`, never with `oneagentgraph interrupt` by
   hand.** A note is journalled against the node; a raw interrupt reaches the worker's
   turn alone and leaves the run unable to explain why a worker changed direction. The
@@ -815,36 +807,42 @@ so nothing runs outside the ledger.
 
 ### The plan flow
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that added the spike stage requires this paragraph to state, tersely, the flow's stages, where a spike's report lives and how a spike branch is named, acknowledged, listed and discarded, because a manager reading this file decides on a stopped flow and on a kept branch from them; `docs/orchestration.md` holds the convention in full. -->
-`just plan <brief.md>` turns a manager-written brief into the project the planner
-authors, launches it, and runs **draft → spikes → finalize** before handing over to `just
-finish-plan` for review and the design document. A draft that needs measuring writes
-`spike-<topic>` nodes into `<plan project>-spikes`; each keeps its branch as `<host
-prefix>/<plan native id>/spike-<topic>`, acknowledged with `just unpublished
---acknowledge`, and writes its report as the document `<plan native id>-<spike id>-report`
-of the plan's own project. A spike may depend on a shared harness spike, and starts from its branch. The plan's successful main run discards those branches, its success hook
-running `just reclaim-branch --discard` on each; a failed run and an
-unlaunched plan keep them, listed by `git ls-remote --heads origin '*/spike-*'`. Every stop
-prints the `--resume` command that carries the flow on.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
-A plan expected to change something a user sees gets a `spike-visual` whose
-before-and-after screenshots its design document shows; where the target repository has
-no straightforward way to capture them, its planner asks the manager, and a one-node plan
-landing a reusable capture command there runs first, the flow resuming with `just plan
---resume spikes`.
+`just plan <brief.md>` runs `templates/planning/` as one flow and `just finish-plan
+<source>:<project>` reruns its tail over an edited plan. Two waits in it are yours to
+release, each after the user decided: `just approve-spikes <run>` and `just approve-design
+<copy> [run]`. A spike branch stays preserved until the plan's main run succeeds, so
+acknowledge it rather than land it; a plan changing what a user sees gets a `spike-visual`.
 
-`just check-plan` reads a project against the bar each node will be judged against, `just
-review-plan` spends the judged turn that clears it, and `just approve-design` records the
-user's approval of its design document. `templates/dispatch-appendix.md` is the operational
-notes every dispatched task carries, and the one statement of what a worker may suppress.
+Every live correction carrying task prose is judged by the engine's `plan_edit_hook`
+(`scripts/review-plan-item.sh`); a `note`'s text is not. `templates/dispatch-appendix.md` is
+the operational notes every dispatched task carries, and the one statement of what a worker
+may suppress.
+
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The one statement of which files of this host serve planning and the library verbs each calls; `tests/tree_scans/test_planning_ownership.py` parses this list and fails when a file or verb parts from it, so it restates those files on purpose. -->
+
+**What of this host serves planning.** Residue says what it computes, a thin wrapper the
+library verbs it calls.
+
+- `scripts/render-diagram.sh` — renders the Planned-tasks graph PNG with mmdc; its `design-doc-dag-*` budgets stay.
+- `orchestrator/host_adoption_check.py` — the `plan check --check` executable holding the two host-install rules, `uninstalled` (a node of this repository consuming an artifact nothing here installs) and `default-taken` (a node elsewhere taking the default target of a producer this host installs), against `orchestrator/host_installs.py`.
+- `scripts/budget-design-doc-summary.sh` — the root `design-doc-budget-summary-length` budget's measurement.
+- `scripts/review-plan-item.sh` — `oneagentgraph run --judge-only`, `onetaskgraph project attestation check`, `onetaskgraph task list`, `onetaskgraph project show`, `onetaskgraph task attest` and `onetaskgraph project attest`.
+- `scripts/plan-attestation-check.sh` — `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onepipeline template resolve`, `onetaskgraph project attestation check`, `onetaskgraph document list` and `onetaskgraph document attestation check`.
+- `templates/planning/planning.md.j2` — its `spikes` step's command: `onetaskgraph task list`, `onepipeline start`, `onepipeline status` and `onepipeline watch`, the status/watch wait an interim workaround for the engine's attached start returning at a human wait, retired by the drafted onepipeline follow-up.
+- `scripts/run-ended.sh` — its spike-discard lines: `onepipeline status`, `onetaskgraph project show`, `onepipeline unpublished` and `just reclaim-branch --discard`.
+- `justfile` — the recipes `plan`, `finish-plan`, `check-plan`, `review-plan`, `copy-plan`, `approve-design` and `approve-spikes`: `onetaskgraph project create`, `onetaskgraph project show`, `llmlint rules`, `onepipeline flow run`, `onepipeline start`, `onepipeline plan check`, `onetaskgraph project copy`, `onetaskgraph document list`, `onetaskgraph document attest`, `onepipeline template resolve`, `onepipeline attest` and `onepipeline adopt`, and `scripts/review-plan-item.sh`.
+
+Nothing else under `orchestrator/` or `scripts/` serves planning, and
+`tests/tree_scans/test_planning_ownership.py` holds it.
+
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 **First decide whether work adds/changes a task budget before analysis**;
-[`docs/budgets.md`](docs/budgets.md) is the convention, and `config/budgets-migration.yaml`
-the one list of plans that predate it. `orchestrator/plan_budgets.py` owns the versioned
-record authority; reviewers establish concern scope and root-budget existence from the
-changed repositories, while read compatibility preserves older plans. A performance
-problem starts from the PR budget report and stays with the current work; an informational
-flag is never a reason for the manager to dispatch.
+[`docs/budgets.md`](docs/budgets.md) is the convention, and the `schema:` declarations of
+`templates/plan-task-budgets.md.j2` and `templates/plan-description.md.j2` the record shapes
+the plan store holds every rendering to. A performance problem starts from the PR budget
+report and stays with the current work; an informational flag is never a reason for the
+manager to dispatch.
 
 ### What every launch exports
 

@@ -37,7 +37,7 @@ from typing import Any
 import onetaskgraph_user_layer
 import pytest
 from linear_board import linear_board
-from project_fixtures import project_from_plan
+from project_fixtures import attested_reviewed, project_from_plan
 from test_adopted_engine_reads_an_adopted_run_e2e import _just, _until
 from test_orchestrate_launch_e2e import CandidatePlan, _node
 from test_orchestrate_launch_e2e import _environment as _launched_environment
@@ -92,9 +92,17 @@ def _layer(endpoint: str) -> dict[str, Any]:
 
 def _edge_into_the_tracker(project: str) -> None:
     """Record, beside `edged`'s own dependency, its opaque edge to the tracker's item."""
-    (edged,) = [task for task in plan_store.read_tasks(project) if task.node_id == "edged"]
-    assert edged.location is not None, edged
-    task = Path(edged.location)
+    source, native = project.split(":", 1)
+    (edged,) = [
+        task
+        for page in plan_store.every_page(
+            project, plan_store.client().task_list, source=[source], project=native
+        )
+        for task in page.items
+        if task.item.metadata.get("onepipeline.id") == "edged"
+    ]
+    assert edged.item.location is not None, edged
+    task = Path(edged.item.location.model_dump(mode="python")["path"])
     written = task.read_text(encoding="utf-8")
     own = "depends_on:\n"
     assert own in written, written
@@ -118,6 +126,9 @@ def test_a_node_edged_into_a_rate_limited_tracker_waits_for_its_reset(
     plan.write_text(json.dumps(_PLAN), encoding="utf-8")
     project = project_from_plan(plan)
     _edge_into_the_tracker(project)
+    # The edge is written after the review, so the record is attested again as a review of
+    # its new content would leave it.
+    attested_reviewed(project)
     run = RunId(project.split(":", 1)[1])
 
     # llmlint: ignore[e2e_not_mocked] Only the tracker's HTTP transport is substituted.

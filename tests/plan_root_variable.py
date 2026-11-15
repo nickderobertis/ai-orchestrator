@@ -1,66 +1,31 @@
-"""The name a planning launch exports its plan-authoring root under, read from its source.
+"""The name a launch exports this checkout's plan-authoring root under.
 
-`scripts/plan-root-env.sh` composes that name and that value, and is the only place
-either is composed: `onetaskgraph.yaml` roots the `authoring` source relatively, so a
-launch that resolved it in two places could export two directories and the plan a
-dispatched planner authors would simply land where nothing looks for it.
-
-So no test spells the name. This reads it out of the helper, by sourcing the helper and
-printing the constant it holds — which is the same read `scripts/plan.sh` makes, one
-step short of the resolution. Deliberately short of it: a caller who only needs the name
-should not need a resolvable plan store to learn it, and every journey that varies the
-environment the resolution runs under lives in `tests/plan_tooling/plan_flow/test_plan_root_env.py`.
+The `authoring` source `onetaskgraph.yaml` configures is rooted relatively, so a launch
+that writes or reads it pins its root through the plan store's own environment layer,
+`ONETASKGRAPH_SOURCES__<SOURCE>__CONFIG__ROOT` beside `..__PLUGIN`. Composed here from that
+layer's convention, so no journey spells the names itself.
 """
 
 from __future__ import annotations
 
-import functools
-import subprocess
-
-from orchestrator.root import REPO_ROOT
-
-HELPER = REPO_ROOT / "scripts" / "plan-root-env.sh"
-
-#: Accessors rather than second copies of the contract: what each names is the helper's
-#: own constant, so a helper that stopped defining one fails the read below rather than
-#: answering wrongly. The source is held beside the variable because the helper composes
-#: the second out of the first — a reader that spelled the source itself could name a
-#: source this checkout does not plan into.
-NAME_HOLDER = "PLAN_AUTHORING_ROOT_ENV"
-SOURCE_HOLDER = "PLAN_AUTHORING_SOURCE"
-PLUGIN_NAME_HOLDER = "PLAN_AUTHORING_PLUGIN_ENV"
-
-
-@functools.cache
-def _held(holder: str) -> str:
-    read = subprocess.run(  # noqa: S603 - this repository's own helper, read as its callers do
-        # noqa: S607 - bash from the search path, because that is the interpreter every
-        # recipe sourcing this helper runs it under; an absolute one here would read a
-        # shell the callers never use.
-        ["bash", "-c", f'source "{HELPER}"; printf "%s" "${holder}"'],  # noqa: S607
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if read.returncode != 0 or not read.stdout.strip():
-        raise AssertionError(
-            f"{HELPER} did not answer with the {holder} it composes; it is the one source of "
-            f"that name, so nothing here can stand in for it:\n{read.stdout}{read.stderr}"
-        )
-    return read.stdout.strip()
-
-
-def name() -> str:
-    """The environment variable a planning launch exports its plan-authoring root under."""
-    return _held(NAME_HOLDER)
+#: The plan source a plan is drafted in, as `onetaskgraph.yaml` names it.
+SOURCE = "authoring"
 
 
 def source() -> str:
-    """The plan source that root belongs to, as this checkout's store configures it."""
-    return _held(SOURCE_HOLDER)
+    """The plan source the authoring root belongs to."""
+    return SOURCE
+
+
+def _setting(key: str) -> str:
+    return f"ONETASKGRAPH_SOURCES__{SOURCE.upper()}__{key}"
+
+
+def name() -> str:
+    """The environment variable the plan-authoring root is exported under."""
+    return _setting("CONFIG__ROOT")
 
 
 def plugin_name() -> str:
-    """The environment variable the launch exports that source's plugin under, beside its root."""
-    return _held(PLUGIN_NAME_HOLDER)
+    """The environment variable that source's plugin is exported under, beside its root."""
+    return _setting("PLUGIN")

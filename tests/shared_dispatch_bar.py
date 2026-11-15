@@ -19,11 +19,9 @@ beside the readers rather than inside one test because both files' guards ask it
 
 Read with a reader written for this shape rather than with a YAML library: the
 workspace installs none, and adding a parser as a dependency to read three blocks of a
-file this repository writes is a worse trade. That reader is
-`orchestrator.criteria_guard.block_scalar`, which `just check-plan` already needs to
-read a persona fragment lifted out of a binary — so this file states the *shape* it
-expects on top of it and fails loudly when the file leaves it, rather than carrying a
-second copy of the parsing for the two of them to disagree over.
+file this repository writes is a worse trade. That reader is :func:`block_scalar`, and
+this file states the *shape* it expects on top of it and fails loudly when the file
+leaves it.
 """
 
 from __future__ import annotations
@@ -31,10 +29,68 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from orchestrator.criteria_guard import APPENDIX, LITERAL_HEADERS, block_scalar, field
 from orchestrator.root import REPO_ROOT
 
+#: The operational text every dispatched task carries, by way of the `plan-task`
+#: template that includes it.
+APPENDIX = Path("templates") / "dispatch-appendix.md"
+
 BASE_CONFIG = Path("config") / "onejudge.base.yaml"
+
+#: Every block-scalar header a field may open with. `>` folds its newlines to spaces and
+#: `|` keeps them, so the reader below folds or keeps to match and a style change is not a
+#: change to any caller.
+FOLDING_HEADERS = (">", ">-", ">+")
+LITERAL_HEADERS = ("|", "|-", "|+")
+
+_BLOCK_OPEN = re.compile(r"^(?P<indent> *)(?P<key>[A-Za-z_][A-Za-z0-9_]*): *(?P<header>[|>][-+]?)$")
+
+_INLINE = re.compile(
+    r"^ *(?P<key>[A-Za-z_][A-Za-z0-9_]*): +(?P<value>\"[^\"]*\"|'[^']*'|[^\s#|>][^#]*?) *$"
+)
+
+
+def block_scalar(document: str, key: str) -> tuple[str, str] | None:
+    """The header ``key`` opens with and its block **normalized for reading**.
+
+    Normalized, not parsed: a `>` block comes back as one whitespace-collapsed line and a
+    `|` block with its line structure and surrounding blank lines trimmed. Every caller
+    either searches the value for the demands it makes or compares it against a prompt
+    that was itself whitespace-normalized, the only comparison a model's rendering of
+    these fields supports.
+    """
+    lines = document.splitlines()
+    for index, line in enumerate(lines):
+        opened = _BLOCK_OPEN.match(line)
+        if opened is None or opened["key"] != key:
+            continue
+        indent = len(opened["indent"])
+        block: list[str] = []
+        for following in lines[index + 1 :]:
+            if following.strip() and len(following) - len(following.lstrip()) <= indent:
+                break
+            block.append(following)
+        inner = min((len(one) - len(one.lstrip()) for one in block if one.strip()), default=0)
+        stripped = [one[inner:] if one.strip() else "" for one in block]
+        header = opened["header"]
+        if header in FOLDING_HEADERS:
+            return header, " ".join(" ".join(stripped).split())
+        return header, "\n".join(stripped).strip("\n")
+    return None
+
+
+def field(document: str, key: str) -> str | None:
+    """``key``'s value normalized for reading, as a block scalar or as one inline line."""
+    block = block_scalar(document, key)
+    if block is not None:
+        return block[1]
+    for line in document.splitlines():
+        inline = _INLINE.match(line)
+        if inline is not None and inline["key"] == key:
+            value = inline["value"]
+            unquoted = value[1:-1] if value[:1] in {'"', "'"} and value[-1:] == value[:1] else value
+            return unquoted.strip()
+    return None
 
 
 def appendix_text() -> str:

@@ -93,13 +93,11 @@ from nx_workspace import (
     copy_working_tree,
     share_this_checkouts_install,
 )
-from project_fixtures import designed, graph_image, helper
+from project_fixtures import attested_reviewed, designed, graph_image, helper, write_plan_project
 from waits import timeout as e2e_timeout
 
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
-from orchestrator import plan_check
-from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import WRITABLE_PLUGIN
 
 #: Building a copy of this checkout reads everything git tracks, which routes this module to
@@ -113,8 +111,11 @@ FAKE_CODEX_UNTRUSTED = helper("fake_codex_untrusted_directory.py")
 FAKE_CODEX = helper("fake_codex.py")
 FAKE_BACKEND = helper("fake_backend.py")
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
-#: A reviewer's one answer for a launched plan: a pass naming no finding.
-PASSING_VERDICT = json.dumps({"passes": True, "findings": []})
+#: A reviewer's one answer for a launched plan: the judge-only run's supervisor decision, a
+#: pass.
+PASSING_VERDICT = json.dumps({"completion": True, "reason": "the stand-in reviewer passes it"})
+#: The engine's own lever beneath the launch config's `require_rendered`, which beats it.
+REQUIRE_RENDERED_ENV = "ONEPIPELINE_REQUIRE_RENDERED"
 
 #: The two destinations: the tracked board, and the tracker the example user layer routes to.
 BOARD = tickets.BOARD
@@ -332,7 +333,7 @@ def _environment(tmp: Path, remote: Mapping[str, str]) -> dict[str, str]:
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     # A follow-up task is rendered from its template, so its launch runs under the
     # `require_rendered` default every launch outside the suite does.
-    environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
+    environment.pop(REQUIRE_RENDERED_ENV, None)
     return environment
 
 
@@ -1151,16 +1152,8 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         )
 
 
-def _delivering_launch(
-    bench: Bench, oneharness_bin: str, delivers: str, gate: Path
-) -> subprocess.Popen[str]:
-    """Write, design and approve a two-node plan whose second node delivers ``delivers``; launch it.
-
-    The first node holds the second back, and its turn is held at the paid-model boundary, so
-    the ticket is read at the moment the run has claimed its plan and no worker has taken a
-    turn — the moment a claim made before the first dispatch has to be readable.
-    """
-    criteria = "## Acceptance criteria\n- The task settles.\n"
+def _write_delivering_records(bench: Bench, delivers: str, criteria: str) -> None:
+    """Write the two-node plan whose second node delivers ``delivers``, through the store."""
     write_plan_project(
         bench.authoring,
         {
@@ -1184,7 +1177,29 @@ def _delivering_launch(
             ],
         },
         native_id=DELIVERING_PROJECT,
+        source="authoring",
     )
+
+
+def _delivering_launch(
+    bench: Bench, oneharness_bin: str, delivers: str, gate: Path
+) -> subprocess.Popen[str]:
+    """Review, design and approve a two-node plan whose second node delivers ``delivers``; launch.
+
+    The first node holds the second back, and its turn is held at the paid-model boundary, so
+    the ticket is read at the moment the run has claimed its plan and no worker has taken a
+    turn — the moment a claim made before the first dispatch has to be readable.
+    """
+    criteria = "## Acceptance criteria\n- The task settles.\n"
+    # The fixture writer runs the store in this process's environment, and a task delivering
+    # a ticket is kept in step with it on create, so the write sees the bench's tracker.
+    before = dict(os.environ)
+    os.environ.update(bench.environment)
+    try:
+        _write_delivering_records(bench, delivers, criteria)
+    finally:
+        os.environ.clear()
+        os.environ.update(before)
     project = f"authoring:{DELIVERING_PROJECT}"
     designed(
         "authoring",
@@ -1207,6 +1222,8 @@ def _delivering_launch(
         # One task depends on the other, so the document opens with the plan's graph.
         **graph_image(bench.tmp / "delivering-graph"),
     )
+    # Reviewed as a passing `just review-plan` leaves it, which the launch check reads.
+    attested_reviewed(project, bench.environment)
     approved = _run(bench, "just", "approve-design", project, seconds=300)
     assert approved.returncode == 0, approved.stdout + approved.stderr
     gate.mkdir()
@@ -1221,7 +1238,7 @@ def _delivering_launch(
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([PASSING_VERDICT])
     environment.pop("FAKE_CODEX_RUN_ON_MARKER", None)
     # A plan written by hand rather than rendered, which the suite's own opt-out admits.
-    environment[plan_check.REQUIRE_RENDERED_ENV] = "false"
+    environment[REQUIRE_RENDERED_ENV] = "false"
     return subprocess.Popen(  # noqa: S603 - this repository's own recipe, in the copy
         ["just", "orchestrate", project, "--dag-graph", "off"],  # noqa: S607 - `just` as an operator runs it
         cwd=bench.checkout,

@@ -2,7 +2,7 @@
 # llmlint: ignore-file[changed_behavior_has_e2e] the entry points that source this helper are driven through every branch by their own subprocess journeys (tests/e2e/launch_monitor_observer/test_claude_identity_routing_e2e.py, tests/test_dispatch_env_hook.py).
 # The ONE source of the portable alternate-Codex home directory, sourced by
 # scripts/dispatch-env.sh (every launch and the smoke), the recipes that run llmlint and
-# scripts/plan-checklist.sh.
+# scripts/oneharness-usage.sh.
 #
 # Every entry point must call this, because oneharness refuses to start whenever the
 # indirection a selected variant names is unset. For why it creates the directory,

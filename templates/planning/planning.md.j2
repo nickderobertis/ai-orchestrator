@@ -1,0 +1,152 @@
+---
+onetaskgraph_template: 1
+description: >-
+  The planning workflow for one brief, as a plan graph: the planner drafts the plan, any
+  spikes it needs run and a planner finalizes the plan from their reports, the plan is
+  checked and reviewed, its design document is written,
+  plan and document are copied onto the board, and the run waits for the user's approval.
+  `just plan <brief>` creates it and launches it in one flow.
+variables:
+  plan:
+    description: The qualified id of the plan project the planner writes, `authoring:<native id>`, from the brief's `Plan project:` line.
+    type: text
+    required: true
+  native:
+    description: The plan project's native id, the part of `plan` after its source.
+    type: text
+    required: true
+  brief:
+    description: The path of the manager's brief, as the recipe was given it.
+    type: text
+    required: true
+  brief_text:
+    description: The brief's whole text.
+    type: text
+    required: true
+  checklist:
+    description: The plan checklist's rules, as `llmlint rules -c config/plan-checklist.llmlint.yml --files <hypothetical plan paths> --format markdown` prints them.
+    type: text
+    required: true
+  destination:
+    description: The configured source the reviewed plan and its design document are copied into.
+    type: text
+    default: plans
+members:
+  - id: "{{ native }}-planning-draft"
+    title: "Draft the plan {{ plan }}"
+    template: {file: planning-draft.md.j2}
+    answers:
+      plan: "{{ plan }}"
+      brief: "{{ brief }}"
+      brief_text: "{{ brief_text }}"
+      checklist: "{{ checklist }}"
+    metadata:
+      onepipeline.id: draft
+      onepipeline.persona: ../personas/planner.yaml
+      onepipeline.agent_graph: graphs/planner.yaml
+  - id: "{{ native }}-planning-spikes"
+    title: "Run the spikes of {{ plan }}, if it has any"
+    template: {file: step.md.j2}
+    answers:
+      description: "Runs `{{ plan }}-spikes` attached in this flow when the draft created it, and settles done at once when it holds no task."
+    depends_on: ["{{ native }}-planning-draft"]
+    # The command starts the plan's spikes run attached in this flow when the draft created
+    # one, and settles `done` at once when there is none. INTERIM WORKAROUND (manager ruling
+    # c6.0): the pinned engine's attached `start` returns at a human node's wait —
+    # `approve-spikes` — with its driver gone, so after it the command waits on
+    # `onepipeline status --json` and `onepipeline watch --until settled --timeout none` until
+    # the run ends, and fails unless it ended `complete`. It is retired by the drafted
+    # onepipeline follow-up "Keep an attached onepipeline start waiting across a human node's
+    # wait", after which the command is the attached `start` alone.
+    metadata:
+      onepipeline.id: spikes
+      onepipeline.kind: command
+      onepipeline.command:
+        - bash
+        - -c
+        - >-
+          set -euo pipefail;
+          spikes="$1-spikes";
+          held=$(.venv/bin/onetaskgraph task list --source "${1%%:*}" --project "$spikes" --json --no-interactive | jq '.items | length');
+          [ "$held" -gt 0 ] || exit 0;
+          run=$(scripts/onepipeline.sh start "$spikes" --launch-config config/onepipeline.workflows.yaml
+          --dag-graph off --label kind=spikes --branch-template "${1#*:}/{{ '{{ node.id }}' }}" | tail -n 1 | jq -r '.run_id');
+          until ending=$(scripts/onepipeline.sh status "$run" --json | jq -c '.ending // empty') && [ -n "$ending" ]; do
+          scripts/onepipeline.sh watch "$run" --until settled --timeout none || true; done;
+          [ "$(jq -r '.kind' <<<"$ending")" = complete ]
+        - spikes
+        - "{{ plan }}"
+  - id: "{{ native }}-planning-finalize"
+    title: "Finalize {{ plan }} from its spikes, if it has any"
+    template: {file: finalize.md.j2}
+    answers:
+      plan: "{{ plan }}"
+      native: "{{ native }}"
+    depends_on: ["{{ native }}-planning-spikes"]
+    metadata:
+      onepipeline.id: finalize
+      onepipeline.persona: ../personas/planner.yaml
+      onepipeline.agent_graph: graphs/planner.yaml
+  - id: "{{ native }}-planning-check"
+    title: "Check {{ plan }} as its launch will load it"
+    template: {file: step.md.j2}
+    answers:
+      description: "`onepipeline plan check` over the plan, with this host's install check registered."
+    depends_on: ["{{ native }}-planning-finalize"]
+    metadata:
+      onepipeline.id: check
+      onepipeline.kind: command
+      onepipeline.command: [scripts/onepipeline.sh, plan, check, "{{ plan }}", --check, orchestrator/host_adoption_check.py]
+  - id: "{{ native }}-planning-review"
+    title: "Review {{ plan }}"
+    template: {file: step.md.j2}
+    answers:
+      description: "`scripts/review-plan-item.sh` judges every unreviewed task and the project, and attests each pass."
+    depends_on: ["{{ native }}-planning-check"]
+    metadata:
+      onepipeline.id: review
+      onepipeline.kind: command
+      onepipeline.command: [scripts/review-plan-item.sh, "{{ plan }}"]
+  - id: "{{ native }}-planning-design"
+    title: "Write the design document of {{ plan }}"
+    template: {file: design.md.j2}
+    answers:
+      plan: "{{ plan }}"
+      native: "{{ native }}"
+      brief_text: "{{ brief_text }}"
+    depends_on: ["{{ native }}-planning-review"]
+    metadata:
+      onepipeline.id: design
+      onepipeline.persona: ../personas/design-doc.yaml
+      onepipeline.agent_graph: graphs/design-doc.yaml
+  - id: "{{ native }}-planning-copy"
+    title: "Copy {{ plan }} and its documents to {{ destination }}"
+    template: {file: step.md.j2}
+    answers:
+      description: "`onetaskgraph project copy` of the plan, its tasks and its documents, into `{{ destination }}`."
+    depends_on: ["{{ native }}-planning-design"]
+    metadata:
+      onepipeline.id: copy
+      onepipeline.kind: command
+      onepipeline.command: [.venv/bin/onetaskgraph, project, copy, "{{ plan }}", --to, "{{ destination }}", --documents, --no-interactive]
+  - id: "{{ native }}-planning-approve-design"
+    title: "Approve the design of {{ plan }}"
+    template: {file: step.md.j2}
+    answers:
+      description: "Waits for the user's approval of the design document on the board copy."
+    depends_on: ["{{ native }}-planning-copy"]
+    metadata:
+      onepipeline.id: approve-design
+      onepipeline.kind: human
+      onepipeline.human_item:
+        kind: task
+        priority: medium
+        title: "Read and approve the design for {{ plan }}"
+        body: >-
+          Read the design document of the copy of {{ plan }} in {{ destination }} (its id is
+          the `onetaskgraph.copies` entry `onetaskgraph project show {{ plan }} --json`
+          names). Once the user approves it, run `just approve-design <that copy>
+          <this run's id>`.
+---
+The planning run of `{{ plan }}`, from the brief `{{ brief }}`: draft, spikes, finalize, check, review,
+design document, copy to `{{ destination }}`, and the user's approval.

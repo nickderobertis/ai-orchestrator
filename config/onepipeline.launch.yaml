@@ -1,22 +1,21 @@
 # What every `onepipeline start` on this host declares about its run, as the engine's own
 # launch config (`start --launch-config`; onepipeline's `LaunchConfig`, `src/filter.rs`, at
 # the release config/onepipeline.version pins). `scripts/onepipeline.sh` names this file on
-# every `start` and passes none of the flags it carries; `adopt` names nothing, because an
-# adopted run replays its launch record.
+# every `start` that names none, which is `just orchestrate`'s; `adopt` names nothing,
+# because an adopted run replays its launch record. This host's own workflow launches — `just
+# plan`, `just finish-plan`, the spikes run a planning run starts and the follow-up runs —
+# name `config/onepipeline.workflows.yaml` instead, which registers no launch check, no
+# plan-edit hook and no run-end hook.
 #
 # Every path below is relative to the launch directory, which `scripts/onepipeline.sh`
 # makes this checkout's root for a `start`: the engine resolves the template root, the bus
 # configuration, the maintenance schedule and the drafting graph against it, and spawns the
-# hooks there, so a relative command names this checkout's script wherever the run is
-# adopted from.
+# hooks and checks there, so a relative command names this checkout's script wherever the
+# run is adopted from.
 #
 # A caller's own flag beats the key it names, a blank one included, which is how a launch
-# says it has none — the engine orders it so. `just orchestrate` takes every key as it
-# stands; every other launcher (`just plan`, the design-document launch, `just follow-ups`,
-# the spike-brief flow) names `--success-hook=`, `--failure-hook=` and `--pr-author-graph=`
-# blank where it names none of its own, so its run keeps the hooks and the drafting graph
-# it had before this file existed, which is none.
-schema_version: 13
+# says it has none — the engine orders it so.
+schema_version: 14
 # Every agent node a launch dispatches is the rendering its provenance records.
 require_rendered: true
 # This host's template registrations; `scripts/template-env.sh` exports the same root for
@@ -36,9 +35,15 @@ failure_hook: scripts/run-ended.sh
 hook_timeout: 600
 # The graph a lifecycle change request's body is drafted by.
 pr_author_graph: graphs/pr-author.yaml
-# Every reply envelope carrying edits is held to the criteria bar — the deterministic tier,
-# then the judged one — before any of it is applied; `orchestrator/envelope_review.py` is
-# that bar's one entry point. Only a pass is recorded, under the run's own
-# `validator-passes/`, keyed on the document judged and on what the bar command prints.
-envelope_reviewer: scripts/envelope-review.sh
-envelope_reviewer_bar: scripts/envelope-review-bar.sh
+# The launch gate: `scripts/plan-attestation-check.sh` refuses a plan unless every task and
+# the project carry a `plan-review` attestation valid under the planner's current bar and
+# its design document a valid `design-approval`, each read with `onetaskgraph ...
+# attestation check`. It reads which plan from `ORCHESTRATOR_PLAN`, which
+# `scripts/orchestrate.sh` exports, because the engine's check document names no project.
+checks:
+  - [scripts/plan-attestation-check.sh]
+# Every live edit that introduces or changes a node's task — `amend`, `retry`, `requeue`,
+# `add` — is judged by the same judge-only review as authoring before any of it applies; a
+# `note` never reaches it.
+plan_edit_hook:
+  command: [scripts/review-plan-item.sh]

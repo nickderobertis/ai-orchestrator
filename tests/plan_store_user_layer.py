@@ -49,8 +49,6 @@ its own.
 The invoking user's configuration home is recorded in `HOST_CONFIG_HOME_ENV`, so a pytest
 process this one starts — an xdist worker, or a suite a test runs — links the same host
 entries rather than taking this process's sandbox for the host's.
-`tests/plan_tooling/plan_copy/test_plan_store_user_layer_e2e.py` drives a fixture's copy
-under a user layer that would refuse it, and the isolation's links.
 """
 
 from __future__ import annotations

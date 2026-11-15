@@ -98,9 +98,26 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, m
 
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import human_items, npm_installs, plan_store
-from orchestrator.plan_budgets import BUDGETS_FILE, Direction
 from orchestrator.plan_store import RECORD_COMPONENT, QualifiedTaskId
 from orchestrator.record_shapes import TASKS_DIRECTORY, frontmatter, hosted_origin
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The two names this
+# module imported from the plan-budgets module the planning cutover deleted,
+# kept as the smallest change the task ruled for each follow-ups file; aio-followups-cutover
+# replaces this module's budget reading, which is when they go.
+#: The budgets file a repository registers its budgets in, at its root.
+BUDGETS_FILE = "budgets.yaml"
+
+
+class Direction(StrEnum):
+    """Which side of its threshold a budget holds a measurement to: onebudgetspec's `direction`."""
+
+    MAX = "max"
+    MIN = "min"
+
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
 
 #: The plan-store source a ticket is stored in, and the directory beside a run's drafts it
 #: is stored under — both the drafts module's, since a ticket sits in the run's draft tree.

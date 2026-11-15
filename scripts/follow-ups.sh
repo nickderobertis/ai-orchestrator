@@ -15,8 +15,8 @@
 # here, or `feedback` for a re-dispatch over the board's own comments, as `--comments`
 # below says.
 #
-# `scripts/plan.sh` is the precedent for everything about the launch, and each departure
-# from it is named:
+# The planning launcher the planning cutover retired, `scripts/plan.sh`, was the precedent
+# for everything about the launch, and each departure from it is named:
 #
 #   * **One direct node, `follow-ups`, in project `follow-up-runs:<run-id>-follow-ups`**, whose
 #     task the template renders ending in `PLAN_DIRECT_PLACEMENT_NOTE`: a direct node works
@@ -43,17 +43,15 @@
 #     given. The node still names `../personas/follow-up.yaml`, because the engine refuses a
 #     direct agent node that names no persona; the graph's member layers none.
 #   * **Its run id is guaranteed free rather than refused when taken.** A planning flow's
-#     name is the manager's to choose, so `scripts/plan.sh` refuses a taken one; this run's
+#     name was the manager's to choose, so `scripts/plan.sh` refused a taken one; this run's
 #     name is derived from the run it follows up, and a second pass over the same run — a
 #     re-dispatch with feedback, or a run the success hook reaches twice — must launch
 #     rather than fail. So it takes the first of `<run-id>-follow-ups`,
-#     `<run-id>-follow-ups-2`, `-3`, … that no run root holds, which is the same "a run root
-#     exists" question `plan_run_is_free` asks. The project id stays `<run-id>-follow-ups`
+#     `<run-id>-follow-ups-2`, `-3`, … that no run root holds. The project id stays `<run-id>-follow-ups`
 #     whichever run id launched it, so a re-dispatch rewrites the one project.
-#   * **It is exempt from design-document approval by a stamp bounded to its one node**, of
-#     the `follow-ups` kind `orchestrator/design_approval.py` reads: there is no plan for a
-#     person to read this project as, and a project that grows a second node, or whose stamp
-#     names a node it does not hold, is gated like any other.
+#   * **It is held to no design-document approval or review**: it launches through
+#     `config/onepipeline.workflows.yaml`, which registers no launch check, because there is
+#     no plan for a person to read this project as.
 #
 # Four refusals and endings come before anything is written, each told apart:
 #
@@ -121,7 +119,7 @@
 #
 # **The launch is a flow, and its first lines say so.** Once every ending that launches
 # nothing is behind it, the recipe re-executes itself inside a flow named for the run it
-# launches (`scripts/launch-flow.sh`), owned by the launching session until it exits, and
+# launches (`onepipeline flow run`), owned by the launching session until it exits, and
 # prints that flow's id beside the `just watch --flow <ID>` that watches it on standard
 # error — before the attached run's own watch command — so arming it is one copy-paste. A
 # `--detach` launch ends the flow as it hands back; its run is then owed on its own, which
@@ -131,7 +129,7 @@
 set -euo pipefail
 
 #: The project this launch writes says what it is: the one-node project a follow-ups launch
-#: writes, bounded to the node below. `orchestrator/design_approval.py` is the one reader.
+#: writes, bounded to the node below. 
 FOLLOW_UPS_METADATA='{"orchestrator.plan-kind": {"kind": "follow-ups", "nodes": ["follow-ups"]}}'
 
 #: The node, its persona ref (resolved against `graphs/`), and the graph it runs under
@@ -159,14 +157,16 @@ SUFFIX="-follow-ups"
 #: What one count the inventory answers with is: a non-negative whole number.
 COUNT='^[0-9]+$'
 
-#: Creates the project with no task yet through the store and prints the id the store
-#: wrote it under. Written again under the same id, the store's writer retires every task
-#: the project already held first (`orchestrator/plan_records.py`), so a re-dispatch never
-#: launches the previous pass's node beside the one created next.
+#: Creates the project with no task yet through the store's own `project create` and prints
+#: the id the store wrote it under. Written again under the same id, the project and every
+#: task record already filed under it are retired first, so a re-dispatch never launches the
+#: previous pass's node beside the one created next.
 PROJECT_PROGRAM='
-import json, pathlib, sys
+import json, pathlib, re, sys
 
-from orchestrator.plan_records import write_plan_project
+import yaml
+
+from orchestrator import plan_store
 
 (root, native, name, run, metadata, mode) = sys.argv[1:7]
 goal = (
@@ -174,12 +174,39 @@ goal = (
     if mode == "feedback"
     else f"Verify the follow-up drafts run {run} left, and put the verified tickets on the board"
 )
-plan = {"schema_version": 3, "goal": {"text": goal}, "name": name, "tasks": []}
-print(
-    write_plan_project(
-        pathlib.Path(root), plan, native_id=native, project_metadata=json.loads(metadata)
+root = pathlib.Path(root)
+project = re.sub(r"[^a-z0-9-]+", "-", native.lower()).strip("-")
+root.mkdir(parents=True, exist_ok=True)
+(root / "projects" / f"{project}.md").unlink(missing_ok=True)
+for record in sorted((root / "tasks").rglob("*.md")):
+    text = record.read_text(encoding="utf-8")
+    front, closed, _ = text[4:].partition("\n---") if text.startswith("---\n") else ("", "", "")
+    try:
+        fields = yaml.safe_load(front) if closed else None
+    except yaml.YAMLError:
+        fields = None
+    if isinstance(fields, dict) and fields.get("project") == project:
+        record.unlink()
+fields = {"onepipeline.schema_version": 3, "onepipeline.goal": {"text": goal}}
+fields |= json.loads(metadata)
+plan_store.complete(
+    plan_store.sdk(
+        plan_store.client().project_create(
+            "plan-records",
+            project,
+            name,
+            body=f"Execution plan {project}.",
+            status="todo",
+            metadata=[f"{key}={json.dumps(value)}" for key, value in fields.items()],
+            set=[
+                "sources.plan-records.plugin=local-md",
+                f"sources.plan-records.config.root={root.resolve()}",
+                "sources.plan-records.visibility=private",
+            ],
+        )
     )
 )
+print(project)
 '
 
 usage="just follow-ups <run-id> [--feedback FILE] [--unanswered] [--comments] [--detach] [--to SOURCE]"
@@ -211,8 +238,83 @@ load() {
     fi
 }
 
-# shellcheck source=scripts/plan-brief.sh
-load plan-brief.sh
+# What this launcher used from scripts/plan-brief.sh and scripts/launch-flow.sh, which the
+# planning cutover deleted, kept here verbatim until aio-followups-cutover replaces this
+# script.
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The run-id grammar this launcher took from scripts/plan-brief.sh, which the planning cutover deleted, copied as the smallest change the task ruled for each follow-ups file; aio-followups-cutover replaces both launchers, which is when the copies go.
+PLAN_SAFE_RUN_ID='^[A-Za-z0-9_][A-Za-z0-9_-]*$'
+PLAN_RUNS_ROOT_ENV="ONEPIPELINE_RUNS_DIR"
+PLAN_DEFAULT_RUNS_ROOT="runs"
+PLAN_RUN_ID_ENV="ONEPIPELINE_RUN_ID"
+PLAN_DIRECT_PLACEMENT_NOTE="
+
+## Additional info
+
+**This dispatch works in a checkout it does not own, so it commits nothing.** It is a
+direct node, dispatched into the checkout the flow was launched from — the shared
+canonical checkout that several orchestrators use — rather than into a worktree of its
+own. So it may write only to gitignored paths, may not commit, may not cut a branch, and
+may not leave the checkout on any branch but its base.
+
+That exempts it from one clause of the shared completion bar every dispatch on this host
+is judged against — \"with every change this dispatch made committed and nothing
+half-applied left behind\". Here there is nothing to commit, and a clean \`git status\` is
+the correct and complete outcome: what this dispatch writes to a gitignored path is the
+deliverable, and committing it would be the failure rather than the proof."
+plan_launch_blanks() {
+    PLAN_LAUNCH_BLANKS=()
+    local flag argument named
+    for flag in --success-hook --failure-hook --pr-author-graph; do
+        named=false
+        for argument in "$@"; do
+            case "$argument" in
+                "$flag" | "$flag"=*) named=true ;;
+            esac
+        done
+        [ "$named" = true ] || PLAN_LAUNCH_BLANKS+=("$flag=")
+    done
+}
+LAUNCH_FLOW_ENTERED_ENV=ORCHESTRATOR_FLOW_ENTERED
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] A verbatim copy of the one function this launcher used from scripts/launch-flow.sh, which the planning cutover deleted; the task ruled the smallest change in each follow-ups file, and aio-followups-cutover replaces both launchers, which is when the copy goes.
+run_in_launch_flow() {
+    local caller=${1:?run_in_launch_flow: the name of the calling launcher is required, so its diagnostics stay attributable}
+    local name=${2:?run_in_launch_flow: the name of the flow is required}
+    local program=${3:?run_in_launch_flow: the launcher to re-execute is required}
+    shift 3
+    name=${name//[^A-Za-z0-9._-]/-}
+    local entered=${!LAUNCH_FLOW_ENTERED_ENV-}
+    unset "$LAUNCH_FLOW_ENTERED_ENV"
+    local asked=${entered%%:*}
+    if [ -n "$entered" ] && { [ "$asked" = "$PPID" ] || [ "$asked" = "$$" ]; }; then
+        local before=${entered#*:}
+        if [[ "${ONEPIPELINE_FLOW:-}" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$ONEPIPELINE_FLOW" != "$before" ]; then
+            echo "flow $ONEPIPELINE_FLOW: watch it with: just watch --flow $ONEPIPELINE_FLOW" >&2
+        fi
+        return 0
+    fi
+    local here
+    if ! here=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); then
+        echo "$caller: the engine wrapper could not be resolved from this checkout; run the launch from inside a checkout, so the flow it enters is that checkout's engine's" >&2
+        return 2
+    fi
+    local engine="${here%/scripts}/node_modules/.bin/onepipeline"
+    if [ ! -x "$engine" ]; then
+        echo "$caller: this checkout has no engine at $engine, so no launch flow can hold a session for this launch; run 'just bootstrap' to install the pinned engine, then retry" >&2
+        return 2
+    fi
+    shopt -s execfail
+    local status errexit=
+    [[ $- == *e* ]] && errexit=1
+    export "$LAUNCH_FLOW_ENTERED_ENV=$$:${ONEPIPELINE_FLOW:-}"
+    set +e
+    exec "$here/onepipeline.sh" flow run --name "$name" -- "$program" "$@"
+    status=$?
+    [ -n "$errexit" ] && set -e
+    unset "$LAUNCH_FLOW_ENTERED_ENV"
+    echo "$caller: the engine wrapper $here/onepipeline.sh could not be run (status $status), so no flow was entered; restore it from the repository or run 'just bootstrap', then retry" >&2
+    return 2
+}
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 # Kept whole for re-executing this launcher inside its flow, below, after the parse has
 # consumed them.
@@ -436,8 +538,10 @@ if [ -z "$board" ]; then
 else
     configured=0
     "$python" -c 'import sys
-from orchestrator import design_approval
-sys.exit(0 if sys.argv[1] in design_approval.configured_sources() else 3)' "$board" || configured=$?
+from orchestrator import plan_store
+settings = plan_store.sdk(plan_store.client().config_show()).settings
+named = {parts[1] for one in settings if len(parts := one.key.model_dump().split(".")) > 1 and parts[0] == "sources"}
+sys.exit(0 if sys.argv[1] in named else 3)' "$board" || configured=$?
     case "$configured" in
         0) ;;
         3) fail "--to names '$board', which this checkout's plan store configures no source for" \
@@ -458,14 +562,48 @@ done
 # Every ending that launches nothing is behind it, so the flow starts here, named for the
 # run it will launch, and holds the session until the account is checked. A `--detach`
 # launch ends it as it hands back, leaving its run owed on its own.
-# shellcheck source=scripts/launch-flow.sh
-load launch-flow.sh
 run_in_launch_flow follow-ups "$follow_up_run" "$script_dir/follow-ups.sh" "${launch_arguments[@]}"
 
 export "$PLAN_RUN_ID_ENV=$follow_up_run"
 
-# shellcheck source=scripts/plan-root-env.sh
-load plan-root-env.sh
+# What this launcher used from the plan-root helper the planning cutover deleted, kept here
+# verbatim for the same reason.
+PLAN_AUTHORING_SOURCE="authoring"
+PLAN_AUTHORING_ROOT_ENV="ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT"
+PLAN_AUTHORING_PLUGIN_ENV="ONETASKGRAPH_SOURCES__AUTHORING__PLUGIN"
+PLAN_AUTHORING_PLUGIN="local-md"
+PLAN_AUTHORING_ROOT_PROGRAM='
+import sys
+
+from orchestrator import plan_store
+
+try:
+    sys.stdout.write(str(plan_store.ensure_writable_source_root(sys.argv[1])))
+except OSError as exc:
+    sys.stderr.write(str(exc))
+    raise SystemExit(1)
+'
+export_plan_authoring_root() {
+    local caller=${1:?export_plan_authoring_root: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, the way this launcher passes follow-ups, then retry}
+    local here python root
+    if ! here=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd); then
+        echo "$caller: this checkout could not be resolved, so the plan store it configures could not be read; run the launch from a readable checkout, then retry" >&2
+        return 2
+    fi
+    python="$here/.venv/bin/python3"
+    [ -x "$python" ] || python=python3
+    if ! root=$(cd -- "$here" && PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" "$python" -c "$PLAN_AUTHORING_ROOT_PROGRAM" "$PLAN_AUTHORING_SOURCE" 2>&1); then
+        echo "$caller: the '$PLAN_AUTHORING_SOURCE' plan source could not be resolved to a writable root: ${root:-the resolution reported nothing}" >&2
+        echo "$caller: repair that source in $here/onetaskgraph.yaml, or point $PLAN_AUTHORING_ROOT_ENV at a directory this launch may write into; if the resolution could not run at all, provision this checkout with 'just bootstrap'. Then retry" >&2
+        return 2
+    fi
+    if [[ ! -v "$PLAN_AUTHORING_ROOT_ENV" ]]; then
+        export "$PLAN_AUTHORING_ROOT_ENV=$root"
+    fi
+    if [[ ! -v "$PLAN_AUTHORING_PLUGIN_ENV" ]]; then
+        export "$PLAN_AUTHORING_PLUGIN_ENV=$PLAN_AUTHORING_PLUGIN"
+    fi
+}
 export_plan_authoring_root follow-ups || exit "$?"
 plan_root=${!PLAN_SOURCE_ROOT_ENV}
 
@@ -597,8 +735,8 @@ written=$("$python" -c "$PROJECT_PROGRAM" "$plan_root" "$project_native" "$follo
     fail "the follow-ups project for run '$run' could not be written under $plan_root" \
         "restore the pinned toolchain with 'just bootstrap', then retry"
 
-# The answer is `write_plan_project`'s own return, whose shape `plan_records._slug` is the
-# one definition of, so an empty answer is the one thing left for this launch to refuse.
+# The answer is the project id the program above wrote, whose slug it is the one definition
+# of, so an empty answer is the one thing left for this launch to refuse.
 # llmlint: ignore[boundary_inputs_validated] The value is this repository's own writer's return, taken in the process that wrote it; restating its slug shape here is the second source `contracts_have_one_source_or_a_drift_gate` forbids.
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when the pinned toolchain's writer returns without naming the project it wrote; no journey can produce that without doubling the writer, which the suite never does.
 [ -n "$written" ] ||
@@ -641,7 +779,7 @@ if [ "$detached" -eq 1 ]; then
     # The engine's own launch record goes to standard error, so standard output is the two
     # lines below and nothing else.
     # llmlint: ignore[tool_output_is_signal, robust_shell] The engine's launch record is kept for an operator reading standard error, and standard output carries only the two lines the success hook relays; `${grouping[@]+"${grouping[@]}"}` is the `set -u` idiom for a possibly-empty array, whose `+` part alone is unquoted, measured to keep every element one argument.
-    "$script_dir/onepipeline.sh" start "$project" --dag-graph off --detach --label kind=follow-ups ${grouping[@]+"${grouping[@]}"} "${closeout_hooks[@]}" "${PLAN_LAUNCH_BLANKS[@]}" >&2 || launched=$?
+    "$script_dir/onepipeline.sh" start "$project" --launch-config "$script_dir/../config/onepipeline.workflows.yaml" --dag-graph off --detach --label kind=follow-ups ${grouping[@]+"${grouping[@]}"} "${closeout_hooks[@]}" "${PLAN_LAUNCH_BLANKS[@]}" >&2 || launched=$?
     [ ! -f "$runs_root/$follow_up_run/launch.json" ] || hook_handed_off=1
     if [ "$launched" -ne 0 ]; then
         echo "follow-ups: the detached launch of run $follow_up_run over run $run failed; the diagnostic above names why" >&2
@@ -666,7 +804,7 @@ status=0
 # once and their answer is this recipe's exit status.
 plan_launch_blanks
 # llmlint: ignore[tool_output_is_signal, robust_shell] This is an attached launch, so streaming the run as it goes is what the operator stays attached for; `${grouping[@]+"${grouping[@]}"}` is the `set -u` idiom for a possibly-empty array, whose `+` part alone is unquoted, measured to keep every element one argument.
-"$script_dir/onepipeline.sh" start "$project" --dag-graph off --label kind=follow-ups ${grouping[@]+"${grouping[@]}"} "${PLAN_LAUNCH_BLANKS[@]}" || status=$?
+"$script_dir/onepipeline.sh" start "$project" --launch-config "$script_dir/../config/onepipeline.workflows.yaml" --dag-graph off --label kind=follow-ups ${grouping[@]+"${grouping[@]}"} "${PLAN_LAUNCH_BLANKS[@]}" || status=$?
 
 # With no judge, this is what holds the output to its shape. Initial mode runs the closeout
 # a detached launch's run-end hook runs, which names each refusal and keeps itself and its

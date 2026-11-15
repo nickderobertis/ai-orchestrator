@@ -307,7 +307,7 @@ NO_VERSION = "none"
 BOUNDARY_FILE = "boundary.txt"
 
 #: The board's watermark under the feedback directory. A leading dot keeps it out of the
-#: run ids `scripts/plan-brief.sh` admits, so no run's directory can take its name.
+#: run ids `scripts/follow-ups.sh` admits, so no run's directory can take its name.
 WATERMARK = ".watermark-{board}.json"
 WATERMARK_SCHEMA = 1
 
@@ -378,9 +378,9 @@ WATERMARK_KEYS = Watermark._fields
 #: next gathering reaching back over it reads that comment again rather than never.
 OVERLAP = timedelta(minutes=15)
 
-#: A run id `scripts/follow-ups.sh` launches, which is `scripts/plan-brief.sh`'s
-#: `PLAN_SAFE_RUN_ID`: narrower than a store record's component, so an issue whose record names
-#: a run outside it is one no launch here could answer.
+#: A run id `scripts/follow-ups.sh` launches, which is its `PLAN_SAFE_RUN_ID`: narrower than
+#: a store record's component, so an issue whose record names a run outside it is one no
+#: launch here could answer.
 #: `tests/plan_tooling/follow_ups/test_follow_ups_answer_comments_recipe_e2e.py` holds the
 #: two spellings to one grammar.
 LAUNCHABLE_RUN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*")

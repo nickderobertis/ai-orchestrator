@@ -14,10 +14,10 @@ channel-reply` to edit and attest, `just status` to read the run, and `just orch
 The run is an approval with one agent node behind it, launched with `--dag-graph off` so
 nothing but this journey writes to its channel. The launch hands the run back paused at
 the approval. Everything is real — the recipes, the `onepipeline` beneath them, the
-envelope reviewer `config/onepipeline.launch.yaml` names, and the run's own records. Only
-the paid model is doubled, where every launch journey here doubles it: the dispatched
-nodes' turns, and the one judged review turn the validator spends on the added node's
-task, scripted to pass.
+plan-edit hook `config/onepipeline.launch.yaml` names, and the run's own records. Only the
+paid model is doubled, where every launch journey here doubles it: the dispatched nodes'
+turns, and the judged review the plan-edit hook spends on the added node's task, scripted
+to pass.
 """
 
 # The same answers
@@ -51,7 +51,6 @@ from test_orchestrate_launch_e2e import (
 from test_orchestrate_launch_e2e import _environment as _launched_environment
 from waits import timeout as e2e_timeout
 
-from orchestrator.plan_review import Verdict
 from orchestrator.root import REPO_ROOT
 from orchestrator.run_reading import Decided, Decision, RunId, decide
 
@@ -66,8 +65,10 @@ PREREQUISITE = "prepare"
 #: `just channel-reply`'s exit status for a reply refused with nothing appended.
 REFUSED = 2
 
-#: The judged review's verdict on the added node's task, as the doubled provider gives it.
-PASSING_VERDICT: Verdict = {"passes": True, "findings": []}
+#: The judged review's verdict on the added node's task, as the doubled provider gives it:
+#: the judge-only run's supervisor decision, a pass. The plan checklist's llmlint batches
+#: are answered apart from it, every rule holding (`tests/e2e/fake_codex.py`).
+PASSING_VERDICT = {"completion": True, "reason": "the stand-in reviewer passes it"}
 
 
 def _task(what: str) -> str:
@@ -178,7 +179,7 @@ def paused(tmp_path: Path, oneharness_bin: str) -> Iterator[PausedRun]:
     # journey here doubles it.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment = _launched_environment(tmp_path, oneharness_bin, session=LAUNCHING_SESSION)
-    # The judged review turn the validator spends on the added node's task.
+    # The judged review the plan-edit hook spends on the added node's task.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider's answer is scripted.
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(PASSING_VERDICT)])
     plan = tmp_path / "reparent-waiting-human.plan.json"

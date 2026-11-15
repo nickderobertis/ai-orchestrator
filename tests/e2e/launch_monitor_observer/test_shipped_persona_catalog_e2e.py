@@ -27,10 +27,10 @@ from pathlib import Path
 import plan_root_variable
 import pytest
 import short_state
+from project_fixtures import write_plan_project
 from waits import timeout as e2e_timeout
 
 from orchestrator import npm_installs
-from orchestrator.plan_records import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: The roles this repository's prose says `oneagentgraph` compiles in. Stated here as

@@ -68,21 +68,20 @@ source and it is this file: what a dispatch that changed nothing tracked owes, a
 piece's checks are run. The removal side is `tests/test_shared_dispatch_bar.py`'s. A
 third is new to both — a process must finish inside the turn that started it.
 
-`tests/test_criteria_guard.py` proves the guard that reads this file; here the subject
-is the file itself, which is why these belong to the tier keyed on this repository's
-prose. `tests/e2e/launch_monitor_observer/test_dispatched_operational_notes_e2e.py` is the
-other half and reads the same rules out of the prompt a really dispatched worker was handed,
-which is where they either arrive or do not.
+Here the subject is the file itself, which is why these belong to the tier keyed on this
+repository's prose. `tests/e2e/launch_monitor_observer/test_dispatched_operational_notes_e2e.py`
+is the other half and reads the same rules out of the prompt a really dispatched worker was
+handed, which is where they either arrive or do not.
 """
 
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
-from orchestrator import envelope_review
-from orchestrator.criteria_guard import APPENDIX, AUTHORIZATIONS
 from orchestrator.root import REPO_ROOT
 
 # The one drift gate left directly under `tests/`, and so in `orchestrator:test-docs`'s
@@ -94,6 +93,13 @@ from orchestrator.root import REPO_ROOT
 # examples and fixtures, and every plan on this host rendered but not yet launched. That
 # move waits for a change scheduled when nothing here is waiting to launch.
 pytestmark = pytest.mark.reads_docs
+
+#: The operational text every dispatched task carries, by way of the `plan-task`
+#: template that includes it.
+APPENDIX = Path("templates") / "dispatch-appendix.md"
+
+#: The planner's prompt, which tells a planner the words a task grants a carve-out in.
+PLANNER = REPO_ROOT / "personas" / "planner.yaml"
 
 #: The definition this file used to carry, asserted absent. Kept as the shape it had,
 #: because that is what a reintroduction would look like.
@@ -743,7 +749,7 @@ def test_the_appendix_states_no_behaviour_specific_to_the_judged_lint_tier(
     The paragraph that led *the judged lint tier is nondeterministic* told a worker to
     clear the findings it named and then stop, never re-running for a clean sheet, while
     every implementation node's criteria demand that tier green over the finished tree.
-    A worker cannot obey both: `docs/plan-review-refusals.json` classified the tension
+    A worker cannot obey both: the plan review's refusal corpus classified the tension
     `left-to-the-judge` for two weeks and two nodes of one run were amended live over it.
     What governs the tier is the rerun rule the file opens with, so the file says nothing
     of its own about stopping or re-running it, and keeps the one sentence that was
@@ -1329,24 +1335,13 @@ def test_the_appendix_says_whose_ruling_binds_and_how_a_managers_is_declined(
 
 def test_the_appendix_quotes_the_attribution_lines_the_engine_writes(appendix: str) -> None:
     """How a reader tells the two parties apart is the attribution the engine renders, so
-    the lines the appendix quotes are the engine's own — held through
-    `orchestrator.envelope_review`, whose restatement `tests/test_engine_contracts.py` holds
-    to the engine's `ruling.rs` at the pinned release."""
+    the rule on rulings quotes both lines; `tests/test_engine_contracts.py` holds each quote
+    to the sentence the engine's `ruling.rs` writes at the pinned release."""
     paragraph = _paragraph(appendix, WHOSE_RULING)
-    for quoted, written in (
-        (
-            "Ruling from the user, relayed by the manager: it binds.",
-            envelope_review.USER_ATTRIBUTION,
-        ),
-        (
-            "Ruling from the manager (ruling reference",
-            envelope_review.manager_attribution(envelope_review.RulingReference("c0.0")),
-        ),
+    for quoted in (
+        "Ruling from the user, relayed by the manager: it binds.",
+        "Ruling from the manager (ruling reference",
     ):
-        assert written.startswith(quoted), (
-            f"the engine attributes a ruling as {written!r}, which {APPENDIX}'s quote "
-            f"{quoted!r} no longer opens"
-        )
         assert quoted in paragraph, f"{APPENDIX} no longer quotes {quoted!r}:\n{paragraph}"
 
 
@@ -1556,29 +1551,63 @@ def test_the_publication_rule_keeps_its_rule_and_states_the_two_carve_outs(
         assert expectation.search(paragraph), f"{APPENDIX}'s carve-out no longer states {missing}"
 
 
-def test_each_carve_out_opens_on_the_grant_the_criteria_guard_reads(appendix: str) -> None:
-    """The words a task grants a carve-out in are the words `just check-plan` reads.
+class Grant(NamedTuple):
+    """One carve-out a task grants in its own `## Additional info`."""
 
-    `orchestrator/criteria_guard.py` admits a criterion about the worker's draft, or about
-    a demonstration change request, only for a task whose own `## Additional info` grants
-    it — and it reads the grant by the carve-out's own words. So each carve-out here has
-    to open on a sentence that grant pattern matches: a planner told to write "in the
-    words the appendix names" would otherwise write words the guard does not read, and
-    the plan would be refused for a criterion its task had granted.
+    #: What it is, for the failure message.
+    name: str
+    #: The words `personas/planner.yaml` tells a planner to grant it in, as it quotes them.
+    words: str
+    #: How the appendix's carve-out reads that grant, in the carve-out's own wording.
+    granted_by: re.Pattern[str]
+
+
+GRANTS = (
+    Grant(
+        "a demonstration change request",
+        "a throwaway demonstration change request is authorized",
+        re.compile(
+            r"\bauthori[sz]e\w*(?: [\w'’]+){0,3} (?:throwaway )?demonstration change request"
+            r"|\bdemonstration change request(?: [\w'’]+){0,3} (?:is |are )?authori[sz]e\w*"
+        ),
+    ),
+    Grant(
+        "early publication",
+        "the change request may be published early",
+        re.compile(r"\bchange request may be published early\b"),
+    ),
+)
+
+
+def test_each_carve_out_opens_on_the_grant_the_planner_is_told_to_write(appendix: str) -> None:
+    """The words a task grants a carve-out in are the words the planner writes it in.
+
+    The plan review admits a criterion about the worker's draft, or about a demonstration
+    change request, only for a task whose own `## Additional info` grants it, and
+    `personas/planner.yaml` tells a planner to grant each in the carve-out's own words. So
+    each carve-out here has to open on the grant the planner quotes: a planner told to
+    write words the carve-out does not open on grants something no worker reads it was
+    granted.
     """
     rule = PUBLICATION_RULE.search(appendix)
     assert rule, f"{APPENDIX} no longer states that publication goes through the harness"
     paragraph = appendix[rule.start() : appendix.find("\n\n**", rule.end() + 1)]
     grants = [" ".join(found["grant"].split()) for found in CARVE_OUT.finditer(paragraph)]
-    assert len(grants) == len(AUTHORIZATIONS), (
+    assert len(grants) == len(GRANTS), (
         f"{APPENDIX} opens {len(grants)} carve-outs on the task's own `## Additional info` "
-        f"and the criteria guard reads {len(AUTHORIZATIONS)} authorizations: {grants}"
+        f"and the planner is told to write {len(GRANTS)} grants: {grants}"
     )
-    for authorization in AUTHORIZATIONS:
-        assert any(authorization.granted_by.search(grant) for grant in grants), (
-            f"{APPENDIX}'s carve-outs open on {grants}, none of which is the wording the "
-            f"criteria guard reads a grant of {authorization.name} by — a task writing "
-            f"{authorization.grant!r} would be granting something this file does not name"
+    planner = " ".join(PLANNER.read_text(encoding="utf-8").split())
+    for grant in GRANTS:
+        assert f"*{grant.words}*" in planner, (
+            f"{PLANNER.relative_to(REPO_ROOT)} no longer tells a planner to grant "
+            f"{grant.name} as {grant.words!r}"
+        )
+        assert grant.granted_by.search(grant.words), grant
+        assert any(grant.granted_by.search(opened) for opened in grants), (
+            f"{APPENDIX}'s carve-outs open on {grants}, none of which is the wording a "
+            f"planner grants {grant.name} in — a task writing {grant.words!r} would be "
+            "granting something this file does not name"
         )
 
 

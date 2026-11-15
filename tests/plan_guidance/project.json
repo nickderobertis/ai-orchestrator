@@ -10,12 +10,10 @@
   "implicitDependencies": [
     "support-boundary-home",
     "support-conftest",
-    "support-fake-codex",
     "support-follow-up-boundary",
     "support-follow-up-ticket-shape",
     "support-follow-up-variables",
     "support-github-board",
-    "support-no-paid-provider",
     "support-nx-inputs",
     "support-onejudge-bundle",
     "support-onetaskgraph-user-layer",
@@ -23,7 +21,6 @@
     "support-plan-fixture-source",
     "support-plan-root-variable",
     "support-plan-sources",
-    "support-project-fixtures",
     "support-published-tools",
     "support-registered-checkouts",
     "support-short-state",
@@ -48,11 +45,8 @@
       "{workspaceRoot}/scripts/**/*",
       "{workspaceRoot}/templates/**/*",
       "{workspaceRoot}/orchestrator/**/*",
-      "{workspaceRoot}/tests/fixtures/design-doc-why/**/*",
       "{workspaceRoot}/tests/fixtures/cycle-time/**/*",
       "{workspaceRoot}/tests/test_follow_up_tickets.py",
-      "{workspaceRoot}/tests/test_design_doc_template.py",
-      "{workspaceRoot}/tests/test_design_approval.py",
       "{workspaceRoot}/tests/plan_guidance/**/*"
     ]
   },

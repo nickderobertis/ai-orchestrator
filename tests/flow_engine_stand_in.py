@@ -1,6 +1,6 @@
 """The engine a copied checkout enters its launch flow through, with only `flow run` doubled.
 
-`scripts/plan.sh` and the other launchers re-execute themselves inside the engine's
+`scripts/follow-ups.sh` and the other launchers re-execute themselves inside the engine's
 `onepipeline flow run` before they write anything, through the real `scripts/onepipeline.sh`,
 and refuse when the checkout has no engine at the command its `node_modules/.bin`
 holds (`orchestrator.npm_installs.ENGINE`). A journey that copies a launcher into a checkout

@@ -23,11 +23,10 @@ first real dispatch, and every phase below fails with it.
 
 **The board is a second local store and never the live `followups` board.** It is added
 through the store's own `ONETASKGRAPH_SOURCES__` environment layer and named to the recipe
-with `--to`, the way `tests/plan_tooling/plan_copy/test_copy_plan_recipe_e2e.py` stands a
-local store in for `plans`: a journey that wrote to the live board would leave issues behind
-on the one board every session's tickets accumulate on. The drafts root and the
-plan-authoring root are stated to the launch for the same reason, so nothing lands in this
-checkout's own stores.
+with `--to`, the way `tests/e2e/planning/` stands a local store in for `plans`: a journey
+that wrote to the live board would leave issues behind on the one board every session's
+tickets accumulate on. The drafts root and the plan-authoring root are stated to the launch
+for the same reason, so nothing lands in this checkout's own stores.
 
 One module fixture drives every phase in order, because they are readings of one run's
 life: its drafts verified once, then re-dispatched with the manager's feedback over the same
@@ -82,9 +81,6 @@ from waits import timeout as e2e_timeout
 from waits import until
 
 from orchestrator import follow_up_tickets as tickets
-from orchestrator import plan_check
-from orchestrator.plan_budgets import Direction
-from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import WRITABLE_PLUGIN, NodeId
 from orchestrator.record_shapes import frontmatter
 from orchestrator.root import REPO_ROOT
@@ -174,7 +170,13 @@ INHERITED = (
     # The suite's session-wide opt-out for hand-written fixture plans, which the follow-up
     # task is not: it is rendered from `follow-up-task`, so these launches run under the
     # `require_rendered` default every launch outside the suite does.
-    plan_check.REQUIRE_RENDERED_ENV,
+    "ONEPIPELINE_REQUIRE_RENDERED",
+)
+
+#: The launch config every follow-ups launch names, as `scripts/follow-ups.sh` spells it beside
+#: itself: this host's workflow runs carry no launch check, plan-edit hook or run-end hook.
+WORKFLOWS_LAUNCH_CONFIG = (
+    f"{delegation_checkout.CHECKOUT}/scripts/../config/onepipeline.workflows.yaml"
 )
 
 #: The interpreter the recipe spells into every `-m orchestrator.follow_up_tickets` command
@@ -1208,8 +1210,6 @@ class Followed(NamedTuple):
     detached_run: str
     mine: subprocess.CompletedProcess[str]
     driving: subprocess.CompletedProcess[str]
-    exempt_gate: subprocess.CompletedProcess[str]
-    tampered_gate: subprocess.CompletedProcess[str]
 
 
 class Turn(NamedTuple):
@@ -1979,44 +1979,6 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         mine = _run(["just", "runs", "--mine"], bench)
         driving = _run(["just", "follow-ups", detached_run, "--to", BOARD], bench)
 
-        # The exemption, read by the gate itself: the recipe's own project, and a copy of it
-        # that gained a second node under the same stamp.
-        project = f"follow-up-runs:{main}{SUFFIX}"
-        exempt_gate = _run(
-            [str(REPO_ROOT / ".venv" / "bin" / "orchestrator-launch-gate"), project], bench
-        )
-        plan = _launched_plan(bench, second.run)
-        tasks = plan["tasks"]
-        assert isinstance(tasks, list)
-        write_plan_project(
-            bench.plans,
-            {
-                "schema_version": 3,
-                "goal": {"text": "a follow-ups project somebody added work to"},
-                "name": f"{main}-tampered",
-                "tasks": [
-                    {
-                        key: value
-                        for key, value in tasks[0].items()
-                        if key in ("id", "persona", "agent_graph", "task")
-                    },
-                    {
-                        "id": "work-somebody-added",
-                        "persona": PERSONA,
-                        "task": "## What\nMore work.\n",
-                    },
-                ],
-            },
-            native_id=f"{main}-tampered",
-            project_metadata={"orchestrator.plan-kind": {"kind": "follow-ups", "nodes": [NODE]}},
-        )
-        tampered_gate = _run(
-            [
-                str(REPO_ROOT / ".venv" / "bin" / "orchestrator-launch-gate"),
-                f"follow-up-runs:{main}-tampered",
-            ],
-            bench,
-        )
         return Followed(
             bench=bench,
             main=main,
@@ -2083,8 +2045,6 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             detached_run=detached_run,
             mine=mine,
             driving=driving,
-            exempt_gate=exempt_gate,
-            tampered_gate=tampered_gate,
         )
     finally:
         released.touch()
@@ -2439,10 +2399,6 @@ def test_the_recipe_launches_one_direct_node_under_the_graph_that_settles_on_the
     )
     results = _run(["just", "results", first.run], followed.bench)
     assert re.search(rf"^\s+{NODE}\s+done$", results.stdout, re.MULTILINE), results.stdout
-    assert (
-        f"launch-gate: follow-up-runs:{followed.main}{SUFFIX} "
-        "is the project a follow-ups launch writes" in first.result.stderr
-    ), first.result.stderr
 
 
 def test_the_members_turn_runs_on_codex_and_runs_commands_from_a_directory_no_repository_holds(
@@ -2639,14 +2595,15 @@ def test_the_launched_task_was_created_from_the_template_and_is_exactly_its_rend
     assert stored.checked.returncode == OK, stored.checked.stdout + stored.checked.stderr
     assert f"item {stored.tasks[0]}: ok" in stored.checked.stdout, stored.checked.stdout
     assert stored.content == stored.rerendered
-    # The note is read where the recipe reads it: sourced out of `scripts/plan-brief.sh`.
+    # The note is read where the recipe holds it: its own assignment in `scripts/follow-ups.sh`.
     note = subprocess.run(
         [
             "bash",
             "-c",
-            '. "$1"; printf %s "$PLAN_DIRECT_PLACEMENT_NOTE"',
+            'eval "$(sed -n \'/^PLAN_DIRECT_PLACEMENT_NOTE="/,/"$/p\' "$1")"; '
+            'printf %s "$PLAN_DIRECT_PLACEMENT_NOTE"',
             "_",
-            str(REPO_ROOT / "scripts" / "plan-brief.sh"),
+            str(REPO_ROOT / "scripts" / "follow-ups.sh"),
         ],
         text=True,
         capture_output=True,
@@ -3327,8 +3284,10 @@ def test_a_detached_launch_returns_at_once_with_two_lines_and_a_run_its_session_
     assert followed.detached_turn_in_flight, "the detached launch waited for its turn"
     launch = json.loads((followed.bench.runs / run / "launch.json").read_text("utf-8"))
     assert launch["session"] == LAUNCHING_SESSION
-    # Named by `scripts/onepipeline.sh` on the recipe's behalf, which names none itself.
-    assert launch["require_rendered"] is True, launch
+    # The recipe launches under `config/onepipeline.workflows.yaml`, whose `require_rendered`
+    # is `false`: the follow-ups node is created from its template by the store, and the
+    # engine records the document's answer.
+    assert launch.get("require_rendered", False) is False, launch
     assert followed.mine.returncode == 0, followed.mine.stderr
     assert re.search(rf"^\*?\s*{re.escape(run)}\s+\[mine\]", followed.mine.stdout, re.MULTILINE), (
         followed.mine.stdout
@@ -3677,18 +3636,6 @@ def test_a_run_whose_driver_is_gone_with_work_ready_is_refused_naming_adopt_and_
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
-
-
-def test_the_exemption_holds_only_while_the_stamp_names_exactly_the_one_node(
-    followed: Followed,
-) -> None:
-    assert followed.exempt_gate.returncode == 0, followed.exempt_gate.stderr
-    assert "is the project a follow-ups launch writes" in followed.exempt_gate.stderr
-
-    tampered = followed.tampered_gate
-    assert tampered.returncode == 1, tampered.stdout + tampered.stderr
-    assert "1 task(s) that launch never wrote (work-somebody-added)" in tampered.stderr
-    assert "nothing was dispatched" in tampered.stderr
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This test launches nothing: it
@@ -4637,7 +4584,7 @@ def _launchable(tmp_path: Path) -> tuple[Path, Path, Path]:
 def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_free_run_id(
     tmp_path: Path,
 ) -> None:
-    """`just follow-ups run-1` writes `follow-up-runs:run-1-follow-ups` and launches it, gated.
+    """`just follow-ups run-1` writes `follow-up-runs:run-1-follow-ups` and launches it.
 
     One direct node naming `graphs/follow-up.yaml`, launched on `--dag-graph off` with
     native budget closeout hooks. A second launch while a run root holds the first id launches
@@ -4651,11 +4598,10 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
         *(
             delegation_checkout.at(checkout, line)
             for line in (
-                "uv run orchestrator-launch-gate follow-up-runs:run-1-follow-ups --dag-graph off"
-                " --label kind=follow-ups",
                 delegation_checkout.ENGINE_VERSION,
-                f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
-                "follow-up-runs:run-1-follow-ups --dag-graph off --label kind=follow-ups",
+                f"{delegation_checkout.ENGINE} start follow-up-runs:run-1-follow-ups "
+                f"--launch-config {WORKFLOWS_LAUNCH_CONFIG} --dag-graph off "
+                "--label kind=follow-ups",
             )
         ),
     )
@@ -4849,11 +4795,10 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
         *(
             delegation_checkout.at(checkout, line)
             for line in (
-                "uv run orchestrator-launch-gate follow-up-runs:run-1-follow-ups --dag-graph off"
-                " --label kind=follow-ups",
                 delegation_checkout.ENGINE_VERSION,
-                f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
-                "follow-up-runs:run-1-follow-ups --dag-graph off --label kind=follow-ups",
+                f"{delegation_checkout.ENGINE} start follow-up-runs:run-1-follow-ups "
+                f"--launch-config {WORKFLOWS_LAUNCH_CONFIG} --dag-graph off "
+                "--label kind=follow-ups",
             )
         ),
     ]
@@ -4861,28 +4806,6 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
         encoding="utf-8"
     )
     assert _front_matter(project)["title"] == "Run-1-follow-ups", project
-    # The launch above is traced, so the id it named is handed to the real launch gate over
-    # the real store, which is the read that refused the capitalised id before; the store's
-    # configuration is what makes `authoring` a source the gate reads at all.
-    shutil.copy2(REPO_ROOT / "onetaskgraph.yaml", checkout / "onetaskgraph.yaml")
-    gated = subprocess.run(
-        [
-            Path(sys.executable).with_name("orchestrator-launch-gate"),
-            *shlex.split(traced[3].split("orchestrator-launch-gate", 1)[1]),
-        ],
-        cwd=checkout,
-        env=os.environ
-        | {
-            plan_root_variable.name(): str(checkout / ".plans"),
-            "ONETASKGRAPH_SOURCES__FOLLOW_UP_RUNS__CONFIG__ROOT": str(
-                checkout / ".follow-ups/runs"
-            ),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert gated.returncode == 0, gated.stderr
 
 
 def test_a_task_the_store_cannot_create_launches_nothing_and_the_next_launch_recovers(
@@ -5447,7 +5370,7 @@ def test_real_follow_ups_disposes_of_open_cancelled_and_changed_budget_causes(
     (publication / "budgets.yaml").write_text(yaml.safe_dump(spec))
     telemetry = _recorded_delivery_run(bench, main, REPOSITORY)
     standing = tickets.OverrunBudget(
-        tickets.Origin(REPOSITORY), "budgets.yaml", "delivery", 10, Direction.MAX
+        tickets.Origin(REPOSITORY), "budgets.yaml", "delivery", 10, tickets.Direction.MAX
     )
     causes = [
         "service-delivery-over-open",

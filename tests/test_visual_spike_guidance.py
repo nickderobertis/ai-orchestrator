@@ -1,7 +1,7 @@
 """The planner is told when and how to author the visual spike, and the writer how to restate it.
 
-A plan that changes what a user sees authors the reserved spike `orchestrator/spike_plan.py`
-names, whose before-and-after screenshots the design document shows. What a planner needs to
+A plan that changes what a user sees authors the reserved spike `spike-visual`, whose
+before-and-after screenshots the design document shows. What a planner needs to
 author it is judgment, so it lives in `personas/planner.yaml`'s spikes guidance, which travels
 into whatever repository is planned against; what the design-document writer needs is that the
 answer is quoted to it, never composed, which `personas/design-doc.yaml` says. This holds both
@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import re
 
+import pytest
 import yaml
 
-from orchestrator import spike_plan
 from orchestrator.root import REPO_ROOT
 
 PLANNER = REPO_ROOT / "personas" / "planner.yaml"
 DESIGN_DOC = REPO_ROOT / "personas" / "design-doc.yaml"
+
+#: The reserved id of the visual spike, which `AGENTS.md`'s plan flow names too.
+VISUAL_SPIKE = "spike-visual"
 
 #: The heading the planner's spikes guidance sits under, and the one after it.
 SPIKES = "## Spikes: measuring before the plan is final"
@@ -32,7 +35,7 @@ CAP_STATEMENT = re.compile(r"Give it `max_turns` no larger\s+than (\d+): a hard 
 
 #: One phrase per thing the guidance has to say, keyed by what it is.
 GUIDANCE = {
-    "the reserved id": f"authors one visual spike**, `{spike_plan.VISUAL_SPIKE}`",
+    "the reserved id": f"authors one visual spike**, `{VISUAL_SPIKE}`",
     "a web view": "a web app's pages or components",
     "a TUI": "a TUI",
     "a CLI's output": "a CLI's printed output",
@@ -40,7 +43,6 @@ GUIDANCE = {
     "capture first": "Check that each view can be captured before authoring it",
     "ask rather than improvise": "author no visual spike and ask the manager instead",
     "a reusable capture command first": "lands a reusable capture command",
-    "resume at spikes": "the flow resumes at its spikes stage",
     "minimal and mocked": "mocked or fixture data, the quickest hacky approach",
     "no verification": "no tests, no lint and no verification of any kind",
     "before from existing baselines": "existing baseline screenshots of its unchanged base",
@@ -84,7 +86,7 @@ def test_the_visual_spike_is_capped_at_forty_turns_as_a_hard_cap() -> None:
 def test_the_writer_is_told_visual_changes_is_quoted_by_its_task_and_never_composed() -> None:
     role = _flat(yaml.safe_load(DESIGN_DOC.read_text(encoding="utf-8"))["system_prompt"])
     assert "The budget answers and `visual_changes` are the parts you do not compose" in role
-    assert "task quotes `visual_changes` from the plan's visual spike report" in role, role
+    assert "Answer `visual_changes` from the plan's visual spike report" in role, role
     assert "giving each image with `--asset`" in role, role
 
 
@@ -100,3 +102,11 @@ def test_choice_guidance_is_authoritative_and_baselines_are_only_for_pairs() -> 
         "The planner can brief a choice; otherwise the spike agent decides per change." in guidance
     )
     assert 'For paired entries only, the "before"' in guidance
+
+
+@pytest.mark.reads_docs
+def test_the_manager_and_the_planner_name_the_same_reserved_visual_spike() -> None:
+    """The plan flow `AGENTS.md` states and the planner's guidance reserve one id."""
+    manager = _flat((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    assert f"`{VISUAL_SPIKE}`" in manager, "AGENTS.md no longer names the visual spike"
+    assert f"`{VISUAL_SPIKE}`" in _flat(_spikes_guidance())

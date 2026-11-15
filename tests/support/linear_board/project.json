@@ -11,7 +11,6 @@
       "{workspaceRoot}/tests/linear_board.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
-      "{workspaceRoot}/orchestrator/plan_units.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/onetaskgraph.yaml",
       "{workspaceRoot}/config/onetaskgraph.version",

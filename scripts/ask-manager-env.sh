@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # The ONE source of the ask-manager seam every launch puts in its dispatches'
-# environment, sourced by scripts/onepipeline.sh and scripts/plan.sh.
+# environment, sourced by scripts/onepipeline.sh for every `start` and `adopt`.
 #
 # `ORCHESTRATOR_ASK_MANAGER` holds the path of `scripts/ask-manager.sh`, which execs the
 # engine's `onepipeline ask` to raise one blocking question on the run's channel — how

@@ -120,23 +120,10 @@ EXEMPTIONS = (
         "rule its github-projects source files each task issue by",
     ),
     Exemption(
-        "docs/x.md",
-        "an illustrative placeholder in orchestrator/criteria_guard.py's own examples of "
-        "criterion prose that cites a file without demanding a change to it",
-    ),
-    Exemption(
-        "orchestrator/y.py",
-        "the second half of that same illustrative pair",
-    ),
-    Exemption(
-        ".onepipeline/templates/design-doc.md.j2",
-        "the template layer any repository may carry, which docs/orchestration.md and "
-        "orchestrator/design_chain.py name as a repository's own override; this repository's "
-        ".onepipeline/ holds only its human-items config, and its templates are templates/",
-    ),
-    Exemption(
         ".onepipeline/templates/plan-task.md.j2",
-        "the same repository layer, for the plan-task template docs/orchestration.md names",
+        "the template layer any repository may carry, which docs/orchestration.md names as a "
+        "repository's own override of the plan-task template; this repository's "
+        ".onepipeline/ holds only its human-items config, and its templates are templates/",
     ),
 )
 EXEMPTED_PATHS = frozenset(exemption.path for exemption in EXEMPTIONS)
@@ -183,8 +170,8 @@ def _resolved(bare: str, directory: str) -> str | None:
     form a reader follows and the form the dangling link this gate was written for
     was written in. Only a `../` token is read against ``directory``: every other path
     this repository's prose and diagnostics name is written from the repository root,
-    and resolving those against the document would turn `examples/…` quoted in
-    `orchestrator/criteria_guard.py` into `orchestrator/examples/…`. A leading `./` is
+    and resolving those against the document would turn an `examples/…` path quoted in a
+    module under `orchestrator/` into `orchestrator/examples/…`. A leading `./` is
     the same root-relative path with a command's spelling — `./scripts/nx.sh reset` is
     run at the root — so it is stripped rather than resolved.
     """
@@ -267,6 +254,8 @@ LEGACY_EXAMPLE = "/".join(("examples", LEGACY_FILE))
 #: carried them — the source indentation of the three refusals dropped, since what is
 #: being proven is the text each one printed. Each is one of the references the
 #: plan-store move left behind, and the gate is worth nothing unless it fails on all six.
+#: The three refusals sat in `orchestrator/criteria_guard.py`, which the planning cutover
+#: deleted; a site only places the text it carried, so the module need not exist.
 DANGLING_TREE = (
     ("README.md", f"just orchestrate {LEGACY_EXAMPLE}\n"),
     (

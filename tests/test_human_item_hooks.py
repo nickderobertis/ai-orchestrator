@@ -1,65 +1,40 @@
 """What this host's human-item hooks decide, against the released engine's live item store.
 
-The realistic journeys are `tests/e2e/board_copy_approval/test_design_review_items_e2e.py` —
-the design review raised, completed from the CLI and the browser, refused for a changed
-document, and completed by `just approve-design`, over the real plan store — and the follow-up
-review journeys in `tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py`. What is
-proven here is every branch of the host's thin interface, in process: what it hands the engine,
-and how it reads each of the engine's answers, including the ones no journey reaches without
-breaking a store.
+The realistic journeys are the follow-up review journeys in
+`tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py`. What is proven here is
+every branch of the host's thin interface, in process: what it hands the engine, and how it
+reads each of the engine's answers, including the ones no journey reaches without breaking a
+store.
 
 The engine is the real one, run through `scripts/onepipeline.sh` with its live store under a
 runs root of each test's own and human items enabled by a host-local file, as a host enables
-them; the tracked `.onepipeline/config.yaml` supplies the hooks. The design-approval authority
-`orchestrator/design_approval.py` is proven in its own tests and its own journeys, so where a
-test here is about how this interface reads the authority's answer, the authority is stood in
-for in process — and where a completion has to run a configured adapter, the host-local file
-names a stand-in command answering the protocol, as a host may.
+them; the tracked `.onepipeline/config.yaml` supplies the hooks. A plan's design review is
+not a hook here: it is the planning run's own `approve-design` human node.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] Not a shell suite and not a host tool: the
 engine every test here spawns is the workspace's own locked install from `bun.lock`, in this
 tier's key, each test's item store is a runs root of its own, and these cover
-`orchestrator/human_items.py`, `orchestrator/design_review.py` and the follow-up review step
-under the tier's 100% coverage floor, as `tests/test_design_approval.py`'s store tests do.
+`orchestrator/human_items.py` and the follow-up review step under the tier's 100% coverage
+floor.
 """
 
 from __future__ import annotations
 
-import dataclasses
-import io
 import json
-import subprocess
-import sys
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from orchestrator import design_approval, design_review, follow_up_tickets, human_items
-from orchestrator.design_approval import ApprovalKey, Approved
+from orchestrator import follow_up_tickets, human_items
 from orchestrator.follow_up_tickets import Priority, ReviewTicket
-from orchestrator.plan_store import QualifiedDocumentId, StoreDocument
 
 HOME = "plans:PVT_review_home"
 SESSION = "hook-manager"
-KEY = ApprovalKey("a" * 64)
-MOVED = ApprovalKey("b" * 64)
 
 
-def _store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, answer: str | None = None) -> Path:
-    """Human items on under a runs root of ``tmp_path``'s own, acting as :data:`SESSION`.
-
-    ``answer`` is the key a stand-in approval adapter answers, for a completion that has to
-    run one; with none, the tracked adapter stands.
-    """
+def _store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Human items on under a runs root of ``tmp_path``'s own, acting as :data:`SESSION`."""
     lines = ["human_items:", "  enabled: true"]
-    if answer is not None:
-        reply = json.dumps({"board_copy": HOME, "key": answer})
-        lines += [
-            "  approval_adapters:",
-            "    design-approval:",
-            f"      command: [{json.dumps(sys.executable)}, '-c', {json.dumps(_stand_in(reply))}]",
-        ]
     host = tmp_path / "onepipeline-host.yaml"
     host.write_text("\n".join(lines) + "\n", encoding="utf-8")
     runs = tmp_path / "runs"
@@ -72,53 +47,9 @@ def _store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, answer: str | Non
     return runs
 
 
-def _stand_in(reply: str) -> str:
-    return f"import sys; sys.stdin.read(); print({reply!r})"
-
-
 @pytest.fixture
 def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return _store(tmp_path, monkeypatch)
-
-
-def _document() -> StoreDocument:
-    return StoreDocument(
-        qualified_id=QualifiedDocumentId(f"{HOME}-design"),
-        title="Design: review",
-        content="## What\n",
-        project="PVT_review_home",
-        labels=[],
-        repositories=[],
-        metadata={},
-        location={"url": "https://github.invalid/review/1"},
-        version=None,
-    )
-
-
-def _current(
-    monkeypatch: pytest.MonkeyPatch, key: ApprovalKey, recorded: str | None = None
-) -> None:
-    """Stand the authority's reading of the document in: at ``key``, approved at ``recorded``."""
-    document = _document()
-    if recorded is not None:
-        document = dataclasses.replace(
-            document, metadata={design_approval.RECORD_KEY: {"key": recorded}}
-        )
-    monkeypatch.setattr(design_approval, "current", lambda project: (document, key))
-
-
-def _review(key: ApprovalKey) -> human_items.Item:
-    raised = human_items.raise_phase(
-        design_review.PHASE,
-        {
-            "owner": {"session": SESSION, "run": None, "plan": HOME},
-            "dedup_key": f"{HOME}:{key}",
-            "vars": {"document": "https://github.invalid/review/1"},
-            "approval": {"board_copy": HOME, "key": key},
-        },
-    )
-    assert raised is not None
-    return raised
 
 
 def _states() -> dict[str, str]:
@@ -397,7 +328,15 @@ def test_an_answer_recorded_as_the_users_own_words_is_read_as_the_engine_records
 def test_raising_completing_and_dismissing_go_through_the_engine_and_narrow_by_plan(
     store: Path,
 ) -> None:
-    review = _review(KEY)
+    review = human_items.raise_phase(
+        "follow-up-review",
+        {
+            "owner": {"session": SESSION, "run": "run-p", "plan": HOME},
+            "dedup_key": "run-p",
+            "tickets": [{"id": "t-2", "url": "https://github.invalid/t/2", "priority": "low"}],
+        },
+    )
+    assert review is not None
     finding = human_items.raise_phase(
         "follow-up-review",
         {
@@ -438,250 +377,10 @@ def test_a_session_helper_that_cannot_be_read_is_a_refusal_never_an_absent_sessi
     touched = {"followups:I_1": ReviewTicket("https://github.invalid/i/1", Priority.LOW)}
     said = follow_up_tickets.review_raised("run-d", touched)
     assert "was not raised" in said and "could not say which session" in said
-    assert design_review.raise_main(["authoring:review", "--in", "plans"]) == 0
-    assert "could not say which session" in capsys.readouterr().err
-
-
-def test_raising_dismisses_older_versions_and_raises_one_for_the_current(
-    store: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    older = _review(MOVED)
-    _current(monkeypatch, KEY)
-    said = design_review.raise_review(HOME, SESSION)
-    (current,) = design_review.reviews(HOME)
-    assert said.startswith(f"design-review: raised {current.id}")
-    assert current.approval == human_items.Approval(HOME, KEY)
-    assert _states()[older.id] == "dismissed"
-    again = design_review.raise_review(HOME, SESSION)
-    assert again.startswith(f"design-review: {current.id} already asks")
-
-
-def test_a_document_approved_at_this_version_raises_none_and_completes_its_open_task(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _store(tmp_path, monkeypatch, answer=KEY)
-    review = _review(KEY)
-    _current(monkeypatch, KEY, recorded=KEY)
-    said = design_review.raise_review(HOME, SESSION)
-    assert said.endswith("already approved at this version")
-    assert design_review.reviews(HOME) == []
-    assert _states()[review.id] == "completed"
-
-
-def test_a_hook_that_raises_nothing_for_a_review_is_refused(
-    store: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _current(monkeypatch, KEY)
-    monkeypatch.setattr(human_items, "raise_phase", lambda phase, context: None)
-    with pytest.raises(OSError, match="raised nothing"):
-        design_review.raise_review(HOME, SESSION)
-
-
-def test_settling_completes_the_approved_version_and_dismisses_the_rest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _store(tmp_path, monkeypatch, answer=KEY)
-    approved, older = _review(KEY), _review(MOVED)
-    said = design_review.settle_reviews(HOME, KEY)
-    states = _states()
-    assert states[approved.id] == "completed"
-    assert states[older.id] == "dismissed"
-    assert said == [
-        f"design-review: completed {approved.id}, releasing {HOME}'s hold",
-        f"design-review: dismissed {older.id}, raised for an older version",
-    ]
-
-
-def _approved(key: ApprovalKey, *, held: bool = False, moved: bool = False) -> Approved:
-    return Approved(QualifiedDocumentId(f"{HOME}-design"), "here", held=held, key=key, moved=moved)
-
-
-@pytest.mark.parametrize(
-    ("request_text", "refusal"),
-    [
-        ("[]", "not an object"),
-        ('{"board_copy": "plans:x"}', "names no board_copy and key"),
-        ('{"board_copy": "plans:x", "key": " "}', "names no board_copy and key"),
-        ('{"board_copy": "not qualified", "key": "k"}', "not a qualified project id"),
-        ("not json", "Expecting value"),
-    ],
-)
-def test_the_adapter_refuses_a_request_it_cannot_act_on(
-    capsys: pytest.CaptureFixture[str], request_text: str, refusal: str
-) -> None:
-    assert design_review.adapter_main(request_text) == 1
-    said = capsys.readouterr()
-    assert said.out == "" and refusal in said.err and "nothing was approved" in said.err
-
-
-def test_the_adapter_approves_the_stored_version_and_answers_it(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    asked: list[tuple[str, object]] = []
-
-    def approve(project: str, expected: object = None) -> Approved:
-        asked.append((project, expected))
-        return _approved(KEY)
-
-    monkeypatch.setattr(design_approval, "approve", approve)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"board_copy": HOME, "key": KEY})))
-    assert design_review.adapter_main() == 0
-    said = capsys.readouterr()
-    assert json.loads(said.out) == {"board_copy": HOME, "key": KEY}
-    assert asked == [(HOME, KEY)] and "recorded the approval" in said.err
-
-
-def test_the_adapter_answers_the_current_version_when_the_document_moved(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(
-        design_approval, "approve", lambda project, expected=None: _approved(MOVED, moved=True)
-    )
-    assert design_review.adapter_main(json.dumps({"board_copy": HOME, "key": KEY})) == 0
-    said = capsys.readouterr()
-    assert json.loads(said.out) == {"board_copy": HOME, "key": MOVED}
-    assert "changed since this task was raised" in said.err
-
-
-def test_the_adapter_refuses_when_the_authority_does(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    def refused(project: str, expected: object = None) -> Approved:
-        raise OSError("the store could not be read")
-
-    monkeypatch.setattr(design_approval, "approve", refused)
-    assert design_review.adapter_main(json.dumps({"board_copy": HOME, "key": KEY})) == 1
-    assert "the store could not be read" in capsys.readouterr().err
-
-
-def test_approve_design_settles_the_reviews_of_the_version_it_recorded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _store(tmp_path, monkeypatch, answer=KEY)
-    review = _review(KEY)
-    monkeypatch.setattr(design_approval, "approve", lambda project: _approved(KEY))
-    assert design_review.approve_main([HOME]) == 0
-    said = capsys.readouterr().out
-    assert "recorded the approval of" in said and f"completed {review.id}" in said
-
-
-def test_approve_design_says_nothing_more_with_human_items_off(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(design_approval, "approve", lambda project: _approved(KEY, held=True))
-
-    def off(home: str, key: ApprovalKey) -> list[str]:
-        raise human_items.Unavailable
-
-    monkeypatch.setattr(design_review, "settle_reviews", off)
-    assert design_review.approve_main([HOME]) == 0
-    assert capsys.readouterr().out.strip().endswith("nothing was recorded")
-
-
-def test_approve_design_reports_a_review_it_could_not_settle_and_keeps_the_approval(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(design_approval, "approve", lambda project: _approved(KEY))
-
-    def broken(home: str, key: ApprovalKey) -> list[str]:
-        raise OSError("the store is gone")
-
-    monkeypatch.setattr(design_review, "settle_reviews", broken)
-    assert design_review.approve_main([HOME]) == 0
-    assert "could not be completed (the store is gone)" in capsys.readouterr().err
-
-
-def test_approve_design_refuses_what_the_authority_refuses(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    assert design_review.approve_main(["not-qualified"]) == 1
-    assert "not a qualified project id" in capsys.readouterr().err
 
 
 class _Landed:
     qualified_id = HOME
-
-
-@pytest.fixture
-def landed(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.setattr(design_review.plan_locations, "copied", lambda project, to: _Landed())
-    yield
-
-
-def test_the_finish_plan_step_raises_for_the_board_copy_the_plan_landed_as(
-    store: Path, monkeypatch: pytest.MonkeyPatch, landed: None, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _current(monkeypatch, KEY)
-    assert design_review.main(["raise", "authoring:review", "--in", "plans"]) == 0
-    assert "design-review: raised hi-" in capsys.readouterr().out
-
-
-def test_the_finish_plan_step_never_refuses_the_flow(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    landed: None,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    off = tmp_path / "off.yaml"
-    off.write_text("human_items:\n  enabled: false\n", encoding="utf-8")
-    monkeypatch.setenv("ONEPIPELINE_CONFIG", str(off))
-    monkeypatch.setenv("ONEPIPELINE_RUNS_DIR", str(tmp_path))
-    monkeypatch.setenv("ONEPIPELINE_LAUNCHER_SESSION", SESSION)
-    _current(monkeypatch, KEY)
-    assert design_review.raise_main(["authoring:review", "--in", "plans"]) == 0
-    assert "human items are off" in capsys.readouterr().out
-
-    def unreadable(project: str) -> tuple[StoreDocument, ApprovalKey]:
-        raise OSError("no design document")
-
-    monkeypatch.setattr(design_approval, "current", unreadable)
-    assert design_review.raise_main(["authoring:review", "--in", "plans"]) == 0
-    assert "no design-review task was raised" in capsys.readouterr().err
-
-    monkeypatch.setattr(human_items, "acting_session", lambda: None)
-    assert design_review.raise_main(["authoring:review", "--in", "plans"]) == 0
-    assert "acts as no session" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    ("request_text", "refusal"),
-    [
-        ("[]", "not an object"),
-        ('{"board_copy": "not qualified", "key": "k"}', "not a qualified project id"),
-        ("not json", "Expecting value"),
-    ],
-)
-def test_the_undo_refuses_a_request_it_cannot_act_on(
-    capsys: pytest.CaptureFixture[str], request_text: str, refusal: str
-) -> None:
-    assert design_review.undo_main(request_text) == 1
-    said = capsys.readouterr()
-    assert said.out == "" and refusal in said.err and "was not removed" in said.err
-
-
-def test_the_command_names_its_verbs(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(design_review, "adapter_main", lambda: 0)
-    monkeypatch.setattr(design_review, "undo_main", lambda: 0)
-    monkeypatch.setattr(sys, "argv", ["orchestrator-design-review", "adapter"])
-    assert design_review.main() == 0
-    assert design_review.main(["undo"]) == 0
-    assert design_review.main(["approve"]) == 2
-    assert "usage:" in capsys.readouterr().err
-
-
-def test_the_installed_command_runs_the_adapter_protocol_end_to_end() -> None:
-    """The entry point `.onepipeline/config.yaml` names, refusing a request with no version."""
-    ran = subprocess.run(
-        ["uv", "run", "--no-sync", "orchestrator-design-review", "adapter"],
-        input="{}",
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=120,
-    )
-    assert ran.returncode == 1 and "nothing was approved" in ran.stderr, ran.stderr
 
 
 def test_the_review_task_is_raised_once_per_run_and_updated_in_place(store: Path) -> None:

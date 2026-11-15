@@ -19,9 +19,9 @@ root, that the project it wrote landed under the isolated drafts root's `runs` f
 seeded records come back out of the store byte for byte.
 
 Everything between the recipe and the model is real: `just orchestrate`,
-`scripts/orchestrate.sh`, `scripts/onepipeline.sh` and its design-approval gate, the
-installed driver, `scripts/run-ended.sh`, `just follow-ups` and the detached follow-up
-run it launches, the real drafting command both seeds are written with, and the
+`scripts/orchestrate.sh`, `scripts/onepipeline.sh`, the launch check its launch config
+registers, the installed driver, `scripts/run-ended.sh`, `just follow-ups` and the detached
+follow-up run it launches, the real drafting command both seeds are written with, and the
 installed `onetaskgraph` both seeded records are read back through. **The paid model
 alone is doubled**: `tests/e2e/fake_backend.py` at the `oneagentgraph` seam for the main
 run's worker and `tests/e2e/fake_codex.py` at the provider binary for the follow-up
@@ -35,12 +35,12 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
 import follow_up_variables
-import plan_root_variable
 import pytest
 import short_state
 from harness_indirections import established_indirections
@@ -51,6 +51,9 @@ from waits import timeout as e2e_timeout
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import plan_store
 from orchestrator.root import REPO_ROOT
+
+#: The variable the store reads the `authoring` source's root from.
+AUTHORING_ROOT = "ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT"
 
 # What the recipes these journeys run leave in the temporary directory, by design or
 # from a published tool they run, is this module's own and goes with it
@@ -150,7 +153,7 @@ class Launched(NamedTuple):
 
 def _variables() -> tuple[str, str]:
     """The two variables the roots are stated by, each read from the one place it is composed."""
-    return plan_root_variable.name(), follow_up_variables.root_name()
+    return AUTHORING_ROOT, follow_up_variables.root_name()
 
 
 def _isolated() -> Isolated:
@@ -211,47 +214,64 @@ def _seeded_task(native: str) -> str:
 
 
 def _seeded_project(root: Path, native: str) -> None:
-    """A plan project written under ``root`` through this repository's own writer.
+    """A plan project written under ``root`` through the installed store's own command line.
 
-    Out of process, because it is another program's records this is putting in place and
-    because the writer is the one `just follow-ups` itself spawns — a project written any
-    other way would be a shape this journey invented.
+    Out of process, because it is another program's records this is putting in place: the
+    store's `project create` and `task create`, with the `authoring` source rooted at
+    ``root``, exactly as a planner writes a plan.
     """
-    plan = {
-        "schema_version": 3,
-        "goal": {"text": SEEDED_GOAL},
-        "name": native,
-        "tasks": [
-            {
-                "id": "authored",
-                "title": _seeded_task(native),
-                "persona": "engineer",
-                "task": f"## What\n{SEEDED_GOAL}\n\n## Why\nA developer wrote it.\n\n"
-                "## Acceptance criteria\n- It is still here afterwards.",
-            }
-        ],
-    }
-    # llmlint: ignore-block[tests_mirror_real_usage] `python -m orchestrator.plan_records <root>`
-    # *is* how a plan reaches the authoring source here: `scripts/plan.sh` and
-    # `scripts/finish-plan.sh` each pipe a generated plan into that exact command line,
-    # and it is the only way an authored project is written. Reaching for `just plan`
-    # instead would spend a real planner dispatch to produce the one record this seed needs.
-    written = subprocess.run(  # noqa: S603 - this repository's writer over the store
-        [
-            str(REPO_ROOT / ".venv" / "bin" / "python3"),
-            "-m",
-            "orchestrator.plan_records",
-            str(root),
-        ],
-        cwd=REPO_ROOT,
-        input=json.dumps(plan),
-        text=True,
-        capture_output=True,
-        check=False,
+    environment = os.environ | {AUTHORING_ROOT: str(root)}
+    store = [str(ONETASKGRAPH_BIN), "--no-interactive"]
+    body = Path(tempfile.mkdtemp()) / "task.md"
+    body.write_text(
+        f"## What\n{SEEDED_GOAL}\n\n## Why\nA developer wrote it.\n\n"
+        "## Acceptance criteria\n- It is still here afterwards.",
+        encoding="utf-8",
     )
-    # llmlint: ignore-end[tests_mirror_real_usage]
-    assert written.returncode == 0, written.stdout + written.stderr
-    assert written.stdout.strip() == native, written.stdout
+    for command in (
+        [
+            *store,
+            "project",
+            "create",
+            "authoring",
+            "--id",
+            native,
+            "--title",
+            native,
+            "--body-file",
+            "/dev/null",
+            "--metadata",
+            "onepipeline.schema_version=3",
+            "--metadata",
+            f"onepipeline.goal={json.dumps({'text': SEEDED_GOAL})}",
+        ],
+        [
+            *store,
+            "task",
+            "create",
+            "authoring",
+            "--project",
+            f"authoring:{native}",
+            "--title",
+            _seeded_task(native),
+            "--metadata",
+            'onepipeline.id="authored"',
+            "--metadata",
+            'onepipeline.persona="engineer"',
+            "--body-file",
+            str(body),
+        ],
+    ):
+        written = subprocess.run(  # noqa: S603 - the installed plan-store CLI
+            command,
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert written.returncode == 0, written.stdout + written.stderr
+    shutil.rmtree(body.parent)
 
 
 def _record(

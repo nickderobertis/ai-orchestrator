@@ -3,10 +3,10 @@ onetaskgraph_template: 1
 description: >-
   A plan's own description: its overview, then any stored plan-level budget analysis in
   full. The planner writes it as the plan project's body, and records full analysis as the
-  project's `orchestrator.plan-budgets` metadata, which `just check-plan`, `just
-  review-plan` and the design-document writer read.
+  project's `orchestrator.plan-budgets` metadata, which the plan review and the
+  design-document writer read.
 variables:
-  # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These descriptions restate the shape `orchestrator/plan_budgets.py` states once, and `tests/test_plan_budgets_template.py` fails the moment the two part: the variables, each list's keys, the vocabularies and every cap are compared with that module's own.
+  # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These descriptions restate in words the shapes each list's own `schema` states once, which the plan store holds every rendering to; `tests/e2e/planning/` renders an answer breaking one and reads the refusal.
   overview:
     description: >-
       The plan's own prose: what it sets out to do, as a project body says it. It carries
@@ -61,6 +61,18 @@ variables:
     type: list
     items: object
     required: false
+    schema:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [concern, budget, not_applicable, summary]
+        properties:
+          concern: {type: string, minLength: 1}
+          budget: {type: string}
+          not_applicable: {type: string}
+          summary: {type: string, maxLength: 160}
+          in_scope: {type: boolean}
   repo_wide_effects:
     description: >-
       Only actual expected effects on existing root budgets of changed repositories,
@@ -73,6 +85,17 @@ variables:
     type: list
     items: object
     required: false
+    schema:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [repository, budget, effect, summary]
+        properties:
+          repository: {type: string, minLength: 1}
+          budget: {type: string}
+          effect: {type: string}
+          summary: {type: string, maxLength: 160}
   realistic_data:
     description: >-
       One object per kind of data the plan makes realistic, or `[]`, with five string keys:
@@ -83,6 +106,18 @@ variables:
     type: list
     items: object
     default: []
+    schema:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [data, choice, reason, artifact, summary]
+        properties:
+          data: {type: string, minLength: 1}
+          choice: {enum: [generator, fixture, hybrid, real-sample]}
+          reason: {type: string, minLength: 1}
+          artifact: {type: string}
+          summary: {type: string, maxLength: 160}
   spike_findings:
     description: >-
       One object per spike finding that changed the plan, or `[]`, with four string keys:
@@ -92,6 +127,17 @@ variables:
     type: list
     items: object
     default: []
+    schema:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [spike, finding, changed, summary]
+        properties:
+          spike: {type: string, minLength: 1}
+          finding: {type: string, minLength: 1}
+          changed: {type: string, minLength: 1}
+          summary: {type: string, maxLength: 160}
   schema_version:
     description: >-
       Integer literal 2 for newly authored answers. Omitted only for exact legacy records.
@@ -100,9 +146,8 @@ variables:
   # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 ---
 {#-
-  THE READERS. A person opening the plan, the plan review and the plan check. The project's
-  `orchestrator.plan-budgets` metadata holds these same answers, and the plan check holds
-  this body to being their rendering; the design document restates only each answer's
+  THE READERS. A person opening the plan and the plan review. The project's
+  `orchestrator.plan-budgets` metadata holds these same answers; the design document restates only each answer's
   summary under the rendering rule in `design-doc` budgets_guidance.
 
   BUDGET NEED. First decide whether the work adds or changes a task budget. Only then

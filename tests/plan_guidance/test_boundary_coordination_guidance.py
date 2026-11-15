@@ -10,10 +10,10 @@ agreement against something real rather than against a remembered sentence:
 * the **installed** engine's typed guidance states the one-plan coordination shape, task-owned
   visibility and no setting, so an adoption that moved the engine back to a project-inherited
   classification, or forward to one needing a mode, fails here before a planner reads it;
-* every surface of this host that speaks about a mixed plan — the planner injection in
-  `scripts/plan.sh`, the planner persona, `docs/orchestration.md` and `AGENTS.md` — carries
-  none of the advice that guidance retired: splitting the work into two plans, a private
-  project making its public tasks private, or a mode or setting to enable.
+* every surface of this host that speaks about a mixed plan — the planning draft's task in
+  `templates/planning/planning-draft.md.j2`, the planner persona, `docs/orchestration.md` and
+  `AGENTS.md` — carries none of the advice that guidance retired: splitting the work into two
+  plans, a private project making its public tasks private, or a mode or setting to enable.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ COORDINATING_GUIDANCE = 2
 
 #: Every surface of this host that tells a reader how a mixed plan is shaped.
 HOST_SURFACES = (
-    "scripts/plan.sh",
+    "templates/planning/planning-draft.md.j2",
     "personas/planner.yaml",
     "docs/orchestration.md",
     "AGENTS.md",
@@ -104,19 +104,22 @@ def test_no_host_surface_carries_advice_the_guidance_retired(surface: str) -> No
         assert advice not in written, f"{surface} still advises {advice!r}"
 
 
-def test_the_planner_injection_quotes_the_guidance_rather_than_restating_it() -> None:
-    """`scripts/plan.sh` places the engine's text at `@GUIDANCE@` and spells none of its own
+#: The planning draft's task, which tells a mixed brief's planner where the shape is stated.
+PLANNING_DRAFT = REPO_ROOT / "templates" / "planning" / "planning-draft.md.j2"
+
+
+def test_the_planning_draft_points_at_the_guidance_rather_than_restating_it() -> None:
+    """The planning draft names `onepipeline boundary guidance` and spells none of its
     coordination lines, so the planner reads one statement of the shape."""
-    script = (REPO_ROOT / "scripts" / "plan.sh").read_text(encoding="utf-8")
-    template = script[script.index("BOUNDARY_NOTE_TEMPLATE=$(") :]
-    template = template[: template.index("\nNOTE\n")]
-    assert "@GUIDANCE@" in template
+    template = PLANNING_DRAFT.read_text(encoding="utf-8")
+    flat = " ".join(template.split())
+    assert "run `onepipeline boundary guidance` and write the plan as it says" in flat
     guidance = _guidance()
     restated = [guidance["coordination"], guidance["producer"]]
     assert all(isinstance(lines, list) for lines in restated), guidance
     for line in (line for lines in restated if isinstance(lines, list) for line in lines):
-        assert str(line) not in template, f"the injection restates the engine's {line!r}"
-    assert "one project in the `authoring` source" in " ".join(template.split())
+        assert str(line) not in template, f"the planning draft restates the engine's {line!r}"
+    assert "one private project in `authoring`" in flat
 
 
 @pytest.mark.parametrize("surface", ["AGENTS.md", "personas/planner.yaml"])

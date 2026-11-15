@@ -864,16 +864,9 @@ def _scratch_checkout(root: Path, helper: str | None = None, *, engine: bool = T
             real if helper is None else helper, encoding="utf-8"
         )
     # llmlint: ignore-end[e2e_not_mocked]
-    # `unfinished.py` reads the spike-brief receipts through `spike_brief.py`, which reads
-    # run state through `run_reading.py`, and both resolve the engine through
-    # `npm_installs.py`; each loads under the system interpreter as well.
-    for module in (
-        "unfinished.py",
-        "spike_brief.py",
-        "run_reading.py",
-        "npm_installs.py",
-        "root.py",
-    ):
+    # `unfinished.py` resolves the engine through `npm_installs.py`; each loads under the
+    # system interpreter as well.
+    for module in ("unfinished.py", "npm_installs.py", "root.py"):
         shutil.copy2(REPO_ROOT / "orchestrator" / module, root / "orchestrator" / module)
     return root / "scripts" / "unfinished.sh"
 

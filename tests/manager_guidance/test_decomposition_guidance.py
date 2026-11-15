@@ -22,7 +22,6 @@ from typing import NamedTuple
 
 import pytest
 
-from orchestrator.criteria_guard import AUTHORIZATIONS
 from orchestrator.root import REPO_ROOT
 
 
@@ -366,28 +365,39 @@ def test_the_manager_names_the_persona_that_owns_the_rest_of_the_doctrine() -> N
     )
 
 
-@pytest.mark.parametrize("authorization", AUTHORIZATIONS, ids=lambda one: one.name)
-def test_the_planner_grants_a_carve_out_in_the_words_the_criteria_guard_reads(
-    authorization: object,
-) -> None:
-    """The grant the persona tells a planner to write is the grant `just check-plan` reads.
+#: The plan review's rule that reads a task's carve-out grant, which the persona names.
+GRANT_RULE = "plan_criteria_draft_needs_its_grant"
+#: The plan review's rules, where that rule is declared.
+PLAN_REVIEW_RULES = REPO_ROOT / "config" / "plan-checklist.llmlint.yml"
+
+#: The two grants the persona tells a planner to write, in the carve-out's own words.
+GRANTS = (
+    "the change request may be published early",
+    "a throwaway demonstration change request is authorized",
+)
+
+
+@pytest.mark.parametrize("grant", GRANTS)
+def test_the_planner_grants_a_carve_out_in_words_the_plan_review_reads(grant: str) -> None:
+    """The grant the persona tells a planner to write is the grant the plan review reads.
 
     A planner writes a task's grant in a worktree of a repository this file never reaches,
-    and the guard reads it back here; the persona is the only copy of the instruction
-    that travels, so its words and the guard's pattern are held to each other rather than
-    remembered. A persona that paraphrased the grant would send every plan written under
-    it back refused for a criterion its task had granted.
+    and the plan review's `plan_criteria_draft_needs_its_grant` rule reads it back; the
+    persona is the only copy of the instruction that travels, so it states each grant in
+    the carve-out's words and names the rule that reads them, and that rule is one the
+    plan review declares. `tests/test_dispatch_appendix.py` holds the same words to the
+    carve-outs the appendix opens on.
     """
-    assert isinstance(authorization, tuple)
     role = _flat(_planner_instructions())
-    assert authorization.grant in role, (
-        f"{PLANNER.document} no longer tells a planner to grant {authorization.name} as "
-        f"{authorization.grant!r}, which is the wording orchestrator/criteria_guard.py reads"
+    assert f"*{grant}*" in role, (
+        f"{PLANNER.document} no longer tells a planner to grant a carve-out as {grant!r}"
     )
-    assert authorization.granted_by.search(role), (
-        f"{PLANNER.document} spells the grant of {authorization.name} in words the criteria "
-        "guard does not read; a plan written under it would be refused for a criterion its "
-        "task had granted"
+    assert f"`{GRANT_RULE}`" in role, (
+        f"{PLANNER.document} no longer names the plan review rule that reads a grant"
+    )
+    assert f"- name: {GRANT_RULE}\n" in PLAN_REVIEW_RULES.read_text(encoding="utf-8"), (
+        f"{PLAN_REVIEW_RULES.relative_to(REPO_ROOT)} no longer declares {GRANT_RULE}, which "
+        f"{PLANNER.document} says reads a task's grant"
     )
 
 

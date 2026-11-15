@@ -25,7 +25,7 @@ import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import follow_up_drafts, follow_up_tickets, plan_copy, plan_review, plan_store
+from orchestrator import follow_up_drafts, follow_up_tickets, plan_store
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
@@ -441,93 +441,24 @@ def test_the_follow_ups_board_projects_a_ticket_s_record_onto_its_fields() -> No
     )
 
 
-def test_every_source_a_planning_closeout_records_into_is_configured_and_writable() -> None:
-    """`PLAN_SOURCES` restates names `onetaskgraph.yaml` owns, so it is reconciled here.
+def test_the_planning_recipes_draft_in_a_local_store_and_copy_onto_the_board() -> None:
+    """The planning recipes' two sources, as the justfile names them, are configured here.
 
-    A source renamed there and not here does not fail: it silently drops out of both the
-    snapshot and the closeout, so a planning run stops recording what it authored and
-    every plan of that store starts costing a judged turn to relaunch. Nothing else
-    notices, which is exactly the drift a restated vocabulary needs a gate for.
+    `just plan` drafts a plan in the `authoring` source, the gitignored `.plans` a
+    `local-md` store keeps, and every planning recipe copies onto `destination="plans"` by
+    default: a configured, defaulted board no local file backs. A source renamed in
+    `onetaskgraph.yaml` and not in the justfile would refuse at the store with "no source
+    named …", which reads as a typo in the invocation rather than a default gone stale.
     """
     configured = read_plan_sources(_configuration())
-    for name in plan_review.PLAN_SOURCES:
-        assert name in configured, (
-            f"orchestrator/plan_review.py records a planner pass into the {name!r} source, "
-            f"which onetaskgraph.yaml no longer configures; the two names are one "
-            f"vocabulary and have to move together"
-        )
-        assert configured[name].plugin == WRITABLE_PLUGIN, (
-            f"the {name!r} source is served by {configured[name].plugin!r}, and a review "
-            f"record is only ever written into a {WRITABLE_PLUGIN!r} one"
-        )
-
-
-def test_the_store_a_planning_run_authors_into_is_recorded_into() -> None:
-    """`just plan` writes into `authoring`, so a planning closeout has to record it.
-
-    Named for what a planning run does rather than for "the plan store this repository
-    plans against", which is the board and is a different question: a record cannot be
-    written into a `github-projects` source at all, so the closeout covers the store a
-    run authors into and `test_no_source_a_closeout_records_into_is_unwritable` above
-    is what keeps the two from being confused.
-    """
-    authoring = read_plan_sources(_configuration())["authoring"]
+    authoring = configured["authoring"]
     assert authoring.root == ".plans", authoring.root
-    assert "authoring" in plan_review.PLAN_SOURCES, (
-        "`just plan` writes a manager's brief into the 'authoring' source, so a planning "
-        "run that authored one there must record a pass for it"
-    )
-
-
-def test_no_source_a_closeout_records_into_is_unwritable() -> None:
-    """A closeout may only name sources a record can actually be written into.
-
-    `plans` is the counter-example that gives this teeth: it is the store a plan of this
-    repository lives on, it is the obvious name to reach for here, and a record can
-    never be written into it — a closeout naming it would pass over every project on the
-    board on every planning run, reporting a failure that is not one.
-    """
-    configured = read_plan_sources(_configuration())
-    assert configured["plans"].plugin != WRITABLE_PLUGIN, (
-        "this check is only worth running while a configured source exists that a record "
-        "cannot be written into; `plans` was that source"
-    )
-    assert "plans" not in plan_review.PLAN_SOURCES, (
-        "the 'plans' board is served by a plugin no review record can be written into, so "
-        "a planning closeout must not try to record into it"
-    )
-
-
-def test_the_board_copy_plan_defaults_to_is_the_one_this_repository_plans_against() -> None:
-    """`plan_copy.BOARD` restates a name `onetaskgraph.yaml` owns, so it is reconciled here.
-
-    A source renamed there and not here does not fail loudly: `just copy-plan` naming no
-    destination would refuse at the store with "no source named …", which reads as a typo
-    in the invocation rather than as a constant that has gone stale — and the plan it was
-    about would still be sitting in the local store, unreachable by the launch that wants
-    it on the board.
-
-    Held to being *defaulted to* as well as configured, because that is the property that
-    makes it the board this repository plans against rather than merely a source it
-    knows: a destination outside `default_sources` goes unlisted by every read that names
-    no source, which is how the engine lists a project's tasks.
-    """
-    configured = read_plan_sources(_configuration())
-    assert plan_copy.BOARD in configured, (
-        f"orchestrator/plan_copy.py copies onto the {plan_copy.BOARD!r} source when a "
-        f"caller names none, which onetaskgraph.yaml no longer configures (it configures "
-        f"{sorted(configured)}); the two names are one vocabulary and move together"
-    )
-    assert plan_copy.BOARD in read_default_sources(_configuration()), (
-        f"the {plan_copy.BOARD!r} source is configured but not defaulted to, so a plan "
-        f"copied onto it is unlisted by every read that names no source — which is how "
-        f"`just check-plan` and the engine's own loader list a project's tasks"
-    )
-    assert configured[plan_copy.BOARD].plugin != WRITABLE_PLUGIN, (
-        f"the {plan_copy.BOARD!r} source is served by {WRITABLE_PLUGIN!r}, so a plan could "
-        f"be reviewed there and `just copy-plan`'s whole reason for existing — that a "
-        f"record can only be written where the plan is drafted — no longer holds"
-    )
+    assert authoring.plugin == WRITABLE_PLUGIN, authoring.plugin
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    for recipe in ("plan brief", "finish-plan plan", "copy-plan plan"):
+        assert f'\n{recipe} destination="plans":' in justfile, recipe
+    assert "plans" in read_default_sources(_configuration())
+    assert configured["plans"].plugin != WRITABLE_PLUGIN, configured["plans"].plugin
 
 
 def test_the_drafts_source_is_a_local_directory_no_plan_listing_reads() -> None:

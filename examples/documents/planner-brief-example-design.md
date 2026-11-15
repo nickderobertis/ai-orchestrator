@@ -3,12 +3,7 @@ title: 'Design: planner-brief-example'
 project: planner-brief-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:d9fc7226a615c542a1db86abed3a13c8e513ea11e9a287dac35edcbf8a94fa54
-  onetaskgraph.template:
-    answers_digest: sha256:d2d517d217e1d9514586678340eb5ca86f2076ca957f0fc269318d657f9749bb
-    body_digest: sha256:365ff2aa21039a827e1d670d4931057a08704615252e16de0145b191dcecd89f
-    digest: sha256:40ceac966dad3e35698a79077e2f0faaa59d9373ca5bb912dfde7ffa0469686d
-    template: onepipeline:design-doc
-  "orchestrator.design-approval": {"approved_at":"2026-10-01T13:24:53.121163+00:00","key":"963e1fae60b91bb4f49739b68f93499f3e4fc66def6ab6b90de65043940a8b99"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:3c3a8049cddfdb99f0afd880b14193ab285fd1eb34211d7455b37540bf6a1340","answers_digest":"sha256:de6beb00d302772a9e020c7ec0d96b3f73d65a6cfb82c7facb1bf86377e9f0b3"}
 ---
 ## What
 
@@ -34,8 +29,19 @@ The planner writes a plan into the plan store and commits nothing; `just plan` t
 
 **Reversible:**
 
-- **The plan's address.** The brief names the qualified project the planner writes to, and everything after this run reads that same address.
-- **The document's shape.** The second launch writes a rendering of the `design-doc` template, so its task names the template rather than restating it.
+<details>
+<summary>The plan's address</summary>
+
+The brief names the qualified project the planner writes to, and everything after this run reads that same address.
+
+</details>
+
+<details>
+<summary>The document's shape</summary>
+
+The second launch writes a rendering of the `design-doc` template, so its task names the template rather than restating it.
+
+</details>
 
 ## Acceptance criteria
 
@@ -48,9 +54,14 @@ The planner writes a plan into the plan store and commits nothing; `just plan` t
 
 ## Planned tasks
 
+<details>
+<summary>All 1 planned tasks</summary>
+
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 | feat(plan): planner-brief-example | Planning run | the plan itself | none | examples/tasks/planner-brief-example/plan.md |
+
+</details>
 
 
 <!-- onetaskgraph:template-answers
@@ -64,12 +75,19 @@ acceptance_criteria:
 - |-
   Every row of the document's planned-tasks table points at a task using the location the
   store reports for it.
+accepted_opaque: []
 architecture: |-
   One node. The planner reads the repository and writes the plan into the plan store, as a
   direct node working in the checkout the launch was made from. What happens to that plan
   afterwards is a second launch rather than a second node of this one, because the design
   document a person reviews the plan as has to be written from reviewed content, and a run
   cannot interject a review between its own nodes.
+budgets: []
+dag_image: ''
+delivers: {}
+goals: []
+graph: {}
+plan_budgets: {}
 planned_tasks:
 - delivers: the plan itself
   depends_on: none
@@ -87,6 +105,7 @@ units:
   - text: The second launch writes a rendering of the `design-doc` template, so its task names the template rather than restating it.
     title: The document's shape
   summary: The planner writes a plan into the plan store and commits nothing; `just plan` then hands over to `just finish-plan`, which reviews the plan, checks it, launches the document, and copies both into the destination a person reviews them in.
+visual_changes: []
 what: |-
   A planning run: one agent turns a manager's brief into a plan another agent could execute
   without re-deriving it.

@@ -98,10 +98,6 @@ POST_CHECKOUT_PROVISIONING_WORKSPACE = "postCheckoutProvisioningWorkspace"
 #: for these doubled journeys and not for that project's real re-provisioning.
 HOST_SWEEP_WORKSPACE = "hostSweepWorkspace"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
-#: The key `project-store-race:test` is memoized on: the module under race, the
-#: project's own files, and the suite modules `tests/conftest.py` imports — nothing
-#: else, because the race reads a temporary root and nothing of this checkout.
-PROJECT_STORE_RACE_WORKSPACE = "projectStoreRaceWorkspace"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and
 # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
@@ -128,11 +124,6 @@ PLAN_STORE_ASSETS_WORKSPACE = "planStoreAssetsWorkspace"
 #: release the journey contrasts it with — immutable on PyPI — and nothing else, because the
 #: journey reads a store configured wholly under its own temporary roots.
 PLAN_STORE_DEPENDENCY_READ_WORKSPACE = "planStoreDependencyReadWorkspace"
-#: The key `board-copy-quota-handover:test-checkouts` is described by: the pin naming the
-#: onetaskgraph release whose budgets it reads, the checkout list naming where that release is
-#: read from, the board-copy budgets file it holds, and the project's own files. Its target is
-#: uncached all the same, because what it reads is the registered checkout itself.
-BOARD_COPY_QUOTA_HANDOVER_WORKSPACE = "boardCopyQuotaHandoverWorkspace"
 #: The key `render-diagram:test` is memoized on: what a render reads — the recipe and its
 #: script, the committed `config/mermaid/` files, `.puppeteerrc.json`, and the lockfile that
 #: names mermaid-cli, Playwright and so the Chromium revision, and the font — the project's
@@ -176,20 +167,6 @@ UNWATCHED_WORKSPACE = "unwatchedWorkspace"
 #: `scripts/**` or `tests/unwatched/**`, because an edit this recipe never reaches must not
 #: pay for its real sessions.
 UNFINISHED_WORKSPACE = "unfinishedWorkspace"
-# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
-# catalog of test projects, where every project has its entry, and
-# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-# describes; the board-copy-approval entry sits beside the others' because the catalog is
-# the domain.
-#: The key `board-copy-approval:test` is memoized on. Files rather than trees, measured as
-#: `unpublishedViewWorkspace` was: the tier traced under `strace -f -e trace=openat,execve`,
-#: each opened path intersected with what git tracks, and the `orchestrator` modules taken
-#: from the bytecode it loaded — the recipes' scripts, the plan store and review configs,
-#: the templates the documents render through, the planner bar, and the `justfile` every
-#: recipe is read from, which `just` reaches without an `openat` the trace records.
-BOARD_COPY_APPROVAL_WORKSPACE = "boardCopyApprovalWorkspace"
-# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
-
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The reason above
 # `HOST_SWEEP_WORKSPACE`: this module holds one row per test project.
 #: The key `graceful-cancel:test` is memoized on. Files rather than trees, for the reason
@@ -364,12 +341,6 @@ class SubjectProject(NamedTuple):
 #: package metadata, decides no verdict here and is left out as every sibling key leaves it.
 PLAN_TOOLING_PROJECTS: tuple[SubjectProject, ...] = (
     SubjectProject(
-        "plan-tooling-check-and-review",
-        f"{PLAN_TOOLING_ROOT}/check_and_review",
-        "planToolingCheckAndReviewWorkspace",
-        docs_tier=True,
-    ),
-    SubjectProject(
         "plan-tooling-comment-version",
         f"{PLAN_TOOLING_ROOT}/comment_version",
         "planToolingCommentVersionWorkspace",
@@ -385,18 +356,6 @@ PLAN_TOOLING_PROJECTS: tuple[SubjectProject, ...] = (
         "plan-tooling-host-layer-routing",
         f"{PLAN_TOOLING_ROOT}/host_layer_routing",
         "planToolingHostLayerRoutingWorkspace",
-        docs_tier=False,
-    ),
-    SubjectProject(
-        "plan-tooling-plan-flow",
-        f"{PLAN_TOOLING_ROOT}/plan_flow",
-        "planToolingPlanFlowWorkspace",
-        docs_tier=True,
-    ),
-    SubjectProject(
-        "plan-tooling-plan-copy",
-        f"{PLAN_TOOLING_ROOT}/plan_copy",
-        "planToolingPlanCopyWorkspace",
         docs_tier=False,
     ),
 )
@@ -518,9 +477,6 @@ ASK_SEAM_JOURNEYS: tuple[AskSeamJourney, ...] = (
         "ask-seam-settled-correlated-ruling",
         f"{ASK_SEAM_ROOT}/settled_correlated_ruling",
         "askSeamSettledCorrelatedRuling",
-    ),
-    AskSeamJourney(
-        "ask-seam-structural-reply", f"{ASK_SEAM_ROOT}/structural_reply", "askSeamStructuralReply"
     ),
 )
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
@@ -685,18 +641,6 @@ HOST_VIEWS_SCOPED = "test"
 #: each project under `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 HOST_VIEWS_ROOT = "tests/host_views"
 
-#: The project whose test target owns the two-process fixture-root isolation journey:
-#: two concurrent pytest sessions each write one project through the store into a root of
-#: their own, and one removes it while the other keeps reading its own. A project of its
-#: own for the reason `unwatched` is, at a smaller scale: each journey pays for two whole
-#: pytest sessions, which `nx affected` can only keep off an unrelated edit of
-#: `orchestrator/` where it is a separate project.
-PROJECT_STORE_RACE_PROJECT = "project-store-race"
-#: That project's one test target: nothing here reads this repository's prose.
-PROJECT_STORE_RACE_SCOPED = "test"
-#: The directory it owns, which every other project's tiers ignore.
-PROJECT_STORE_RACE_ROOT = "tests/project_store_race"
-
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and
 # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
@@ -738,16 +682,6 @@ PLAN_STORE_DEPENDENCY_READ_PROJECT = "plan-store-dependency-read"
 PLAN_STORE_DEPENDENCY_READ_SCOPED = "test-pypi"
 #: The directory it owns, which every other project's tiers ignore.
 PLAN_STORE_DEPENDENCY_READ_ROOT = "tests/plan_store_dependency_read"
-#: The project whose target owns the checks that the board-copy journeys' quota is budgeted in
-#: the adopted plan store: they read the store's budgets file and its loopback board's
-#: placement delays at the tag `config/onetaskgraph.version` names, from the registered
-#: onetaskgraph checkout. A project of its own because what it reads lives outside every
-#: cache key, which a project's whole tier says rather than a marker inside another's.
-BOARD_COPY_QUOTA_HANDOVER_PROJECT = "board-copy-quota-handover"
-#: That project's one target, uncached because it reads another repository's checkout.
-BOARD_COPY_QUOTA_HANDOVER_SCOPED = "test-checkouts"
-#: The directory it owns, which every other project's tiers ignore.
-BOARD_COPY_QUOTA_HANDOVER_ROOT = "tests/board_copy_quota_handover"
 #: The project whose test target owns the journeys over `just render-diagram`: a real
 #: Chromium drawing a Mermaid source in the locked font, and every refusal. A project of its
 #: own for the reason the one above is.
@@ -789,27 +723,6 @@ UNFINISHED_HOST_SCOPED = "test-host"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 #: The directory it owns, which every other project's tiers ignore.
 UNFINISHED_ROOT = "tests/unfinished"
-
-# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
-# catalog of test projects, where every project has its entry, and
-# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-# describes; the board-copy-approval entry sits beside the others' because the catalog is
-# the domain.
-#: The project whose test target owns the journeys approving a design document on the
-#: `plans` board: the real `just copy-plan`, `just approve-design` and launch gate, the
-#: installed plan store and engine, against the GitHub Projects double. A project of its
-#: own for the reason `unwatched` is: a real recipe chain per assertion is a cost `nx
-#: affected` can only keep off an unrelated edit where it is a separate project.
-BOARD_COPY_APPROVAL_PROJECT = "board-copy-approval"
-#: That project's code-keyed test target: nothing here reads this repository's prose.
-BOARD_COPY_APPROVAL_SCOPED = "test"
-#: Its uncached target timing the approval at the `plans` board's scale, the one journey
-#: its `test` deselects: the figure budget `plan-approval-seconds` reports, which a memo
-#: would replay from another moment.
-BOARD_COPY_APPROVAL_HOST_SCOPED = "test-host"
-#: The directory it owns, which every other project's tiers ignore.
-BOARD_COPY_APPROVAL_ROOT = "tests/e2e/board_copy_approval"
-# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The reason above
 # `HOST_SWEEP_WORKSPACE`: this module holds one row per test project.
@@ -905,11 +818,7 @@ E2E_JOURNEYS: tuple[JourneyProject, ...] = (
     JourneyProject(
         "pooled-server-session", f"{E2E_ROOT}/pooled_server_session", "pooledServerSessionWorkspace"
     ),
-    JourneyProject("spike-brief", f"{E2E_ROOT}/spike_brief", "spikeBriefWorkspace"),
-    JourneyProject(
-        "design-review-undo", f"{E2E_ROOT}/design_review_undo", "designReviewUndoWorkspace"
-    ),
-    JourneyProject("screened-export", f"{E2E_ROOT}/screened_export", "screenedExportWorkspace"),
+    JourneyProject("planning", f"{E2E_ROOT}/planning", "planningWorkspace"),
     JourneyProject("review-drafting", f"{E2E_ROOT}/review_drafting", "reviewDraftingWorkspace"),
     JourneyProject(
         "publish-and-landing", f"{E2E_ROOT}/publish_and_landing", "publishAndLandingWorkspace"
@@ -1098,7 +1007,6 @@ def catalogued_roots() -> dict[str, str]:
         # The workspace root's own project, which holds the workspace-wide targets.
         WORKSPACE_PROJECT: "",
         MARKER_TIER_ROOT: MARKER_TIER_ROOT,
-        BOARD_COPY_APPROVAL_PROJECT: BOARD_COPY_APPROVAL_ROOT,
         DAG_UI_PROJECT: DAG_UI_ROOT,
         GRACEFUL_CANCEL_PROJECT: GRACEFUL_CANCEL_ROOT,
         HOST_SWEEP_PROJECT: HOST_SWEEP_ROOT,
@@ -1107,8 +1015,6 @@ def catalogued_roots() -> dict[str, str]:
         MERGE_POLICY_PROJECT: MERGE_POLICY_ROOT,
         PLAN_STORE_ASSETS_PROJECT: PLAN_STORE_ASSETS_ROOT,
         PLAN_STORE_DEPENDENCY_READ_PROJECT: PLAN_STORE_DEPENDENCY_READ_ROOT,
-        BOARD_COPY_QUOTA_HANDOVER_PROJECT: BOARD_COPY_QUOTA_HANDOVER_ROOT,
-        PROJECT_STORE_RACE_PROJECT: PROJECT_STORE_RACE_ROOT,
         RENDER_DIAGRAM_PROJECT: RENDER_DIAGRAM_ROOT,
         RUN_END_HOOKS_PROJECT: RUN_END_HOOKS_ROOT,
         SCHEMA_CACHE_PROJECT: SCHEMA_CACHE_ROOT,

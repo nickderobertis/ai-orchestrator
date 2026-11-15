@@ -3,8 +3,7 @@ title: 'Design: scheduler-research'
 project: scheduler-research
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:511628c22c97dd8b34beb643fd9f28514f5fb04c6aed6e0bbd4c9267edd81f53
-  "onetaskgraph.template": {"answers_digest":"sha256:da5fad8cd113848f7015c77a829dd3a8a3f7ab2c8f0ce244ec3df5d11eb66ad9","body_digest":"sha256:0f3952ac8b0fa96e84d3d49ed887b52a3de0ec1f0a6fe780f47d5109c033a308","digest":"sha256:b3081e2663074adf631864ea2a51e4148e6a82407f8fc9b893f85a2c6aef6634","template":"onepipeline:design-doc"}
-  "orchestrator.design-approval": {"approved_at":"2026-10-09T00:49:58.709670+00:00","key":"c5e3f6082cafff0c70f42863d91d88e9aecb105431a87a5b2a48e5eeb5b328bd"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:69f4d29cf681ce24ef8ed77bd8db8d5d71430b16517f2573f3b95902e005701f","answers_digest":"sha256:b723efea4bd5818404994f9734da4c47aec27f4591465f48dd2f000c6c1041e6"}
 ---
 ## What
 
@@ -32,19 +31,29 @@ A new note states the selection rule and points at the code that implements it. 
 
 ## Planned tasks
 
+<details>
+<summary>All 1 planned tasks</summary>
+
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 | research | Scheduler notes | the written account of the selection rule | none | examples/tasks/scheduler-research/research.md |
+
+</details>
 
 
 <!-- onetaskgraph:template-answers
 acceptance_criteria:
 - The note names the selection rule and the code that implements it.
 - Every claim in it points at a file and a symbol somebody can open.
+accepted_opaque: []
 architecture: |-
   Nothing is built. One agent reads the scheduler and writes what it found beside the code
   it describes, so the note moves with it.
 budgets: []
+dag_image: ''
+delivers: {}
+goals: []
+graph: {}
 plan_budgets:
   checklist:
   - budget: ''
@@ -87,7 +96,6 @@ planned_tasks:
   location: examples/tasks/scheduler-research/research.md
   task: research
   unit: Scheduler notes
-predates_budgets: ''
 units:
 - decisions: []
   name: Scheduler notes
@@ -95,6 +103,7 @@ units:
   repository: onepipeline
   reversible: []
   summary: A new note states the selection rule and points at the code that implements it. Nothing reads it but a person.
+visual_changes: []
 what: |-
   One written account of how the scheduler decides which node to run next, kept as a note
   in the repository the scheduler lives in.

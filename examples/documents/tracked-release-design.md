@@ -3,8 +3,7 @@ title: 'Design: tracked-release'
 project: tracked-release
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:f9a181fad4a495bf5f9042f736a807665321e8f64d5e8eb0eceae56c9c56a6a8
-  "onetaskgraph.template": {"answers_digest":"sha256:e97c6b267555394d1a48dcf0197de99eaeb954d95cb8499bd55b3853cacae690","body_digest":"sha256:968f1c6cd102da0aa3269c872a39b9a23c2f74f9fb7a5e7f6cb73d9ce2a164a2","digest":"sha256:b3081e2663074adf631864ea2a51e4148e6a82407f8fc9b893f85a2c6aef6634","template":"onepipeline:design-doc"}
-  "orchestrator.design-approval": {"approved_at":"2026-10-09T00:50:00.527340+00:00","key":"93f092314f2874ce94b181874fa30b5bd434f6b2d3ea97dc641202d65f3612c4"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:e08d5eeda54543870c508592120fab854db332c447346a1397a8fcb34a488c16","answers_digest":"sha256:7cb6361b21a24692beb57d04edeac145abe27a44f9d23e92a417fba2bf1d4dcc"}
 ---
 ## What
 
@@ -36,7 +35,12 @@ Written into the design and approved by a person before anything is built; every
 
 **Reversible:**
 
-- **Readiness handoff.** One node records that the readiness handoff produced no repository change, rather than pretending to.
+<details>
+<summary>Readiness handoff</summary>
+
+One node records that the readiness handoff produced no repository change, rather than pretending to.
+
+</details>
 
 ### Documentation — `some-docs`
 
@@ -50,6 +54,9 @@ The documentation describes the approved API and rollout, and the announcement f
 
 ## Planned tasks
 
+<details>
+<summary>All 7 planned tasks</summary>
+
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 | design | Service | the API and rollout contract | none | examples/tasks/tracked-release/design.md |
@@ -60,18 +67,25 @@ The documentation describes the approved API and rollout, and the announcement f
 | release-approval | Service | a person's approval to publish | service, docs | examples/tasks/tracked-release/release-approval.md |
 | announce | Documentation | the release announcement | release-approval | examples/tasks/tracked-release/announce.md |
 
+</details>
+
 
 <!-- onetaskgraph:template-answers
 acceptance_criteria:
 - The API and rollout are agreed in writing before any of it is built.
 - The service does what was agreed, and the documentation describes what the service does.
 - Nothing is published until a person has read both.
+accepted_opaque: []
 architecture: |-
   A line with two people in it. The design is written first; somebody approves it; the
   service and the documentation are then built against it in parallel, in their own
   repositories; somebody approves the result; the announcement is written last. One node
   changes nothing at all and says so.
 budgets: []
+dag_image: ''
+delivers: {}
+goals: []
+graph: {}
 plan_budgets:
   checklist:
   - budget: ''
@@ -144,7 +158,6 @@ planned_tasks:
   location: examples/tasks/tracked-release/announce.md
   task: announce
   unit: Documentation
-predates_budgets: ''
 units:
 - decisions:
   - artifact: ''
@@ -164,6 +177,7 @@ units:
   repository: some-docs
   reversible: []
   summary: The documentation describes the approved API and rollout, and the announcement follows the second approval.
+visual_changes: []
 what: |-
   One release carried from a written design, through a person's approval of it, into the
   service and the documentation, to a second approval and the announcement.

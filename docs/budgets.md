@@ -41,8 +41,7 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
   states. **A time target is enforced only in CI, where measurement is consistent**, and
   this repository has no CI, so on this host a seconds budget is labelled `host-variable`:
   still measured on every check and reported with its actual, budget, headroom and host
-  conditions, and over it warns rather than refuses. `plan-approval-seconds`, the three
-  `plan-copy-seconds-*` budgets and `gate-time` carry it; `own-sessions-read-seconds`
+  conditions, and over it warns rather than refuses. `gate-time` carries it; `own-sessions-read-seconds`
   predates the rule and is strict until it is relabelled. The hook reads the label on the
   root file; a project's uncached `budgets-host` target (`scripts/budgets-host.sh`) reads it
   on the project's `host` budgets, where an errored measurement still fails, and a
@@ -96,7 +95,7 @@ finishes before that worker can settle.
 
 ## The budgets files
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] this restates the onebudgetspec keys a plan's budgets name, which the task that added it requires; their reconciliation with the installed library is held by `tests/test_budgets_files.py`, and the vocabularies in it are held to `orchestrator/plan_budgets.py` by `tests/test_plan_budgets_template.py`. -->
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] this restates the onebudgetspec keys a plan's budgets name, which the task that added it requires; their reconciliation with the installed library is held by `tests/test_budgets_files.py`, and the vocabularies in it are stated once by the `schema:` of `templates/plan-task-budgets.md.j2`, which the plan store holds every rendering to. -->
 A budgets file is named `budgets.yaml`. Of each budget in it, a plan's budget names the
 `id`, the `command`, the `unit`, the `direction` (`max` or `min`) and the
 `threshold`, and the convention below uses its `description`; onebudgetspec's documentation
@@ -124,12 +123,13 @@ adopted engine. This is what such a command may rely on.
 
 ## How a plan states its budgets
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This restates the data model `orchestrator/plan_budgets.py` states once, which a planner reads here; `tests/test_plan_budgets_template.py` fails the moment its records, vocabularies or caps part from that module's own. -->
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This restates the data model the `schema:` declarations of `templates/plan-task-budgets.md.j2` and `templates/plan-description.md.j2` state once, which a planner reads here; the plan store holds every rendering to those schemas, so a record breaking one is refused whatever this page says, and `tests/e2e/planning/` renders one and reads the refusal. -->
 A plan first decides whether it needs an added/changed task budget. With none and no
 existing analysis, it renders `plan-description` from overview alone and omits
 `orchestrator.plan-budgets`; it performs no further budget analysis. Existing analysis
 records are preserved and validated in full. When analysis is needed, it lives in two homes,
-and `orchestrator/plan_budgets.py` states the shape of both once.
+and the `schema:` declarations of `templates/plan-task-budgets.md.j2` and
+`templates/plan-description.md.j2` state the shape of both once.
 
 - **Each budget lives on the task that owns it.** The node that implements a budget owns its
   command and its registration, so its task carries the budget: the task's
@@ -179,12 +179,13 @@ and `orchestrator/plan_budgets.py` states the shape of both once.
   registration and unaffected repositories do not belong here.
 - **The metadata is authoritative.** A copy carries metadata and never a template's
   answers, so the records are what every reader reads, on the board as where the plan was
-  drafted. `just check-plan` renders each task's `## Budgets` section and the plan's
-  description from their records and refuses a body that is not that rendering.
+  drafted. Each task's `## Budgets` section and the plan's description are renderings of
+  the same records, and the engine refuses, at `just check-plan` and again at launch, a body
+  that is no longer the rendering its provenance records.
 - **The design document summarizes introduced or modified targets.** The template's
-  `budgets_guidance` is the single rendering rule. The writer copies all three
-  answers from `python -m orchestrator.plan_budgets <project>` in full; `just finish-plan`
-  refuses a document whose answers differ. Task records and existing project analysis,
+  `budgets_guidance` is the single rendering rule. The writer answers `plan_budgets` with
+  the project's `orchestrator.plan-budgets` metadata and `budgets` with every task's
+  `orchestrator.budgets` records, in full and as the store holds them, inventing none. Task records and existing project analysis,
   including repo-wide effects, remain intact regardless of what the design document shows.
 - **Only an approved design document changes a budgets file.** A plan proposes its changes
   to each budgets file on the tasks that own them, the design document puts them to the
@@ -214,16 +215,11 @@ and `orchestrator/plan_budgets.py` states the shape of both once.
 
 ## Plans that predate budgets
 
-`config/budgets-migration.yaml` is the one list of plans written before this requirement.
-Each entry is a qualified plan project id and the reason it predates budgets. A plan named
-there is exempt from every refusal about its plan-level answers and held to everything
-else. Its migration reason remains a writer answer; design rendering follows the
-template guidance above. Adding to the list is a reviewed change to this repository, so a
-plan cannot exempt itself. The plan kinds exempt from design approval — a planning launch's project and
-a follow-ups launch's — are exempt here too.
-
-Exact current key sets are the implicit legacy format. Version 2 selects modern records;
-unknown versions, extra keys, partial fields and malformed types are refused. Legacy
-metadata, rendered task/project bodies, copied records and digests stay unchanged, without
-invented source/runtime facts. Design rendering follows the template guidance above. Existing migration
-exemptions remain unchanged. `orchestrator/plan_budgets.py` is the schema authority.
+No list exempts a plan from budgets: a plan written before this requirement is reviewed
+like any other the next time `just review-plan` judges it. Exact current key sets
+are the implicit legacy format, which the template schemas still read; version 2 selects
+modern records, and an unknown version, an extra key, a partial field or a malformed type is
+refused. Legacy metadata, rendered task and project bodies and copied records stay
+unchanged, without invented source or runtime facts. The `schema:` declarations of
+`templates/plan-task-budgets.md.j2` and `templates/plan-description.md.j2` are the schema
+authority.

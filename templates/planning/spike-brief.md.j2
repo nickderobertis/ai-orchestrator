@@ -1,0 +1,27 @@
+---
+onetaskgraph_template: 1
+description: The spike-brief writer's task of a plan's spikes run.
+variables:
+  plan:
+    description: The qualified id of the plan whose spikes are briefed.
+    type: text
+    required: true
+  native:
+    description: The plan project's native id.
+    type: text
+    required: true
+---
+Read the spike tasks of `{{ plan }}-spikes` and the draft plan `{{ plan }}`, and write the
+spike brief a person approves before any spike runs: exactly one document of `{{ plan }}`
+with the native id `{{ native }}-spike-brief`, rendered from the `spike-brief` template as
+`onepipeline template resolve spike-brief --json` resolves it, with one entry per spike task,
+by its node id.
+
+## Acceptance criteria
+
+- `{{ plan }}` holds the document `{{ native }}-spike-brief`, rendered from the `spike-brief` template, with one question and use for each spike task of `{{ plan }}-spikes` and no other.
+
+## Additional info
+
+This dispatch writes only to the plan store, which is gitignored: it commits nothing and
+leaves the checkout on its base branch.

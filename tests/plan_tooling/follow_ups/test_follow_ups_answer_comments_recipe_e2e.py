@@ -2422,7 +2422,7 @@ def _refusals(stderr: str, program: str) -> list[str]:
 
 @pytest.mark.parametrize(
     ("helper_name", "what"),
-    [("follow-up-env.sh", "drafts-root helper"), ("plan-brief.sh", "run-id helper")],
+    [("follow-up-env.sh", "drafts-root helper")],
 )
 def test_the_recipe_refuses_before_the_board_is_read_when_another_helper_cannot_be_loaded(
     tmp_path: Path, helper_name: str, what: str
@@ -2578,7 +2578,7 @@ def test_the_narrow_mode_is_refused_without_the_gathering_it_is_about(tmp_path: 
 
 def test_the_run_ids_the_module_routes_to_are_the_ones_the_launcher_takes() -> None:
     """A second spelling of a grammar drifts, so the module's is read against the launcher's."""
-    brief = (REPO_ROOT / "scripts" / "plan-brief.sh").read_text(encoding="utf-8")
-    (declared,) = re.findall(r"^PLAN_SAFE_RUN_ID='\^(.*)\$'$", brief, re.MULTILINE)
+    launcher = (REPO_ROOT / "scripts" / "follow-ups-answer-comments.sh").read_text(encoding="utf-8")
+    (declared,) = re.findall(r"^PLAN_SAFE_RUN_ID='\^(.*)\$'$", launcher, re.MULTILINE)
 
     assert declared == comments.LAUNCHABLE_RUN.pattern

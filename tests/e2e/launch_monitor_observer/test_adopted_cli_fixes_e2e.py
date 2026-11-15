@@ -729,7 +729,7 @@ def test_a_relative_source_root_resolves_against_the_document_that_supplied_it(
 
 
 #: How the store spells `ROOT_SETTING` at its environment layer, which is the layer
-#: `scripts/plan-root-env.sh` and `scripts/follow-up-env.sh` export this checkout's own
+#: `scripts/follow-ups.sh` and `scripts/follow-up-env.sh` export this checkout's own
 #: absolute roots at.
 ROOT_SETTING_ENV = "ONETASKGRAPH_SOURCES__WORK__CONFIG__ROOT"
 

@@ -25,8 +25,8 @@ import re
 from typing import NamedTuple
 
 import pytest
+from shared_dispatch_bar import APPENDIX
 
-from orchestrator.criteria_guard import APPENDIX
 from orchestrator.root import REPO_ROOT
 
 #: The document that must point rather than state.

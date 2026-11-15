@@ -110,12 +110,12 @@ _ENVELOPE = (
     "one file per run as its grant names"
 )
 _SHARED_ENVELOPE = "never one file shared between runs"
-_PLAN = "`just plan <brief.md>` turns a manager-written brief into the project the planner authors"
-_FINISH = "`just finish-plan <brief>` is its tail"
-_CHECK_PLAN = "`just check-plan` reads a project against the bar each node will be judged against"
+_PLAN = "`just plan <brief.md>` launches `templates/planning/planning.md.j2` as one flow"
+_FINISH = "`just finish-plan <source>:<project>` runs it from `check` over an edited plan"
+_CHECK_PLAN = "`just check-plan` is the engine's plan load with this host's install check"
 _REVIEW_PLAN = (
     "A plan you wrote or tweaked is unreviewed until `just review-plan <source:project>` "
-    "has read it"
+    "has judged what changed"
 )
 _COPY_PLAN = "A `just copy-plan` refused for a rate limit"
 _PLANS_READ = "Read one with `just plans project show plans:<project>`"

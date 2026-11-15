@@ -70,8 +70,9 @@ RESOLUTION_FIELDS = frozenset({"actor", "on_behalf_of", "text", "choice", "reaso
 #: manager's own or the user's relayed; omitted while it is the manager's.
 PROVENANCES = ("manager", "user")
 
-#: The document version a task stored: opaque to the engine, and for a design review the
-#: approval key `orchestrator/design_approval.py` computes.
+#: The document version a task stored: opaque to the engine. This host raises no
+#: design-review task any more — a plan's design review is the planning run's own
+#: `approve-design` node — so it only reads one an item already carries.
 VersionKey = NewType("VersionKey", str)
 
 

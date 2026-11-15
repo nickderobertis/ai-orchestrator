@@ -66,8 +66,8 @@ default:
 #: the fixtures that call this are module-scoped, so they run before it has.
 GIT_IDENTITY = ("-c", "user.email=test@example.com", "-c", "user.name=ai-orchestrator-test")
 
-#: The origin `scripts/plan-brief.sh` names as a planning flow's default publication
-#: repository — this repository's own, as `onevcs` files it. A journey driving `just
+#: The origin a planning flow's default publication repository was named by — this
+#: repository's own, as `onevcs` files it. A journey driving `just
 #: plan` or `just finish-plan` as an operator types them seeds a scratch identity under
 #: this origin, so the record the recipe writes when nobody tells it anything is one its
 #: launch can resolve, in a registry that is never this host's.

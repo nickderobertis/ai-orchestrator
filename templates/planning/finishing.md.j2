@@ -1,0 +1,85 @@
+---
+onetaskgraph_template: 1
+description: >-
+  The tail of the planning workflow, for a plan already drafted or edited since: check,
+  review, design document, copy onto the board, and the user's approval. `just finish-plan
+  <plan>` creates it and launches it in one flow.
+variables:
+  plan:
+    description: The qualified id of the plan project the planner writes, `authoring:<native id>`, from the brief's `Plan project:` line.
+    type: text
+    required: true
+  native:
+    description: The plan project's native id, the part of `plan` after its source.
+    type: text
+    required: true
+  brief_text:
+    description: What the plan was briefed to do, for the design document's What and Why; the plan's own description when no brief is at hand.
+    type: text
+    required: true
+  destination:
+    description: The configured source the reviewed plan and its design document are copied into.
+    type: text
+    default: plans
+members:
+  - id: "{{ native }}-finishing-check"
+    title: "Check {{ plan }} as its launch will load it"
+    template: {file: step.md.j2}
+    answers:
+      description: "`onepipeline plan check` over the plan, with this host's install check registered."
+    metadata:
+      onepipeline.id: check
+      onepipeline.kind: command
+      onepipeline.command: [scripts/onepipeline.sh, plan, check, "{{ plan }}", --check, orchestrator/host_adoption_check.py]
+  - id: "{{ native }}-finishing-review"
+    title: "Review {{ plan }}"
+    template: {file: step.md.j2}
+    answers:
+      description: "`scripts/review-plan-item.sh` judges every unreviewed task and the project, and attests each pass."
+    depends_on: ["{{ native }}-finishing-check"]
+    metadata:
+      onepipeline.id: review
+      onepipeline.kind: command
+      onepipeline.command: [scripts/review-plan-item.sh, "{{ plan }}"]
+  - id: "{{ native }}-finishing-design"
+    title: "Write the design document of {{ plan }}"
+    template: {file: design.md.j2}
+    answers:
+      plan: "{{ plan }}"
+      native: "{{ native }}"
+      brief_text: "{{ brief_text }}"
+    depends_on: ["{{ native }}-finishing-review"]
+    metadata:
+      onepipeline.id: design
+      onepipeline.persona: ../personas/design-doc.yaml
+      onepipeline.agent_graph: graphs/design-doc.yaml
+  - id: "{{ native }}-finishing-copy"
+    title: "Copy {{ plan }} and its documents to {{ destination }}"
+    template: {file: step.md.j2}
+    answers:
+      description: "`onetaskgraph project copy` of the plan, its tasks and its documents, into `{{ destination }}`."
+    depends_on: ["{{ native }}-finishing-design"]
+    metadata:
+      onepipeline.id: copy
+      onepipeline.kind: command
+      onepipeline.command: [.venv/bin/onetaskgraph, project, copy, "{{ plan }}", --to, "{{ destination }}", --documents, --no-interactive]
+  - id: "{{ native }}-finishing-approve-design"
+    title: "Approve the design of {{ plan }}"
+    template: {file: step.md.j2}
+    answers:
+      description: "Waits for the user's approval of the design document on the board copy."
+    depends_on: ["{{ native }}-finishing-copy"]
+    metadata:
+      onepipeline.id: approve-design
+      onepipeline.kind: human
+      onepipeline.human_item:
+        kind: task
+        priority: medium
+        title: "Read and approve the design for {{ plan }}"
+        body: >-
+          Read the design document of the copy of {{ plan }} in {{ destination }} (its id is
+          the `onetaskgraph.copies` entry `onetaskgraph project show {{ plan }} --json`
+          names). Once the user approves it, run `just approve-design <that copy>
+          <this run's id>`.
+---
+The finishing run of `{{ plan }}`: check, review, design document, copy to `{{ destination }}`, and the user's approval.

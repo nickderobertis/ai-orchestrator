@@ -248,8 +248,7 @@ DECLINE_REASON_ENV = "FAKE_BACKEND_DECLINE_REASON"
 DECLINE_RECORD_ENV = "FAKE_BACKEND_DECLINE_RECORD"
 
 #: The attribution the engine renders beside a manager's ruling, naming the reference a
-#: dispatch declines it by — `onepipeline`'s `ruling::attribution`, which
-#: `tests/test_engine_contracts.py` holds `orchestrator.envelope_review` to. Read off the
+#: dispatch declines it by — `onepipeline`'s `ruling::attribution`. Read off the
 #: turn's own prompt, so the reference is the one the dispatch was really handed.
 MANAGER_RULING = re.compile(r"Ruling from the manager \(ruling reference `(?P<reference>[^`]+)`\)")
 
@@ -315,7 +314,7 @@ LOST_TURN_ATTEMPTS = 1_000_000
 #: Optionally have the dispatched agent turn WRITE the files a real one would.
 #:
 #: A planner's whole deliverable is a plan it authors as records in a local Markdown
-#: store, and `scripts/plan.sh` records a planner pass for whatever that run authored.
+#: store, which the planning run's later steps then read.
 #: A stand-in that only reports leaves nothing for the closeout to find, so a journey
 #: about the closeout would be measuring an empty diff. This names a JSON file mapping
 #: each destination path to its content, written once, by the dispatched member alone —

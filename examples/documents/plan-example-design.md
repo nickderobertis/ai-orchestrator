@@ -3,8 +3,7 @@ title: 'Design: plan-example'
 project: plan-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:7543864a301acea3a06b63a9cda7d47b585511926f55b6d379566db4530ee0a8
-  "onetaskgraph.template": {"answers_digest":"sha256:f543a08d7dc83470913ffb3267cb3e26ebce3905e8b86801cc929b7d63b55560","body_digest":"sha256:34dbf8331736c98143689caf72defbaf36bb1711d3dbe27f769aad7ff2fdd7ea","digest":"sha256:b3081e2663074adf631864ea2a51e4148e6a82407f8fc9b893f85a2c6aef6634","template":"onepipeline:design-doc"}
-  "orchestrator.design-approval": {"approved_at":"2026-10-09T00:49:54.883522+00:00","key":"b08c4e54c400d00b32859769c7a87f054ddd9ea6e95441002c506244333c8bdf"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:edf138252993822cf098b693624ff3030b31a3ce069c60308bb43030f4b67769","answers_digest":"sha256:9efa3635ebbc6f3ee56bf080c358f91af3c6f1a99bdbcc26ce07ad22d2c36bb1"}
 ---
 ## What
 
@@ -41,7 +40,12 @@ CREATE TABLE links (
 
 **Reversible:**
 
-- **The HTTP API.** Two operations, `POST /links` to create a short link and `GET /<code>` to follow one, called only by this plan's UI.
+<details>
+<summary>The HTTP API</summary>
+
+Two operations, `POST /links` to create a short link and `GET /<code>` to follow one, called only by this plan's UI.
+
+</details>
 
 ### Web UI — `shortener` (`ui`)
 
@@ -59,6 +63,9 @@ The README says what the service is, how to run it, and what its API is.
 
 ## Planned tasks
 
+<details>
+<summary>All 5 planned tasks</summary>
+
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 | design | API | the API, the storage, and the module boundaries | none | examples/tasks/plan-example/design.md |
@@ -67,17 +74,24 @@ The README says what the service is, how to run it, and what its API is.
 | docs | Documentation | the README | api, ui | examples/tasks/plan-example/docs.md |
 | review | API | verified, severity-ranked findings | api, ui | examples/tasks/plan-example/review.md |
 
+</details>
+
 
 <!-- onetaskgraph:template-answers
 acceptance_criteria:
 - A person can create a short link and follow it.
 - The API and the UI hold to the design the first task writes.
 - The README says what the service is, how to run it, and what its API is.
+accepted_opaque: []
 architecture: |-
   Three pieces, split so two of them can be built at once. One agent settles the design —
   the API, the storage, and the line between the two halves — and the API and the web UI
   are then built in parallel against it. Documentation and a review follow both.
 budgets: []
+dag_image: ''
+delivers: {}
+goals: []
+graph: {}
 plan_budgets:
   checklist:
   - budget: ''
@@ -145,7 +159,6 @@ planned_tasks:
   location: examples/tasks/plan-example/review.md
   task: review
   unit: API
-predates_budgets: ''
 units:
 - decisions:
   - artifact: |-
@@ -177,6 +190,7 @@ units:
   repository: shortener
   reversible: []
   summary: The README says what the service is, how to run it, and what its API is.
+visual_changes: []
 what: |-
   A URL shortener: somewhere to turn a long link into a short one, and somewhere to follow
   a short one back.

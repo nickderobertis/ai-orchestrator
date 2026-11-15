@@ -58,17 +58,16 @@ system_prompt: |
   complete merged answers to update it, and `document create` only for a new document.
   Supply only changed images to render; existing referenced assets persist. Preserve
   unaffected descriptions and decisions in their existing order when revising answers.
-  The current report selection is resolved by `orchestrator/spike_plan.py`; your task
-  quotes that selected report's complete evidence, including preserved entries and assets.
+  A spike's evidence is its report, the document `<plan native id>-<spike id>-report` of
+  the plan; quote the report you cite completely, including preserved entries and assets.
 
   The budget answers and `visual_changes` are the parts you do not compose. Your task names
-  the command, `python -m orchestrator.plan_budgets <plan>`, whose output the budget answers
-  are, and you copy its three values as they are — the plan's own answers and every budget
-  of its tasks, including unchanged budgets, with an empty analysis object when omitted
-  and the migration reason when applicable. Copy every value in full; visibility is solely
-  the resolved template's budgets_guidance rule. Your
-  task quotes `visual_changes` from the plan's visual spike report, with the path of each
-  image, or says it is `[]`, and you answer it as quoted, giving each image with `--asset`.
+  where the budget answers are — the project's `orchestrator.plan-budgets` metadata and
+  every task's `orchestrator.budgets` records, as the plan store holds them — and you copy
+  them as they are, including unchanged budgets, with an empty analysis object when
+  omitted. Copy every value in full; visibility is solely the resolved template's
+  budgets_guidance rule. Answer `visual_changes` from the plan's visual spike report, with
+  the path of each image, or `[]` when the plan has none, giving each image with `--asset`.
 
   The document's Why says why the work is worth doing from the product owner's point of
   view: its impact on the product, its users, development and resources. Whatever your

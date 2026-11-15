@@ -2,34 +2,31 @@
 #
 # The plan checklist: the llmlint rules a plan is held to while it is reviewed, so a rule
 # its code would later meet on the merge path refuses the plan before approval instead.
-# It is the planner's second judge (`graphs/planner.yaml`) and the checklist `just
-# review-plan` runs, both through `scripts/plan-checklist.sh`, and the one source of every
-# plan-checklist rule. The repository's own `llmlint.yml` never loads it, and llmlint never
-# discovers it, because it is not named `llmlint.yml`.
+# It is the `plan-checklist` judge of `graphs/planner.yaml`'s worker, so every review —
+# `scripts/review-plan-item.sh`'s judge-only run, for authoring and for every live edit —
+# judges against it, and the planner's draft task carries these rules as `llmlint rules`
+# prints them. It is the one source of every plan-checklist rule, the criteria and
+# authorization rules and the cross-record budget rules among them, each judged rather than
+# matched. The repository's own `llmlint.yml` never loads it, and llmlint never discovers
+# it, because it is not named `llmlint.yml`.
 #
-# Every rule judges exactly the plan documents it is passed — the project's description
-# and each task's Markdown document — and never a file of a repository's tree. Under `-c`
-# llmlint roots every glob at its working directory rather than at this file's, and drops
-# a passed path outside that directory without a word, so the script runs llmlint from the
-# plan-authoring root (the directory holding `projects/` and `tasks/`), names the
-# documents relative to it, and selects them with `**/*.md` here. A rule about the plan's
-# description alone selects `projects/**/*.md`, and one about task documents alone
-# `tasks/**/*.md`, since that is where the store keeps each.
+# Every rule judges exactly the plan document it is passed. The review lays each out under a
+# scratch root as `tasks/<id>.md` (a task) or `projects/<id>.md` (a plan's description, its
+# front matter listing every task with its metadata), each opening with front matter holding
+# the record's title and metadata. A rule about task documents selects `tasks/**/*.md`, one
+# about descriptions `projects/**/*.md`; no rule selects any other path, so a checkout's own
+# files are never judged against this checklist.
 #
 # The judge's oneharness routing is `oneharness.llmlint.toml`'s, the same as this
-# repository's judged tier, named below under `oneharness.config`. llmlint hands that
-# path to oneharness as written, and both resolve it against the process's working
-# directory rather than `--cwd`, so the script runs llmlint from this checkout's root
-# and points `--cwd` at the plan-authoring root.
+# repository's judged tier, named below under `oneharness.config`; llmlint resolves it
+# against the process's working directory, which is this checkout's root.
 #
 # A deliberate departure from a rule is one HTML comment on its own line in the departing
 # task's `additional_info` answer — `<!--`, then `llmlint: ignore-file`, then the rule's name
 # in square brackets, then the reason, then `-->` — or, for a rule judged on the plan's
-# description, the same line in its overview under `**Decided**`. The checklist runs with
-# `--no-ignore-check`, so a departure naming a misspelled rule suppresses nothing and the
-# rule still fires.
+# description, the same line in its overview under `**Decided**`.
 files:
-  include: ["**/*.md"]
+  include: ["tasks/**/*.md", "projects/**/*.md"]
 rationales: true
 history:
   max_runs: 200
@@ -48,8 +45,11 @@ agents:
       Every target file is a document of one execution plan, written before any of its
       work exists. Each is either the plan's description (its goal, its workload and
       sizing, its answer about 10x usage, and its budget checklist) or one plan task's
-      Markdown document. A task document carries YAML frontmatter, whose
-      `orchestrator.budgets` record lists the budgets that task owns, and a body with
+      Markdown document. Each opens with front matter holding its title and metadata; a
+      description's also lists every task of the plan, with each task's metadata, so a rule
+      about the whole plan reads the tasks there. A task's `orchestrator.budgets` record
+      lists the budgets that task owns, and its `orchestrator.unit` the unit it changes. A
+      task document has a body with
       `## What`, `## Why`, an optional `## Goals` section, an optional `## Budgets`
       section, `## Acceptance criteria` and `## Additional info`. Text under
       `### Operational notes for this host` is a standard appendix every task
@@ -80,37 +80,37 @@ rules:
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: the plan registers or keeps a budget, in a task's budget record or a description's budget checklist
   - name: budgets_reuse_gate_telemetry
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: the plan registers a budget and states what its command runs or reads
   - name: budgets_scoped_to_minimal_tree
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: the plan registers a budget and states where its budgets file, command, or budget-only fixtures will live
   - name: budget_commands_measure_directly
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: the plan registers a budget and states its command
   - name: tests_hold_no_nonfunctional_thresholds
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: the plan states what a test it adds or changes will assert about a timing, size or count figure, or how it bounds a wait
   - name: expensive_tests_stay_behind_their_own_edge
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: the plan adds or changes a test that is slow or reaches an external service, or a project definition or dependency edge that owns one, or makes a budget's figure depend on one
 
   # Every other rule the two fragments ship, off: each is about a repository's own files
@@ -121,31 +121,31 @@ rules:
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: false
   - name: onebudgetspec_is_the_only_judge
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: false
   - name: instruction_layer_localized
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: false
   - name: new_projects_keep_the_graph_uniform
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: false
   - name: code_lands_in_the_domain_that_owns_it
     override: true
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: false
 
   # First decide whether work needs an added/changed task budget; only then perform budget
@@ -156,7 +156,7 @@ rules:
   - name: seam_decisions_rest_with_their_owner
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: the plan's design names a contract between two components, such as a call, a selection or query, a stored shape or a boundary between two collections of code
     description: |
       true when every decision a contract between two components encodes is made by the
@@ -188,9 +188,49 @@ rules:
       after the dispatch settles or outside it: a change request merging, a release or
       deploy, the merge path's or a host's required checks passing, a scheduled job, or a
       third party acting. A criterion naming a later comparison while stating that its
-      result is not the task's bar, one about the dispatch's own judged lint, and one about
-      a draft or demonstration change request the task grants its worker rest on nothing
-      outside it.
+      result is not the task's bar, and one about the dispatch's own judged lint, rest on
+      nothing outside it.
+    require_line_attribution: true
+  - name: plan_criteria_draft_needs_its_grant
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: an acceptance criterion is about the worker's own draft change request, or a throwaway demonstration change request stacked on it, being opened, pushed to or described
+    description: |
+      true when the task's own `## Additional info`, above its operational notes, grants
+      the worker that draft (that its change request may be published early) or that
+      demonstration change request.
+    require_line_attribution: true
+  - name: plan_criteria_state_properties
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the task document has an `## Acceptance criteria` section
+    description: |
+      true when every acceptance criterion states a property of the finished tree or of
+      what the dispatch reports. false when one names a procedure in its place: an exact
+      command line that must be run, a sequence of steps to perform, or an act such as
+      "the branch publishes" or "the gate is run".
+    require_line_attribution: true
+  - name: plan_task_names_its_unit
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the file opens with front matter carrying a `metadata` object
+    description: |
+      true when that `metadata` holds an `orchestrator.unit` that is a non-empty string
+      naming the unit of the plan the task changes, which the design document groups
+      tasks under.
+    require_line_attribution: true
+  - name: plan_checklist_budgets_have_owners
+    agent: plan
+    files:
+      include: ["projects/**/*.md"]
+    relevance: the file opens with front matter listing the plan's `tasks`, and its `orchestrator.plan-budgets` checklist names a budget in an entry's `budget`
+    description: |
+      true when every budget id a checklist entry names in its `budget` is owned by one of
+      the listed tasks, in that task's `orchestrator.budgets` record, and no budget id is
+      owned by two tasks.
     require_line_attribution: true
   - name: plan_criteria_require_realistic_tests
     agent: plan
@@ -206,7 +246,7 @@ rules:
   - name: plan_workload_states_numbers
     agent: plan
     files:
-      include: ["**/*.md"]
+      include: ["tasks/**/*.md", "projects/**/*.md"]
     relevance: the file states a realistic workload, in a plan description's workload or a budget's `workload`
     description: |
       true when every realistic workload the file states gives its scale in numbers: how

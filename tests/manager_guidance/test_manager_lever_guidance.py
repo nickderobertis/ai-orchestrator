@@ -11,9 +11,12 @@ there rather than leaving this passage describing a lever this host does not hav
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
-from orchestrator.criteria_guard import APPENDIX
 from orchestrator.root import REPO_ROOT
+
+#: The operational notes every task carries, by way of the `plan-task` template.
+APPENDIX = Path("templates") / "dispatch-appendix.md"
 
 #: The manager's own document, and the region of it the lever passage lives in. A region
 #: rather than the whole file, because the claim is made where a manager is doing that
@@ -62,8 +65,8 @@ def test_the_operational_notes_really_open_at_the_heading_the_manager_is_told_to
 ):
     """ "Above the operational notes" has to name a position a task really has.
 
-    A task carries `templates/dispatch-appendix.md` verbatim — `just check-plan` refuses one
-    that does not — so the heading that file opens with is the boundary an amendment sits
+    A task carries `templates/dispatch-appendix.md` verbatim — the `plan-task` template
+    includes it — so the heading that file opens with is the boundary an amendment sits
     above. If it moved, the placement instruction would send a manager to a heading no
     task has, and the precedence sentence would sit under text it does not govern.
     """

@@ -49,8 +49,9 @@ Such a producer has no row, because nothing here installs it, and every
 producer the override gives a default is in exactly one of ``INSTALLED``,
 ``AWAITING_FIRST_ADOPTION`` and ``CONSUMER_DEFAULTS``: `tests/test_host_installs.py`
 holds that, and `tests/sibling_facts.py` holds each default to the producer's own
-declaration. The difference matters to `orchestrator/adoption_guard.py`'s R7, which
-refuses a node elsewhere taking a default this host installs, and none of these.
+declaration. The difference matters to `orchestrator/host_adoption_check.py`'s
+`default-taken` rule, which refuses a node elsewhere taking a default this host installs,
+and none of these.
 
 One thing this host runs is deliberately not a row. `oneharness-core` is a *crate* the
 engine links on its own account, published from the `oneharness` repository on a
@@ -74,8 +75,8 @@ __all__ = [
 
 
 # llmlint: ignore-block[modern_domain_modeling] The four names are `str` by the interface
-# this module was specified to: its callers — the plan-check and planner-prompt nodes that
-# follow — hand it the identity `onevcs` prints and the artifact id a declaration carries,
+# this module was specified to: its caller, `orchestrator/host_adoption_check.py`, hands
+# it the identity `onevcs` prints and the artifact id a declaration carries,
 # both plain text at that boundary, and a `NewType` here would be one no caller mints.
 # Block-scoped because the rule reads each field line, not the class line.
 class Installed(NamedTuple):

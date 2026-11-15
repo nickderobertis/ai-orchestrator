@@ -35,7 +35,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import NamedTuple, TypedDict
 
@@ -543,18 +542,6 @@ def test_a_failed_run_retried_to_completion_launches_follow_up_verification(
         adopted = _just(bench, "orchestrate", "--adopt", run)
         assert adopted.returncode == 0, adopted.stdout + adopted.stderr
         assert _settlement(Launch(adopted, run)) == {"run_id": run, "settlement": "complete"}
-        # The ledger the engine wrote over a retry is one `just plan`'s spike stage reads a
-        # run's settlement from: the superseded node answered for by its replacement.
-        read = subprocess.run(  # noqa: S603 - this checkout's own reader
-            [sys.executable, "-m", "orchestrator.spike_flow", "settled", run],
-            cwd=REPO_ROOT,
-            env=bench.environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert (read.returncode, read.stdout.split()) == (0, [f"{NODE}-2"]), read.stderr
-
         success_log = (bench.runs / run / "hooks" / "success.log").read_text(encoding="utf-8")
         matched = LAUNCHED.search(success_log)
         assert matched is not None, success_log
@@ -788,13 +775,19 @@ def test_the_success_hook_relays_the_recipes_answer_when_there_is_nothing_to_ver
     ran = _hook(tmp_path, environment)
 
     assert ran.returncode == 0, ran.stdout + ran.stderr
-    # One line, the recipe's own, which already says nothing was launched.
+    # Two lines. The engine holds no record of this run, so its plan cannot be read and the
+    # spike discard says so, naming how to discard by hand, rather than skipping in silence;
+    # and the follow-up recipe still runs after it, its own line saying nothing was launched.
     lines = ran.stdout.splitlines()
-    assert len(lines) == 1, ran.stdout
-    assert lines[0].startswith("follow-ups: run nothing-drafted holds no follow-up drafts"), (
+    assert len(lines) == 2, ran.stdout
+    assert lines[0].startswith(
+        "run-ended: the plan of run nothing-drafted could not be read from 'onepipeline status'"
+    ), ran.stdout
+    assert "'just reclaim-branch <branch> --repo <identity> --discard'" in lines[0], ran.stdout
+    assert lines[1].startswith("follow-ups: run nothing-drafted holds no follow-up drafts"), (
         ran.stdout
     )
-    assert lines[0].endswith("no follow-up run was launched"), ran.stdout
+    assert lines[1].endswith("no follow-up run was launched"), ran.stdout
     assert not runs.exists() or not list(runs.iterdir())
 
 
@@ -920,12 +913,10 @@ BY_HAND = "no follow-up run was launched; verify its drafts by hand with: just f
 
 
 def _copied_hook(tmp_path: Path) -> Path:
-    """The hook and the helper it sources, in a checkout that carries no `.venv`."""
+    """The hook, in a checkout that carries no `.venv`."""
     scripts = tmp_path / "bare-checkout" / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("run-ended.sh", "plan-brief.sh"):
-        copied = scripts / name
-        shutil.copy2(REPO_ROOT / "scripts" / name, copied)
+    shutil.copy2(REPO_ROOT / "scripts" / "run-ended.sh", scripts / "run-ended.sh")
     return scripts / "run-ended.sh"
 
 
@@ -989,24 +980,3 @@ def test_the_failure_hook_still_says_how_to_verify_by_hand_when_no_python_can_ru
         "(the reason could not be read, because no Python interpreter could run)" in ran.stdout
     ), ran.stdout
     assert ran.stdout.rstrip().endswith(BY_HAND), ran.stdout
-
-
-def test_the_hook_refuses_to_run_from_a_checkout_missing_the_run_id_grammar(tmp_path: Path) -> None:
-    hook = _copied_hook(tmp_path)
-    (hook.parent / "plan-brief.sh").unlink()
-
-    ran = subprocess.run(  # noqa: S603 - the script under test, from a checkout missing its helper
-        [str(hook)],
-        cwd=tmp_path,
-        env=_bench(tmp_path, "").environment
-        | {"ONEPIPELINE_HOOK": "failure", "ONEPIPELINE_RUN_ID": "demo"},
-        input=_failure_document(),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert ran.returncode == 2, ran.stdout + ran.stderr
-    assert "required helper is not a readable regular file" in ran.stderr, ran.stderr
-    assert "plan-brief.sh" in ran.stderr, ran.stderr

@@ -72,7 +72,7 @@ concerns (persona defaults, session), never harness/model selection.
 ### Where the identities are stated, and what a role file carries
 
 Every role config above extends a shared parent, so the seven identities are written down
-once rather than thirteen times:
+once rather than eleven times:
 
 | File | What it holds |
 | --- | --- |
@@ -138,15 +138,14 @@ child that merely *mentions* a variant table without giving it a non-empty `unse
 is reported as masking nothing — `unset_env: []` — while the turn it runs still applies
 the parent's mask. Adding one `env_from` key or one `model` line is exactly that case.
 
-So `oneharness.dispatch.toml`, `oneharness.judge.toml`, `oneharness.pr-author.toml`,
-`oneharness.plan-review.toml` and `oneharness.plan-review-whole.toml` restate masks they
-would inherit correctly anyway. The
+So `oneharness.dispatch.toml`, `oneharness.judge.toml` and `oneharness.pr-author.toml`
+restate masks they would inherit correctly anyway. The
 restatement changes no behaviour; it keeps what this host *reports* about its own
 credential isolation true, which is what a reviewer and the equivalence record below
 both read. A follow-up against oneharness is what retires them.
 
 Both halves are held, and it takes both.
-`tests/e2e/launch_monitor_observer/test_oneharness_config_equivalence_e2e.py` holds all thirteen roles' reported
+`tests/e2e/launch_monitor_observer/test_oneharness_config_equivalence_e2e.py` holds all eleven roles' reported
 configurations to a committed record under `tests/e2e/launch_monitor_observer/oneharness_resolved/`, so a
 deliberate routing change is a visible update to that record in the same commit.
 `tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` drives a **real turn** on every identity of
@@ -265,18 +264,18 @@ members:
 
 **One graph here declares a panel: `graphs/planner.yaml`**, the planner's own worker
 judged by its reviewer — `../oneharness.judge.toml`, labelled `reviewer` — and the plan
-checklist — `kind: llmlint`, labelled `plan-checklist`, whose `bin` is
-`scripts/plan-checklist.sh` and whose `config` is `config/plan-checklist.llmlint.yml` — in
-that order. The script runs llmlint over the documents of the plan the planner is writing,
-from the plan-authoring root, rather than over the worktree onejudge names. The graph anchors
-the llmlint side's `config` to its own directory and hands its `bin` over as written, so
-the script is named relative to the directory a run is launched from, this checkout's root.
+checklist — `kind: llmlint`, labelled `plan-checklist`, the installed llmlint under
+`config/plan-checklist.llmlint.yml` with `--no-ignore-check` — in that order. The graph
+anchors the llmlint side's `config` to its own directory.
 
-**The planner's draft and finalize nodes run under that panel**: `scripts/plan.sh` names
-the graph as the `agent_graph` of exactly those two nodes, and each one's task carries the
-checklist's rules as llmlint resolves them when the task is written, so the planner writes
-against them on its first draft. The spikes and the design-document node keep their own
-graphs, and every other dispatch keeps its single simulated user,
+**The planner's draft and finalize nodes run under that panel, and every plan review is
+judged by it**: `templates/planning/` names the graph as the `agent_graph` of exactly those
+two nodes, and the draft's task carries the checklist's rules as `llmlint rules` prints them,
+so the planner writes against them on its first draft. A draft's checkout holds no plan file
+for the checklist's globs, so there it judges nothing; `scripts/review-plan-item.sh` runs
+`oneagentgraph run graphs/planner.yaml --judge-only --member worker` over each task and the
+project's description laid out as `tasks/<id>.md` and `projects/<id>.md`, which is where the
+checklist holds the plan. The spikes and the design-document node keep their own graphs, and every other dispatch keeps its single simulated user,
 `config/onejudge.base.yaml`'s `provider:` naming the one `oneharness.judge.toml`. **The panel
 starts without the writable escape hatch**: onejudge refuses a panel of two or more judges
 holding one whose mode is writable (`refuse_writable_panels` in its `cli/config.rs`), and
@@ -286,9 +285,8 @@ the reviewer is `read-only` for the reason the section above gives, so the graph
 — the config, how a panel decides, and what each surface carries per judge — and, for a
 graph member, in [oneagentgraph v0.5.6's
 `contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.6/docs/contract.md).
-`tests/e2e/registry_and_recipes/test_plan_checklist_e2e.py` drives the pinned oneagentgraph's composition of
-the graph and the pinned `onejudge run` under its two judges, with the script as the
-llmlint side's `bin`; `tests/e2e/launch_monitor_observer/test_judge_panel_e2e.py` drives it over a two-judge
+`tests/e2e/planning/` drives the judge-only review under both judges, and
+`tests/e2e/launch_monitor_observer/test_judge_panel_e2e.py` drives a panel over a two-judge
 list, a single `judge:`, and a single provider, offline.
 
 ## Provider wiring
@@ -472,8 +470,7 @@ and still move no turn here — a `run_mode` nothing set resolves to `fallback`,
 `parallel` the opt-in, and `oneharness run`'s stdout is a human-readable view unless the
 reader names the JSON contract (`--format json`, or `--compact`, which alone selects
 it) — because every `oneharness.*.toml` sets `run_mode = "fallback"` explicitly, and every
-reader of the CLI's stdout in this repository asks for JSON by name — the one bare parser,
-`orchestrator/plan_review.py`, spawns `--format json` since this adoption, the
+reader of the CLI's stdout in this repository asks for JSON by name — the
 wrappers under `scripts/` forward the `--compact` or `--stream` their callers send (the
 onejudge the engine links sends `--compact` on every turn), and the suite's own
 journeys that parse a `--print-command` plan or the `list` catalogue name `--format
@@ -655,8 +652,8 @@ directory: it derives `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` as `$HOME/.claude-alt
 in the environment wins, then the host's identities file
 (`$XDG_CONFIG_HOME/ai-orchestrator/claude-identities.env`, or the same path under
 `$HOME/.config`), then that default. Every entry point that reaches oneharness sources it — the llmlint and
-usage wrappers, the launch verbs, the plan reviewer, the drafter
-the envelope reviewer and the smoke — because
+usage wrappers, the launch verbs, the plan reviewer (which is also the plan-edit hook), the
+drafter and the smoke — because
 oneharness refuses to start whenever a named variant's `env_from` source is unset in the
 parent. Each variant maps its portable path to `CLAUDE_CONFIG_DIR`
 only inside its own child and masks ambient Anthropic API/OAuth credentials so they
@@ -1342,9 +1339,7 @@ probe to failing on either.
 Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`,
 `oneharness.identities.toml`, `oneharness.dispatch.toml`, `oneharness.toml`,
-`oneharness.judge.toml`, `oneharness.orchestrator.toml`,
-`oneharness.plan-review.toml`, or
-`oneharness.plan-review-whole.toml`; every other pushed diff skips it. The two shared parents
+`oneharness.judge.toml` or `oneharness.orchestrator.toml`; every other pushed diff skips it. The two shared parents
 are on that list because they are where an identity, a model or a credential mask now
 changes — a launch path can move without any role file being touched at all.
 

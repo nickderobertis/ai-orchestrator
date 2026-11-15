@@ -1,0 +1,39 @@
+---
+onetaskgraph_template: 1
+description: >-
+  The planner's finalize task, reworking a plan from its spikes' reports, or reporting that
+  there is nothing to finalize when the plan has no spikes project.
+variables:
+  plan:
+    description: The qualified id of the plan to finalize.
+    type: text
+    required: true
+  native:
+    description: The plan project's native id.
+    type: text
+    required: true
+---
+**First, check whether the spikes project exists**: run `onetaskgraph project show
+{{ plan }}-spikes`. When it finds no such project, the plan needed no measurement: report at
+once that there is nothing to finalize, reading nothing else and changing nothing.
+
+{# llmlint: ignore-block[changed_behavior_has_e2e] A planner or design writer carries this out by its own reading of the store, which the suite never scripts a verdict for: it doubles the model's turn, so a journey could only assert what its own script chose. What the host decides around it is driven: the planning journeys hold that this step runs with this task, at its place in the flow, over the records the store holds. #}
+Otherwise every spike of `{{ plan }}-spikes` has settled. Read each spike's report — the document
+`{{ native }}-<spike id>-report` of `{{ plan }}` — and rework `{{ plan }}` from what they
+measured: regenerate each task a report changes from its template (`onetaskgraph task
+answers` prints what it was answered, `onetaskgraph task render` regenerates it), keep every
+budget on the task that owns it and the plan-level answers in the description current with
+the findings, and answer each task that builds on a spike with its `spikes` entry naming the
+spike, its report and the branch it preserved (`onepipeline unpublished --format json` lists
+it). Spike branches stay until the plan's own run succeeds.
+{# llmlint: ignore-end[changed_behavior_has_e2e] #}
+
+## Acceptance criteria
+
+- Where `{{ plan }}-spikes` exists, every task of `{{ plan }}` a spike report bears on states what the report measured, and names that spike in its `spikes` answer.
+- Every task is the rendering of its template its provenance records.
+
+## Additional info
+
+This dispatch writes only to the plan store, which is gitignored: it commits nothing and
+leaves the checkout on its base branch.

@@ -75,7 +75,7 @@ from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import human_items, npm_installs, plan_store
-from orchestrator.plan_budgets import Direction
+from orchestrator.follow_up_tickets import Direction
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.record_shapes import frontmatter
 from orchestrator.root import REPO_ROOT
@@ -1220,7 +1220,7 @@ FEEDBACK_ACCOUNT: dict[str, object] = {
 ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 TEMPLATE_ROOT = REPO_ROOT / "templates"
 TEMPLATE_NAME = "follow-up-task"
-#: What the recipe answers `placement_note` with is `scripts/plan-brief.sh`'s; a note of
+#: What the recipe answers `placement_note` with is `scripts/follow-ups.sh`'s; a note of
 #: this test's own stands in, so a rendering is read for what the template does with it.
 PLACEMENT_NOTE = "\n## Additional info\n\nThis stands in for the direct-node placement note.\n"
 #: A gathering, as `just follow-ups-answer-comments` writes one, cut to what a task carries.

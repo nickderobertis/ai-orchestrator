@@ -7,7 +7,7 @@
 # snapshot, claim it and write its feedback, launch, settle — with the launches between them,
 # each through `scripts/follow-ups.sh --comments`. A `--dry-run` stops after the gathering,
 # printing the `--from` that launches exactly what it showed; a `--from` reads no board before
-# its launches. The whole of it is one flow (`scripts/launch-flow.sh`) holding the launching
+# its launches. The whole of it is one flow (`onepipeline flow run`) holding the launching
 # session until it exits, whose first lines name the flow and the `just watch --flow <ID>`
 # that watches it.
 set -euo pipefail
@@ -49,12 +49,56 @@ export_host_credentials follow-ups-answer-comments || exit "$?"
 load follow-up-env.sh "drafts-root helper"
 export_follow_up_drafts follow-ups-answer-comments || exit "$?"
 drafts_root=${!FOLLOW_UP_DRAFTS_ROOT_ENV}
-load plan-brief.sh "run-id helper"
+# What this launcher used from scripts/plan-brief.sh and scripts/launch-flow.sh, which the
+# planning cutover deleted, kept here verbatim until aio-followups-cutover replaces this
+# script.
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The run-id grammar this launcher took from scripts/plan-brief.sh, which the planning cutover deleted, copied as the smallest change the task ruled for each follow-ups file; aio-followups-cutover replaces both launchers, which is when the copies go.
+PLAN_SAFE_RUN_ID='^[A-Za-z0-9_][A-Za-z0-9_-]*$'
+LAUNCH_FLOW_ENTERED_ENV=ORCHESTRATOR_FLOW_ENTERED
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] A verbatim copy of the one function this launcher used from scripts/launch-flow.sh, which the planning cutover deleted; the task ruled the smallest change in each follow-ups file, and aio-followups-cutover replaces both launchers, which is when the copy goes.
+run_in_launch_flow() {
+    local caller=${1:?run_in_launch_flow: the name of the calling launcher is required, so its diagnostics stay attributable}
+    local name=${2:?run_in_launch_flow: the name of the flow is required}
+    local program=${3:?run_in_launch_flow: the launcher to re-execute is required}
+    shift 3
+    name=${name//[^A-Za-z0-9._-]/-}
+    local entered=${!LAUNCH_FLOW_ENTERED_ENV-}
+    unset "$LAUNCH_FLOW_ENTERED_ENV"
+    local asked=${entered%%:*}
+    if [ -n "$entered" ] && { [ "$asked" = "$PPID" ] || [ "$asked" = "$$" ]; }; then
+        local before=${entered#*:}
+        if [[ "${ONEPIPELINE_FLOW:-}" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$ONEPIPELINE_FLOW" != "$before" ]; then
+            echo "flow $ONEPIPELINE_FLOW: watch it with: just watch --flow $ONEPIPELINE_FLOW" >&2
+        fi
+        return 0
+    fi
+    local here
+    if ! here=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); then
+        echo "$caller: the engine wrapper could not be resolved from this checkout; run the launch from inside a checkout, so the flow it enters is that checkout's engine's" >&2
+        return 2
+    fi
+    local engine="${here%/scripts}/node_modules/.bin/onepipeline"
+    if [ ! -x "$engine" ]; then
+        echo "$caller: this checkout has no engine at $engine, so no launch flow can hold a session for this launch; run 'just bootstrap' to install the pinned engine, then retry" >&2
+        return 2
+    fi
+    shopt -s execfail
+    local status errexit=
+    [[ $- == *e* ]] && errexit=1
+    export "$LAUNCH_FLOW_ENTERED_ENV=$$:${ONEPIPELINE_FLOW:-}"
+    set +e
+    exec "$here/onepipeline.sh" flow run --name "$name" -- "$program" "$@"
+    status=$?
+    [ -n "$errexit" ] && set -e
+    unset "$LAUNCH_FLOW_ENTERED_ENV"
+    echo "$caller: the engine wrapper $here/onepipeline.sh could not be run (status $status), so no flow was entered; restore it from the repository or run 'just bootstrap', then retry" >&2
+    return 2
+}
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 # The gathering, its launches, their watches and the settling check are one flow holding the
 # session until it exits; each `scripts/follow-ups.sh` below runs in it rather than in one of
 # its own.
-load launch-flow.sh "flow helper"
 run_in_launch_flow follow-ups-answer-comments follow-ups-answer-comments \
     "$checkout/scripts/follow-ups-answer-comments.sh" "$@"
 

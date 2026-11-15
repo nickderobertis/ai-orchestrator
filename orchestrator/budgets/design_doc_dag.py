@@ -6,7 +6,8 @@ budgets `orchestrator/budgets.yaml` registers, run by `design-doc-dag-label-size
 21, 48 and 100 tasks copying real plan shapes — is first held to how it was made, then loaded
 into a scratch `local-md` store through the store's own `task create`, read by the
 pinned plan store's real `onetaskgraph project graph --format mermaid --direction auto
---group-by orchestrator.unit` exactly as `scripts/finish-plan.sh` reads it, and drawn:
+--group-by orchestrator.unit`, the graph a planning run's design writer is told to read
+(`templates/planning/design.md.j2`), and drawn:
 
 * to a PNG by the real `just render-diagram`, as the flow draws it, for the width a reader
   sees it at; and
@@ -48,10 +49,11 @@ from typing import NamedTuple
 
 from onebudgetspec_sdk import report
 
-from orchestrator import plan_units, planned_tasks
-from orchestrator.plan_records import write_plan_project
 from orchestrator.plan_store import NodeId
 from orchestrator.root import REPO_ROOT
+
+#: The task metadata key a plan's graph is grouped into units by.
+UNIT_KEY = "orchestrator.unit"
 
 
 class Shape(NamedTuple):
@@ -96,6 +98,56 @@ PNG_HEADER = slice(16, 24)
 
 class Unmeasured(Exception):
     """A measurement that could not be taken, saying what to repair."""
+
+
+def graph_shape(answered: str) -> tuple[int, str]:
+    """The unit count and direction of the store's `project graph --format json` answer.
+
+    Held to the shape read here — an object whose `nodes` are objects and whose `direction`
+    is text — so an answer of another shape is refused naming it, rather than read as zero
+    units or a missing direction.
+    """
+    try:
+        graph = json.loads(answered)
+    except ValueError as error:
+        raise Unmeasured(
+            f"the store's graph answer is not JSON ({error}); {_GRAPH_REPAIR}"
+        ) from None
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    direction = graph.get("direction") if isinstance(graph, dict) else None
+    if (
+        not isinstance(nodes, list)
+        or not all(isinstance(node, dict) for node in nodes)
+        or not all(isinstance(node.get("group", ""), str) for node in nodes)
+        or not isinstance(direction, str)
+    ):
+        raise Unmeasured(
+            "the store's graph answer is not an object of `nodes` objects, each `group` text, "
+            "and a `direction`; " + _GRAPH_REPAIR
+        )
+    return len({node["group"] for node in nodes if node.get("group")}), direction
+
+
+def created_id(answered: str) -> str:
+    """The id the store's `task create --json` answer gives the one task it created."""
+    try:
+        answer = json.loads(answered)
+    except ValueError as error:
+        raise Unmeasured(
+            f"the store's task-create answer is not JSON ({error}); {_GRAPH_REPAIR}"
+        ) from None
+    items = answer.get("items") if isinstance(answer, dict) else None
+    held = items[0] if isinstance(items, list) and len(items) == 1 else None
+    identifier = held.get("id") if isinstance(held, dict) else None
+    if not isinstance(identifier, str) or not identifier:
+        raise Unmeasured(
+            "the store's task-create answer names no one created task by id; " + _GRAPH_REPAIR
+        )
+    return identifier
+
+
+#: What to do about a graph answer of another shape.
+_GRAPH_REPAIR = "re-provision the checkout with 'just bootstrap' so the pinned store answers"
 
 
 def page_width() -> int:
@@ -147,7 +199,8 @@ def shaped(tasks: int, shape: Shape, fixtures: Path) -> list[FixtureTask]:
                 66 <= len(title) <= 79
                 and len(deps) <= 2
                 and all(isinstance(dep, str) and dep in rank for dep in deps)
-                and plan_units.problem(unit) is None
+                and unit.strip() == unit != ""
+                and len(unit) <= 60
             ):
                 made.append(
                     FixtureTask(NodeId(node), title, tuple(NodeId(dep) for dep in deps), unit)
@@ -172,26 +225,52 @@ def shaped(tasks: int, shape: Shape, fixtures: Path) -> list[FixtureTask]:
     return made
 
 
-def load(tasks: int, shape: Shape, fixtures: Path, store: Path) -> str:
-    """Load the fixture of ``tasks`` tasks into the scratch store, and answer its project id."""
+def load(tasks: int, shape: Shape, fixtures: Path, env: Mapping[str, str], work: Path) -> str:
+    """Load the fixture of ``tasks`` tasks into the scratch store, and answer its project id.
+
+    Through the store's own command line, dependencies first, so each task names the ids the
+    store gave the tasks it waits on.
+    """
     native = f"plan-{tasks}"
-    write_plan_project(
-        store,
-        {
-            "name": native,
-            "tasks": [
-                {
-                    "id": task.id,
-                    "title": task.title,
-                    "unit": task.unit,
-                    "deps": list(task.depends_on),
-                    "task": "## What\n\nA fixture task.\n",
-                }
-                for task in shaped(tasks, shape, fixtures)
-            ],
-        },
-        native_id=native,
+    store = [str(REPO_ROOT / ".venv" / "bin" / "onetaskgraph"), "--no-interactive"]
+    repair = "provision the checkout with 'just bootstrap' and retry"
+    run(
+        [
+            *store,
+            "project",
+            "create",
+            SOURCE,
+            "--id",
+            native,
+            "--title",
+            native,
+            "--body-file",
+            "/dev/null",
+        ],
+        repair,
+        env,
+        work,
     )
+    created: dict[NodeId, str] = {}
+    for task in shaped(tasks, shape, fixtures):
+        command = [
+            *store,
+            "task",
+            "create",
+            SOURCE,
+            "--project",
+            f"{SOURCE}:{native}",
+            "--title",
+            task.title,
+            "--body-file",
+            "/dev/null",
+            "--json",
+            "--metadata",
+            f"{UNIT_KEY}={json.dumps(task.unit)}",
+        ]
+        for dep in task.depends_on:
+            command += ["--depends-on", created[dep]]
+        created[task.id] = created_id(run(command, repair, env, work))
     return f"{SOURCE}:{native}"
 
 
@@ -279,16 +358,15 @@ def measure(mode: str, shapes: Mapping[int, Shape], fixtures: Path) -> tuple[flo
         figures: list[float] = []
         parts: list[str] = []
         for tasks, shape in shapes.items():
-            project = load(tasks, shape, fixtures, store)
+            project = load(tasks, shape, fixtures, env, work)
             read = [str(REPO_ROOT / ".venv" / "bin" / "onetaskgraph"), "project", "graph"]
-            read += [project, "--direction", "auto", "--group-by", plan_units.UNIT_KEY]
+            read += [project, "--direction", "auto", "--group-by", UNIT_KEY]
             mermaid = work / f"plan-{tasks}.mmd"
             # Read from the scratch directory, which holds no `onetaskgraph.yaml`: a graph
             # read asks every configured source, and the checkout's gitignored `local-md`
             # roots are absent from a publication worktree, which the store refuses.
             mermaid.write_text(run([*read, "--format", "mermaid"], provision, env, work), "utf-8")
-            graph = json.loads(run([*read, "--format", "json"], provision, env, work))
-            read_graph = planned_tasks.parse_graph(graph)
+            units, direction = graph_shape(run([*read, "--format", "json"], provision, env, work))
             svg = work / f"plan-{tasks}.svg"
             run(
                 [str(REPO_ROOT / "node_modules" / ".bin" / "mmdc"), "--quiet"]
@@ -305,11 +383,10 @@ def measure(mode: str, shapes: Mapping[int, Shape], fixtures: Path) -> tuple[flo
             )
             natural, tall, size = svg_size(svg, f"plan-{tasks}")
             if mode == "natural-width":
-                units = len({node.group for node in read_graph.nodes if node.group})
                 figures.append(natural)
                 parts.append(
                     f"plan-{tasks}: {natural:.0f} x {tall:.0f} px natural, "
-                    f"{read_graph.direction}, {units} units"
+                    f"{direction}, {units} units"
                 )
                 continue
             png = work / f"plan-{tasks}.png"

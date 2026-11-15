@@ -23,9 +23,8 @@ in a source declared private, under the tracked configuration's write screening,
 private producer and a public consumer that each keep their own visibility — no mode, setting
 or metadata key makes the consumer public. The journey runs in a sparse checkout of its own
 declared inputs so that its configuration is its own, and holds that configuration to being
-screened, with the fixture source declared private, before it authors anything.
-`tests/e2e/screened_export/` executes the same shape to completion; this journey holds the
-run at its gate, because the reply seam is what it proves.
+screened, with the fixture source declared private, before it authors anything. This
+journey holds the run at its gate, because the reply seam is what it proves.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This *is* the edge: the
 journey spends a real launch and is behind its own Nx project, keyed on `askSeamBoundaryReply`
@@ -62,8 +61,10 @@ FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
 
-#: What the doubled provider answers a review turn the criteria validator spends.
-PASSING_VERDICT = {"passes": True, "findings": []}
+#: What the doubled provider answers the review turn the plan-edit hook spends on an `amend`:
+#: the judge-only run's supervisor decision, a pass. The plan checklist's llmlint batches are
+#: answered apart from it, every rule holding (`tests/e2e/fake_codex.py`).
+PASSING_VERDICT = {"completion": True, "reason": "the stand-in reviewer passes it"}
 
 LAUNCHING_SESSION = "e2e-boundary-reply"
 INHERITED_ENVIRONMENT = (
@@ -188,7 +189,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
 
 
 @pytest.fixture(scope="module")
-def mixed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Mixed]:
+def mixed(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Mixed]:
     """A mixed run launched through the real `just orchestrate`, held at a human gate."""
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -233,6 +234,8 @@ def mixed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Mixed]:
     assert configuration["write_policy"]["check_command"][:3] == ["onevcs", "boundary", "check"]
     assert configuration["sources"]["test-fixtures"]["visibility"] == "private"
     environment = {**_environment(tmp_path), **install}
+    # The plan-edit hook's judge turn reaches the stand-in through the real `oneharness`.
+    environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     run = f"boundary-reply-{SUITE}"
     plan = tmp_path / f"{run}.plan.json"
     plan.write_text(

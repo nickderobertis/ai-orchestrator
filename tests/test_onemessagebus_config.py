@@ -7,7 +7,7 @@ unknown key that the same load refuses by name — without that control, a verb 
 ignored `--config` would pass too. Then each value is held to the statement it comes from:
 the monitor's author to `AGENTS.md` and to the reasons the bus gave before it stopped
 naming the monitor, the reply window to the shim's default, the absence of a validator
-to the engine's envelope reviewer, the frames link to the onejudge this host adopts, and
+to the engine's plan-edit hook, the frames link to the onejudge this host adopts, and
 the layout link to the engine this host adopts — whose published planner-channel layout is where the
 channel's queues now come from, since the adopted bus compiles no layout in.
 
@@ -237,19 +237,19 @@ def test_the_binding_opens_on_the_reply_window_and_the_engines_asker() -> None:
     assert lines[4:6] == ["    select: op", "    frames:"]
 
 
-def test_no_reply_validator_is_declared_because_the_engine_reviews_every_envelope() -> None:
-    """The criteria bar is the engine's envelope reviewer, so the bus declares no hook.
+def test_no_reply_validator_is_declared_because_the_plan_edit_hook_judges_every_edit() -> None:
+    """A live edit is judged by the engine's plan-edit hook, so the bus declares no hook.
 
-    A bus hook beside the reviewer would judge every envelope twice and keep a pass
-    cache nothing reads; `config/onepipeline.launch.yaml` names the reviewer and its bar
-    command, and `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drives it.
+    A bus hook beside it would judge every envelope twice; `config/onepipeline.launch.yaml`
+    names `scripts/review-plan-item.sh` as the hook, which `tests/e2e/planning/` drives.
     """
     assert re.search(r"^(validators|hooks):", _lines(), re.MULTILINE) is None
-    launch = (REPO_ROOT / "config" / "onepipeline.launch.yaml").read_text(encoding="utf-8")
-    assert "\nenvelope_reviewer: scripts/envelope-review.sh\n" in launch, launch
-    assert "\nenvelope_reviewer_bar: scripts/envelope-review-bar.sh\n" in launch, launch
-    for script in ("envelope-review.sh", "envelope-review-bar.sh"):
-        assert (REPO_ROOT / "scripts" / script).stat().st_mode & 0o111, script
+    launch = yaml.safe_load(
+        (REPO_ROOT / "config" / "onepipeline.launch.yaml").read_text(encoding="utf-8")
+    )
+    assert launch["plan_edit_hook"] == {"command": ["scripts/review-plan-item.sh"]}
+    assert "envelope_reviewer" not in launch
+    assert (REPO_ROOT / "scripts" / "review-plan-item.sh").stat().st_mode & 0o111
 
 
 def _link() -> tuple[str, str]:

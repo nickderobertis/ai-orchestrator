@@ -3,8 +3,7 @@ title: 'Design: health-endpoint'
 project: health-endpoint
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:5697e51426246121fbc2486ca79881d3fbc11590f7b984c7514a0c1b5100a474
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:d7c061839dd8d5659215ef60ad74ad5496221fd1e1264cf5bdc63ae32e05e9a6","body_digest":"sha256:b780bb10838c4f5d4a075d8a6ed37b7ba8e1a785dc3594be370c026ac978207f","answers_digest":"sha256:d45d355ba7bb685096eaceb1d4d4874b6fe0bd90d0bd41e2154a8d71a749ef8c"}
-  "orchestrator.design-approval": {"key":"39ec6b2617d72e2a44ff03fceb1c1fb2a0106bb81e74790b9a8eda073b160cff","approved_at":"2026-11-12T12:07:24.122539+00:00"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:b780bb10838c4f5d4a075d8a6ed37b7ba8e1a785dc3594be370c026ac978207f","answers_digest":"sha256:069948f1db58c046372b96dcda781d068d6adbea57c571208ed670e83041627e"}
 ---
 ## What
 
@@ -102,7 +101,9 @@ budgets:
   unit: ms
   workload: 200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes.
 dag_image: ''
+delivers: {}
 goals: []
+graph: {}
 plan_budgets:
   checklist:
   - budget: health-endpoint-p95-latency
@@ -145,7 +146,6 @@ planned_tasks:
   location: examples/tasks/health-endpoint/health.md
   task: 'feat(api): add /health endpoint'
   unit: Service
-predates_budgets: ''
 units:
 - decisions:
   - artifact: |-

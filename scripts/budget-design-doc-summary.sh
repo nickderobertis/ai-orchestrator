@@ -3,10 +3,10 @@
 #
 # The `design-doc-budget-summary-length` budget the root `budgets.yaml` registers. It
 # renders the design document from the committed fixture `tests/fixtures/budgets/issue-
-# 1568.json` — #1568's budget answers in the shape `python -m orchestrator.plan_budgets`
-# prints: 9 budgets, 6 concerns answered n/a, 4 changed repositories (one actual named root effect), 1 realistic-data choice and no spike finding — through the design-doc template
+# 1568.json` — #1568's budget answers, the plan's `orchestrator.plan-budgets` record and
+# every task's budgets with where each task lives: 9 budgets, 6 concerns answered n/a, 4 changed repositories (one actual named root effect), 1 realistic-data choice and no spike finding — through the design-doc template
 # as the pinned engine resolves it from this checkout's `templates/`, rendered by the pinned
-# plan store, and counts the characters (Unicode code points) of its `## Budgets` section,
+# plan store, after holding each fixture record to the fields that section reads, and counts the characters (Unicode code points) of its `## Budgets` section,
 # heading included, up to the next section's heading. The other answers the template
 # requires are one word each and sit outside that section, so they never reach the count.
 # The result goes to the file onebudgetspec names in ONEBUDGETSPEC_RESULT, in its result
@@ -44,42 +44,39 @@ answers="$scratch/answers.json"
 
 "$engine" template resolve design-doc --json --template-root "$root/templates" >"$loader" ||
   fail "the pinned engine did not resolve the design-doc template through $root/templates (its diagnostic is above); repair the template until 'scripts/onepipeline.sh template check design-doc' passes, then retry"
-"$python" - "$fixture" "$root" >"$answers" <<'PY' ||
+"$python" - "$fixture" >"$answers" <<'PY' ||
 import json, sys
 
-sys.path.insert(0, sys.argv[2])
-from orchestrator import plan_budgets
-
 answers = json.loads(open(sys.argv[1], encoding="utf-8").read())
-shaped = (
-    isinstance(answers, dict)
-    and set(answers) == {"predates_budgets", "plan_budgets", "budgets"}
-    and isinstance(answers["predates_budgets"], str)
-    and isinstance(answers["budgets"], list)
-    and all(
-        isinstance(entry, dict)
-        and set(entry) in ({"node", "location", "anchor", "link", *plan_budgets.BUDGET_KEYS}, {"node", "location", "anchor", "link", *plan_budgets.MODERN_BUDGET_KEYS})
-        and isinstance(entry["node"], str)
-        and isinstance(entry["location"], str)
-        and isinstance(entry["anchor"], str)
-        and isinstance(entry["link"], str)
-        for entry in answers["budgets"]
-    )
-)
-if not shaped:
+if not isinstance(answers, dict) or not isinstance(answers.get("budgets"), list) or not isinstance(answers.get("plan_budgets"), dict):
     sys.exit(
-        "budget-design-doc-summary: the fixture does not hold exactly the three budget "
-        "answers `python -m orchestrator.plan_budgets` prints: the predates reason as text, "
-        "and each budget with its node, its location, its anchor and its link as text and the keys a task's "
-        "budgets record holds"
+        "budget-design-doc-summary: the fixture does not hold the design document's "
+        "`plan_budgets` object and `budgets` list"
     )
-try:
-    plan_budgets.parse_plan(answers["plan_budgets"])
-    plan_budgets.parse_budgets(
-        [{key: value for key, value in entry.items() if key not in {"node", "location", "anchor", "link"}} for entry in answers["budgets"]]
+# Each record is read by the summary table by these fields, so one missing or of another
+# type is refused here, naming it, rather than rendered as an empty cell.
+for position, budget in enumerate(answers["budgets"]):
+    missing = [
+        key
+        for key in ("id", "name", "node", "link", "measure", "unit", "direction", "file_change")
+        if not isinstance(budget, dict) or not isinstance(budget.get(key), str) or not budget[key]
+    ]
+    if isinstance(budget, dict) and (
+        isinstance(budget.get("threshold"), bool)
+        or not isinstance(budget.get("threshold"), (int, float))
+    ):
+        missing.append("numeric threshold")
+    if missing:
+        sys.exit(
+            f"budget-design-doc-summary: the fixture's budget {position} lacks "
+            f"{', '.join(missing)}; restore the fixture from the repository, then retry"
+        )
+if not isinstance(answers["plan_budgets"].get("checklist", []), list):
+    sys.exit(
+        "budget-design-doc-summary: the fixture's plan-level `checklist` is not a list; "
+        "restore the fixture from the repository, then retry"
     )
-except plan_budgets.BudgetsError as exc:
-    sys.exit(f"budget-design-doc-summary: the fixture's answers are malformed: {exc}")
+answers.pop("predates_budgets", None)
 answers.update(
     what="W", why="Y", architecture="A", units=[], acceptance_criteria=["C"], planned_tasks=[]
 )
@@ -92,7 +89,7 @@ PY
 # environment sets (as a launch or the test suite does) is a setting with no source to
 # belong to, which the store refuses before it renders anything.
 body=$(cd -- "$root" && "$root/.venv/bin/onetaskgraph" template render --template-loader "$loader" --answers "$answers" --no-interactive) ||
-  fail "the pinned plan store did not render the design document from the fixture (its diagnostic is above); repair the fixture's answers or the template it names until 'tests/test_design_doc_template.py' passes, then retry"
+  fail "the pinned plan store did not render the design document from the fixture (its diagnostic is above); repair the fixture's answers or the template it names until the store renders them, then retry"
 section=$(BUDGET_DESIGN_DOC_BODY="$body" "$python" - <<'PY'
 import os, sys
 

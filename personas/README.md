@@ -98,8 +98,8 @@ completion criterion out of a real dispatch.
 - Editing a flat file here whose name a built-in claims does not change what a node
   naming that role is dispatched with. Those files are a catalog and a validation
   target, not the dispatch input — which is why `engineer.yaml` is gone rather than
-  maintained, and why `orchestrator/criteria_guard.py` resolves a node's bar out of
-  the `oneagentgraph` `onepipeline` links instead of out of this directory.
+  maintained, and why `scripts/review-plan-item.sh` judges a node under its persona as
+  `oneagentgraph` resolves it rather than out of this directory.
 - A built-in role's own `user.done_when` is enforced **alongside**
   `config/onejudge.base.yaml`'s, not instead of it. The `reviewer` node's supervisor
   was given "Both of these must hold: 1. every acceptance criterion stated in the

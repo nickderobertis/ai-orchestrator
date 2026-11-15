@@ -2,34 +2,24 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import shutil
 import subprocess
 import sys
 import venv
-from datetime import UTC, datetime
+from collections.abc import Coroutine
 from pathlib import Path
 from types import SimpleNamespace
 
 import boundary_home
 import onetaskgraph_sdk
 import pytest
+import yaml
 from onetaskgraph_sdk import QueryResponseOfQualifiedTask
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import (
-    design_approval,
-    design_chain,
-    design_review,
-    follow_up_comments,
-    plan_copy,
-    plan_store,
-)
-from orchestrator.plan_records import write_plan_project
-from orchestrator.record_shapes import PlanDocument, PlanNode, frontmatter
+from orchestrator import plan_store
 from orchestrator.root import REPO_ROOT
 
 #: A plan-store CLI of another release, the suite's own decoy: it reports a version no
@@ -67,112 +57,15 @@ def _registered(
             monkeypatch.setenv(name, value)
 
 
-#: The ticket a fixture task delivers, held by a local source the test configures.
-DELIVERED = "sdktickets:ticket"
-
-
-def test_sdk_helpers_read_and_copy_a_real_local_plan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    source, destination = tmp_path / "source", tmp_path / "destination"
-    destination.mkdir()
-    # The repository a task names and the ticket it delivers are classified at the write,
-    # so both are in place before the store is asked to write the plan naming them.
-    _registered(monkeypatch, tmp_path, public=["github.com/acme/service"])
-    tickets = tmp_path / "tickets"
-    write_plan_project(
-        tickets, {"name": "board", "tasks": [PlanNode(id="ticket", title="Ticket", task="Fix.")]}
+def _local_task(root: Path, native: str, title: str, body: str, **front: object) -> None:
+    """One task of project `demo`, written as the `local-md` plugin stores it."""
+    (root / "projects").mkdir(parents=True, exist_ok=True)
+    (root / "projects" / "demo.md").write_text("---\ntitle: demo\nstatus: todo\n---\n")
+    (root / "tasks").mkdir(exist_ok=True)
+    fields = {"title": title, "status": "todo", "project": "demo", **front}
+    (root / "tasks" / f"{native}.md").write_text(
+        f"---\n{yaml.safe_dump(fields, sort_keys=False)}---\n{body}\n", encoding="utf-8"
     )
-    _source(monkeypatch, "sdktickets", tickets)
-    _source(monkeypatch, "sdksource", source)
-    _source(monkeypatch, "sdkdestination", destination)
-    plan: PlanDocument = {
-        "name": "demo",
-        "tasks": [
-            PlanNode(id="first", title="First", task="Do first."),
-            PlanNode(
-                id="second",
-                title="Second",
-                task="Do second.",
-                deps=["first"],
-                repo="github.com/acme/service",
-                delivers=[DELIVERED],
-            ),
-        ],
-    }
-    write_plan_project(source, plan)
-    drafts = tmp_path / "drafts"
-    # The draft source holds the project its document is filed under, because the store's
-    # boundary refuses an item under a project its source cannot classify.
-    write_plan_project(drafts, {"name": "demo", "tasks": []})
-    documents = drafts / "documents"
-    documents.mkdir(parents=True)
-    # Provenance built here in the shape a rendering of this body records, so the approval
-    # below reads a design document it can key rather than one it refuses. One value is
-    # both hashed and written, which `frontmatter` stores with its trailing whitespace cut.
-    body = "The design."
-    rendering = {
-        "template": design_approval.TEMPLATE_REFERENCE,
-        "digest": "sha256:test-template",
-        "body_digest": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
-    }
-    (documents / "design.md").write_text(
-        frontmatter(
-            {
-                "title": "Design",
-                "project": "demo",
-                "labels": ["design"],
-                "metadata": {design_approval.PROVENANCE: rendering},
-            },
-            body,
-        ),
-        encoding="utf-8",
-    )
-    _source(monkeypatch, "sdkdraft", drafts)
-    plan_store.sdk(plan_store.client().document_copy(["sdkdraft:design"], to="sdksource"))
-
-    read, records = plan_store.read_project("sdksource:demo")
-
-    assert read["name"] == "demo"
-    assert read["tasks"][1]["deps"] == ["first"]
-    assert read["tasks"][1]["repo"] == "github.com/acme/service"
-    assert read["tasks"][1]["delivers"] == [DELIVERED]
-    assert plan_store.task_record("sdksource:first")["title"] == "First"
-    assert plan_store.read_projects("sdksource")[0].title == "demo"
-    # No task there carries a comment, so the narrowed query keeps none of them.
-    commented = plan_store.client().task_list(
-        source=["sdksource"],
-        commented_since=follow_up_comments.instant(datetime(2026, 1, 1, tzinfo=UTC)),
-    )
-    assert plan_store.sdk(commented).items == []
-    assert plan_store.local_projects("sdksource") == ["sdksource:demo"]
-    assert plan_store.task_document("sdksource", "first").is_file()
-    assert plan_store.read_documents("sdksource:demo")[0].labels == ["design"]
-    assert plan_store.authored_deps(records[1]) == ["first"]
-
-    monkeypatch.setattr(
-        design_approval,
-        "resolved_digest",
-        lambda *_arguments: design_approval.ChainDigest("sha256:test-template"),
-    )
-    # The provenance above is built here rather than rendered, so the pinned engine's
-    # template check is answered as accepting it; that check is driven for real in
-    # `tests/plan_tooling/plan_flow/test_approve_design_recipe_e2e.py`.
-    monkeypatch.setattr(design_approval, "checked", lambda *_arguments: None)
-    assert design_review.approve_main(["sdksource:demo"]) == 0
-    assert design_approval.approve("sdksource:demo").held
-    assert design_review.approve_main(["sdksource:demo"]) == 0
-    assert "sdksource" in design_approval.configured_sources()
-
-    assert plan_copy.copy("sdksource:demo", "sdkdestination", []) == plan_copy.OK
-    output = capsys.readouterr().out
-    assert '"action":"created"' in output
-    assert plan_store.project_record("sdkdestination:demo")["title"] == "demo"
-    assert plan_copy._documents("sdksource:demo", "missing", []) == plan_copy.COPY_REFUSED
-    empty = tmp_path / "empty"
-    write_plan_project(empty, {"name": "empty", "tasks": []})
-    _source(monkeypatch, "empty", empty)
-    assert plan_copy._documents("empty:empty", "sdkdestination", []) == plan_copy.OK
 
 
 def test_a_read_runs_the_locked_install_with_a_decoy_first_on_the_path(
@@ -188,9 +81,7 @@ def test_a_read_runs_the_locked_install_with_a_decoy_first_on_the_path(
     alone would read the test's own search path back to itself.
     """
     root = tmp_path / "source"
-    write_plan_project(
-        root, {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]}
-    )
+    _local_task(root, "task", "Task", "Body")
     _source(monkeypatch, "sdksource", root)
     served = tmp_path / "older-plan-store.served"
     monkeypatch.setenv("PATH", f"{OLDER_PLAN_STORE}{os.pathsep}{os.environ['PATH']}")
@@ -203,7 +94,6 @@ def test_a_read_runs_the_locked_install_with_a_decoy_first_on_the_path(
     )
 
     assert plan_store.task_record("sdksource:task")["title"] == "Task"
-    assert plan_store.read_tasks("sdksource:demo")[0].node_id == "task"
 
     assert not served.exists() or served.read_text(encoding="utf-8") == "", (
         f"the decoy ahead on PATH served a read of this package: {served.read_text('utf-8')}"
@@ -284,9 +174,7 @@ def test_the_sdk_binary_variable_is_refused_by_name(
     which release runs, and a second answer in the environment is refused as such.
     """
     root = tmp_path / "source"
-    write_plan_project(
-        root, {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]}
-    )
+    _local_task(root, "task", "Task", "Body")
     _source(monkeypatch, "sdksource", root)
     assert plan_store.task_record("sdksource:task")["title"] == "Task"
 
@@ -299,24 +187,39 @@ def test_the_sdk_binary_variable_is_refused_by_name(
 
 
 def test_sdk_helpers_report_real_local_source_refusals(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "source"
-    write_plan_project(source, {"name": "demo", "tasks": []})
+    _local_task(source, "task", "Task", "Body")
     _source(monkeypatch, "sdksource", source)
 
-    assert plan_copy.copy("sdksource:demo", "missing", []) == plan_copy.COPY_REFUSED
-    assert "refused copying" in capsys.readouterr().err
-    with pytest.raises(OSError, match="no project"):
-        plan_store.project_record("sdksource:missing")
     with pytest.raises(OSError, match="no task"):
         plan_store.task_record("sdksource:missing")
-    with pytest.raises(OSError, match="not <task> or <project>/<task>"):
-        plan_store.task_document("sdksource", "a/b/c")
-    with pytest.raises(OSError, match="has no record"):
-        plan_store.task_document("sdksource", "missing")
-    with pytest.raises(OSError, match="has no record"):
-        plan_store.task_document("sdksource", "demo/missing")
+
+
+def test_a_task_show_answering_other_than_one_record_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A trust-boundary guard: `task show` for one id answering 0 or 2 records is refused.
+
+    A conforming store answers one, so the real answer is read and only its item count is
+    changed before the guard reads it.
+    """
+    source = tmp_path / "source"
+    _local_task(source, "task", "Task", "Body")
+    _source(monkeypatch, "sdksource", source)
+    real = plan_store.sdk
+    for count in (0, 2):
+
+        def answered(
+            awaitable: Coroutine[object, object, QueryResponseOfQualifiedTask], count: int = count
+        ) -> QueryResponseOfQualifiedTask:
+            shown = real(awaitable)
+            return shown.model_copy(update={"items": [shown.items[0]] * count})
+
+        monkeypatch.setattr(plan_store, "sdk", answered)
+        with pytest.raises(OSError, match=f"returned {count} records"):
+            plan_store.task_record("sdksource:task")
 
 
 def test_source_root_helpers_use_the_sdk_configuration(
@@ -332,9 +235,6 @@ def test_source_root_helpers_use_the_sdk_configuration(
     _source(monkeypatch, "occupied", occupied)
     with pytest.raises(OSError, match="not a directory"):
         plan_store.ensure_writable_source_root("occupied")
-
-    with pytest.raises(OSError, match="qualified"):
-        plan_store.read_project("unqualified")
 
     monkeypatch.setattr(
         plan_store,
@@ -355,99 +255,6 @@ def test_source_root_helpers_use_the_sdk_configuration(
     monkeypatch.setattr(plan_store.os, "access", lambda *_arguments: False)
     with pytest.raises(OSError, match="not writable"):
         plan_store.ensure_writable_source_root("sdksource")
-
-
-def test_plan_semantic_refusals_are_applied_after_sdk_validation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    missing_id = tmp_path / "missing-id"
-    write_plan_project(
-        missing_id,
-        {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]},
-    )
-    task = missing_id / "tasks" / "task.md"
-    task.write_text(
-        task.read_text(encoding="utf-8").replace("  onepipeline.id: task\n", ""),
-        encoding="utf-8",
-    )
-    _source(monkeypatch, "missingid", missing_id)
-    with pytest.raises(OSError, match="no string onepipeline.id"):
-        plan_store.read_tasks("missingid:demo")
-
-    repositories = tmp_path / "repositories"
-    write_plan_project(
-        repositories,
-        {
-            "name": "demo",
-            "tasks": [
-                PlanNode(
-                    id="task",
-                    title="Task",
-                    task="Body",
-                    repo="github.com/acme/one",
-                )
-            ],
-        },
-    )
-    task = repositories / "tasks" / "task.md"
-    task.write_text(
-        task.read_text(encoding="utf-8").replace(
-            "- github.com/acme/one\n", "- github.com/acme/one\n- github.com/acme/two\n"
-        ),
-        encoding="utf-8",
-    )
-    _source(monkeypatch, "repositories", repositories)
-    with pytest.raises(OSError, match="more than one repository"):
-        plan_store.read_tasks("repositories:demo")
-
-    unknown = tmp_path / "unknown"
-    write_plan_project(
-        unknown,
-        {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]},
-    )
-    task = unknown / "tasks" / "task.md"
-    task.write_text(
-        task.read_text(encoding="utf-8").replace(
-            "status: todo\n", 'status: todo\ndepends_on: ["missing"]\n'
-        ),
-        encoding="utf-8",
-    )
-    _source(monkeypatch, "unknown", unknown)
-    # The store's own graph refuses a prerequisite its source does not hold at all.
-    with pytest.raises(OSError, match="no task with the id unknown:missing"):
-        plan_store.read_tasks("unknown:demo")
-    # One it holds outside the plan is drawn, and refused here as no task of the plan.
-    write_plan_project(
-        unknown,
-        {"name": "other", "tasks": [PlanNode(id="missing", title="Missing", task="Body")]},
-    )
-    with pytest.raises(OSError, match="unknown dependency targets for unknown:task"):
-        plan_store.read_tasks("unknown:demo")
-
-    duplicate = tmp_path / "duplicate"
-    write_plan_project(
-        duplicate,
-        {
-            "name": "demo",
-            "tasks": [
-                PlanNode(id="first", title="First", task="Body"),
-                PlanNode(id="second", title="Second", task="Body"),
-            ],
-        },
-    )
-    second = duplicate / "tasks" / "second.md"
-    second.write_text(
-        second.read_text(encoding="utf-8").replace(
-            "onepipeline.id: second", "onepipeline.id: first"
-        ),
-        encoding="utf-8",
-    )
-    _source(monkeypatch, "duplicate", duplicate)
-    with pytest.raises(OSError, match="duplicate task or node identities"):
-        plan_store.read_tasks("duplicate:demo")
-
-    with pytest.raises(OSError, match="not <task> or <project>/<task>"):
-        plan_store.task_document("duplicate", "../first")
 
 
 def test_partial_sdk_answers_are_refused_through_the_generated_model() -> None:
@@ -473,10 +280,7 @@ def test_a_later_page_a_source_failed_to_answer_refuses_the_whole_listing(
 ) -> None:
     """`complete`'s rule holds on every page: nothing from a partial listing is returned."""
     root = tmp_path / "source"
-    write_plan_project(
-        root,
-        {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]},
-    )
+    _local_task(root, "task", "Task", "Body")
     _source(monkeypatch, "sdksource", root)
     whole = plan_store.sdk(plan_store.client().task_list(source=["sdksource"], project="demo"))
     assert whole.next is None
@@ -642,10 +446,7 @@ def test_a_page_cursor_already_followed_is_refused_naming_it(
     it; the refusal names that cursor and nothing of either page is returned.
     """
     root = tmp_path / "source"
-    write_plan_project(
-        root,
-        {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]},
-    )
+    _local_task(root, "task", "Task", "Body")
     _source(monkeypatch, "sdksource", root)
     whole = plan_store.sdk(plan_store.client().task_list(source=["sdksource"], project="demo"))
     assert whole.next is None
@@ -681,259 +482,6 @@ def test_a_page_cursor_already_followed_is_refused_naming_it(
     assert len(pages) == 1, "a third page was asked for after the cursor repeated"
 
 
-def test_a_task_the_store_created_is_read_as_its_projects_whatever_the_source_named_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Membership is the item's own `project`, which a created task's id does not spell.
-
-    `onetaskgraph task create` into a `local-md` source names the file after the task's
-    title, so its id sits beside the project's other tasks rather than under a directory
-    of the project. A reader holding it to `<project>/<task>` refused every task a planner
-    created from a template; one filed under another project is still refused.
-    """
-    root = tmp_path / "source"
-    write_plan_project(
-        root,
-        {"name": "demo", "tasks": [PlanNode(id="written", title="Written", task="Body")]},
-    )
-    _source(monkeypatch, "sdksource", root)
-    body = tmp_path / "body.md"
-    body.write_text("## What\n\nCreated by the store.\n", encoding="utf-8")
-    created = subprocess.run(
-        [
-            str(ONETASKGRAPH_BIN),
-            "task",
-            "create",
-            "sdksource",
-            "--project",
-            "demo",
-            "--title",
-            "Created by the store",
-            "--body-file",
-            str(body),
-            "--metadata",
-            'onepipeline.id="created"',
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert created.returncode == 0, created.stderr
-    minted = created.stdout.strip()
-    assert not minted.startswith("sdksource:demo/"), minted
-
-    read = {task.node_id: task for task in plan_store.read_tasks("sdksource:demo")}
-
-    assert set(read) == {"written", "created"}, read
-    assert read["created"].qualified_id == minted
-    assert {task.project for task in read.values()} == {"demo"}
-
-    listed = plan_store.sdk(plan_store.client().task_list(source=["sdksource"], project="demo"))
-    (held,) = [item for item in listed.items if item.id.model_dump() == minted]
-    elsewhere = held.model_copy(
-        update={
-            "item": held.item.model_copy(update={"project": held.item.project.__class__("other")})
-        }
-    )
-    # The project's own record, read for real before the task listing is replaced, so the
-    # replaced answer below is only ever read as the task listing it stands in for.
-    record = plan_store.project_record("sdksource:demo")
-    monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
-    monkeypatch.setattr(
-        plan_store, "sdk", lambda _answer: listed.model_copy(update={"items": [elsewhere]})
-    )
-    with pytest.raises(OSError, match="outside itself"):
-        plan_store.read_tasks("sdksource:demo")
-
-
-def test_typed_listings_are_still_held_to_the_requested_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root = tmp_path / "source"
-    write_plan_project(
-        root,
-        {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]},
-    )
-    documents = root / "documents"
-    documents.mkdir()
-    (documents / "design.md").write_text(
-        frontmatter({"title": "Design", "project": "demo", "labels": ["design"]}, "Body.\n"),
-        encoding="utf-8",
-    )
-    _source(monkeypatch, "sdksource", root)
-    real_client = plan_store.client()
-    projects = plan_store.sdk(real_client.project_list(source=["sdksource"]))
-    tasks = plan_store.sdk(real_client.task_list(source=["sdksource"], project="demo"))
-    shown_project = plan_store.sdk(real_client.project_show("sdksource:demo"))
-    shown_task = plan_store.sdk(real_client.task_show("sdksource:task"))
-    held_documents = plan_store.sdk(real_client.document_list(source=["sdksource"], project="demo"))
-
-    bad_project = projects.items[0].model_copy(
-        update={"id": projects.items[0].id.__class__("elsewhere:demo")}
-    )
-    monkeypatch.setattr(
-        plan_store,
-        "client",
-        lambda: SimpleNamespace(project_list=lambda **_kwargs: object()),
-    )
-    monkeypatch.setattr(
-        plan_store, "sdk", lambda _answer: projects.model_copy(update={"items": [bad_project]})
-    )
-    with pytest.raises(OSError, match="outside its own ids"):
-        plan_store.read_projects("sdksource")
-
-    # The project listing is the store's own record and has its guard above; these are the
-    # task listing's, so the project's record names no members and the plain listing answers.
-    shown_record = plan_store.project_record
-    monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": {}})
-    duplicate = tasks.model_copy(update={"items": [tasks.items[0], tasks.items[0]]})
-    monkeypatch.setattr(
-        plan_store,
-        "client",
-        lambda: SimpleNamespace(
-            task_list=lambda **_kwargs: object(), project_list=lambda **_kwargs: object()
-        ),
-    )
-    monkeypatch.setattr(plan_store, "sdk", lambda _answer: duplicate)
-    with pytest.raises(OSError, match="duplicate task or node identities"):
-        plan_store.read_tasks("sdksource:demo")
-
-    outside = tasks.items[0].model_copy(
-        update={"id": tasks.items[0].id.__class__("elsewhere:demo/task")}
-    )
-    monkeypatch.setattr(
-        plan_store, "sdk", lambda _answer: tasks.model_copy(update={"items": [outside]})
-    )
-    with pytest.raises(OSError, match="outside itself"):
-        plan_store.read_tasks("sdksource:demo")
-
-    monkeypatch.setattr(plan_store, "project_record", shown_record)
-    monkeypatch.setattr(
-        plan_store,
-        "client",
-        lambda: SimpleNamespace(
-            project_show=lambda _id: object(), task_show=lambda _id, **_: object()
-        ),
-    )
-    monkeypatch.setattr(
-        plan_store,
-        "sdk",
-        lambda _answer: shown_project.model_copy(
-            update={"items": [shown_project.items[0], shown_project.items[0]]}
-        ),
-    )
-    with pytest.raises(OSError, match="returned 2 records"):
-        plan_store.project_record("sdksource:demo")
-    monkeypatch.setattr(
-        plan_store, "sdk", lambda _answer: shown_task.model_copy(update={"items": []})
-    )
-    with pytest.raises(OSError, match="returned 0 records"):
-        plan_store.task_record("sdksource:task")
-
-    foreign = held_documents.items[0].model_copy(
-        update={"id": held_documents.items[0].id.__class__("elsewhere:design")}
-    )
-    monkeypatch.setattr(
-        plan_store,
-        "client",
-        lambda: SimpleNamespace(document_list=lambda **_kwargs: object()),
-    )
-    monkeypatch.setattr(
-        plan_store,
-        "sdk",
-        lambda _answer: held_documents.model_copy(update={"items": [foreign]}),
-    )
-    with pytest.raises(OSError, match="outside itself"):
-        plan_store.read_documents("sdksource:demo")
-
-
-#: The published plan-store CLI, doubled at its boundary and nowhere above it: every
-#: invocation is the locked install's, and only its JSON answer is rewritten on the way
-#: out, so the SDK's decode and this package's reading path run as they do on a real read.
-#: `REWRITTEN_FIELD` names a field of every task a listing answers, and `REWRITTEN_AS`
-#: says what that task carries in its place: `absent`, an explicit JSON `null`, or —
-#: for any other word — the store's own value, untouched.
-REWRITING_PLAN_STORE = """\
-#!/usr/bin/env bash
-set -uo pipefail
-answer=$("$REAL_PLAN_STORE" "$@")
-status=$?
-printf '%s' "$answer" | "$(dirname "$0")/python3" -c '
-import json, os, sys
-text = sys.stdin.read()
-field, mode = os.environ["REWRITTEN_FIELD"], os.environ["REWRITTEN_AS"]
-try:
-    answer = json.loads(text)
-except ValueError:
-    sys.stdout.write(text)
-    raise SystemExit
-for held in answer.get("items", []) if isinstance(answer, dict) else []:
-    task = held.get("item") if isinstance(held, dict) else None
-    if isinstance(task, dict) and "delivers" in task:
-        if mode == "absent":
-            task.pop(field, None)
-        elif mode == "null":
-            task[field] = None
-json.dump(answer, sys.stdout)
-'
-exit "$status"
-"""
-
-
-@pytest.mark.parametrize("field", ["repositories", "delivers"])
-def test_a_defaulted_task_field_decodes_to_its_default_and_an_explicit_null_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
-) -> None:
-    """The adopted SDK's decode, through `read_tasks` over a real local-md store.
-
-    A task's `repositories` and `delivers` are defaulted and never null: a store answer
-    that omits one reads as its default, the same answer carrying `null` is refused as
-    outside the store's schema rather than read as `None`, and a value the store answers
-    reads unchanged. The interpreter is a real bare one with the stand-in beside it,
-    because the package runs the CLI beside its interpreter and no other.
-    """
-    root = tmp_path / "source"
-    write_plan_project(
-        root,
-        {
-            "name": "demo",
-            "tasks": [
-                PlanNode(
-                    id="task",
-                    title="Task",
-                    task="Body",
-                    repo="github.com/acme/service",
-                    delivers=["followups:I_1"],
-                )
-            ],
-        },
-    )
-    _source(monkeypatch, "sdksource", root)
-    bare = tmp_path / "bare"
-    venv.create(bare, with_pip=False)
-    stand_in = bare / "bin" / "onetaskgraph"
-    stand_in.write_text(REWRITING_PLAN_STORE, encoding="utf-8")
-    stand_in.chmod(0o755)
-    monkeypatch.setattr(sys, "executable", str(bare / "bin" / "python3"))
-    monkeypatch.setenv("REAL_PLAN_STORE", str(ONETASKGRAPH_BIN))
-    monkeypatch.setenv("REWRITTEN_FIELD", field)
-
-    monkeypatch.setenv("REWRITTEN_AS", "absent")
-    [defaulted] = plan_store.read_tasks("sdksource:demo")
-    assert getattr(defaulted, field) in ([], ()), defaulted
-
-    monkeypatch.setenv("REWRITTEN_AS", "null")
-    with pytest.raises(OSError, match="outside its emitted schema") as refused:
-        plan_store.read_tasks("sdksource:demo")
-    assert field in str(refused.value)
-
-    monkeypatch.setenv("REWRITTEN_AS", "untouched")
-    [held] = plan_store.read_tasks("sdksource:demo")
-    assert held.repositories == ["github.com/acme/service"]
-    assert held.delivers == ("followups:I_1",)
-
-
 #: The repository a routed source takes, and the one that stays in the plan's own source.
 ROUTED_REPOSITORY = "github.com/hiddenco/qh-api"
 HOME_REPOSITORY = "github.com/nickderobertis/onevcs"
@@ -957,268 +505,6 @@ def _routed_sources(
     monkeypatch.setenv(
         "ONETASKGRAPH_SOURCES__HOME__ROUTES__0__REPOSITORIES", "github.com/hiddenco/*"
     )
-
-
-def _copied_home(name: str, tasks: list[PlanNode], tmp_path: Path) -> str:
-    """Draft ``tasks`` as one plan and copy it to the routing source, answering its home.
-
-    The copy is the real store's, in a directory whose own document declares the three
-    sources and no public boundary. These reader journeys exercise existing routed records;
-    `test_a_public_home_sends_a_plan_holding_a_private_task_to_the_private_source`
-    separately drives the screened copy and an explicitly private project's refusal.
-
-    The store stamps a task naming a private repository `classification: private` when it
-    writes it under this checkout's boundary, which makes the whole draft private; these
-    journeys read records drafted without that boundary, so the stamp is taken back off
-    the draft before it is copied.
-    """
-    draft = tmp_path / "draft"
-    write_plan_project(draft, {"name": name, "tasks": tasks})
-    for record in (draft / "tasks").glob("*.md"):
-        record.write_text(
-            record.read_text(encoding="utf-8").replace("classification: private\n", ""),
-            encoding="utf-8",
-        )
-    unbounded = tmp_path / "unbounded"
-    unbounded.mkdir(exist_ok=True)
-    (unbounded / "onetaskgraph.yaml").write_text(
-        "sources:\n"
-        + "".join(
-            f"  {source}:\n    plugin: local-md\n    config:\n      root: {tmp_path / source}\n"
-            for source in ("draft", "member")
-        )
-        + f"  home:\n    plugin: local-md\n    config:\n      root: {tmp_path / 'home'}\n"
-        + '    routes:\n      - repositories: ["github.com/hiddenco/*"]\n        to: member\n',
-        encoding="utf-8",
-    )
-    environment = {
-        key: value for key, value in os.environ.items() if not key.startswith("ONETASKGRAPH_")
-    }
-    environment["XDG_CONFIG_HOME"] = str(tmp_path / "no-user-layer")
-    copied = subprocess.run(
-        [str(ONETASKGRAPH_BIN), "--json", "project", "copy", f"draft:{name}", "--to", "home"],
-        cwd=unbounded,
-        env=environment,
-        text=True,
-        capture_output=True,
-        stdin=subprocess.DEVNULL,
-        check=False,
-    )
-    assert copied.returncode == 0, copied.stderr
-    (home,) = [
-        str(item["destination"])
-        for item in json.loads(copied.stdout)["items"]
-        if item["source"] == f"draft:{name}" and item.get("destination")
-    ]
-    return home
-
-
-def test_a_plan_the_store_routed_across_sources_is_read_as_one_with_its_members(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The home's tasks and its member's are one plan, with edges both ways between them.
-
-    The real store routes the hiddenco task into a member project of the second source; the
-    read names every node once, each under its own source and project, and resolves the
-    dependency edges that cross sources in either direction.
-    """
-    _routed_sources(monkeypatch, tmp_path)
-    home = _copied_home(
-        "mixed",
-        [
-            PlanNode(id="library", title="Library", task="Do it.", repo=HOME_REPOSITORY),
-            PlanNode(
-                id="consumer",
-                title="Consumer",
-                task="Do it.",
-                deps=["library"],
-                repo=ROUTED_REPOSITORY,
-            ),
-            PlanNode(
-                id="rollout",
-                title="Rollout",
-                task="Do it.",
-                deps=["consumer"],
-                repo=HOME_REPOSITORY,
-            ),
-        ],
-        tmp_path,
-    )
-
-    read = {task.node_id: task for task in plan_store.read_tasks(home)}
-
-    assert home.startswith("home:"), home
-    assert plan_store.reachable("home") == ("home", "member")
-    assert plan_store.members(home) == {f"member:{home.partition(':')[2]}"}
-    assert {node: task.qualified_id.partition(":")[0] for node, task in read.items()} == {
-        "library": "home",
-        "consumer": "member",
-        "rollout": "home",
-    }
-    assert {node: task.deps for node, task in read.items()} == {
-        "library": (),
-        "consumer": ("library",),
-        "rollout": ("consumer",),
-    }
-    assert design_chain.plan_repository(home) is None
-
-
-def test_a_plan_every_task_of_which_routes_away_lands_whole_in_the_routed_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An all-hiddenco plan's home is the routed source's, resolving through that repository."""
-    _routed_sources(monkeypatch, tmp_path)
-    home = _copied_home(
-        "routed",
-        [
-            PlanNode(id="first", title="First", task="Do it.", repo=ROUTED_REPOSITORY),
-            PlanNode(
-                id="second",
-                title="Second",
-                task="Do it.",
-                deps=["first"],
-                repo=ROUTED_REPOSITORY,
-            ),
-        ],
-        tmp_path,
-    )
-
-    assert home.startswith("member:"), home
-    assert plan_store.members(home) == frozenset()
-    assert {task.node_id for task in plan_store.read_tasks(home)} == {"first", "second"}
-    assert design_chain.plan_repository(home) == ROUTED_REPOSITORY
-
-
-def test_a_public_home_sends_a_plan_holding_a_private_task_to_the_private_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Onto a public home a plan naming only private repositories is homed where they route.
-
-    The boundary is on, so a plan every task of which routes to the source declared private
-    lands there whole, home and tasks. A mixed plan lands there whole too, and its public
-    task is seen at the public home only as a neutral view naming no private work. An
-    explicitly private project is refused at that public home before anything is written. A
-    single task copy is routed, which is how a follow-up ticket of the organization reaches
-    its own tracker.
-    """
-    _routed_sources(monkeypatch, tmp_path, home="public")
-    monkeypatch.setenv("ONETASKGRAPH_SOURCES__DRAFT__VISIBILITY", "private")
-
-    def drafted(name: str, repositories: list[str]) -> str:
-        """Draft the plan ``name``, its tasks each naming one of ``repositories``."""
-        write_plan_project(
-            tmp_path / "draft",
-            {
-                "name": name,
-                "tasks": [
-                    PlanNode(id=f"task-{index}", title=f"Task {index}", task="Do it.", repo=repo)
-                    for index, repo in enumerate(repositories)
-                ],
-            },
-        )
-        return f"draft:{name}"
-
-    def task_ids(project: str) -> list[str]:
-        """The qualified ids the store gave ``project``'s tasks, in node order."""
-        return [
-            str(task.qualified_id)
-            for task in sorted(plan_store.read_tasks(project), key=lambda task: task.node_id)
-        ]
-
-    routed = drafted("routed", [ROUTED_REPOSITORY, ROUTED_REPOSITORY])
-    routed_tasks = task_ids(routed)
-    report = plan_store.sdk(plan_store.client().project_copy(routed, to="home"))
-    assert {
-        str(item.root.source.root): str(item.root.destination.root).partition(":")[0]
-        for item in report.items
-        if item.root.destination
-    } == {routed: "member"} | dict.fromkeys(routed_tasks, "member")
-
-    mixed = drafted("mixed", [HOME_REPOSITORY, ROUTED_REPOSITORY])
-    mixed_tasks = task_ids(mixed)
-    report = plan_store.sdk(plan_store.client().project_copy(mixed, to="home"))
-    destinations = {
-        str(item.root.source.root): str(item.root.destination.root).partition(":")[0]
-        for item in report.items
-        if item.root.destination
-    }
-    # Every task of a plan holding a private one stays canonical beside its private home; the
-    # public task is seen at the public home only as the store's neutral view of it.
-    assert destinations == {mixed: "member"} | dict.fromkeys(mixed_tasks, "member"), destinations
-    public_records = {
-        path: path.read_text(encoding="utf-8") for path in (tmp_path / "home").rglob("*.md")
-    }
-    views = [content for content in public_records.values() if "title: Task 0" in content]
-    assert len(views) == 1, public_records
-    assert "github.com/nickderobertis/onevcs" in views[0], views
-    assert any("title: Public work" in content for content in public_records.values())
-    for path, content in public_records.items():
-        assert "hiddenco" not in content and "qh-api" not in content, (path, content)
-        assert "mixed" not in content and "Task 1" not in content, (path, content)
-
-    # Public repositories leave no route to a private home: only the project's explicit
-    # classification makes this copy private, so it must refuse at the requested home.
-    private = drafted("classified", [HOME_REPOSITORY, HOME_REPOSITORY])
-    classified = subprocess.run(
-        [
-            str(ONETASKGRAPH_BIN),
-            "project",
-            "create",
-            "draft",
-            "--id",
-            "classified",
-            "--title",
-            "Classified plan",
-            "--classification",
-            "private",
-            "--no-interactive",
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert classified.returncode == 0, classified.stdout + classified.stderr
-    before_refusal = {
-        path: path.read_bytes()
-        for source in ("home", "member")
-        for path in (tmp_path / source).rglob("*.md")
-    }
-    with pytest.raises(OSError, match="is private, and source home is not declared private"):
-        plan_store.sdk(plan_store.client().project_copy(private, to="home"))
-    assert before_refusal == {
-        path: path.read_bytes()
-        for source in ("home", "member")
-        for path in (tmp_path / source).rglob("*.md")
-    }
-
-    report = plan_store.sdk(plan_store.client().task_copy([routed_tasks[0]], to="home"))
-    assert [
-        str(item.root.destination.root).partition(":")[0]
-        for item in report.items
-        if item.root.destination
-    ] == ["member"]
-
-
-def test_a_home_naming_its_members_in_any_other_shape_is_refused_by_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A `onetaskgraph.members` that is not a list of qualified ids names nothing to read."""
-    _source(monkeypatch, "home", tmp_path)
-    write_plan_project(tmp_path, {"name": "odd", "tasks": []})
-    record = tmp_path / "projects" / "odd.md"
-    text = record.read_text(encoding="utf-8")
-    record.write_text(
-        text.replace(
-            "status: todo\n",
-            'status: todo\nmetadata:\n  onetaskgraph.members: ["not qualified"]\n',
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(OSError, match="not a list of qualified project ids"):
-        plan_store.members("home:odd")
 
 
 def test_a_sources_reachable_family_is_the_stores_own_answer(
@@ -1249,15 +535,8 @@ def test_task_locate_answers_the_copys_placement_and_looks_nothing_up(
     even where the destination holds the task's copy, and every refusal is an :class:`OSError`.
     """
     _routed_sources(monkeypatch, tmp_path, home="public")
-    _copied_home(
-        "located",
-        [PlanNode(id="one", task="One task.", repo=HOME_REPOSITORY)],
-        tmp_path,
-    )
-    drafted = {
-        task.node_id: str(task.qualified_id) for task in plan_store.read_tasks("draft:located")
-    }
-    source = drafted["one"]
+    _local_task(tmp_path / "draft", "one", "one", "One task.", repositories=[HOME_REPOSITORY])
+    source = "draft:one"
     before = sorted((tmp_path / "home").rglob("*.md"))
 
     found = plan_store.task_locate(source, "home")
@@ -1295,72 +574,6 @@ def test_task_locate_refuses_an_answer_about_another_task_or_count(
         monkeypatch.setattr(plan_store, "client", lambda: SimpleNamespace(task_locate=answered))
         with pytest.raises(OSError, match=refused):
             plan_store.task_locate("drafts:run/tickets/cause", "board")
-
-
-def test_project_copies_lists_only_projects_stamped_with_the_requested_origin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The real store finds a copied project by origin and excludes unrelated projects."""
-    draft = tmp_path / "draft"
-    board = tmp_path / "board"
-    write_plan_project(draft, {"name": "copied", "tasks": []})
-    write_plan_project(board, {"name": "unrelated", "tasks": []})
-    _source(monkeypatch, "draft", draft)
-    _source(monkeypatch, "board", board)
-
-    assert plan_store.project_copies("board", "draft:copied") == []
-    plan_store.sdk(plan_store.client().project_copy("draft:copied", to="board"))
-
-    (copied,) = plan_store.project_copies("board", "draft:copied")
-    assert str(copied.qualified_id) == "board:copied"
-    assert copied.title == "copied"
-    assert copied.metadata[plan_store.ORIGIN_KEY] == "draft:copied"
-    assert plan_store.project_copies("board", "draft:unrelated") == []
-
-
-def test_a_project_the_store_holds_no_record_of_is_refused_rather_than_read_as_empty(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Its record is read by id, so a project nothing holds is the store's refusal.
-
-    Which members a plan has is read off its own record, and that record is asked for by
-    id rather than found in a listing of every project its source holds; a project the
-    store has no record of is then the store's own refusal, never an empty plan.
-    """
-    _source(monkeypatch, "home", tmp_path)
-
-    with pytest.raises(OSError, match="no project with that id"):
-        plan_store.read_tasks("home:nothing-here")
-
-
-def test_a_home_with_no_tasks_of_its_own_refuses_when_its_member_cannot_be_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A routed task the store cannot read is a refusal, never an empty or partial plan.
-
-    The real routed copy files the hiddenco task in the member source and records the member
-    on the home. The home's own task is then removed, so its own listing is empty, and the
-    member source is pointed at a directory that is not there: the read of the home asks for
-    its members because its record names them, and reports the member's refusal.
-    """
-    _routed_sources(monkeypatch, tmp_path)
-    home = _copied_home(
-        "unreadable",
-        [
-            PlanNode(id="library", title="Library", task="Do it.", repo=HOME_REPOSITORY),
-            PlanNode(id="consumer", title="Consumer", task="Do it.", repo=ROUTED_REPOSITORY),
-        ],
-        tmp_path,
-    )
-    native = home.partition(":")[2]
-    for task in (tmp_path / "home" / "tasks").rglob("*.md"):
-        task.unlink()
-    listed = plan_store.sdk(plan_store.client().task_list(source=["home"], project=native))
-    assert listed.items == [], "the home still lists a task of its own"
-    _source(monkeypatch, "member", tmp_path / "gone")
-
-    with pytest.raises(OSError, match="source member could not answer"):
-        plan_store.read_tasks(home)
 
 
 def test_the_tracked_configuration_declares_its_drafting_sources_private_and_its_boards_not() -> (

@@ -26,14 +26,14 @@
 #     checkout, which is the command every briefing tells a party to draft with.
 #
 # A name the environment already defines wins for the two store settings, the precedence
-# scripts/plan-root-env.sh gives the authoring root, and the value is still resolved and
+# scripts/follow-ups.sh gives the authoring root, and the value is still resolved and
 # validated through the store, which reads that environment layer too. It is a helper
 # rather than lines in each caller because the names, the values and the refusals are one
 # decision, and `tests/test_follow_up_draft_composition.py` refuses a second composition
 # of any of the three names anywhere in this repository's tracked code.
 #
 # Strict mode is established here rather than inherited from the sourcing caller, exactly
-# as scripts/plan-root-env.sh and scripts/ask-manager-env.sh do: a resolution that failed
+# as scripts/ask-manager-env.sh does: a resolution that failed
 # must abort the launch rather than fall through to dispatches that draft nowhere.
 set -euo pipefail
 
