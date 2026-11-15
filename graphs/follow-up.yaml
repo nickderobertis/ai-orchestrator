@@ -1,29 +1,27 @@
-# The node-scope agent graph `just follow-ups <run-id>` dispatches its one direct node
-# under: the follow-up agent, which verifies a finished run's drafted follow-ups, groups
-# what stands by root cause, and puts the verified tickets on the `followups` board.
+# The node-scope agent graph the follow-up plans' agent nodes run under: the follow-up
+# agent, which verifies a finished run's drafted follow-ups through onefollowup — the
+# `verify` node of the plan `just follow-ups` creates from `templates/follow-ups.md.j2` — or
+# answers people's comments on their tickets — the node of each feedback plan
+# `just follow-ups-answer-comments` creates.
 #
 # One single-sided `kind: oneharness` member and **no judge side**. That is the user's
-# decision: nothing judges the follow-up agent's output. What holds it is the ticket shape
-# `orchestrator/follow_up_tickets.py` states and `just follow-ups` validates once an
-# attached run settles, the manager's reading of its report, and the journeys.
+# decision: nothing judges the follow-up agent's output. What holds it is onefollowup's own
+# `check` step, which the plan runs after it, the manager's reading of its report, and the
+# journeys.
 #
-# The member claims no `task` of its own, so the task `scripts/follow-ups.sh` creates
-# from the `follow-up-task` template, `templates/follow-up-task.md.j2`, reaches it whole as
-# its prompt. It layers no persona
-# either — a single-sided member has no onejudge base config to layer a persona delta
-# over — so `../personas/follow-up.yaml` is named for the label alone and that composed
-# task is the one copy of its instructions the model is given. The plan node names the
-# same persona because the engine refuses a direct agent node that names none.
+# The member claims no `task` of its own, so the task the plan renders through this host's
+# `follow-up-task` layer, `templates/follow-up-task.md.j2`, reaches it whole as its prompt,
+# pointing it at the task onefollowup rendered. It layers no persona either — a single-sided
+# member has no onejudge base config to layer a persona delta over — so
+# `../personas/follow-up.yaml` is named for the label alone. The plan node names the same
+# persona because the engine refuses a direct agent node that names none.
 #
 # The member's turn runs in `bypass` mode, and declares no `mode` here. Its working
 # directory is this graph's scratch directory, not a repository, where a `default`-mode
 # turn is refused by codex as an untrusted directory and denied its tools by Claude Code.
 # The mode is declared in `oneharness.follow-up.toml`, because the linked oneagentgraph
-# admits no `mode` on a single-sided member — so the next single-sided member that runs
-# commands declares its mode in its own harness config too.
-# `tests/test_follow_up_agent_arrangement.py` holds this arrangement, and
-# `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` launches a direct node naming this
-# graph through the installed engine and reads the composed task out of the member's turn.
+# admits no `mode` on a single-sided member. `tests/e2e/follow_ups/` launches the plans
+# naming this graph through the installed engine.
 #
 # Every ref below is relative to THIS file's directory, not the working directory.
 version: 9

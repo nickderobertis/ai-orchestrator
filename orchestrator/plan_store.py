@@ -93,8 +93,7 @@ def locked_binary(interpreter: str | Path | None = None) -> Path:
     ``interpreter`` defaults to ``sys.executable`` and exists so a check can drive the
     resolution against a real interpreter beside which no CLI is installed. An absent or
     non-executable file is refused by name before the SDK's own generic "binary not
-    found", with this checkout's provisioning recipe as the remedy — the refusal
-    ``scripts/follow-ups.sh`` makes of an unprovisioned checkout, one layer down.
+    found", with this checkout's provisioning recipe as the remedy.
     """
     expected = Path(interpreter if interpreter is not None else sys.executable).parent / CLI_NAME
     if os.environ.get(SDK_BINARY_VARIABLE):

@@ -8,9 +8,12 @@
 # review is not a hook: it is the planning run's own `approve-design` human node
 # (`templates/planning/`), which `just approve-design` attests.
 #
-#   * `follow-up-review` — a follow-up run's closeout raises it over every ticket the run
-#     created or updated; the engine's `ticket_review` aggregation derives its priority,
-#     groups the links, and retires it when there are none. It holds nothing.
+#   * `follow-up-review` — over every ticket a follow-up batch created or updated; the
+#     engine's `ticket_review` aggregation derives its priority, groups the links, and
+#     retires it when there are none. It holds nothing. `onefollowup.yaml` names it as
+#     onefollowup's `batch_settled` hook, handed the context file onefollowup's settle
+#     writes, so its title and body expand only what that file supplies: the batch, under
+#     `vars`, and the tickets the aggregation links.
 #
 # Human items are on for every host of this repository: the item store, holds, the CLI, the
 # browser's Action items page, and each task's projection into `human-public`, the shared
@@ -28,8 +31,8 @@ human_items:
   hooks:
     - phase: follow-up-review
       kind: task
-      title: "Accept or defer the follow-up tickets from {{ run }}"
-      body: "Move each ticket to Todo to accept it or Deferred to defer it."
+      title: "Accept or defer the follow-up tickets from batch {{ batch }}"
+      body: "Move each ticket follow-up batch {{ batch }} filed or updated to Todo to accept it, or to Deferred to defer it."
       priority: low
       block: {scope: nothing}
       aggregate: ticket_review

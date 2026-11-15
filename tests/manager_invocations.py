@@ -161,24 +161,14 @@ _SCRATCH_DISCARD = (
     "only the regenerable scratch of a run whose status word says it ended, never follows a "
     "link out of it, and refuses a paused, driven or unknown run"
 )
-_TICKETS = (
-    "`python -m orchestrator.follow_up_tickets statuses` prints the vocabulary every agent reads"
-)
-_BOARD_ITEMS = (
-    "**The board is searched, never listed: every query of it is `python -m "
-    "orchestrator.follow_up_tickets board-items`.**"
-)
-_CHECK_DISPOSITIONS = (
-    "`python -m orchestrator.follow_up_tickets check-dispositions` is what holds an account to that"
-)
-_CHECK_RESPONSES = (
-    "`python -m orchestrator.follow_up_tickets check-responses` is what holds an account to that"
+_ONEFOLLOWUP_CONFIG = (
+    "`uv run --no-sync onefollowup config show` prints the follow-up loop's effective "
+    "configuration, and writes nothing"
 )
 _FOLLOW_UP = (
     "Draft a follow-up with `just follow-up <run-id>` only when nobody needs it during the run"
 )
 _FOLLOW_UPS = "asking the user whether to verify its drafts by hand with `just follow-ups <run-id>`"
-_FEEDBACK = "anything more goes back with `just follow-ups <run-id> --feedback FILE`"
 _COMMENTS = (
     "People's board comments are answered by `just follow-ups-answer-comments`, which reads the"
 )
@@ -195,7 +185,6 @@ _DEV_TIER = (
 )
 _CLONE = "and so is `git clone`: a clone adds a checkout and changes no remote or base"
 _BARE = "Confirm `git config core.bare` is `false`"
-_GATHERING = "The pre-launch `check-gathering` holds the file to its"
 _GIT_OUTPUT_UNGRANTED = "whose `--output` writes a file"
 _GIT_C_UNGRANTED = "A `git -C <path>` read is not granted, because Claude Code's `*` spans words"
 _CD = "an invocation written `cd <this checkout> && <verb>` passes on the verb's grant"
@@ -387,14 +376,8 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _allow("pool-status", "onevcs pool status {co}", _POOL),
     _allow("follow-up", "just follow-up {run}", _FOLLOW_UP),
     _allow("follow-ups", "just follow-ups {run}", _FOLLOW_UPS),
-    _allow("follow-ups-feedback", "just follow-ups {run} --feedback {feedback}", _FEEDBACK),
     _allow("follow-ups-comments", "just follow-ups-answer-comments", _COMMENTS),
     _allow("follow-ups-comments-dry-run", "just follow-ups-answer-comments --dry-run", _COMMENTS),
-    _allow(
-        "follow-ups-comments-from",
-        "just follow-ups-answer-comments --from /home/me/follow-ups/feedback/.snapshots/x",
-        _COMMENTS,
-    ),
     _allow(
         "supersessions",
         "node_modules/.bin/onepipeline supersessions {run} --record",
@@ -404,31 +387,10 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "scratch-discard", "node_modules/.bin/onepipeline scratch discard {run}", _SCRATCH_DISCARD
     ),
     _allow(
-        "tickets-statuses",
-        "uv run --no-sync python -m orchestrator.follow_up_tickets statuses",
-        _TICKETS,
+        "onefollowup-config",
+        "uv run --no-sync onefollowup config show",
+        _ONEFOLLOWUP_CONFIG,
         codex=CODEX_EXACT,
-    ),
-    _allow(
-        "tickets-board-items",
-        "uv run --no-sync python -m orchestrator.follow_up_tickets board-items --board followups "
-        "--search cursor",
-        _BOARD_ITEMS,
-    ),
-    _allow(
-        "tickets-dispositions",
-        "uv run --no-sync python -m orchestrator.follow_up_tickets check-dispositions {run}",
-        _CHECK_DISPOSITIONS,
-    ),
-    _allow(
-        "tickets-responses",
-        "uv run --no-sync python -m orchestrator.follow_up_tickets check-responses {run}",
-        _CHECK_RESPONSES,
-    ),
-    _allow(
-        "tickets-gathering",
-        "uv run --no-sync python -m orchestrator.follow_up_tickets check-gathering {run}",
-        _GATHERING,
     ),
     _allow("log-cat", "cat {runs}/{run}/driver.log", _LOG_READ, codex=CODEX_READ),
     _allow("log-tail", "tail -n 50 .logs/{label}.log", _LOG_READ, codex=CODEX_READ),

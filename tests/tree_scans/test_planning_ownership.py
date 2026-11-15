@@ -157,7 +157,6 @@ SHARED: dict[str, Shared] = {
     "scripts/template-env.sh": Shared("exports this checkout's template root to the engine"),
     "scripts/launcher-session.sh": Shared("names the acting manager session"),
     "scripts/ask-manager-env.sh": Shared("exports the ask-manager seam every launch carries"),
-    "scripts/follow-up-env.sh": Shared("exports the follow-up drafting seam every launch carries"),
     "scripts/follow-up-draft.sh": Shared("drafts one follow-up into the drafts source"),
     "scripts/dispatch-env-hook.sh": Shared(
         "the engine's dispatch-env hook: each dispatch's environment"
@@ -167,26 +166,10 @@ SHARED: dict[str, Shared] = {
     "scripts/nx.sh": Shared("runs Nx for the checks a dispatch's gate measures"),
     "scripts/preserved-log.sh": Shared("keeps a stage's redacted log"),
     "scripts/setup-llmlint.sh": Shared("installs the judged lint tier"),
-    "scripts/follow-ups.sh": Shared(
-        "the follow-up verification launch, which the success hook runs",
-        matches="it reads and writes follow-up tickets and drafts, not a plan's records",
-    ),
-    "scripts/follow-ups-answer-comments.sh": Shared(
-        "answers people's comments on follow-up tickets"
-    ),
-    "orchestrator/follow_up_tickets.py": Shared(
-        "verifies and files follow-up tickets",
-        matches="it reads and writes follow-up tickets, not a plan's records",
-    ),
-    "orchestrator/follow_up_comments.py": Shared(
-        "answers comments on follow-up tickets",
-        matches="it reads follow-up tickets, not a plan's records",
-    ),
-    "orchestrator/follow_up_drafts.py": Shared("validates follow-up drafts"),
     "orchestrator/plan_store.py": Shared(
-        "the locked plan-store client the follow-up modules read through",
+        "the locked plan-store client the host's own readers read through",
         matches=(
-            "it is the store client itself: every read the follow-up modules make goes through it"
+            "it is the store client itself: every read the host's own readers make goes through it"
         ),
     ),
     "orchestrator/host_installs.py": Shared(
@@ -196,8 +179,7 @@ SHARED: dict[str, Shared] = {
     "orchestrator/record_shapes.py": Shared(
         "normalized origins and record ids every reader shares"
     ),
-    "orchestrator/human_items.py": Shared("the human-items hooks of every run"),
-    "orchestrator/run_reading.py": Shared("reads a run's settlement for the follow-up launch"),
+    "orchestrator/run_reading.py": Shared("reads a run's settlement, as the engine publishes it"),
     "orchestrator/npm_installs.py": Shared("the engine's npm install, every verb's binary"),
     "orchestrator/gate_impact.py": Shared("measures what the gate leaves on the host"),
     "orchestrator/redaction.py": Shared("the redaction rule every kept log is written under"),

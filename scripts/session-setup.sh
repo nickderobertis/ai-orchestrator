@@ -18,7 +18,7 @@
 #      installed into this worktree's project venv by the same `uv sync` and
 #      verified as both a distribution and CLI.
 #   3. The published tools this repository is a configuration layer over —
-#      oneagentgraph, onevcs, onemessagebus, onetaskgraph, and onebudgetspec — arrive from
+#      oneagentgraph, onevcs, onemessagebus, onetaskgraph, onebudgetspec, and onefollowup — arrive from
 #      PyPI through that same `uv sync` at the versions adopted in `config/`, and are
 #      verified as both a distribution and a CLI (see PUBLISHED_TOOL_SPECS below). The
 #      engine (`onepipeline`) and the read API (`onepipeline-api`) arrive from npmjs.com
@@ -75,6 +75,7 @@ readonly PUBLISHED_TOOL_SPECS=(
   "onemessagebus|onemessagebus-cli|onemessagebus.version"
   "onetaskgraph|onetaskgraph-cli|onetaskgraph.version"
   "onebudgetspec|onebudgetspec-cli|onebudgetspec.version"
+  "onefollowup|onefollowup-cli|onefollowup.version"
 )
 # The published tools installed from npmjs.com instead, through `bun.lock`, as
 # `<CLI binary>|<npm package>|<config version file>`: the engine, and the read API whose
@@ -593,7 +594,7 @@ if verify_published_tools; then
   done
   warm_schema_cache
 else
-  log "the adopted oneagentgraph, onevcs, onemessagebus, onetaskgraph, and onebudgetspec releases are required — 'just check' will fail until setup succeeds"
+  log "the adopted oneagentgraph, onevcs, onemessagebus, onetaskgraph, onebudgetspec, and onefollowup releases are required — 'just check' will fail until setup succeeds"
   toolchain_failed=1
 fi
 report_npm_tools || toolchain_failed=1

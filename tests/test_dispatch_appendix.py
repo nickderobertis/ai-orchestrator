@@ -1398,7 +1398,7 @@ def test_the_appendix_states_the_drafting_rule_once_beside_the_blocking_route(
     intact is
     `tests/e2e/launch_monitor_observer/test_dispatched_operational_notes_e2e.py`'s, and that
     the command it names works from inside a real dispatch is
-    `tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py`'s.
+    the verifying journey's under `tests/e2e/follow_ups/`.
     """
     paragraphs = [block for block in appendix.split("\n\n") if DRAFT_COMMAND.search(block)]
     assert len(paragraphs) == 1, (

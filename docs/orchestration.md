@@ -89,9 +89,11 @@ to a source not declared private is refused, with the store's own refusal naming
 nothing written. The tracked document declares the two boards, `plans` and `followups`, public,
 and local folders of this machine private: `authoring`, where every plan, design document, spike
 report and budget answer is drafted, so an organization's plan is drafted there like any other,
-and `follow-up-runs`, where a follow-up launch writes its project, because its task quotes drafts
-and board comments that may name private work. `drafts` declares no visibility, so a follow-up
-draft naming a private repository is refused there; `examples` declares none either.
+and `follow-up-runs`, where the follow-up recipes create their plans, because a task there
+quotes drafts and board comments that may name private work. `drafts` is private too, because
+onetaskgraph records a private draft only on a source declared private and onefollowup leaves
+that declaration to the host: a draft naming a private repository is recorded private there,
+and one about public work public. `examples` declares none.
 `test-fixtures` is private because local journeys include deliberately private projects. Writes
 there are accepted as private; a copy to a public board is screened at that destination.
 Session setup creates every private folder, because an absent root fails a dependency read that
@@ -162,11 +164,9 @@ or a comment) screens only the text it writes and sends the source the same requ
 this host leaves the store's read-first `sanitize_stored_on_write` off, because it would read
 the task and its comments beside every such write.
 
-`tests/plan_tooling/host_layer_routing/test_screened_host_states_e2e.py` and its
-`follow_ups/` sibling `test_screened_host_states_follow_ups_e2e.py` drive the plan-store
-recipes in each host state —
+`tests/plan_tooling/host_layer_routing/test_screened_host_states_e2e.py` drives the plan-store recipes in each host state —
 no user layer, the example's shape with its organization's sources declared private, and that
-layer with no credential for them — and the first drives content naming a synthetic private
+layer with no credential for them — and drives content naming a synthetic private
 repository to the private sources it may reach and away from the public ones it may not. One
 gap of the pinned store stands in the third state: its copy authenticates every private
 source, so a plan's copy onto a public destination and a follow-up ticket's copy onto the
@@ -336,14 +336,15 @@ from the plan's own description. Each step's task and command are the template's
 `scripts/` or `orchestrator/` composes them. `tests/e2e/planning/` drives both recipes end to
 end.
 
-**The whole flow is one watch.** `just plan`, `just finish-plan`, `just follow-ups` and
-`just follow-ups-answer-comments` each run inside the engine's `onepipeline flow run`, owned
+**The whole flow is one watch.** `just plan`, `just finish-plan` and `just
+follow-ups-answer-comments` each run inside the engine's `onepipeline flow run`, owned
 by the launching session from the launcher's start to its exit, so the session is held
 through every run the flow starts — a planning run's spikes run included. Each prints its
 flow first, beside `just watch --flow <ID>`: arm that, and re-arm from its cursor on every
-ending, a run joining the flow included, exactly as a run's watch is re-armed. A flow that
-ends non-zero or dies is owed closure: report it, then `just unwatched --acknowledge-flow
-<ID> --reason "<why>"`. `just orchestrate` is one run, and is not a flow.
+ending, a run joining the flow included, exactly as a run's watch is re-armed. `just follow-ups`
+launches its one run detached, which is owed a watch of its own. A flow that ends non-zero
+or dies is owed closure: report it, then `just unwatched --acknowledge-flow <ID> --reason
+"<why>"`. `just orchestrate` is one run, and is not a flow.
 
 **The review is an attestation the plan store keeps.** `just review-plan <source>:<project>`
 is `scripts/review-plan-item.sh`, the planning run's `review` step exactly. Its bar is the
@@ -1268,29 +1269,18 @@ just channel-reply RUN reply.json
 just channel-approve RUN
 just channel-reject RUN "verification failed"
 just channel-continue RUN "apply the edit and continue"
-just follow-ups RUN --detach
-just follow-ups RUN --feedback feedback.md
+just follow-ups RUN
 just follow-ups-answer-comments --dry-run
 just follow-ups-answer-comments
 ```
 
-`just follow-ups` verifies a finished run's drafted follow-ups in a run of its own; a
-run `just orchestrate` launched whose every node ended `done` has it launched for it by
-the success hook, and a manager types it for a run that ended any other way or to
-re-dispatch with feedback. `just follow-ups-answer-comments` is that re-dispatch for what
-people wrote on the board, for every run at once: it asks the store only for this host's
-items commented on since the board's watermark, narrowed by the store before any comment is
-read, sends each person's comment to the run owning the issue it sits on until any run's
-reply names it, writes one feedback file per such run under
-the drafts root's `feedback/<run-id>/`, each comment with its id, its URL, its author and its
-text, and hands each to `just follow-ups --feedback --comments`, whose agent acts on each
-comment and answers it with a reply under the run's marker. Its report names every comment
-the query returned, sent or left out with its one reason, and every reply; `--dry-run`
-writes and launches nothing, `--run RUN` reads only the items that run's tickets are bound
-to and `--issue SOURCE:ID` that one item, each by id with no listing, and
-`orchestrator/follow_up_comments.py` states the rule. A gathering with nothing selected
-launches nothing and says so. [Follow-ups are drafted, not
-surfaced](#follow-ups-are-drafted-not-surfaced) says what it does and how the hooks
+`just follow-ups` creates the plan that verifies a finished run's follow-ups through
+onefollowup and launches it detached; a run `just orchestrate` launched whose every node
+ended `done` has it launched for it by the success hook, and a manager types it for a run
+that ended any other way. `just follow-ups-answer-comments` runs onefollowup's comment pass
+as a plan in a flow, answering each person's comment on this host's tickets once, by the
+batch that owns its ticket; `--dry-run` only gathers and reports. [Follow-ups are drafted,
+not surfaced](#follow-ups-are-drafted-not-surfaced) says what each does and how the hooks
 reach it.
 
 The ledger lives under `runs/` in the working directory; `ONEPIPELINE_RUNS_DIR`
@@ -1967,27 +1957,27 @@ graph should stop for.
 ### Follow-ups are drafted, not surfaced
 
 A follow-up — work some party noticed outside its own scope that can wait to be verified
-after the run — does not travel over the channel at all. It is **drafted**: written as an
-unverified local Markdown task into the `drafts` plan source (`onetaskgraph.yaml`, root
-`.follow-ups/` in the launching checkout, gitignored and outside `default_sources`), in a
-project of its own per run — `projects/<run-id>.md`, with each draft under
-`tasks/<run-id>/drafts/`. Drafts live there rather than in a dispatch's worktree so they
-survive the worktree being reaped, and they are read by a follow-up agent after the graph
-completes; nothing reads them during the run.
+after the run — does not travel over the channel at all. It is **drafted**, and the whole
+loop that follows — recording drafts, verifying them, filing one ticket per root cause, and
+answering people's comments on those tickets — is onefollowup's. This host states its store,
+destination, budget inputs and review sink in one file, the root `onefollowup.yaml`, and
+runs the loop as plans created from templates, which the engine journals and watches like
+any run. What a draft, a ticket record, a comment marker or a receipt is, the rubric a
+ticket's priority is estimated from, the status roles and who owns what on the board are
+onefollowup's own README and `onefollowup config show`; the board's options for those roles
+are the `followups` source's `status_mapping` in `onetaskgraph.yaml`.
 
-Every launch exports the seam through `scripts/follow-up-env.sh`: the source's absolute
-root and its plugin at the plan store's environment layer, and
-`$ORCHESTRATOR_FOLLOW_UP_DRAFT`, the one command every party drafts with. A worker drafts
-as itself; the monitor drafts `--as monitor --member monitor`; a manager drafts with
-`just follow-up <run-id>`. `--as pacemaker` named a scheduled member this host has
-retired: a draft already written under it still reads and verifies, because it is a stored
-shape a later follow-up run reads, and writing a new one is refused naming `--as monitor`. The party supplies only a
-title, the repository, the paths and a body carrying four headings; the command stamps the
-rest — the run, the dispatch's scratch, session, working directory, branch and head, the
-node the engine names to the dispatch-env hook, which that hook passes on to the dispatch
-as `ONEPIPELINE_NODE_ID`, and the command that
-reads the turns the draft came from. `orchestrator/follow_up_drafts.py` is the one source
-of that record, and `"$ORCHESTRATOR_FOLLOW_UP_DRAFT" --help` states it in full.
+**Drafting.** Every launch exports `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, the path of
+`scripts/follow-up-draft.sh`, the one command every party drafts with: a worker as itself,
+the monitor `--as monitor --member monitor`, a manager through `just follow-up <run-id>`.
+It runs `onefollowup draft` with this checkout's configuration and store from wherever the
+party works, passing what the dispatch environment says: the batch, which is the run's
+public id as `onepipeline status <run> --json` names it; the author label; and the
+transcript pointer, the engine command that reads the turns the draft came from. A draft is
+written into the `drafts` source (`.follow-ups/` in the launching checkout, gitignored), so
+it survives the worktree being reaped. onefollowup keeps each batch's working files —
+state, answers, staged writes, receipts, comment snapshots — in `.onefollowup/` beside the
+store's `onetaskgraph.yaml`, gitignored too.
 
 Drafting is only for what can wait. Anything blocking — a decision fork, a constraint
 that cannot be met, a finding the planner should act on now — still goes over the channel
@@ -1995,230 +1985,60 @@ immediately: a worker's blocking question to its manager, the monitor's
 `finding` or progress report, a planner's exceptions. A draft never stands in for any
 of them.
 
-After the run, `just follow-ups <run-id>` dispatches the follow-up agent over its drafts:
-one direct node under `graphs/follow-up.yaml`, a single-sided member with no judge on
-`oneharness.follow-up.toml`, given the task the store renders from this host's
-`follow-up-task` template, `templates/follow-up-task.md.j2`. Its turn
-runs in `bypass` mode: the member works in its agent graph's scratch directory, which is
-not a repository, and a `default`-mode turn there is refused by codex as an untrusted
-directory and denied its tools by Claude Code. The mode is declared in that harness config
-rather than on the member because the linked oneagentgraph admits no `mode` on a
-single-sided member, so a single-sided member that has to run commands declares its mode in
-its own harness config. It verifies each draft against the registered checkouts' `origin/<base>`, writes one verified
-ticket per root cause beside the drafts (`tasks/<run-id>/tickets/`), and copies each onto
-the `followups` GitHub Projects board, where every session's tickets accumulate —
-commenting on another run's open issue for the same root cause instead of filing a second.
-A root cause is the invariant that is missing or broken, in words independent of the file a
-run saw, written for a reader who does not know the implementation and naming no code, with
-every location contributing to it listed in its suggested fix: one root cause when a single
-change to the rule removes every instance, even across several places, and two when each
-needs a fix that stands alone. So drafts pointing at different files under one
-invariant are one ticket, and the board search asks first in the invariant's words, then
-once per further text question with the failing file last, and by root-cause slug only for
-a budget overrun, whose slug is derived. An open item at any status whose stated root cause
-meets the bar is the same root cause whatever its location and slug: it takes the run's
-evidence as a comment, whose `Bears on the ticket:` paragraph states only the widened
-invariant, in the same plain words, and its added locations as the suggested fix's, where the
-evidence shows the cause broader, and the run's ticket takes its slug, so the comment's
-marker, the account and the recount agree. Every section a person reads to decide on a
-ticket comes first, with optional `## Related tickets` directly before the last
-`## Evidence`. List only tickets clearly addressing a similar root cause, suggesting a
-similar fix, or supplying a dependency this ticket needs, each as one linked bullet with
-one explanatory sentence. Mere shared area or a broader problem is insufficient. Omit the
-section when empty and never mention rejected irrelevant candidates anywhere, even in
-Evidence. Schema 12 rejects the retired search heading and carries no query or candidate
-log; disposition accounts and the run's receipts of its board writes remain the
-duplicate-prevention proof. A ticket's `repositories` lists every repository its fix changes,
-and the store places it by them, their visibility included: a route a host declares on
-`followups` in its user layer (*Host-local sources and routes*) files an organization's root
-cause in that organization's own tracker, where its team triages it, and an owner's private
-work on a board declared private. Every command a follow-up run runs takes `followups` as the
-root of those boards and asks the store's placement-only `task locate`, with
-`--no-counterpart`, once per ticket where it lands — the destination and the repository a create files its issue in,
-with `creates_in.refused` where the destination's `creation_owners` refuses that create — which
-reads nothing at the board, so nothing here derives a route or a filing repository. The
-ticket's card is the one its record names: the store's own link, or, on a destination declared
-private, which keeps no link, the card its run's last copy receipt names while that card
-carries the ticket's origin; `board-status` reads it once by id with its comments, and none for
-a ticket naming none. Its issue is created in that repository, which its record's
-`repository` names: the one it lists, or for several the destination's configured one. The
-store creates it only for the owners the destination declares, and refuses any other —
-`board-status` reads that refusal off the locate and `copy` off the store's `creation-owner` —
-so it is reported rather than filed. The agent writes a ticket's record before searching for
-its duplicate, with `board-items --ticket <its path>`, and removes a record it then does not
-file. `copy` is one guarded `task copy` naming the card the record names as `--target-task`,
-the store's own link, intent and origin rules deciding it for a record naming none, and its
-answer goes to the run's receipts, which the closeout's checks read instead of the board. A
-record from before schema 13 may still carry the retired `board_item`, which its next `copy`
-names until it brings the record forward without it. The comment gathering reads every board `sources route` answers
-`followups` can reach, from a watermark of its own, and gives a comment to the run whose ticket
-its issue's own `onetaskgraph.origin` names.
-`orchestrator/follow_up_tickets.py` is the one source of the ticket's shape and of
-ownership on that board: a run changes only the issues its own tickets created and the
-comments whose marker names it — its evidence on another run's issue, and its replies to
-people's comments. The recipe refuses a run something is still driving,
-launches nothing for an initial run holding no drafts or tickets after checking any
-existing disposition account, and checks the mode's own account
-once an attached run settles. `--feedback FILE` re-dispatches over the same run with the
-manager's words in the task, `--detach` returns at the launch record printing the follow-up
-run and its watch command, and `--to SOURCE` copies onto another configured source.
+**Verifying.** `just follow-ups <run-id>` creates the run's `follow-ups` plan in the private
+`follow-up-runs` source from `templates/follow-ups.md.j2` and launches it detached, printing
+the follow-up run's id and its watch command. Its five nodes are onefollowup's verify loop:
+`prepare` (command `onefollowup prepare`) snapshots the batch's drafts and inputs, reads the
+destination and renders the verifying agent's task from onefollowup's shipped template;
+`verify` is the follow-up agent, one direct node under `graphs/follow-up.yaml`, a
+single-sided member with no judge on `oneharness.follow-up.toml`, whose own task is this
+host's thin `follow-up-task` layer, `templates/follow-up-task.md.j2`, pointing it at that
+rendered task and stating only where this host differs; then `check`, `publish` and `settle`
+(commands `onefollowup check|publish|settle`). The member's turn runs in `bypass` mode,
+declared in its harness config: it works in its graph's scratch directory, which is not a
+repository, and the linked oneagentgraph admits no `mode` on a single-sided member. Nothing
+reaches the destination before `publish`, and `check` refuses a batch whose dispositions,
+tickets or staged writes break onefollowup's rules.
 
-**A retry never repeats settled work.** Every re-dispatch carries the earlier pass forward:
-the dispositions its account already records are snapshotted at launch beside the account
-(`dispositions/<run>.carried.json`) and `check-dispositions` refuses an account that no longer
-holds each one unchanged, and `copy` skips the board for a ticket whose copy digest — its
-record and `depends_on` set as copied — matches its last copy that landed, receipting the skip
-as `skipped-unchanged` naming that copy's receipt line, which the completion check reads the
-placement from. `--unanswered`, alone or beside `--feedback`, scopes the re-dispatch to the
-drafts the account answers no disposition for and the tickets no landed copy confirms
-unchanged, which its task names as its whole work; it is refused on a run whose account no
-earlier pass opened, naming `just follow-ups <run-id>`, and beside `--comments`.
-`orchestrator/follow_up_tickets.py` holds the digest's one definition.
+**Budget overruns are inputs.** `prepare` runs the `batch_preparing` hook,
+`scripts/follow-up-budget-inputs.sh`, a composition deciding nothing itself: `onepipeline
+telemetry <run> --changes --json` lists the run's landed changes, `onevcs resolve` names
+each one's publication checkout, onebudgetspec's per-subject `check`, held to the
+`onepipeline` label and its over results, measures each change's delivery budgets there
+([Delivery budgets after landing](budgets.md#delivery-budgets-after-landing)), and `jq` turns
+each over result into a `budget-overrun` input and each subject onebudgetspec could not check
+into a `budget-unanswered` one. The verifying agent disposes them like any draft.
 
-**A dispatch is rendered in one of two modes, and the caller states which.** The template
-takes the mode as its `mode` variable and refuses any other value; everything else it is
-answered with comes from `python -m orchestrator.follow_up_tickets answers`, which states
-the values and the examples its validators read back, while the prose is the template's
-own. The recipe creates the one node's task with the pinned `onetaskgraph task create
---template-loader -`, fed `onepipeline template resolve follow-up-task --json`, so its body
-is exactly the rendering and records `onepipeline:follow-up-task` as its provenance, then
-holds it to `onepipeline template check follow-up-task --item` and launches nothing on a
-refusal. Initial mode — every launch but a comment gathering — is the task above, and owes a disposition
-artifact giving each of the drafts the recipe recorded before the dispatch exactly one
-of `filed`, `not-reproducible`, `already-fixed` or `too-low-impact`, which
-`python -m orchestrator.follow_up_tickets check-dispositions` reads back. Feedback mode —
-what `just follow-ups-answer-comments` launches, passing `--comments` through — is the far
-shorter task the template's `feedback` branch renders: it answers only the comments that gathering
-quoted, in order, changes only the ticket of an issue a quoted comment sits on, and owes a
-response artifact `python -m orchestrator.follow_up_tickets check-responses` reads back
-against the board's own replies. Each rendered task's own acceptance criteria name its
-validator, which is what binds the detached run the success hook launches, and an attached
-run has the recipe re-run it. Before the split there was one task, and a comment-only
-re-dispatch spent its paid turn re-reading and re-copying every unrelated ticket after its
-replies were already posted, until it reached the provider's deadline.
+**The review item.** `onefollowup.yaml` names the engine's `onepipeline human-items raise
+--phase follow-up-review --context {context_file}` as the `batch_settled` hook, which `settle`
+runs with the context file it writes: the batch, the tickets it touched, a dedup key, and
+the owner, `hooks.owner.session`. That owner is the launching manager session, which every
+launch and the drafting command export at onefollowup's environment layer,
+`ONEFOLLOWUP_HOOKS__OWNER__SESSION`, and without which onefollowup refuses every verb. The
+item's title and body in `.onepipeline/config.yaml` expand only what that context supplies.
+`tests/e2e/follow_ups/` holds settle running the hook and the engine raising the item.
 
-**A ticket names its host and reaches the board as a proposal.** Evidence is a claim about
-trees read on one machine — its registered checkouts, its installed tools, its run
-journals — so a ticket's record's `host` names the machine its verification ran on, read
-from `hostname` rather than typed. From schema 15 the record also holds the rest of the
-audit trail the body once carried — owning runs, basis, each draft's source and transcript,
-and a witness per verified claim — and `## Evidence` says only what happened. The
-`followups` source's `metadata_fields` projects those values onto the board's text fields
-(`BOARD_FIELDS` in `orchestrator/follow_up_tickets.py`), so the board filters a ticket by
-the machine, run or basis it came from as it filters by its origin, while the description's
-metadata slot stays the record's one home and the one every check reads; a routed Linear
-tracker shows the same values in one collapsed `Fields` section the store writes at the end
-of the issue. The fields are created on the board by `just plans sources fields followups
---apply`, the plan-store verb, and never by a hand-written mutation; a copy onto a board
-lacking one is refused before anything is written, the store's message naming `sources
-fields`. A new ticket lands on the board in `Proposal`, and the user
-moving it to `Todo` is what accepts it, so a later agent sent to work on accepted
-follow-ups selects them by the board's status alone. The board is therefore the record of
-that decision and no copy undoes it: before every copy the follow-up agent runs the
-module's `board-status` command, and every copy but a withdrawal is made under the store's
-`--status-policy preserve-destination`, so a ticket the board already holds keeps the status
-the board holds it at. Withdrawing a ticket closes a proposal as not planned, under the
-store's status guard, and a run never withdraws a ticket the board shows as accepted or
-deferred: the store refuses that write as `destination-status`, and the run leaves its own
-ticket as it is and reports what it would have withdrawn and why. The statuses,
-the record's keys and the board's options are stated in `orchestrator/follow_up_tickets.py`
-and `onetaskgraph.yaml` alone, and `tests/plan_guidance/test_follow_up_ticket_docs.py` holds this
-paragraph to them.
+**Answering comments.** `just follow-ups-answer-comments` creates the `follow-up-comments`
+plan from `templates/follow-up-comments.md.j2` and runs it attached in a flow: `gather`
+(`onefollowup comments gather`) selects each person's comment for the batch owning its
+ticket; `answer` creates, for each batch `onefollowup comments launches` names, its one-node
+feedback plan from `templates/follow-up-feedback.md.j2` — the follow-up agent pointed at
+that batch's feedback file — and runs it attached in the same flow, failing when one fails;
+and `settle` (`onefollowup comments settle`) verifies every reply, sends every ticket change
+and moves the watermark. A run of each feedback plan is supervised like any run, its
+questions on its own channel. `--dry-run` runs only `onefollowup comments gather --dry-run`.
 
-**A ticket's priority is estimated from its facts, and a person's override stands.** A
-follow-up agent records facts and never a priority: the `## Impact` severity with the
-workaround, and whether the root cause fires consistently as the record's `frequency`. Both
-severities are judged by the rubric `orchestrator/follow_up_tickets.py` states — the product
-owner's view across users, development and resources, users first — and an acceptable
-workaround always lowers a severity above low. The estimate is that severity one level for
-one level, raised one level, capped at high, when it fires consistently or has 3 or more
-occurrences — the ticket's own evidence, plus each other run's evidence comment and each
-reply marked as confirming, recounted off the issue's comments every time and stored
-nowhere — so only a severity still critical with the workaround estimates urgent.
-`board-status` writes it before every copy, as the record's `priority_estimate`, the
-`## Impact` estimate line and the ticket's priority; a run that comments on another run's
-issue, or replies confirming one, runs `re-estimate` on it. The card's priority follows the
-estimate only while it holds the estimate the card last received — the record's
-`board_estimate`, or none for a record without one — which the store's priority guard decides
-at the write, so a person's priority is never rewritten, and setting it back to that estimate
-hands it back. `check-dispositions` holds the account to the run's receipts, and
-`check-responses` holds replies to the board.
-
-**A person may defer a ticket instead of accepting it.** The store word `draft` is written
-to the board's `Deferred` option: a deferred ticket is not accepted and no agent picks it
-up, but a later run verifying the same root cause still comments on it, a re-copy keeps it
-deferred, and a run never withdraws it. The module renders the whole vocabulary, which
-`python -m orchestrator.follow_up_tickets statuses` prints and the follow-up agent's task
-carries, and this copy of it is held to that rendering:
-
-- **Board status `Proposal`**, Linear state `Proposed`, written `backlog`: a proposal
-  awaiting the user's decision. Who moves an item there: a follow-up run's first copy of a
-  new ticket. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `Todo`**, Linear state `Todo`, written `todo`: accepted, and not yet
-  taken up. Who moves an item there: only a person, which is what accepting a ticket is.
-  **Selected** by an agent sent to pick up accepted tickets, the only status that is.
-- **Board status `Deferred`**, Linear state `Backlog`, written `draft`: deferred for later
-  by a person: not accepted, picked up by no agent, and still taking new evidence. Who
-  moves an item there: only a person. Not selected by an agent sent to pick up accepted
-  tickets.
-- **Board status `Queued`**, Linear state `Queued`, written `queued`: accepted, and
-  claimed by a launched DAG whose node has not started, so it returns to `Todo` if that
-  work does not happen. Who moves an item there: no person — a launched run's first
-  projection, over the store's `delivers` relation. Not selected by an agent sent to pick
-  up accepted tickets.
-- **Board status `In Progress`**, Linear state `In Progress`, written `in-progress`:
-  accepted and taken up. Who moves an item there: a person, or a dispatch whose own task
-  says to. Not selected by an agent sent to pick up accepted tickets.
-- **Closed as completed at Status `Done`**, Linear state `Done`, written `done`: accepted
-  and finished. Who moves an item there: a person, a dispatch whose own task says to, or
-  the engine, when a landing it performs or relays — a run's landing, or one of its own
-  `publish-branch`, `repo-recover` and `integrate` — closes the ticket's issue, or when a
-  run it adopts carries a landing whose closure it had not yet written, whatever status
-  the card held, accepted ones included; an `integrate` landing moves the card only when
-  the integrated repository's own tree carries the store configuration, and is otherwise
-  in the accepted lag the on-demand reconcile clears, until the follow-up "just integrate
-  in another repository's checkout closes no follow-up card" is fixed. Not selected by an
-  agent sent to pick up accepted tickets.
-- **Closed as not planned at Status `Cancelled`**, Linear state `Canceled`, written
-  `cancelled`: withdrawn. Who moves an item there: a follow-up run withdrawing its own
-  ticket that nobody accepted or deferred, or a person. Not selected by an agent sent to
-  pick up accepted tickets.
-
-A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing
-else, on either destination: never an item at `Proposal`, `Deferred`, `Queued` or
-`In Progress` — on Linear `Proposed`, `Backlog`, `Queued` or `In Progress` — and never a
-closed one, which on Linear is one at `Done` or `Canceled`. No follow-up run writes
-Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Reviewed`,
-`Ready To Merge`, `Blocked`, `Duplicate` or `Cannot Reproduce`: those belong to people.
-
-**Every proposal is written against the board's accepted fixes.** Before it copies
-anything, the agent reads the accepted items its searches returned — `Todo`, `Queued`, `In Progress`,
-and `Done` where the fix has not reached the basis the ticket was verified at — and reads
-each one's suggested fix as if it were already in: a ticket that fix removes is not filed
-(its drafts are reported as dropped, naming the accepted ticket), one it narrows has its
-impact and root cause written to what remains, and one it displaces states the fix that
-remains right, with the displaced one among its rejected fixes. Whenever an accepted fix
-changes a ticket that way, the ticket depends on it as the store's own `depends_on` edge,
-outside the `orchestrator.follow-up` record — the board carries it natively as the
-issue's dependency, and `onetaskgraph task deps` walks it from either end — and the
-ticket's text says, at each place the fix changed something, which accepted ticket
-changed it and how, by the item's URL, which from ticket schema 10 is also on a
-`dependency` entry of the ticket's optional `## Related tickets`. `validate` holds the edge's shape and reads no
-board; `board-status` resolves every edge against the board before the copy, refusing an
-entry the board no longer holds as an accepted ticket of another root cause whose URL the
-body names, which on a re-dispatch is the signal to re-derive the ticket from the board
-as it now is. A `Proposal` or `Deferred` item's fix is never assumed; a clearly related one
-is a `related` entry of `## Related tickets`, with no edge. The same-root-cause path is
-unchanged: an accepted item for a ticket's own root cause takes the run's evidence as a
-comment and is never depended on.
+**A brief to pick up "accepted" follow-up tickets** means the items at the role
+onefollowup marks `selected` — `Todo` on the board — and nothing else; each node working
+one names it in the store's `delivers` field, one ticket per node.
 
 **The run-end hooks are what launch it.** `config/onepipeline.launch.yaml` names
 `scripts/run-ended.sh`, relative to the launching checkout the engine spawns it in, as
 both the engine's success hook and its failure hook, and `just orchestrate` takes
-both unless the caller named that flag; every other launcher names both blank, and
-`just orchestrate --adopt` names neither, because the engine replays both from the
-launch record. The engine runs at most one of them, once, when the run **ends** —
-after the driver has let go of the run, in the launch directory, awaited under
+both unless the caller named that flag; every other launcher, the follow-up recipes among
+them, names both blank, and `just orchestrate --adopt` names neither, because the engine
+replays both from the launch record. The engine runs at most one of them, once, when the run
+**ends** — after the driver has let go of the run, in the launch directory, awaited under
 `--hook-timeout` — keeps its output in `runs/<run-id>/hooks/<hook>.log`, relays it to
 an attached launch's stderr, and renders it in `just results <run-id>` — each record
 against the epoch it belongs to. A run a recovery edit reopened keeps every hook record
@@ -2233,14 +2053,13 @@ completion). A hook never
 changes how the run settled. onepipeline's own `docs/contract.md` (**Run-end hooks**)
 is the contract; this host does two things with it:
 
-- **success** (every node `done`) runs `just follow-ups <run-id> --detach` and prints
+- **success** (every node `done`) runs `just follow-ups <run-id>` and prints
   `main work of run <run-id> is complete; follow-ups are being verified in run
-  <follow-up-run-id>; watch it with: just watch <follow-up-run-id>`. A run that drafted
-  nothing prints the recipe's own line and that no follow-up run was launched. It exits
-  with the recipe's status. The follow-up run is detached because the hook is awaited
-  and the run outlives that deadline, and it belongs to the main run's owner: the
-  engine exports that owner's launcher identity to the hook, and
-  `scripts/onepipeline.sh` keeps an exported identity.
+  <follow-up-run-id>; watch it with: just watch <follow-up-run-id>`. It exits with the
+  recipe's status. The follow-up run is detached because the hook is awaited and the run
+  outlives that deadline, and it belongs to the main run's owner: the engine exports that
+  owner's launcher identity to the hook, and `scripts/onepipeline.sh` keeps an exported
+  identity.
 - **failure** (a failed or skipped node, an unfinished graph with nothing left to
   decide, or a clean `stop`) launches nothing, prints one line naming the run and the
   reason the engine gave, says that no follow-up run was launched and that `just
@@ -2255,23 +2074,14 @@ landed some other way — fires its success hook for the complete ending that se
 carried it to; either way follow-up verification launches on recovery. A settle that
 changes why a run failed without changing that it did ends it under the same hook and
 fires nothing new. A driver that dies fires nothing.
-`just plan` and `just finish-plan` name no hook. An initial detached `just follow-ups`
-launch names a per-launch closeout on both endings; an attached launch runs that same
-closeout once after settlement. It validates tickets (`check-run`), the disposition
-account against the board (`check-dispositions`), and the measured budget account,
-then reports the budget results. A refusal exits non-zero, names the failed validation
-and `just follow-ups <run-id> --feedback FILE` recovery, and keeps the hook and measured
-snapshot for a corrected re-run. Engine settlement alone does not mean the follow-ups
-were verified: read the hook result in `just results <follow-up-run-id>`. Hooks from
-older launches naming `budget-closeout` run these same checks. Feedback (`--comments`)
-mode registers no hook. Closeout launches nothing, so a planning run and a follow-up
-run never launch a follow-up run, and nothing else in this repository runs
-`just follow-ups` — the
-success hook and a manager typing it are the only two ways. **Hooks arrive with an
-engine adopted between runs**: a launch record written before `config/onepipeline.version`
-named a release carrying them names no hook, and that run fires none, whichever engine
-later adopts it. `tests/run_end_hooks/test_run_end_hooks_e2e.py` drives both hooks through a
-real launch.
+`just plan` and `just finish-plan` name no hook, and the follow-up recipes name both
+blank, so a planning run and a follow-up run never launch a follow-up run, and nothing
+else in this repository runs `just follow-ups` — the success hook and a manager typing it
+are the only two ways. **Hooks arrive with an engine adopted between runs**: a launch
+record written before `config/onepipeline.version` named a release carrying them names no
+hook, and that run fires none, whichever engine later adopts it.
+`tests/run_end_hooks/test_run_end_hooks_e2e.py` drives both hooks through a real launch,
+and `tests/e2e/follow_ups/` the follow-up plans they launch.
 `monitor` renders `ACK REQUIRED` while any blocking surface, including closeout,
 awaits a reply.
 
@@ -3259,7 +3069,7 @@ sidebar groups a plan's runs and its kind filter tells them apart:
 | `just orchestrate` | `main` | none named: the engine groups a launch from a board copy through the copy's origin, and any other by its own project |
 | `just plan` and `just finish-plan` | `planning` | none named: the planning project, whose id begins with the plan's native id |
 | a planning run's spikes run | `spikes` | none named: the plan's `<plan>-spikes` project |
-| `just follow-ups` | `follow-ups` | the followed run's effective `group`, off `onepipeline status <run> --json`; none for a run with no run root |
+| `just follow-ups`, `just follow-ups-answer-comments` and each feedback plan | `follow-ups` | none named: the engine groups each by its own project |
 
 A caller's own `kind` label to `just orchestrate`, as `--label kind=<value>` or
 `--label=kind=<value>`, replaces the default, because the engine refuses a key named
@@ -4032,12 +3842,11 @@ going.
   <run>` records the approval and attests the step. Completing the item alone attests the
   step without recording an approval, so the launch gate, which reads the approval record and
   never the item, still refuses the plan until `just approve-design` has run.
-* **A follow-up run's closeout**: one task per run, holding nothing, linking every ticket the
-  run created or updated once, grouped by priority with a separate "No priority" group. Its
-  priority is the engine's exact rule — any urgent ticket, urgent; otherwise three or more
-  high, high; otherwise only low tickets plus at most one medium, low; otherwise medium — a
-  ticket with no priority counting as medium and named in a finding to the owning manager.
-  A re-dispatch's closeout updates that one task; a run that touched no ticket has none.
+* **A follow-up batch's review**: one task per batch, holding nothing, linking every ticket
+  the batch created or updated once, grouped by priority with a separate "No priority"
+  group, by the engine's `ticket_review` rule. onefollowup's `settle` runs the configured
+  `follow-up-review` hook with the context file it writes, naming the batch and its owner,
+  the session that launched it.
 
 **A question is answered by a choice, in the person's own words, or both.** Every question
 a manager puts to the user is a question item, by `AGENTS.md`'s manager-loop rule; one a few

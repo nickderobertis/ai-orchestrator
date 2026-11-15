@@ -1,0 +1,41 @@
+---
+onetaskgraph_template: 1
+description: >-
+  One batch's feedback plan: the follow-up agent answering the comments one gathering quoted
+  on that batch's tickets. The comment plan's `answer` step creates one per owning batch.
+variables:
+  project:
+    description: The plan's native id, which its one member's id is prefixed with.
+    type: string
+    required: true
+  batch:
+    description: The batch whose tickets' comments are answered.
+    type: string
+    required: true
+  checkout:
+    description: The absolute path of the checkout every onefollowup command is run from.
+    type: string
+    required: true
+  feedback:
+    description: The absolute path of the feedback file `onefollowup comments launches` wrote for the batch.
+    type: string
+    required: true
+  task_loader:
+    description: The loader document `onepipeline template resolve follow-up-task --json` stated.
+    type: string
+    required: true
+members:
+  - id: "{{ project }}-answer"
+    title: "Answer the comments on batch {{ batch }}'s follow-up tickets"
+    template: {loader: "{{ task_loader }}"}
+    answers:
+      mode: feedback
+      batch: "{{ batch }}"
+      checkout: "{{ checkout }}"
+      task_file: "{{ feedback }}"
+    metadata:
+      onepipeline.id: answer
+      onepipeline.persona: ../personas/follow-up.yaml
+      onepipeline.agent_graph: graphs/follow-up.yaml
+---
+Answer the comments one gathering quoted on batch `{{ batch }}`'s follow-up tickets.

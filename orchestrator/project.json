@@ -14,8 +14,6 @@
     "support-conftest",
     "support-credential-dialect",
     "support-fake-codex",
-    "support-follow-up-boundary",
-    "support-follow-up-ticket-shape",
     "support-follow-up-variables",
     "support-github-board",
     "support-llmlint-install",
@@ -86,6 +84,7 @@
       "!{workspaceRoot}/tests/e2e/host_local_registration/test_*.py",
       "!{workspaceRoot}/tests/e2e/release_adoption/test_*.py",
       "!{workspaceRoot}/tests/e2e/release_holdup/test_*.py",
+      "!{workspaceRoot}/tests/e2e/follow_ups/test_*.py",
       "!{workspaceRoot}/tests/e2e/llmlint_installer/test_*.py",
       "!{workspaceRoot}/tests/e2e/pooled_server_session/test_*.py",
       "!{workspaceRoot}/tests/e2e/review_drafting/test_*.py",
@@ -133,7 +132,7 @@
       ]
     },
     "coverage": {
-      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-comment-version .coverage.plan-tooling-follow-ups .coverage.plan-tooling-host-layer-routing .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
+      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-host-layer-routing .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
       "options": {
         "cwd": "."
       },
@@ -179,18 +178,6 @@
         {
           "projects": [
             "plan-guidance"
-          ],
-          "target": "test"
-        },
-        {
-          "projects": [
-            "plan-tooling-comment-version"
-          ],
-          "target": "test"
-        },
-        {
-          "projects": [
-            "plan-tooling-follow-ups"
           ],
           "target": "test"
         },

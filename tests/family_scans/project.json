@@ -32,7 +32,8 @@
       "{workspaceRoot}/personas/**/*",
       "{workspaceRoot}/scripts/**/*",
       "{workspaceRoot}/templates/**/*",
-      "{workspaceRoot}/tests/family_scans/**/*"
+      "{workspaceRoot}/tests/family_scans/**/*",
+      "{workspaceRoot}/justfile"
     ]
   },
   "targets": {

@@ -5,50 +5,6 @@
 # the one statement of each threshold.
 schema_version: 1
 budgets:
-  - id: follow-up-run-points
-    description: >-
-      Modelled GitHub GraphQL points one complete realistic follow-up run spends, priced on
-      the loopback stand-ins: its tickets on the followups board and the one review task the
-      engine projects onto a human-task board, raised and completed. It protects the board
-      token's hourly allowance, which every session on this host shares; the figure is the
-      modelled points, not live quota, and its breakdown gives each phase's and each
-      document's points beside their requests.
-    measure: reported
-    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
-    unit: points
-    direction: max
-    # Measured at 108: searches 24, write path 76, board check 0 and the review task 8. A new
-    # ticket's one guarded copy costs 4 — the creation context every create sends, the create,
-    # the created item's read and its field write, with no origin lookup on a host that has
-    # recorded its existing tickets — a bound re-copy 3, and each evidence comment with its
-    # re-estimate 4, whose writes expect the version its one read returned; both closeout
-    # checks read the run's receipts and nothing of the board.
-    threshold: 108
-  - id: comment-answer-pass-points
-    description: >-
-      Modelled GitHub GraphQL points one realistic comment-answer pass, the
-      `follow-ups-answer-comments` recipe's, spends on the followups board — 40 comments on
-      20 proposals of 6 runs, beside 60 other items of this host — priced on the loopback
-      stand-in. It protects the same shared
-      allowance against a pass that reads the board more than once on each side of its replies.
-    measure: reported
-    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
-    unit: points
-    direction: max
-    threshold: 58
-  # llmlint: ignore-block[budgets_track_product_owner_outcomes] Overlaps follow-up-run-points and comment-answer-pass-points, which already sum one ticket's filing, re-copy, comment answer and withdrawal; kept in place by the manager's ruling pending a separate consolidation of the three.
-  - id: ticket-lifecycle-points
-    description: >-
-      Modelled GitHub GraphQL points one follow-up ticket's whole life spends on the
-      followups board: filed, re-copied, answered once and withdrawn. It protects the same
-      shared allowance per ticket, including the steps a run does not drive.
-    measure: reported
-    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
-    unit: points
-    direction: max
-    # Measured at 19: filing 7, re-copy 3, answering a comment 5 and withdrawal 4.
-    threshold: 19
-  # llmlint: ignore-end[budgets_track_product_owner_outcomes]
   - id: lost-turn-surface-chars
     description: >-
       Characters of the planner surface a lost monitor turn raises, the largest the journeys

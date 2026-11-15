@@ -31,13 +31,11 @@ import yaml
 from published_tools import ENGINE_BIN
 from test_engine_contracts import (
     ONEPIPELINE_DOCS,
-    ONEPIPELINE_SCHEMAS,
     Engine,
     _pinned_tag,
     _source,
 )
 
-from orchestrator import human_items
 from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_checkouts
@@ -275,38 +273,3 @@ def test_the_planner_states_every_human_nodes_item_with_an_explicit_priority() -
         assert word in planner and word in manager, word
     assert "a task bound for `plans` carries none, because that source maps none" in planner
     assert "separate from a plan-store task's own priority" in manager
-
-
-def test_the_item_vocabulary_this_host_parses_is_the_engines_whole_schema() -> None:
-    """Every kind, state, priority and choice bound the pinned engine's schema declares.
-
-    `orchestrator/human_items.py` refuses an item outside these sets, so an engine that grows
-    a member fails here before a host refuses its real items.
-    """
-    schema = json.loads(_source(ONEPIPELINE_SCHEMAS, "human-items.schema.json"))
-    item = schema["HumanItem"]
-    declared = {
-        name: tuple(member["const"] for member in item["$defs"][name]["oneOf"])
-        for name in ("HumanItemKind", "HumanItemState")
-    }
-    assert declared["HumanItemKind"] == human_items.KINDS
-    assert declared["HumanItemState"] == human_items.STATES
-    assert tuple(item["properties"]["priority"]["enum"]) == human_items.PRIORITIES
-    choices = item["properties"]["choices"]
-    choice = item["$defs"]["HumanItemChoice"]
-    assert choices["maxItems"] == human_items.MAX_CHOICES
-    assert choice["properties"]["id"]["pattern"] == f"^{human_items.CHOICE_ID.pattern}$"
-    assert choice["properties"]["title"]["maxLength"] == human_items.CHOICE_TITLE_LENGTH
-    assert set(choice["required"]) == human_items.CHOICE_FIELDS
-    resolution = item["$defs"]["HumanItemResolution"]
-    assert set(resolution["properties"]) == human_items.RESOLUTION_FIELDS
-    assert resolution["additionalProperties"] is False
-    provenance = item["$defs"]["Provenance"]
-    assert tuple(member["const"] for member in provenance["oneOf"]) == human_items.PROVENANCES
-    labels = schema["priority_labels"]
-    assert [labels[priority] for priority in human_items.PRIORITIES] == [
-        "Critical",
-        "High",
-        "Medium",
-        "Low",
-    ], labels

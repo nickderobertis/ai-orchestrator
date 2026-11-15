@@ -1773,3 +1773,75 @@ def test_a_registry_answer_is_reported_in_every_shape_and_fails_nothing(
         "the reading has to reach an operator as a report; a behind-the-registry answer "
         "that failed the tier would fail this repository on somebody else's publish"
     )
+
+
+#: The wheel this host installs the follow-up loop from, at `config/onefollowup.version`.
+#: It links the plan store as the `onetaskgraph-*` crate family rather than spawning a CLI,
+#: so every ticket, draft and comment it reads or writes goes through that linked release.
+ONEFOLLOWUP_DISTRIBUTION = "onefollowup-cli"
+
+
+def linked_onetaskgraph(sbom: Path) -> dict[str, str]:
+    """Each `onetaskgraph-*` crate the SBOM at ``sbom`` declares, mapped to its release."""
+    document = json.loads(sbom.read_text("utf-8"))
+    return {
+        str(component["name"]): str(component["version"])
+        for component in document["components"]
+        if str(component["name"]).startswith(RECONCILED_FAMILIES["onetaskgraph"])
+    }
+
+
+def refuse_a_foreign_plan_store(sbom: Path, pinned: str) -> None:
+    """Fail unless every `onetaskgraph-*` crate ``sbom`` declares is release ``pinned``.
+
+    onefollowup's every store access is a call into its linked plan store, so a
+    follow-up batch filed through a release other than the one `config/onetaskgraph.version`
+    adopts writes records this host's own `just plans` reads through another release.
+    """
+    family = linked_onetaskgraph(sbom)
+    assert family, (
+        f"{ONEFOLLOWUP_DISTRIBUTION}'s SBOM ({sbom}) declares no onetaskgraph-* crate, so "
+        "which plan store it writes through cannot be read; surface the gap to its producer"
+    )
+    assert set(family.values()) == {pinned}, (
+        f"{ONEFOLLOWUP_DISTRIBUTION} links {family} while config/onetaskgraph.version "
+        f"adopts {pinned}. Adopt the onefollowup release linking {pinned}, or move both pins "
+        "together"
+    )
+
+
+def _onefollowup_sbom() -> Path:
+    """The SBOM the installed `onefollowup-cli` wheel ships."""
+    return _sbom_path(
+        importlib.metadata.distribution(ONEFOLLOWUP_DISTRIBUTION), ONEFOLLOWUP_DISTRIBUTION
+    )
+
+
+def test_the_installed_onefollowup_is_the_pinned_release() -> None:
+    """The lock installs `onefollowup-cli` at the release `config/onefollowup.version` names."""
+    assert importlib.metadata.version(ONEFOLLOWUP_DISTRIBUTION) == _pinned_cli(
+        "onefollowup.version"
+    )
+
+
+def test_the_installed_onefollowup_links_the_pinned_plan_store() -> None:
+    """Every onetaskgraph crate onefollowup links is the release this host pins."""
+    refuse_a_foreign_plan_store(_onefollowup_sbom(), _pinned_cli("onetaskgraph.version"))
+
+
+def test_an_onefollowup_linking_another_plan_store_is_refused(tmp_path: Path) -> None:
+    """A copy of the real SBOM whose plan store moved one release is refused, naming both."""
+    document = json.loads(_onefollowup_sbom().read_text("utf-8"))
+    moved = "0.0.1"
+    for component in document["components"]:
+        if str(component["name"]).startswith(RECONCILED_FAMILIES["onetaskgraph"]):
+            component["version"] = moved
+    copy = tmp_path / "onefollowup.cyclonedx.json"
+    copy.write_text(json.dumps(document), encoding="utf-8")
+    pinned = _pinned_cli("onetaskgraph.version")
+
+    with pytest.raises(AssertionError) as refused:
+        refuse_a_foreign_plan_store(copy, pinned)
+
+    assert moved in str(refused.value)
+    assert f"adopts {pinned}" in str(refused.value)

@@ -55,7 +55,7 @@ from orchestrator.root import REPO_ROOT
 
 #: The rows this table is fixed to, stated here in full rather than derived from the
 #: module: a test that read them out of the code under test would hold the module to
-#: itself. Ten producers, the override's order, the engine alone marked as what a
+#: itself. Eleven producers, the override's order, the engine alone marked as what a
 #: dispatch runs, the engine and the read API alone installed from npm, and `llmlint`
 #: alone governed by no pin, naming its installer instead.
 EXPECTED_ROWS = (
@@ -113,6 +113,13 @@ EXPECTED_ROWS = (
         None,
         False,
         "scripts/setup-llmlint.sh",
+    ),
+    Installed(
+        "github.com/nickderobertis/onefollowup",
+        "pypi",
+        "pypi:onefollowup-cli",
+        "onefollowup",
+        False,
     ),
 )
 
@@ -329,11 +336,9 @@ def _override_default_targets() -> dict[RepoIdentity, str]:
 
 
 #: The producers whose override rule precedes their first adoption, stated here in full
-#: for the reason `EXPECTED_ROWS` is: `onefollowup`, whose `pypi` target is the
-#: `onefollowup-cli` wheel, until the node adopting its first release gives it a row, a
-#: pin and a dependency.
+#: for the reason `EXPECTED_ROWS` is.
 ONEFOLLOWUP: RepoIdentity = "github.com/nickderobertis/onefollowup"
-EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset({ONEFOLLOWUP})
+EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset()
 #: The producers whose override default is the artifact a consumer outside this repository
 #: waits on, stated in full for the same reason: printobserver, whose `github-release` is the
 #: program's own release, privateterms, whose `crate` is the specification's Rust crate, and
@@ -391,7 +396,6 @@ def test_the_overrides_default_target_per_producer_is_the_rows_target() -> None:
     assert _override_default_targets()[PRIVATETERMS] == "crate"
     assert _override_default_targets()[TASK_UI] == "npm"
     assert _override_default_targets()[ONEFOLLOWUP] == "pypi"
-    assert by_producer(ONEFOLLOWUP) is None
     assert (
         override_complaints(_override_default_targets(), INSTALLED, AWAITING_FIRST_ADOPTION) == []
     )
@@ -439,11 +443,12 @@ def test_the_set_is_what_admits_an_awaiting_producer() -> None:
     ]
 
 
-def test_the_set_is_what_admits_the_tracked_onefollowup_rule() -> None:
-    """Off the set, onefollowup's tracked `pypi` rule is a default target nothing accounts for."""
-    assert override_complaints(
-        _override_default_targets(), INSTALLED, AWAITING_FIRST_ADOPTION - {ONEFOLLOWUP}
-    ) == [
+def test_the_onefollowup_row_is_what_accounts_for_its_tracked_rule() -> None:
+    """Adopted, onefollowup's `pypi` rule is admitted by its row: without the row it is refused."""
+    without = tuple(row for row in INSTALLED if row.producer != ONEFOLLOWUP)
+
+    assert len(without) == len(INSTALLED) - 1
+    assert override_complaints(_override_default_targets(), without, AWAITING_FIRST_ADOPTION) == [
         f"config/onevcs.releases.yml names {ONEFOLLOWUP}'s default target 'pypi', and neither "
         "a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it"
     ]
@@ -706,28 +711,6 @@ def test_a_producer_awaiting_its_first_adoption_passes_with_no_row(tmp_path: Pat
 
     advance(_checkout(home, producer), {"release-targets.toml": None})
     assert _contradictions(home, defaults, awaiting) == []
-
-
-def test_onefollowup_declaring_nothing_before_its_bootstrap_contradicts_nothing(
-    tmp_path: Path,
-) -> None:
-    """The tracked state until onefollowup's base carries a `release-targets.toml`.
-
-    Its rule names `pypi` ahead of any declaration, which the awaiting set admits; off
-    the set the same checkout is a producer declaring nothing that the override names a
-    default for.
-    """
-    home = _scratch_producers(tmp_path)
-    advance(_checkout(home, ONEFOLLOWUP), {"release-targets.toml": None})
-
-    assert declared_targets(_checkout(home, ONEFOLLOWUP)) is None
-    assert _contradictions(home) == []
-    assert _contradictions(home, awaiting=AWAITING_FIRST_ADOPTION - {ONEFOLLOWUP}) == [
-        f"config/onevcs.releases.yml names {ONEFOLLOWUP}'s default target 'pypi', and neither "
-        "a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it",
-        f"{ONEFOLLOWUP} declares no release targets at its base, and "
-        "config/onevcs.releases.yml names 'pypi' as its default target",
-    ]
 
 
 def test_a_producer_awaiting_its_first_adoption_still_contradicts_by_dropping_its_target(

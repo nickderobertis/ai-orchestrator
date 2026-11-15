@@ -1,31 +1,31 @@
 """A launching journey that states no plan-store roots never reaches this checkout's.
 
-Every other module here states its own runs, drafts and authoring roots, as this
-project's `AGENTS.md` says a journey that fires a hook must. This one deliberately does
-not: it launches through the real `just orchestrate`, whose success hook runs
-`just follow-ups <run-id>` — which *reads* that run's follow-up drafts and *writes* a
-project named after it — and leaves both roots to whatever the suite gives it. What
-stands between such a launch and a developer's own `.plans` and `.follow-ups` is the
-autouse isolation in `tests/conftest.py` and nothing else, so this is where that
-isolation is proven rather than assumed.
+Every other module here states its own runs root and follow-up store, as this project's
+`AGENTS.md` says a journey that fires a hook must. This one deliberately does not: it
+launches through the real `just orchestrate`, whose success hook runs `just follow-ups
+<run-id>` — which *writes* the run's follow-up plan into the `follow-up-runs` source and
+launches it, whose `onefollowup prepare` *reads* the run's drafts from the `drafts` source
+and writes onefollowup's working files beside its store — and leaves every one of those to
+whatever the suite gives it. What stands between such a launch and a developer's own
+`.follow-ups`, `.follow-ups/runs` and `.onefollowup` is the autouse isolation in
+`tests/conftest.py` and nothing else, so this is where that isolation is proven rather than
+assumed.
 
-The proof is a collision. A draft and a plan project are seeded under **this checkout's
-configured roots** carrying the launched run's own id — exactly the records an
-unisolated hook would read and overwrite — and a second draft is seeded under the
-isolated drafts root so the hook has something to find and carries on into the write. It
-then has to be true that the follow-up run's composed task names the isolated drafts
-root, that the project it wrote landed under the isolated drafts root's `runs` folder, the
-`follow-up-runs` source's, and that both
-seeded records come back out of the store byte for byte.
+The proof is a collision. A draft of the launched run's batch and a plan project named as
+`just follow-ups` names the run's follow-up plan are seeded under **this checkout's
+configured roots** — exactly the records an unisolated hook would read and overwrite — and
+a second draft is seeded under the isolated drafts root. It then has to be true that the
+follow-up plan landed under the isolated `follow-up-runs` root, that the batch onefollowup
+prepared holds the isolated draft and not the configured one, that its working files are
+under the isolated store and none under this checkout, and that both seeded records come
+back byte for byte.
 
 Everything between the recipe and the model is real: `just orchestrate`,
-`scripts/orchestrate.sh`, `scripts/onepipeline.sh`, the launch check its launch config
-registers, the installed driver, `scripts/run-ended.sh`, `just follow-ups` and the detached
-follow-up run it launches, the real drafting command both seeds are written with, and the
-installed `onetaskgraph` both seeded records are read back through. **The paid model
-alone is doubled**: `tests/e2e/fake_backend.py` at the `oneagentgraph` seam for the main
-run's worker and `tests/e2e/fake_codex.py` at the provider binary for the follow-up
-agent's single-sided member.
+`scripts/orchestrate.sh`, `scripts/onepipeline.sh`, the installed driver,
+`scripts/run-ended.sh`, `just follow-ups` and the detached follow-up run it launches, and
+the pinned `onefollowup` both drafts are written with. **The paid model alone is doubled**:
+`tests/e2e/fake_backend.py` at the `oneagentgraph` seam for the main run's worker and
+`tests/e2e/fake_codex.py` at the provider binary for the follow-up agent's member.
 """
 
 from __future__ import annotations
@@ -35,25 +35,21 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
+import boundary_home
+import follow_up_store
 import follow_up_variables
 import pytest
 import short_state
 from harness_indirections import established_indirections
 from project_fixtures import helper, project_from_plan
-from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator import follow_up_drafts as drafts
 from orchestrator import plan_store
 from orchestrator.root import REPO_ROOT
-
-#: The variable the store reads the `authoring` source's root from.
-AUTHORING_ROOT = "ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT"
 
 # What the recipes these journeys run leave in the temporary directory, by design or
 # from a published tool they run, is this module's own and goes with it
@@ -65,9 +61,12 @@ FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
 
+#: The pinned onefollowup, which both drafts are written with.
+ONEFOLLOWUP = REPO_ROOT / ".venv" / "bin" / "onefollowup"
+
 #: The launching session this module states, and everything an enclosing dispatch would
-#: otherwise decide for this launch. **Neither plan-store root is on this list**, and that
-#: is the whole point: this journey inherits whatever roots the suite put in its
+#: otherwise decide for this launch. **No plan-store root and no follow-up store is on this
+#: list**, and that is the whole point: this journey inherits whatever the suite put in its
 #: environment, the way a journey that never thought about them does.
 LAUNCHING_SESSION = "e2e-configured-plan-stores"
 INHERITED = (
@@ -89,8 +88,8 @@ INHERITED = (
 #: Who the indirection helpers attribute their diagnostics to.
 INDIRECTION_CALLER = "tests/run_end_hooks/test_configured_plan_stores_stay_untouched_e2e.py"
 
-#: The one node the launched plan holds, and what `just follow-ups` names the run and the
-#: project it writes for the run it follows up.
+#: The one node the launched plan holds, and what `just follow-ups` names the follow-up plan
+#: and run for the run it follows up.
 NODE = "report"
 FOLLOW_UPS_SUFFIX = "-follow-ups"
 
@@ -104,35 +103,27 @@ LAUNCHED = re.compile(
 #: How long the detached follow-up run, whose one turn is a stand-in, is given to settle.
 FOLLOW_UP_SETTLE_SECONDS = 300
 
-#: The two seeded drafts, told apart by their titles: one under the roots this checkout
+#: The two seeded drafts, told apart by their titles: one under the root this checkout
 #: configures, which nothing in this journey may touch, and one under the isolated root,
-#: which is what gives the hook something to carry on from.
+#: which is what the follow-up run should prepare.
 CONFIGURED_TITLE = "A developer's own draft, which no test may read"
 ISOLATED_TITLE = "The draft this journey's own launch leaves"
-REPOSITORY = "github.com/nickderobertis/some-service"
+#: The repository both drafts are about, registered public in a registry of this module's
+#: own: the store classifies a draft by its repository, so both seeds are recorded public, as
+#: a draft about this repository is on any host.
+REPOSITORY = boundary_home.THIS_REPOSITORY
 
-#: What the seeded plan project says, so that a project the hook overwrote could not read
-#: back as the seeded one.
-SEEDED_GOAL = "A plan a developer authored, which no test may replace"
+#: The source the follow-up recipes create their plans in.
+RUNS_SOURCE = "follow-up-runs"
 
 
 class Configured(NamedTuple):
     """The two roots this checkout configures, and the records seeded under them."""
 
-    authoring: Path
     drafts: Path
-    environment: dict[str, str]
+    runs: Path
     draft: Path
-    draft_id: str
-    project: str
-    task_id: str
-
-
-class Isolated(NamedTuple):
-    """The two roots the suite's isolation states for this process."""
-
-    authoring: Path
-    drafts: Path
+    project: Path
 
 
 class Launched(NamedTuple):
@@ -142,53 +133,62 @@ class Launched(NamedTuple):
     follow_up: str
     result: subprocess.CompletedProcess[str]
     log: str
-    task: str
     configured: Configured
-    isolated: Isolated
-    draft_before: dict[str, object] | None
-    draft_after: dict[str, object] | None
-    task_before: dict[str, object] | None
-    task_after: dict[str, object] | None
+    isolated_runs: Path
+    store: Path
+    draft_before: bytes
+    project_before: bytes
+    draft_after: bytes | None
+    project_after: bytes | None
 
 
-def _variables() -> tuple[str, str]:
-    """The two variables the roots are stated by, each read from the one place it is composed."""
-    return AUTHORING_ROOT, follow_up_variables.root_name()
-
-
-def _isolated() -> Isolated:
-    """What the suite's autouse isolation put in this process's environment."""
-    authoring, drafts_root = (os.environ.get(name) for name in _variables())
-    assert authoring and drafts_root, (
-        "this process was given no isolated plan-store roots, so this journey would be "
-        "launching against the roots this checkout configures, which is the failure it "
-        "exists to prevent"
+def _isolated() -> tuple[Path, Path, Path]:
+    """The drafts root, follow-up-runs root and follow-up store the suite's isolation states."""
+    named = (
+        follow_up_variables.root_name(),
+        follow_up_store.RUNS_ROOT,
+        follow_up_variables.ONEFOLLOWUP_STORE,
     )
-    return Isolated(Path(authoring), Path(drafts_root))
+    missing = [name for name in named if not os.environ.get(name)]
+    assert not missing, (
+        f"this process was given no isolated {', '.join(missing)}, so this journey would be "
+        "launching against what this checkout configures, which is the failure it exists to "
+        "prevent"
+    )
+    drafts, runs, store = (Path(os.environ[name]) for name in named)
+    return drafts, runs, store
 
 
 def _configured(monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-    """The roots `onetaskgraph.yaml` puts inside this checkout, read with the isolation off.
+    """The drafts and follow-up-runs roots `onetaskgraph.yaml` puts inside this checkout.
 
-    Resolved through the store's own configuration, so what is seeded below is whatever
-    this checkout really reads rather than a directory name joined onto its path.
+    Read with the isolation off and resolved through the store's own configuration, so what
+    is seeded below is whatever this checkout really reads.
     """
-    for name in _variables():
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv(follow_up_variables.root_name(), raising=False)
+    monkeypatch.delenv(follow_up_store.RUNS_ROOT, raising=False)
     return (
-        plan_store.ensure_writable_source_root("authoring"),
-        plan_store.ensure_writable_source_root(drafts.SOURCE),
+        plan_store.ensure_writable_source_root(follow_up_variables.source()),
+        plan_store.ensure_writable_source_root(RUNS_SOURCE),
     )
 
 
-def _drafted(root: Path, run: str, title: str) -> Path:
-    """One follow-up drafted against ``run`` under ``root``, through the real command."""
-    _, drafts_variable = _variables()
-    drafted = subprocess.run(  # noqa: S603 - the drafting command every party drafts with
-        [str(REPO_ROOT / "scripts" / "follow-up-draft.sh"), "--as", "manager", "--run", run]
+def _drafted(drafts: Path, run: str, title: str, registry: Path) -> Path:
+    """One draft of ``run``'s batch under ``drafts``, through the pinned onefollowup.
+
+    `onefollowup draft` itself rather than the drafting wrapper, because the wrapper reads the
+    batch from the engine's record of the run, and this draft is seeded before the run exists.
+    """
+    drafted = subprocess.run(  # noqa: S603 - the pinned onefollowup, as the wrapper calls it
+        [str(ONEFOLLOWUP), "draft", "--batch", run, "--author", "manager"]
         + ["--title", title, "--repository", REPOSITORY, "--path", "src/cursor.py"],
         cwd=REPO_ROOT,
-        env={**os.environ, drafts_variable: str(root)},
+        env={
+            **boundary_home.environment(None, registry),
+            follow_up_variables.root_name(): str(drafts),
+            # The owner the review sink names, as the launching session's launch exports it.
+            "ONEFOLLOWUP_HOOKS__OWNER__SESSION": LAUNCHING_SESSION,
+        },
         input=(
             "## What happened\nThe cursor skipped a page.\n\n## Where\n`src/cursor.py`.\n\n"
             "## Why it is out of scope\nThe run was about something else.\n\n"
@@ -199,123 +199,31 @@ def _drafted(root: Path, run: str, title: str) -> Path:
         check=False,
     )
     assert drafted.returncode == 0, drafted.stdout + drafted.stderr
-    matched = re.fullmatch(r"drafted (?P<id>\S+) at (?P<path>\S+)\n", drafted.stdout)
-    assert matched is not None, drafted.stdout
-    return Path(matched["path"])
+    return Path(json.loads(drafted.stdout)["path"])
 
 
-def _seeded_task(native: str) -> str:
-    """The native id the store gives the one task :func:`_seeded_project` writes.
-
-    The store names a task by the slug of its title, so the title carries the project's
-    own unique id and the task's name cannot collide with a record already in the root.
-    """
-    return f"{native}-authored"
-
-
-def _seeded_project(root: Path, native: str) -> None:
-    """A plan project written under ``root`` through the installed store's own command line.
-
-    Out of process, because it is another program's records this is putting in place: the
-    store's `project create` and `task create`, with the `authoring` source rooted at
-    ``root``, exactly as a planner writes a plan.
-    """
-    environment = os.environ | {AUTHORING_ROOT: str(root)}
-    store = [str(ONETASKGRAPH_BIN), "--no-interactive"]
-    body = Path(tempfile.mkdtemp()) / "task.md"
-    body.write_text(
-        f"## What\n{SEEDED_GOAL}\n\n## Why\nA developer wrote it.\n\n"
-        "## Acceptance criteria\n- It is still here afterwards.",
-        encoding="utf-8",
-    )
-    for command in (
-        [
-            *store,
-            "project",
-            "create",
-            "authoring",
-            "--id",
-            native,
-            "--title",
-            native,
-            "--body-file",
-            "/dev/null",
-            "--metadata",
-            "onepipeline.schema_version=3",
-            "--metadata",
-            f"onepipeline.goal={json.dumps({'text': SEEDED_GOAL})}",
-        ],
-        [
-            *store,
-            "task",
-            "create",
-            "authoring",
-            "--project",
-            f"authoring:{native}",
-            "--title",
-            _seeded_task(native),
-            "--metadata",
-            'onepipeline.id="authored"',
-            "--metadata",
-            'onepipeline.persona="engineer"',
-            "--body-file",
-            str(body),
-        ],
-    ):
-        written = subprocess.run(  # noqa: S603 - the installed plan-store CLI
-            command,
-            cwd=REPO_ROOT,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert written.returncode == 0, written.stdout + written.stderr
-    shutil.rmtree(body.parent)
-
-
-def _record(
-    environment: dict[str, str], qualified: str, *, required: bool = True
-) -> dict[str, object] | None:
-    """One record as the installed store reports it, read under the configured roots.
-
-    ``required`` is what tells a seed that never landed from a record something removed:
-    the first read of each seed demands one, and the read *after* the launch answers
-    `None` for a record the store no longer holds, so the comparison below reports a
-    record that was replaced rather than erroring in a fixture with the store's own
-    "no task with that id".
-    """
-    shown = subprocess.run(  # noqa: S603 - the installed plan-store CLI, reading a seeded record
-        [str(ONETASKGRAPH_BIN), "task", "show", qualified, "--json"],
+def _seeded_project(runs: Path, native: str) -> Path:
+    """A plan project under ``runs`` named as `just follow-ups` names the run's follow-up plan."""
+    created = subprocess.run(  # noqa: S603 - the locked plan-store CLI
+        [str(plan_store.locked_binary()), "project", "create", RUNS_SOURCE, "--id", native]
+        + ["--title", "A plan a developer authored, which no test may replace"],
         cwd=REPO_ROOT,
-        env=environment,
+        env={**os.environ, follow_up_store.RUNS_ROOT: str(runs)},
         text=True,
         capture_output=True,
-        timeout=e2e_timeout(120),
         check=False,
     )
-    if shown.returncode != 0 and not required:
-        return None
-    assert shown.returncode == 0, shown.stdout + shown.stderr
-    payload: object = json.loads(shown.stdout)
-    assert isinstance(payload, dict), payload
-    items = payload["items"]
-    assert isinstance(items, list) and len(items) == 1, items
-    held = items[0]
-    assert isinstance(held, dict), held
-    item = held["item"]
-    assert isinstance(item, dict), item
-    return item
+    assert created.returncode == 0, created.stdout + created.stderr
+    project = runs / "projects" / f"{native}.md"
+    assert project.is_file(), sorted(runs.rglob("*"))
+    return project
 
 
 def _just(
     environment: dict[str, str], *arguments: str, seconds: float = 600
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 - this checkout's own recipes
-        # noqa: S607 - `just` from the search path, as an operator invokes it: this
-        # journey's subject is the recipe reached the way the command surface reaches it,
-        # and an absolute path would exercise a binary no caller here resolves.
-        ["just", *arguments],  # noqa: S607
+        ["just", *arguments],  # noqa: S607 - `just` as an operator invokes it
         cwd=REPO_ROOT,
         env=environment,
         text=True,
@@ -369,63 +277,31 @@ def _project(tmp: Path, name: str) -> str:
     return project_from_plan(plan, name)
 
 
-def _launched_task(runs: Path, follow_up: str) -> str:
-    """The task the engine recorded dispatching for the follow-up run."""
-    plan: object = json.loads((runs / follow_up / "plan.json").read_text(encoding="utf-8"))
-    assert isinstance(plan, dict), plan
-    tasks = plan["tasks"]
-    assert isinstance(tasks, list) and len(tasks) == 1, tasks
-    node = tasks[0]
-    assert isinstance(node, dict), node
-    return str(node["task"])
-
-
-def _remove(*paths: Path) -> None:
-    for path in paths:
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink(missing_ok=True)
+def _bytes(path: Path) -> bytes | None:
+    return path.read_bytes() if path.is_file() else None
 
 
 @pytest.fixture(scope="module")
-def launched(  # noqa: PLR0915 - one journey, seeded and read back in order
-    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
-) -> Iterator[Launched]:
+def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Launched]:
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     tmp = tmp_path_factory.mktemp("configured-plan-stores")
-    isolated = _isolated()
+    isolated_drafts, isolated_runs, store = _isolated()
     run = f"plan-store-isolation-{os.getpid()}"
-    follow_up_native = f"{run}{FOLLOW_UPS_SUFFIX}"
-    authoring_variable, drafts_variable = _variables()
+    registry = boundary_home.registered_home(tmp)
     with pytest.MonkeyPatch.context() as patched:
-        configured_authoring, configured_drafts = _configured(patched)
-    assert configured_authoring.is_relative_to(REPO_ROOT), configured_authoring
+        configured_drafts, configured_runs = _configured(patched)
     assert configured_drafts.is_relative_to(REPO_ROOT), configured_drafts
-    # Read back under the configured roots, whatever the environment says elsewhere: this
-    # is the reading a developer would make of their own records.
-    reading = {
-        **os.environ,
-        authoring_variable: str(configured_authoring),
-        drafts_variable: str(configured_drafts),
-    }
-    seeded_draft = _drafted(configured_drafts, run, CONFIGURED_TITLE)
-    _seeded_project(configured_authoring, follow_up_native)
+    assert configured_runs.is_relative_to(REPO_ROOT), configured_runs
+    assert not isolated_drafts.is_relative_to(REPO_ROOT), isolated_drafts
     configured = Configured(
-        authoring=configured_authoring,
         drafts=configured_drafts,
-        environment=reading,
-        draft=seeded_draft,
-        draft_id=f"{drafts.SOURCE}:{run}/{drafts.DRAFTS}/{seeded_draft.stem}",
-        project=follow_up_native,
-        task_id=f"authoring:{_seeded_task(follow_up_native)}",
+        runs=configured_runs,
+        draft=_drafted(configured_drafts, run, CONFIGURED_TITLE, registry),
+        project=_seeded_project(configured_runs, f"{run}{FOLLOW_UPS_SUFFIX}"),
     )
-    draft_before = _record(reading, configured.draft_id)
-    task_before = _record(reading, configured.task_id)
-    # What the hook finds instead, so it carries on past its no-drafts ending and into the
-    # write a collision would land on the seeded project.
-    _drafted(isolated.drafts, run, ISOLATED_TITLE)
+    draft_before, project_before = configured.draft.read_bytes(), configured.project.read_bytes()
+    _drafted(isolated_drafts, run, ISOLATED_TITLE, registry)
 
     environment = _environment(tmp, oneharness_bin)
     runs = Path(environment["ONEPIPELINE_RUNS_DIR"])
@@ -441,6 +317,8 @@ def launched(  # noqa: PLR0915 - one journey, seeded and read back in order
                 environment,
                 "watch",
                 follow_up,
+                "--until",
+                "settled",
                 "--timeout",
                 str(FOLLOW_UP_SETTLE_SECONDS),
                 seconds=FOLLOW_UP_SETTLE_SECONDS + 60,
@@ -450,78 +328,59 @@ def launched(  # noqa: PLR0915 - one journey, seeded and read back in order
             follow_up=follow_up,
             result=result,
             log=log,
-            task=_launched_task(runs, follow_up) if follow_up else "",
             configured=configured,
-            isolated=isolated,
+            isolated_runs=isolated_runs,
+            store=store,
             draft_before=draft_before,
-            draft_after=_record(reading, configured.draft_id, required=False),
-            task_before=task_before,
-            task_after=_record(reading, configured.task_id, required=False),
+            project_before=project_before,
+            draft_after=_bytes(configured.draft),
+            project_after=_bytes(configured.project),
         )
     finally:
         for stopping in (run, follow_up):
             if stopping and (runs / stopping).exists():
                 _just(environment, "stop", stopping, seconds=60)
-        _remove(
-            configured_drafts / "tasks" / run,
+        for seeded in (
+            configured.draft,
+            configured.project,
             configured_drafts / "projects" / f"{run}.md",
-            configured_authoring / "tasks" / f"{_seeded_task(follow_up_native)}.md",
-            configured_authoring / "projects" / f"{follow_up_native}.md",
-        )
+        ):
+            seeded.unlink(missing_ok=True)
 
 
-def test_the_hook_reads_the_isolated_drafts_root_and_not_the_one_this_checkout_configures(
-    launched: Launched,
-) -> None:
-    """The follow-up run was composed against the isolated root, over the isolated draft.
-
-    The composed task is where the root the agent is sent to actually appears, so this is
-    the read half of the claim: a hook that had resolved the configured root would have
-    named it here and told its agent to verify a draft nobody asked it to read.
-    """
+def test_the_follow_up_plan_lands_under_the_isolated_runs_root(launched: Launched) -> None:
+    """The recipe's write: the follow-up plan is in the suite's root, not the checkout's."""
     assert launched.result.returncode == 0, launched.result.stdout + launched.result.stderr
     assert launched.follow_up == f"{launched.run}{FOLLOW_UPS_SUFFIX}", launched.log
-
-    assert str(launched.isolated.drafts) in launched.task, launched.task
-    assert str(launched.configured.drafts) not in launched.task, (
-        "the follow-up agent was sent to the drafts root this checkout configures, which "
-        "holds a developer's own drafts"
+    written = launched.isolated_runs / "projects" / f"{launched.follow_up}.md"
+    assert written.is_file(), (
+        f"no {launched.follow_up} project under {launched.isolated_runs}; the launch wrote "
+        "its follow-up plan somewhere this journey did not state"
     )
-    assert CONFIGURED_TITLE not in launched.task, launched.task
 
 
-def test_the_follow_up_project_lands_under_the_isolated_drafts_root(
+def test_the_batch_is_prepared_from_the_isolated_drafts_into_the_isolated_store(
     launched: Launched,
 ) -> None:
-    """The write half: the project the recipe wrote is in the suite's root, not the checkout's.
-
-    `just follow-ups` writes it into `follow-up-runs`, rooted under the drafts root it resolved.
-    """
-    native = f"{launched.run}{FOLLOW_UPS_SUFFIX}"
-    runs = launched.isolated.drafts / "runs"
-
-    assert (runs / "projects" / f"{native}.md").is_file(), (
-        f"no {native} project under {runs}; the launch wrote its "
-        "follow-up project somewhere this journey did not state"
+    """onefollowup's read and its working files: the isolated draft, in the isolated store."""
+    state_path = launched.store / ".onefollowup" / "state" / f"{launched.run}.json"
+    assert state_path.is_file(), (state_path, launched.log)
+    titles = [entry.get("title") for entry in json.loads(state_path.read_text("utf-8"))["inputs"]]
+    assert ISOLATED_TITLE in titles, titles
+    assert CONFIGURED_TITLE not in titles, (
+        "the follow-up batch was prepared from the drafts root this checkout configures, "
+        "which holds a developer's own drafts"
     )
+    assert not (REPO_ROOT / ".onefollowup" / "state" / f"{launched.run}.json").exists()
 
 
 def test_the_seeded_draft_and_plan_this_checkout_holds_come_back_unchanged(
     launched: Launched,
 ) -> None:
     """Neither seeded record was read, consumed or replaced by a launch with the same run id."""
-    assert launched.configured.draft.is_file(), (
-        f"{launched.configured.draft} is gone; a launch consumed a draft under the root "
-        "this checkout configures"
-    )
-    # Whole records rather than chosen fields: what a collision does to one of these is
-    # not this journey's to anticipate, and a comparison of the fields it happened to
-    # think of would pass over the rest.
-    assert CONFIGURED_TITLE in json.dumps(launched.draft_before), launched.draft_before
     assert launched.draft_after == launched.draft_before, (
-        "the draft under the root this checkout configures came back changed"
+        "the draft under the root this checkout configures came back changed or gone"
     )
-    assert SEEDED_GOAL in json.dumps(launched.task_before), launched.task_before
-    assert launched.task_after == launched.task_before, (
-        "the plan under the root this checkout configures came back changed"
+    assert launched.project_after == launched.project_before, (
+        "the plan under the root this checkout configures came back changed or gone"
     )

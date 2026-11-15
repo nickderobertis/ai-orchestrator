@@ -13,6 +13,7 @@ source = { editable = "." }
 dependencies = [
     { name = "oneagentgraph-cli" },
     { name = "onebudgetspec-cli" },
+    { name = "onefollowup-cli" },
     { name = "oneharness-cli" },
     { name = "onejudge" },
     { name = "onemessagebus-cli" },
@@ -24,7 +25,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "jsonschema" },
-    { name = "markdown-it-py" },
     { name = "mypy" },
     { name = "onebudgetspec-sdk" },
     { name = "packaging" },
@@ -38,7 +38,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "oneagentgraph-cli", specifier = "==0.13.0" },
-    { name = "onebudgetspec-cli", specifier = "==0.1.5" },
+    { name = "onebudgetspec-cli", specifier = "==0.2.2" },
+    { name = "onefollowup-cli", specifier = "==0.5.0" },
     { name = "oneharness-cli", specifier = "==0.26.1" },
     { name = "onejudge", specifier = "==0.23.1" },
     { name = "onemessagebus-cli", specifier = "==0.11.1" },
@@ -50,9 +51,8 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "jsonschema", specifier = ">=4.26" },
-    { name = "markdown-it-py", specifier = "==4.0.0" },
     { name = "mypy", specifier = ">=1.11" },
-    { name = "onebudgetspec-sdk", specifier = "==0.1.5" },
+    { name = "onebudgetspec-sdk", specifier = "==0.2.2" },
     { name = "packaging", specifier = ">=24" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=5.0" },
@@ -278,27 +278,6 @@ wheels = [
 ]
 
 [[package]]
-name = "markdown-it-py"
-version = "4.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "mdurl" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5b/f5/4ec618ed16cc4f8fb3b701563655a69816155e79e24a17b651541804721d/markdown_it_py-4.0.0.tar.gz", hash = "sha256:cb0a2b4aa34f932c007117b194e945bd74e0ec24133ceb5bac59009cda1cb9f3", size = 73070, upload-time = "2025-08-11T12:57:52.854Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/94/54/e7d793b573f298e1c9013b8c4dade17d481164aa517d1d7148619c2cedbf/markdown_it_py-4.0.0-py3-none-any.whl", hash = "sha256:87327c59b172c5011896038353a81343b6754500a08cd7a4973bb48c6d578147", size = 87321, upload-time = "2025-08-11T12:57:51.923Z" },
-]
-
-[[package]]
-name = "mdurl"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
-]
-
-[[package]]
 name = "mypy"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -358,20 +337,19 @@ wheels = [
 
 [[package]]
 name = "onebudgetspec-cli"
-version = "0.1.5"
+version = "0.2.2"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5f/d2/a79bb272e1e7d973ad01d6f7262a0fdde44e821cdab08f91c171d8e1f803/onebudgetspec_cli-0.1.5-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:2f4540333782ad57de70a5598bcf4211cfa068f6487748909c8745c9d5435870", size = 1848858, upload-time = "2026-10-13T21:36:30.94Z" },
-    { url = "https://files.pythonhosted.org/packages/20/66/d07354cf7960766b059a17ea55b8f9749f4659414421dbe7e10256c137e9/onebudgetspec_cli-0.1.5-py3-none-macosx_11_0_arm64.whl", hash = "sha256:aacaea79144d6845dca6ed0da27a7e93db09f0f6ac6eaefe354af99b783b7627", size = 1751590, upload-time = "2026-10-13T21:36:32.313Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/b0/d708d5d1e1b15406232fb8c6b0d822b8f18e7d873b978bab1d68f9d74102/onebudgetspec_cli-0.1.5-py3-none-manylinux_2_39_aarch64.whl", hash = "sha256:7e523c13a42f9516c1471a8cb4db85b8e5f59d8faaef8ca4294845693a44c531", size = 1811536, upload-time = "2026-10-13T21:36:36.278Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/b6/eb690d7e562c5a1b215aa0dc0ffd70eb1e4ea6b0187010148c7f549740a2/onebudgetspec_cli-0.1.5-py3-none-manylinux_2_39_x86_64.whl", hash = "sha256:3ad957365aa9b994232518d5d52d47ed828898a19840dfd5073e166e41efaebb", size = 1961587, upload-time = "2026-10-13T21:36:37.872Z" },
-    { url = "https://files.pythonhosted.org/packages/cd/cf/5f5a2c3a300ecd8b3070daab59fe69f969d37325fe6e70788e8c5ad84c23/onebudgetspec_cli-0.1.5-py3-none-win_amd64.whl", hash = "sha256:f57ab39d25848503dfc0c88b0ef73e3623ac2952ce309c2d21ad5dc85253e7bc", size = 1865210, upload-time = "2026-10-13T21:36:39.076Z" },
-    { url = "https://files.pythonhosted.org/packages/11/84/f108c5ebfd1af02812ea74a9ffe7b2763bfc79db2ab4f0cd4441e8c676c8/onebudgetspec_cli-0.1.5-py3-none-win_arm64.whl", hash = "sha256:949fbab94af2cd0e73c3e0a3df397beb33eb61835d73edde8f483b1c68924060", size = 1729164, upload-time = "2026-10-13T21:36:40.251Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/dd/0ea3a09ca90a6b80938e3bf32822517f22fc4a73cef9245dad440f7636f0/onebudgetspec_cli-0.2.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3f3ea4df02957e6439145e7d8b1f05efb6abc82e35b09b369bcb78d2337233d5", size = 1972381, upload-time = "2026-11-10T12:47:58.063Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/1d/9966eeadc2def8f0f59210bfd52cae1c004f5c3ae42c15674af248a4e7a2/onebudgetspec_cli-0.2.2-py3-none-manylinux_2_39_aarch64.whl", hash = "sha256:86896a2b332afc0fafbf64cfdcf3766dea128ae0335db58d3aa1c76b887814d9", size = 2031250, upload-time = "2026-11-10T12:47:59.443Z" },
+    { url = "https://files.pythonhosted.org/packages/40/04/0af0f2c774f3d3f45dbd25e54559371f2bc8b879c7aae95fb50e03bd95da/onebudgetspec_cli-0.2.2-py3-none-manylinux_2_39_x86_64.whl", hash = "sha256:0c8523dbe3cd329fe4a292ba59d05e3d6035426e32389b944df146017bd3e97c", size = 2191451, upload-time = "2026-11-10T12:48:00.694Z" },
+    { url = "https://files.pythonhosted.org/packages/05/16/6546bb3b6aae44d6879a70d2d86839c95394b521cd701bd42a38ad9cb1b2/onebudgetspec_cli-0.2.2-py3-none-win_amd64.whl", hash = "sha256:0681c0900108be8ffc8e5e64c2a079acf2816a78307741cc715cbb71e7e322fd", size = 2109641, upload-time = "2026-11-10T12:48:01.991Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/40/cefb089e731663c7d66fcda11694788b917db19177e3a4deb06499e79abb/onebudgetspec_cli-0.2.2-py3-none-win_arm64.whl", hash = "sha256:891315be5390050bf4f5b2de735c28b5c1cf5e6ccd24d6c58da651c6a1029efd", size = 1959732, upload-time = "2026-11-10T12:48:03.62Z" },
 ]
 
 [[package]]
 name = "onebudgetspec-sdk"
-version = "0.1.5"
+version = "0.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
@@ -380,7 +358,18 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f5/fd/ae7662dbd55a6370a1b564810e66b94b64bf8dc4f375cc077d1776601db6/onebudgetspec_sdk-0.1.5-py3-none-any.whl", hash = "sha256:c2bd0535d20d72418f1dae3a1a5ed6d18537f2084beefac7021b961a0dede00e", size = 13921, upload-time = "2026-10-13T18:17:00.385Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/6f/d7fe52e11c1e9979e021f5310e5eb5c72cd7cabd517b400f53867b8fbe00/onebudgetspec_sdk-0.2.2-py3-none-any.whl", hash = "sha256:d69cd8ca8d049280fd961bbc3f16f4858d452458bc00191bb1fb4b483fec0359", size = 27765, upload-time = "2026-11-10T12:47:58.21Z" },
+]
+
+[[package]]
+name = "onefollowup-cli"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/01/71cb7c8cebabd82ba9f844773916a912d30de4150f5749743b4de5fb5fac/onefollowup_cli-0.5.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:88d3eb87159cc4c632be63a0d581330624002cc34d4b9b8a6095706b083ae3e4", size = 11327604, upload-time = "2026-11-14T06:43:47.963Z" },
+    { url = "https://files.pythonhosted.org/packages/87/76/41906cbfcce3b655dab71f273475597049bf9899eb209363e88e39d9c85f/onefollowup_cli-0.5.0-py3-none-manylinux_2_39_aarch64.whl", hash = "sha256:c28eadef8ac869cf9c47e062af40cc328dfd8d9ebe646e3a39d52cafcf277b6a", size = 13887503, upload-time = "2026-11-14T06:27:58.847Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/7c/6b3b9fcb1c93c502d0ffa9664658c2a05869bb64104969ac0008e5f6523a/onefollowup_cli-0.5.0-py3-none-manylinux_2_39_x86_64.whl", hash = "sha256:8173be604705b1366b17b3fccbc0bcf061d110429c842418372db3c8519b53ae", size = 14633301, upload-time = "2026-11-14T06:29:36.99Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/81/f7937f46b6ceaab085b17e5c0b44361c24d9053806df8bb3373df5a13ea8/onefollowup_cli-0.5.0-py3-none-win_amd64.whl", hash = "sha256:eaa90a6cf0719376d637a5b197e3f878c797fda72bd371d83ffd4f70cafdddb7", size = 12910380, upload-time = "2026-11-14T06:30:28.133Z" },
 ]
 
 [[package]]

@@ -65,7 +65,6 @@
       "{workspaceRoot}/tests/family_scans/project.json",
       "{workspaceRoot}/tests/manager_guidance/project.json",
       "{workspaceRoot}/tests/plan_guidance/project.json",
-      "{workspaceRoot}/tests/plan_tooling/follow_ups/project.json",
       "{workspaceRoot}/tests/release_pins/project.json",
       "{workspaceRoot}/tests/tree_scans/project.json",
       "{workspaceRoot}/uv.lock",

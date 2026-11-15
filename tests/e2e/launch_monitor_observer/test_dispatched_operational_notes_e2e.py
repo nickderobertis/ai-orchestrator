@@ -336,8 +336,8 @@ def test_a_dispatched_worker_is_told_to_draft_what_can_wait_and_ask_about_what_c
     the stand-in replaces, so it is not driven here. What is driven is everything short of
     that: that the rule a worker is held to reached it through the builder, `onepipeline`
     and `oneagentgraph` intact, and — in
-    `tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py` — that the
-    command it names works from inside a real dispatch.
+    the verifying journey under `tests/e2e/follow_ups/` — that the command it names works
+    from inside a real dispatch.
     """
     paragraphs = [block for block in dispatched_notes.split("\n\n") if DRAFT_COMMAND.search(block)]
     assert len(paragraphs) == 1, (

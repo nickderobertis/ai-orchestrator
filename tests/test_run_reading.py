@@ -1,14 +1,14 @@
-"""`orchestrator/run_reading.py`: what `just follow-ups` decides from the engine's reading.
+"""`orchestrator/run_reading.py`: what a reader decides from the engine's reading of a run.
 
 The decisions are driven end to end over run roots the installed engine leaves by
-`tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py`; this module holds every refusal the
-reader makes to an answer the engine would not give, and — marked `reads_checkouts` —
-holds the reader's restated vocabulary to the schema the pinned engine publishes.
+`tests/e2e/launch_monitor_observer/test_reparent_waiting_human_adopted_e2e.py`; this module
+holds every refusal the reader makes to an answer the engine would not give, and — marked
+`reads_checkouts` — holds the reader's restated vocabulary to the schema the pinned engine
+publishes.
 """
 
 from __future__ import annotations
 
-import io
 import json
 from typing import NamedTuple
 
@@ -332,88 +332,9 @@ def test_an_answer_that_is_not_the_engines_reading_is_unreadable(answer: str, sa
     assert said in str(refused.value)
 
 
-def test_the_command_prints_one_decision_line_for_the_answer_on_stdin(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(CRASHED)))
-    assert run_reading.main([RUN]) == 0
-    assert capsys.readouterr().out == "crashed DRIVER DEAD\n"
-
-    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
-    assert run_reading.main([RUN]) == 0
-    assert capsys.readouterr().out == "unreadable the answer is not one JSON document\n"
-
-
-#: A run whose id names something private, as the engine names it in public instead.
-PUBLIC = "run-0123456789ab"
-
-
-def test_the_public_id_is_the_one_the_engine_names_and_nothing_derived() -> None:
-    assert run_reading.public_id(json.dumps(ENDED | {"public_id": RUN}), RUN) == RUN
-    assert run_reading.public_id(json.dumps(DRIVEN | {"public_id": PUBLIC}), RUN) == PUBLIC
-    with pytest.raises(Unreadable, match="its public id is empty"):
-        run_reading.public_id(json.dumps(ENDED | {"public_id": ""}), RUN)
-    with pytest.raises(Unreadable, match='it reads run "run-2", not run-1'):
-        run_reading.public_id(json.dumps(ENDED | {"run_id": "run-2"}), RUN)
-    with pytest.raises(Unreadable, match="its ending does not carry"):
-        run_reading.public_id(json.dumps(ENDED | {"ending": {"kind": "failed"}}), RUN)
-    with pytest.raises(Unreadable, match="it reads driven and yet ended or paused"):
-        run_reading.public_id(json.dumps(ENDED | {"driven": True}), RUN)
-
-
-def test_the_command_prints_the_public_id_or_refuses_an_unreadable_answer(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(CRASHED | {"public_id": PUBLIC})))
-    assert run_reading.main(["--public-id", RUN]) == 0
-    assert capsys.readouterr().out == f"{PUBLIC}\n"
-
-    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
-    assert run_reading.main(["--public-id", RUN]) == 1
-    printed = capsys.readouterr()
-    assert printed.out == ""
-    assert "unreadable the answer is not one JSON document" in printed.err
-
-
-def test_the_group_is_the_effective_one_the_engine_reads_or_none() -> None:
-    grouped = ENDED | {"group": "authoring:widget", "labels": {"kind": "main"}}
-    assert run_reading.group(json.dumps(grouped), RUN) == "authoring:widget"
-    assert run_reading.group(json.dumps(ENDED | {"group": None}), RUN) is None
-    with pytest.raises(Unreadable, match="its group is neither a string nor null"):
-        run_reading.group(json.dumps(ENDED | {"group": 7}), RUN)
-
-
-def test_the_command_prints_the_group_an_empty_line_or_refuses(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(ENDED | {"group": "plans:board"})))
-    assert run_reading.main(["--group", RUN]) == 0
-    assert capsys.readouterr().out == "plans:board\n"
-
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(ENDED | {"group": None})))
-    assert run_reading.main(["--group", RUN]) == 0
-    assert capsys.readouterr().out == "\n"
-
-    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
-    assert run_reading.main(["--group", RUN]) == 1
-    printed = capsys.readouterr()
-    assert printed.out == ""
-    assert "unreadable the answer is not one JSON document" in printed.err
-
-
-def test_the_command_refuses_a_call_that_names_no_single_run(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr("sys.argv", ["run_reading"])
-    assert run_reading.main() == 2
-    assert "usage: python -m orchestrator.run_reading [--public-id | --group] <run-id>" in (
-        capsys.readouterr().err
-    )
-
-
 # llmlint: ignore-block[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] This
 # module's project, the root `orchestrator`, splits its tiers by pytest marker over the keys of its
-# four targets. The subject of the two tests below is the engine's registered checkout, read at the
+# four targets. The subject of the tests below is the engine's registered checkout, read at the
 # pinned tag the way `tests/test_engine_contracts.py` reads it, which lives outside this workspace
 # and so outside every one of those keys — hence `reads_checkouts`, the uncached tier, where a memo
 # cannot replay a green across the pin bump these exist to catch.

@@ -113,8 +113,10 @@ one labelled `host`, which every check runs.
 ## Delivery budgets after landing
 
 A repository opts in to delivery reporting by registering a budget in its root
-`budgets.yaml` with `labels: [onepipeline]`. Only this host's run-success hook, through
-`just follow-ups`, selects that label; pre-push hooks, CI and Nx targets exclude it.
+`budgets.yaml` with `labels: [onepipeline]`. Only the follow-up loop selects that label —
+`scripts/follow-up-budget-inputs.sh`, onefollowup's `batch_preparing` hook, checks each
+landed change with `onebudgetspec check --subjects` — and pre-push hooks, CI and Nx targets
+exclude it.
 An `onepipeline`-labelled budget's command runs from the root of that repository's
 registered publication checkout with `ONEPIPELINE_RUN_ID` naming the run that landed the
 change, `ONEPIPELINE_NODE_ID` naming its node, `ONEPIPELINE_RUNS_DIR` naming the runs root,

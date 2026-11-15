@@ -89,8 +89,8 @@ launch named, else the origin of the board copy it was launched from, else its o
 project, as any label overlay `onepipeline label` wrote leaves it. Every launch path
 here passes the engine's `--label kind=<kind>` — `main` from `just orchestrate`;
 `planning` from `just plan` and `just finish-plan` and `spikes` from a planning run's
-spikes run, each grouped under its own project; `follow-ups` from `just
-follow-ups`, grouped where the run it follows is — so a plan's runs sit together under
+spikes run, each grouped under its own project; `follow-ups` from the follow-up recipes,
+each grouped by its own project — so a plan's runs sit together under
 that plan and the view's kind filter, built from the kinds the runs carry, tells them
 apart. A run with no group sits under **Other runs**. Opening a project selects its
 newest run; there is no separate project page.

@@ -408,13 +408,16 @@ def _environment(
         environment.pop(name, None)
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     # llmlint: ignore-end[shell_test_tiers_stay_split]
-    # Every launch through the recipe names the run-end hooks, and the success hook reads
-    # the run's drafts and writes a follow-up project when it finds some. So the drafts
-    # root and the authoring root are this journey's own, never the real stores of the
-    # tree the suite runs in.
+    # Every launch through the recipe names the run-end hooks, and the success hook creates
+    # and launches the run's follow-up plan over its drafts. So the drafts root and the
+    # authoring root are this journey's own, never the real stores of the tree the suite
+    # runs in. Both exist, as session setup creates every local root on a host: each is
+    # declared private, so a read asking every private source asks them.
     root_name, plugin_name, command_name = follow_up_variables.all_names()
     environment.pop(command_name, None)
-    environment[root_name] = str(tmp_path / "follow-ups")
+    drafts = tmp_path / "follow-ups"
+    drafts.mkdir(parents=True, exist_ok=True)
+    environment[root_name] = str(drafts)
     environment[plugin_name] = WRITABLE_PLUGIN
     authoring = tmp_path / "plans"
     authoring.mkdir(parents=True, exist_ok=True)
@@ -626,8 +629,10 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     # And before the run's own stream, the one line naming the engine this launch requests
     # and the one it ran, so a proof against a hand-installed engine can be read against
     # the pair it really ran on (ai-orchestrator#1217). Stderr only: stdout is the
-    # settlement record above and nothing else.
-    pairs = ENGINE_PAIR.findall(launch.stderr)
+    # settlement record above and nothing else. Read before the run's own stream, because
+    # the success hook launches the run's follow-up run, whose own engine line the attached
+    # launch relays with the hook's output once the run has ended.
+    pairs = ENGINE_PAIR.findall(launch.stderr.split("run-started", 1)[0])
     assert len(pairs) == 1, f"the launch printed {len(pairs)} engine lines:\n{launch.stderr}"
     ((requested, running, binary),) = pairs
     pin = (REPO_ROOT / "config" / "onepipeline.version").read_text(encoding="utf-8").strip()

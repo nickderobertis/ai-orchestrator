@@ -451,12 +451,12 @@ def test_a_node_of_this_repository_naming_no_target_waits_on_the_producers_defau
 @pytest.mark.parametrize(
     ("producer", "adoption", "consumes", "refused"),
     [
-        pytest.param(
-            next(iter(host_installs.AWAITING_FIRST_ADOPTION)),
-            "published",
-            None,
-            True,
-            id="awaiting-first-adoption",
+        # A producer awaiting its first adoption is refused like an installed one, while the
+        # host has one: once each has been adopted the set is empty and the case has nothing
+        # to read.
+        *(
+            pytest.param(producer, "published", None, True, id="awaiting-first-adoption")
+            for producer in sorted(host_installs.AWAITING_FIRST_ADOPTION)[:1]
         ),
         pytest.param(
             LIBRARY_ID, "published", None, False, id="producer-this-host-installs-nothing-of"

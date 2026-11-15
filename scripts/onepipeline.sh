@@ -55,9 +55,8 @@
 # last place that can put it there, and `start` and `adopt` are every shape of launch
 # this repository has. `scripts/ask-manager-env.sh` owns the path and the refusal.
 #
-# For the same reason a launch carries the follow-up drafting seam: the absolute root of
-# the `drafts` plan source and the command every party drafts a non-blocking follow-up
-# with. `scripts/follow-up-env.sh` owns both names, both values and the refusal.
+# For the same reason a launch carries `ORCHESTRATOR_FOLLOW_UP_DRAFT`, the command every
+# party drafts a non-blocking follow-up with.
 #
 # Who is acting is `scripts/launcher-session.sh`'s to answer, sourced here and by
 # `scripts/telemetry-server.sh`, which hands the same answer to the read API so a
@@ -142,12 +141,17 @@ if [ "${1:-}" = publish-branch ] || [ "${1:-}" = repo-recover ] || [ "${1:-}" = 
     export_lock_timeout onepipeline || exit $?
 fi
 
-# The follow-up drafting seam, for the launch shapes the arm above decided.
+# The follow-up drafting command every dispatch and the monitor draft with, this checkout's
+# own `scripts/follow-up-draft.sh` over `onefollowup draft`; it reaches a dispatch only by
+# inheritance, so the launch is the last place that can put it there. Beside it, the owner
+# `onefollowup.yaml`'s review sink names in the context it hands the engine — the launching
+# manager's session, at onefollowup's environment layer — without which onefollowup refuses
+# every verb, a dispatch's draft and a follow-up run's settle among them.
 if [ "$launching" = true ]; then
-    # shellcheck source=scripts/follow-up-env.sh
-    # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
-    . "$script_dir/follow-up-env.sh"
-    export_follow_up_drafts onepipeline || exit "$?"
+    export ORCHESTRATOR_FOLLOW_UP_DRAFT="$script_dir/follow-up-draft.sh"
+    if [ -z "${ONEFOLLOWUP_HOOKS__OWNER__SESSION:-}" ] && [ -n "${ONEPIPELINE_LAUNCHER_SESSION:-}" ]; then
+        export ONEFOLLOWUP_HOOKS__OWNER__SESSION="$ONEPIPELINE_LAUNCHER_SESSION"
+    fi
 fi
 
 # Which `onepipeline` every verb runs: the binary `bun.lock` installs from npmjs.com into

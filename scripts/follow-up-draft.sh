@@ -1,67 +1,119 @@
 #!/usr/bin/env bash
-# The command every dispatch and the monitor draft a non-blocking
-# follow-up with, reached through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, and the one
-# `just follow-up` runs for the manager:
+# The command every dispatch and the monitor draft a non-blocking follow-up with, reached
+# through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, and the one `just follow-up` runs for the manager:
 #
 #     "$ORCHESTRATOR_FOLLOW_UP_DRAFT" --title TITLE --repository HOST/OWNER/NAME \
 #         [--path PATH]... [--as node|monitor|manager] [--member NAME] \
 #         [--run RUN-ID] < body.md
 #
-# Everything a draft is — the flags, the body's headings, what is stamped, the refusals,
-# and the `--help` that states all of it — is `orchestrator/follow_up_drafts.py`'s. This
-# only puts that module in front of the caller from wherever the caller is: a worktree of
-# another repository, a graph member's scratch, or this checkout. So it resolves the
-# checkout from its own location and imports the package from there, with Python's safe
-# path on: `python -c` otherwise puts the caller's working directory first on the import
-# path, and a worker of this repository works in a checkout whose own `orchestrator` is a
-# different revision of the one this command belongs to.
-#
-# The root's environment name is read out of scripts/follow-up-env.sh, its one
-# composition, and handed to the module rather than spelled there. The process is
-# replaced rather than forked, so the draft inherits the caller's environment whole —
-# `ONEPIPELINE_NODE_ID` among it, which names the node.
+# A wrapper over `onefollowup draft`, which records the draft and owns its format. This
+# passes it what the dispatch environment says and nothing else: the batch key, which is the
+# run's public id as the engine reads it (`--run`, else `ONEPIPELINE_RUN_ID`); the author
+# label (`node:<ONEPIPELINE_NODE_ID>`, `monitor:<member>` or `manager`, from `--as`); and the
+# transcript pointer stamp — the engine command that reads the turns a draft came from. It
+# runs onefollowup with this checkout's configuration and store — or the ones
+# `ONEFOLLOWUP_CONFIG` and `ONEFOLLOWUP_STORE` name — whichever directory the caller drafts
+# from, so a worker in another repository's worktree drafts into this host's drafts source.
+# Every other argument goes to `onefollowup draft` as it was given.
 set -euo pipefail
 
-# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
-if ! here=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd); then
-    echo "follow-up-draft: the checkout this command belongs to could not be resolved; run it by its path in a readable checkout, then retry" >&2
+usage="\"\$ORCHESTRATOR_FOLLOW_UP_DRAFT\" --title TITLE --repository HOST/OWNER/NAME [--path PATH]... [--as node|monitor|manager] [--member NAME] [--run RUN-ID] < body.md"
+
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and this line; no journey can produce that without racing the filesystem the test itself runs on.
+checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd) || {
+    echo "follow-up-draft: refused: the checkout this command belongs to could not be resolved; run it by its path in a readable checkout, then retry" >&2
     exit 2
+}
+onefollowup="$checkout/.venv/bin/onefollowup"
+engine="$checkout/node_modules/.bin/onepipeline"
+
+author=node
+member=""
+run=${ONEPIPELINE_RUN_ID:-}
+passed=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h | --help)
+            cat <<EOF
+usage: $usage
+
+Records one unverified follow-up for the run's follow-up batch; a follow-up agent verifies it
+after the run. The body, read from standard input, carries four headings, each with content:
+## What happened, ## Where, ## Why it is out of scope, ## Evidence.
+EOF
+            exit 0
+            ;;
+        --as | --member | --run)
+            [ $# -ge 2 ] || { echo "follow-up-draft: $1 was given no value; usage: $usage" >&2; exit 2; }
+            case "$1" in
+                --as) author=$2 ;;
+                --member) member=$2 ;;
+                --run) run=$2 ;;
+            esac
+            shift 2
+            ;;
+        *)
+            passed+=("$1")
+            shift
+            ;;
+    esac
+done
+
+[ -n "$run" ] || { echo "follow-up-draft: no run is named: pass --run RUN-ID, or draft from inside a dispatch, whose ONEPIPELINE_RUN_ID names it; usage: $usage" >&2; exit 2; }
+# The run, the node and the member are passed through as the engine and the bus name them:
+# each is shell-quoted into the transcript stamp's command, so any value reads back as itself.
+run_word=$(printf %q "$run")
+
+stamps=()
+case "$author" in
+    node)
+        node=${ONEPIPELINE_NODE_ID:-}
+        label="node${node:+:$node}"
+        node_word=""
+        [ -z "$node" ] || node_word=" $(printf %q "$node")"
+        stamps=(--stamp "transcript=onepipeline transcript $run_word$node_word")
+        ;;
+    monitor)
+        [ -n "$member" ] || { echo "follow-up-draft: --as monitor names its member with --member; usage: $usage" >&2; exit 2; }
+        label="monitor:$member"
+        # The filter is JSON jq builds from the member, so any member name stays valid JSON.
+        # llmlint: ignore[changed_behavior_has_e2e] Reachable only in a checkout whose provisioning removed a pinned tool; a journey that deleted one would break every other test sharing this checkout's install.
+        filter=$(jq -nc --arg member "$member" '{include: [{member: $member}]}') || {
+            echo "follow-up-draft: jq could not build the monitor's transcript filter; install jq (provision this checkout with 'just bootstrap'), then retry" >&2
+            exit 2
+        }
+        stamps=(--stamp "transcript=onepipeline monitor $run_word --filter $(printf %q "$filter")")
+        ;;
+    manager) label=manager ;;
+    *) echo "follow-up-draft: --as is node, monitor or manager, not '$author'; usage: $usage" >&2; exit 2 ;;
+esac
+
+# The owner `onefollowup.yaml`'s review sink names, without which onefollowup refuses every
+# verb: what a launch exported, else the manager session this process runs in, as
+# `scripts/launcher-session.sh` answers it for every launch.
+if [ -z "${ONEFOLLOWUP_HOOKS__OWNER__SESSION:-}" ]; then
+    # shellcheck source=scripts/launcher-session.sh
+    # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+    . "$checkout/scripts/launcher-session.sh"
+    [ -n "${ONEPIPELINE_LAUNCHER_SESSION:-}" ] || {
+        echo "follow-up-draft: no manager session is named: draft from a dispatch of a run a manager session launched, or from that session itself, whose session id names the owner of the batch's review item; usage: $usage" >&2
+        exit 2
+    }
+    export ONEFOLLOWUP_HOOKS__OWNER__SESSION="$ONEPIPELINE_LAUNCHER_SESSION"
 fi
-helper="$here/scripts/follow-up-env.sh"
-if [ ! -f "$helper" ] || [ ! -r "$helper" ]; then
-    echo "follow-up-draft: required helper is not a readable regular file: $helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only in a checkout whose provisioning removed a pinned tool; a journey that deleted one would break every other test sharing this checkout's install.
+for tool in "$engine" "$onefollowup"; do
+    [ -x "$tool" ] || { echo "follow-up-draft: $tool is not installed; provision this checkout with 'just bootstrap', then retry" >&2; exit 2; }
+done
+
+# The batch is the run's public id as the engine reads it, any non-empty string.
+# llmlint: ignore[changed_behavior_has_e2e] The engine names a public id other than the run id only for a run whose id carries a private repository's term, which no journey's run id does: each is named for its own case, so the journeys hold this read where the two ids agree.
+batch=$("$engine" status "$run" --json | jq -er '.public_id | select(type == "string" and length > 0)') || {
+    echo "follow-up-draft: the engine named no public id for run '$run', so there is no batch to draft into; check the run with 'just status $run', then retry" >&2
     exit 2
-fi
-# shellcheck source=scripts/follow-up-env.sh
-if ! . "$helper"; then
-    echo "follow-up-draft: the helper at $helper is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
-    exit 2
-fi
+}
 
-python="$here/.venv/bin/python3"
-[ -x "$python" ] || python=python3
-if ! command -v "$python" >/dev/null 2>&1; then
-    echo "follow-up-draft: no Python interpreter was found, neither $here/.venv/bin/python3 nor python3 on PATH, so no draft can be written; provision this checkout with 'just bootstrap', then retry" >&2
-    exit 2
-fi
-
-# The import is guarded inside the program rather than probed first, so a checkout whose
-# package cannot be imported is one sentence with its repair instead of a traceback.
-program='
-import sys
-
-try:
-    from orchestrator import follow_up_drafts
-except ImportError as exc:
-    sys.stderr.write(
-        f"follow-up-draft: this checkout'"'"'s orchestrator package could not be imported ({exc}); "
-        "provision the checkout with '"'"'just bootstrap'"'"', then retry\n"
-    )
-    raise SystemExit(2)
-
-raise SystemExit(follow_up_drafts.main(sys.argv[2:], root_env=sys.argv[1]))
-'
-
-export PYTHONSAFEPATH=1
-export PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}"
-exec "$python" -c "$program" "$FOLLOW_UP_DRAFTS_ROOT_ENV" "$@"
+exec "$onefollowup" --config "${ONEFOLLOWUP_CONFIG:-$checkout/onefollowup.yaml}" \
+    --store "${ONEFOLLOWUP_STORE:-$checkout}" draft \
+    --batch "$batch" --author "$label" ${stamps[@]+"${stamps[@]}"} ${passed[@]+"${passed[@]}"}

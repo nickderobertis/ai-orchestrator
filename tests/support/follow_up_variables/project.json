@@ -9,7 +9,7 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/follow_up_variables.py",
-      "{workspaceRoot}/scripts/follow-up-env.sh",
+      "{workspaceRoot}/onefollowup.yaml",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

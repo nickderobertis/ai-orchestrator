@@ -19,19 +19,40 @@ import json
 import os
 import subprocess
 
+import follow_up_variables
 import jsonschema
 import onetaskgraph_user_layer
 import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import follow_up_drafts, follow_up_tickets, plan_store
+from orchestrator import plan_store
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
 
 def _configuration() -> str:
     return (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+
+
+def _follow_up_configuration() -> dict[str, object]:
+    """The follow-up loop's effective configuration, as the pinned `onefollowup` resolves it.
+
+    Under a manager session's owner, which every caller states and without which onefollowup
+    refuses the review sink `onefollowup.yaml` configures.
+    """
+    shown = subprocess.run(  # noqa: S603 - the pinned onefollowup over this checkout
+        [str(REPO_ROOT / ".venv" / "bin" / "onefollowup"), "config", "show"],
+        cwd=REPO_ROOT,
+        env=os.environ | {"ONEFOLLOWUP_HOOKS__OWNER__SESSION": "e2e-manager-session"},
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stderr
+    config: dict[str, object] = json.loads(shown.stdout)["config"]
+    return config
 
 
 def test_no_two_configured_sources_share_a_root() -> None:
@@ -393,33 +414,34 @@ def test_the_follow_ups_board_maps_every_priority_and_the_plans_board_maps_none(
     # A human-task board's labels are the operator's, not a follow-up ticket's.
     for source in HUMAN_BOARDS:
         assert mapped(source) == HUMAN_PRIORITIES, (source, mapped(source))
-    estimated = {level.value for level in follow_up_tickets.ESTIMATES}
+    rubric = _follow_up_configuration()["rubric"]
+    assert isinstance(rubric, dict), rubric
+    estimated = {str(level["priority"]) for level in rubric["levels"]}
     assert set(mapped("followups")) == estimated, (
         f"the `followups` source maps the priorities {sorted(mapped('followups'))}, and a "
         f"follow-up ticket's estimate is one of {sorted(estimated)}"
     )
 
 
-#: The board text fields each follow-up ticket's record values are projected onto: the
-#: record module's one declaration (`BOARD_FIELDS`), which the installed CLI's resolution of
-#: the tracked document is held to. The tracked document declares no other board; a host's own
-#: follow-up trackers are its user layer's.
-FOLLOWUPS_METADATA_FIELDS = follow_up_tickets.metadata_fields()
+#: The board text fields a follow-up ticket's record is projected onto, and the field of
+#: onefollowup's ticket record each reads. Stated here for the reason
+#: :data:`FOLLOWUPS_PRIORITIES` is: the other party is the live board, so what is held is the
+#: projection the installed CLI resolves. Only fields onefollowup's record writes are
+#: projected, so its copies never blank a field an older record filled. The tracked document
+#: declares no other board; a host's own follow-up trackers are its user layer's.
+RECORD_FIELDS = (
+    ("Host", "host"),
+    ("Owning runs", "owning_runs"),
+    ("Basis", "basis"),
+    ("Verified at", "verified_at"),
+)
 
 
-def test_the_record_s_board_fields_name_its_own_keys() -> None:
-    """Each field the record is shown on reads a key the record writes, `Host` first."""
-    assert [field for field, _ in follow_up_tickets.BOARD_FIELDS] == [
-        "Host",
-        "Owning runs",
-        "Basis",
-        "Drafts",
-        "Transcripts",
-        "Witnesses",
-        "Verified at",
-    ]
-    for _, path in follow_up_tickets.BOARD_FIELDS:
-        assert len(path) == 1 and path[0] in follow_up_tickets.RECORD_KEYS, path
+def followups_metadata_fields() -> list[dict[str, object]]:
+    """The `metadata_fields` the `followups` source declares: each of :data:`RECORD_FIELDS`
+    under onefollowup's record key, `<namespace>.follow-up` in its resolved configuration."""
+    key = f"{_follow_up_configuration()['namespace']}.follow-up"
+    return [{"field": field, "key": key, "path": [path]} for field, path in RECORD_FIELDS]
 
 
 @pytest.mark.reads_checkouts
@@ -427,17 +449,18 @@ def test_the_follow_ups_board_projects_a_ticket_s_record_onto_its_fields() -> No
     """`followups` projects the record's values onto its fields, and no other source projects.
 
     Read through the installed CLI's own resolution, because an entry the store does not
-    resolve is one no copy writes. Its `key` and `path`s are the record module's own
-    declaration, so a record that renamed either would leave the board's field empty on every
-    copy rather than failing here.
+    resolve is one no copy writes. Its `key` is onefollowup's record key under the namespace
+    its configuration resolves, so a namespace that moved would leave the board's fields empty
+    on every copy rather than failing here.
     """
     resolved = _resolved_configuration()
+    expected = followups_metadata_fields()
     projections = {
         key: value for key, value in resolved.items() if key.endswith(".config.metadata_fields")
     }
-    assert projections == {"sources.followups.config.metadata_fields": FOLLOWUPS_METADATA_FIELDS}, (
+    assert projections == {"sources.followups.config.metadata_fields": expected}, (
         f"onetaskgraph.yaml's sources resolve the metadata-field projections {projections}, "
-        f"and this host states only the `followups` source's {FOLLOWUPS_METADATA_FIELDS}"
+        f"and this host states only the `followups` source's {expected}"
     )
 
 
@@ -471,15 +494,16 @@ def test_the_drafts_source_is_a_local_directory_no_plan_listing_reads() -> None:
     it is ever committed is asked of git itself.
     """
     configured = read_plan_sources(_configuration())
-    assert follow_up_drafts.SOURCE in configured, (
-        f"onetaskgraph.yaml configures no {follow_up_drafts.SOURCE!r} source, which is where "
-        "orchestrator/follow_up_drafts.py stores every draft"
+    source = follow_up_variables.source()
+    assert source in configured, (
+        f"onetaskgraph.yaml configures no {source!r} source, which is where onefollowup.yaml "
+        "has every draft stored"
     )
-    drafts = configured[follow_up_drafts.SOURCE]
+    drafts = configured[source]
     assert (drafts.plugin, drafts.root) == (WRITABLE_PLUGIN, ".follow-ups"), (
         f"the drafts source is {drafts.plugin!r} rooted at {drafts.root!r}"
     )
-    assert follow_up_drafts.SOURCE not in read_default_sources(_configuration()), (
+    assert source not in read_default_sources(_configuration()), (
         "the drafts source is among default_sources, so every plan listing shows drafts"
     )
     ignored = subprocess.run(
@@ -508,14 +532,15 @@ WRITE_POLICY = {
 }
 WRITE_POLICY_KEYS = tuple(WRITE_POLICY)
 #: Each source the tracked document declares a visibility for: the two boards public, and the
-#: local drafting, follow-up launch and fixture folders private. `drafts` and `examples`
-#: declare none.
+#: local drafting, follow-up draft, follow-up launch and fixture folders private. `examples`
+#: declares none.
 DECLARED_VISIBILITY = {
     "plans": "public",
     "followups": "public",
     "human-public": "public",
     "human-private": "private",
     "authoring": "private",
+    "drafts": "private",
     "follow-up-runs": "private",
     "test-fixtures": "private",
 }
@@ -664,9 +689,10 @@ def example_resolved(tmp_path_factory: pytest.TempPathFactory) -> dict[str, obje
 def test_every_linear_tracker_the_example_routes_follow_ups_to_shows_the_record_s_fields(
     example_resolved: dict[str, object],
 ) -> None:
-    """Every `linear` source the example layer's `followups` routes reach carries the record
-    module's `metadata_fields`, which the store shows as one collapsed `Fields` section at the
-    end of each issue's description; a route's GitHub board carries them as fields."""
+    """Every `linear` source the example layer's `followups` routes reach carries the
+    `followups` source's `metadata_fields`, which the store shows as one collapsed `Fields`
+    section at the end of each issue's description; a route's GitHub board carries them as
+    fields."""
     routes = example_resolved.get("sources.followups.routes")
     assert isinstance(routes, list) and routes, routes
     reached = sorted({str(route["to"]) for route in routes if isinstance(route, dict)})
@@ -674,7 +700,7 @@ def test_every_linear_tracker_the_example_routes_follow_ups_to_shows_the_record_
     assert linear == [onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS], reached
     for name in reached:
         assert example_resolved.get(f"sources.{name}.config.metadata_fields") == (
-            follow_up_tickets.metadata_fields()
+            followups_metadata_fields()
         ), name
 
 

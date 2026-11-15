@@ -139,14 +139,13 @@ def test_a_consumer_default_resolves_the_overrides_target_with_no_row(
     assert unresolved is not None and "CONSUMER_DEFAULTS" in unresolved, unresolved
 
 
-def test_onefollowup_resolves_the_overrides_pypi_default_awaiting_its_first_adoption() -> None:
-    """Registered ahead of its first release, onefollowup resolves `pypi` with no row."""
+def test_onefollowup_resolves_the_overrides_pypi_default_through_its_row() -> None:
+    """Adopted, onefollowup resolves `pypi`, the target its row says this host installs."""
     producer = "github.com/nickderobertis/onefollowup"
     defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
-    assert by_producer(producer) is None and producer in AWAITING_FIRST_ADOPTION
+    row = by_producer(producer)
+    assert row is not None and producer not in AWAITING_FIRST_ADOPTION
     assert producer not in CONSUMER_DEFAULTS
-    assert defaults[producer] == "pypi"
+    assert defaults[producer] == row.target == "pypi"
 
     assert default_target_complaint(producer, "pypi", defaults) is None
-    unresolved = default_target_complaint(producer, None, defaults)
-    assert unresolved is not None and "ahead of its first adoption" in unresolved, unresolved
