@@ -30,7 +30,11 @@ sources:
     plugin: local-md
     config:
       root: .plans
+  # Follow-up drafts name whatever a run noticed, a private repository's work included. The
+  # store records a private draft only on a source declared private, and onefollowup leaves
+  # that declaration to the host; a draft about public work is still recorded public here.
   drafts:
+    visibility: private
     plugin: local-md
     config:
       root: .follow-ups
@@ -131,14 +135,14 @@ sources:
         medium: Medium
         low: Low
       # Projects onto the board's text fields the parts of a follow-up ticket's audit trail
-      # onefollowup's record writes — the machine its verification ran on, its owning runs and
-      # its verification time — so the board filters and sorts by host or run the way it does
-      # by origin. Only fields that record writes are projected: a projected field whose path
-      # a record lacks is written empty on every copy, so the `Basis`, `Drafts`,
-      # `Transcripts` and `Witnesses` fields an older ticket filled keep their values. The
-      # record keeps every value in its description's metadata slot, which stays its one
-      # home. `sources fields followups --apply` creates the fields, and a copy onto a board
-      # without one is refused by name before anything is written.
+      # onefollowup's record writes — the machine its verification ran on, its owning runs,
+      # its basis and its verification time — so the board filters and sorts by host, run or
+      # basis the way it does by origin. Only fields that record writes are projected: a
+      # projected field whose path a record lacks is written empty on every copy, so the
+      # `Drafts`, `Transcripts` and `Witnesses` fields an older ticket filled keep their
+      # values. The record keeps every value in its description's metadata slot, which stays
+      # its one home. `sources fields followups --apply` creates the fields, and a copy onto a
+      # board without one is refused by name before anything is written.
       # `tests/test_plan_source_roots.py` holds these entries to the CLI's resolved config;
       # their `key` is onefollowup's ticket record key and each `path` a field of that record.
       metadata_fields:
@@ -148,6 +152,9 @@ sources:
         - field: Owning runs
           key: orchestrator.follow-up
           path: [owning_runs]
+        - field: Basis
+          key: orchestrator.follow-up
+          path: [basis]
         - field: Verified at
           key: orchestrator.follow-up
           path: [verified_at]

@@ -195,6 +195,30 @@ ORIGIN_FIELD_NAME = "onetaskgraph.origin"
 #: once `sources fields followups --apply` has created it; the `plans` source projects
 #: nothing, so carrying it there changes nothing it writes.
 HOST_FIELD_NAME = "Host"
+#: The other board text fields the live `followups` board carries, beside `Host`, and the id
+#: each is answered under: the three more the source projects onefollowup's ticket record
+#: onto, and the three only an older record filled, which no copy writes any more. Every
+#: board here carries them, as it carries `Host`, unless a journey takes one away.
+PROJECTED_FIELD_NAMES = (
+    "Owning runs",
+    "Basis",
+    "Drafts",
+    "Transcripts",
+    "Witnesses",
+    "Verified at",
+)
+PROJECTED_FIELD_IDS = {
+    name: f"FIELD_text_{re.sub(r'[^a-z]+', '_', name.lower())}" for name in PROJECTED_FIELD_NAMES
+}
+#: The most a GitHub text field holds, in UTF-8 bytes, and GitHub's whole refusal of a value
+#: over it, as the sample-ticket spike measured on a live board: 1,024 accepted, 1,025 refused
+#: with nothing on the item changed.
+TEXT_FIELD_LIMIT = 1024
+TEXT_FIELD_REFUSAL = "Column value must be a valid value for text column"
+
+
+class TextTooLong(ValueError):
+    """A text field write over :data:`TEXT_FIELD_LIMIT`, which GitHub refuses whole."""
 
 
 class _BoardField(StrEnum):
@@ -349,6 +373,7 @@ class _RowState(NamedTuple):
     priority: str | None
     origin: str | None
     host: str | None
+    texts: tuple[tuple[str, str], ...] = ()
 
 
 class _Edge(NamedTuple):
@@ -410,6 +435,9 @@ class _Issue:
     #: left it — kept and answered back for the reason `origin` is, since the source sends a
     #: projected value again only when the row does not already hold it.
     host: str | None = None
+    #: The text each other projected field of this row holds, by field name, kept for the
+    #: reason `host` is.
+    texts: dict[str, str] = field(default_factory=dict)
     #: The Status option this row is at: where a person last moved it, or where the last
     #: write put it. Applied rather than only recorded, because a read-back is what the
     #: store's own `delivers` relation decides on — it computes a delivered ticket's status
@@ -470,7 +498,9 @@ class _Issue:
             self.sub_issues,
             self.repository,
         )
-        row = _RowState(self.status, self.priority, self.origin, self.host)
+        row = _RowState(
+            self.status, self.priority, self.origin, self.host, tuple(sorted(self.texts.items()))
+        )
         edges = frozenset(
             {_Edge("blocked-by", str(held)) for held in self.blocked_by}
             | {
@@ -538,7 +568,10 @@ class _Issue:
                     "field": {"id": _BoardField.HOST, "name": HOST_FIELD_NAME},
                 }
             ]
-        )
+        ) + [
+            {"text": text, "field": {"id": PROJECTED_FIELD_IDS[name], "name": name}}
+            for name, text in self.texts.items()
+        ]
         held = self.priority_value()
         priority = [] if held is None else [held]
         return {
@@ -833,6 +866,8 @@ class _Board:
         self.attachments: dict[str, bytes] = {}
         #: Whether the board carries the `Host` text field, which one journey takes away.
         self.has_host_field = True
+        #: The other projected text fields the board carries, which a journey may take away.
+        self.text_fields: set[str] = set(PROJECTED_FIELD_NAMES)
         #: How many of an issue's comments one page answers, or `None` for every one on the
         #: first page: GitHub pages an issue's comments, and a reader that reads past the first
         #: page reads an issue that can change between its pages.
@@ -900,6 +935,16 @@ class _Board:
                     ]
                     if self.has_host_field
                     else []
+                ),
+                *(
+                    {
+                        "__typename": "ProjectV2Field",
+                        "id": PROJECTED_FIELD_IDS[name],
+                        "name": name,
+                        "dataType": "TEXT",
+                    }
+                    for name in PROJECTED_FIELD_NAMES
+                    if name in self.text_fields
                 ),
                 *(
                     [
@@ -1383,10 +1428,30 @@ class _Board:
             case _BoardField.ORIGIN:
                 self._row(item_id).origin = self._text(value)
             case _BoardField.HOST:
-                self._row(item_id).host = self._text(value)
+                self._row(item_id).host = self._held_text(value)
             case _BoardField.PRIORITY:
                 self._row(item_id).priority = self._option_named(value, self.priorities)
+            case str(projected) if projected in PROJECTED_FIELD_IDS.values():
+                name = next(one for one, held in PROJECTED_FIELD_IDS.items() if held == projected)
+                self._row(item_id).texts[name] = self._held_text(value)
         return item_id
+
+    def _held_text(self, value: object) -> str:
+        """A projected text field's value, refused whole over the limit GitHub holds."""
+        text = self._text(value)
+        if len(text.encode("utf-8")) > TEXT_FIELD_LIMIT:
+            raise TextTooLong(TEXT_FIELD_REFUSAL)
+        return text
+
+    @staticmethod
+    def _refused_text(payloads: Sequence[object]) -> dict[str, object] | None:
+        """GitHub's whole refusal of a request writing any text value over the limit."""
+        for payload in payloads:
+            value = payload.get("value") if isinstance(payload, dict) else None
+            text = value.get("text") if isinstance(value, dict) else None
+            if isinstance(text, str) and len(text.encode("utf-8")) > TEXT_FIELD_LIMIT:
+                return {"data": None, "errors": [{"message": TEXT_FIELD_REFUSAL}]}
+        return None
 
     def _cleared(self, payload: object) -> object:
         """Clear one field value on a row: a priority of `none`, or a host no longer recorded."""
@@ -1398,12 +1463,19 @@ class _Board:
                 self._row(item_id).priority = None
             case _BoardField.HOST:
                 self._row(item_id).host = None
+            case str(projected) if projected in PROJECTED_FIELD_IDS.values():
+                name = next(one for one, held in PROJECTED_FIELD_IDS.items() if held == projected)
+                self._row(item_id).texts.pop(name, None)
             case _:
-                raise ValueError(f"only Priority and Host are cleared here, not {payload!r}")
+                raise ValueError(
+                    f"only Priority and the projected text fields are cleared here, not {payload!r}"
+                )
         return item_id
 
     def set_field(self, variables: dict[str, object]) -> dict[str, object]:
         """Set one field value on a row, keeping what an origin or a Status write puts there."""
+        if (refused := self._refused_text([variables.get("input")])) is not None:
+            return refused
         item_id = self._applied(variables.get("input"))
         return {
             "data": {
@@ -1432,6 +1504,11 @@ class _Board:
         when its `write…` flag is set, so only the writes it asked for are applied and only
         their aliases are answered, which is what GitHub does with an `@include(if:)`.
         """
+        sent = [
+            variables.get(write.variable) for write in BATCHED_WRITES if write.included(variables)
+        ]
+        if (refused := self._refused_text(sent)) is not None:
+            return refused
         answer: dict[str, object] = {}
         for write in BATCHED_WRITES:
             if write.included(variables):
@@ -1501,11 +1578,11 @@ class _Board:
         }
 
     def create_field(self, variables: dict[str, object]) -> dict[str, object]:
-        """Create the board's `Priority` field, or its missing `Host` text field.
+        """Create the board's `Priority` field, or a missing projected text field.
 
-        `Priority` takes the options the setup sends, in its order. `Host` is answered with
-        nothing, as GitHub answers a text field to a document selecting only a single-select
-        field's fragment.
+        `Priority` takes the options the setup sends, in its order. A text field is answered
+        with nothing, as GitHub answers a text field to a document selecting only a
+        single-select field's fragment.
         """
         match variables.get("input"):
             case {"dataType": "TEXT", "name": str(name)} if (
@@ -1513,11 +1590,16 @@ class _Board:
             ):
                 self.has_host_field = True
                 return {"data": {"createProjectV2Field": {"projectV2Field": {}}}}
+            case {"dataType": "TEXT", "name": str(name)} if (
+                name in PROJECTED_FIELD_NAMES and name not in self.text_fields
+            ):
+                self.text_fields.add(name)
+                return {"data": {"createProjectV2Field": {"projectV2Field": {}}}}
             case {"name": "Priority", "singleSelectOptions": list(options)} if not self.priorities:
                 pass
             case payload:
                 raise ValueError(
-                    f"only a missing Host text field or a Priority field with options is "
+                    f"only a missing projected text field or a Priority field with options is "
                     f"created here, once: {payload!r}"
                 )
         self.priorities = tuple(
@@ -1664,6 +1746,16 @@ class _Board:
         """
 
         def answered(variables: dict[str, object]) -> dict[str, object]:
+            # GitHub refuses a request carrying a text value over the limit whole, nothing on
+            # any item changed, so it is read before a slot is applied.
+            fields = [
+                variables[f"{part.prefix}{n}"]
+                for part in parts
+                if part.write is _Operation.UPDATE_FIELD
+                for n in part.sent(variables)
+            ]
+            if (refused := self._refused_text(fields)) is not None:
+                return refused
             answer: dict[str, object] = {}
             for part in parts:
                 for n in part.sent(variables):

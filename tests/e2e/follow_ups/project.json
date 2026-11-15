@@ -13,6 +13,7 @@
     "support-fake-backend",
     "support-fake-codex",
     "support-follow-up-store",
+    "support-github-board",
     "support-harness-configs",
     "support-harness-indirections",
     "support-no-paid-provider",
@@ -25,6 +26,7 @@
   "namedInputs": {
     "followUpsWorkspace": [
       "{workspaceRoot}/onefollowup.yaml",
+      "{workspaceRoot}/tests/fixtures/cycle-time/ticket-v15.json",
       "{workspaceRoot}/onetaskgraph.yaml",
       "{workspaceRoot}/budgets.yaml",
       "{workspaceRoot}/config/onebudgetspec.version",

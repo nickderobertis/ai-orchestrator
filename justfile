@@ -683,6 +683,11 @@ follow-ups-answer-comments *args:
     set -euo pipefail
     export PATH="{{repo_root}}/node_modules/.bin:{{repo_root}}/.venv/bin:$PATH"
     export ONEPIPELINE_TEMPLATE_ROOT="{{repo_root}}/templates"
+    # The owner `onefollowup.yaml`'s review sink names: a launch's, else this manager session's.
+    if [ -z "${ONEFOLLOWUP_HOOKS__OWNER__SESSION:-}" ]; then
+        . "{{repo_root}}/scripts/launcher-session.sh"
+        export ONEFOLLOWUP_HOOKS__OWNER__SESSION="${ONEPIPELINE_LAUNCHER_SESSION:-}"
+    fi
     gathered="${ONEPIPELINE_RUN_ROOT:-}/gathering.json"
     case "${1:-}" in
         --dry-run)

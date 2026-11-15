@@ -36,10 +36,15 @@ def _configuration() -> str:
 
 
 def _follow_up_configuration() -> dict[str, object]:
-    """The follow-up loop's effective configuration, as the pinned `onefollowup` resolves it."""
+    """The follow-up loop's effective configuration, as the pinned `onefollowup` resolves it.
+
+    Under a manager session's owner, which every caller states and without which onefollowup
+    refuses the review sink `onefollowup.yaml` configures.
+    """
     shown = subprocess.run(  # noqa: S603 - the pinned onefollowup over this checkout
         [str(REPO_ROOT / ".venv" / "bin" / "onefollowup"), "config", "show"],
         cwd=REPO_ROOT,
+        env=os.environ | {"ONEFOLLOWUP_HOOKS__OWNER__SESSION": "e2e-manager-session"},
         text=True,
         capture_output=True,
         timeout=60,
@@ -424,7 +429,12 @@ def test_the_follow_ups_board_maps_every_priority_and_the_plans_board_maps_none(
 #: projection the installed CLI resolves. Only fields onefollowup's record writes are
 #: projected, so its copies never blank a field an older record filled. The tracked document
 #: declares no other board; a host's own follow-up trackers are its user layer's.
-RECORD_FIELDS = (("Host", "host"), ("Owning runs", "owning_runs"), ("Verified at", "verified_at"))
+RECORD_FIELDS = (
+    ("Host", "host"),
+    ("Owning runs", "owning_runs"),
+    ("Basis", "basis"),
+    ("Verified at", "verified_at"),
+)
 
 
 def followups_metadata_fields() -> list[dict[str, object]]:
@@ -522,14 +532,15 @@ WRITE_POLICY = {
 }
 WRITE_POLICY_KEYS = tuple(WRITE_POLICY)
 #: Each source the tracked document declares a visibility for: the two boards public, and the
-#: local drafting, follow-up launch and fixture folders private. `drafts` and `examples`
-#: declare none.
+#: local drafting, follow-up draft, follow-up launch and fixture folders private. `examples`
+#: declares none.
 DECLARED_VISIBILITY = {
     "plans": "public",
     "followups": "public",
     "human-public": "public",
     "human-private": "private",
     "authoring": "private",
+    "drafts": "private",
     "follow-up-runs": "private",
     "test-fixtures": "private",
 }

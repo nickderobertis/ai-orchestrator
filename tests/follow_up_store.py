@@ -70,10 +70,12 @@ def isolated(root: Path) -> Store:
                 "write_policy": CHECKOUT_STORE["write_policy"],
                 "default_sources": [follow_up_variables.source()],
                 "sources": {
-                    follow_up_variables.source(): {
-                        "plugin": "local-md",
-                        "config": {"root": ".follow-ups"},
-                    },
+                    # The checkout's drafts source with its root here, so a draft is
+                    # classified as the checkout's own declaration classifies it.
+                    follow_up_variables.source(): CHECKOUT_STORE["sources"][
+                        follow_up_variables.source()
+                    ]
+                    | {"config": {"root": ".follow-ups"}},
                     DESTINATION: {"plugin": "local-md", "config": {"root": "board"}},
                     # The board `onefollowup.yaml` names, as this checkout declares it, so the
                     # settings pointing it at the suite's empty loopback board complete it here

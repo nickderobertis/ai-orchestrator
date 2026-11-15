@@ -142,6 +142,9 @@ sources:
         - field: Owning runs
           key: orchestrator.follow-up
           path: [owning_runs]
+        - field: Basis
+          key: orchestrator.follow-up
+          path: [basis]
         - field: Verified at
           key: orchestrator.follow-up
           path: [verified_at]
@@ -191,6 +194,9 @@ sources:
         - field: Owning runs
           key: orchestrator.follow-up
           path: [owning_runs]
+        - field: Basis
+          key: orchestrator.follow-up
+          path: [basis]
         - field: Verified at
           key: orchestrator.follow-up
           path: [verified_at]

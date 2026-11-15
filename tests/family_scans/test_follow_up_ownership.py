@@ -242,17 +242,37 @@ def test_only_the_named_wrappers_touch_the_follow_up_loop() -> None:
     assert "recipe:follow-ups-answer-comments" in touching
 
 
+#: The one helper a wrapper may source: the definition of which manager session is acting,
+#: whose answer names the owner `onefollowup.yaml`'s review sink hands the engine.
+SOURCED = re.compile(r'^\s*\. "[^"]*/scripts/launcher-session\.sh"$')
+
+
+def _sources_only_the_session_helper(text: str) -> bool:
+    """Whether every line of ``text`` that sources a file sources the session helper."""
+    sourcing = [line for line in _code_lines(text) if re.match(r"^\s*\.\s", line)]
+    return all(SOURCED.match(line) for line in sourcing)
+
+
 @pytest.mark.parametrize("wrapper", sorted(WRAPPERS))
 def test_each_wrapper_runs_only_the_verbs_it_composes(wrapper: str) -> None:
     text = _subjects()[wrapper]
     allowed = WRAPPERS[wrapper] | PLUMBING | {"just", "./scripts/follow-up-draft.sh"}
     allowed |= {"$draft", "$engine", "$onefollowup"} | defined(text)
+    if _sources_only_the_session_helper(text):
+        allowed |= {"."}
 
     ran = commands(text)
 
     assert ran <= allowed, sorted(ran - allowed)
     assert "python" not in text
     assert "orchestrator." not in text
+
+
+def test_a_wrapper_sourcing_anything_but_the_session_helper_is_not_composing() -> None:
+    """Sourcing runs another file's code in the wrapper, so only the session helper may be."""
+    assert _sources_only_the_session_helper('    . "$checkout/scripts/launcher-session.sh"\n')
+    assert not _sources_only_the_session_helper('. "$checkout/scripts/follow-up-logic.sh"\n')
+    assert not _sources_only_the_session_helper(". ./launcher-session.sh\n")
 
 
 def test_the_success_branch_of_the_run_end_hook_only_launches_the_follow_ups_recipe() -> None:
