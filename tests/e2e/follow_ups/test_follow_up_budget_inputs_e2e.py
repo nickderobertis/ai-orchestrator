@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import boundary_home
+import pytest
 import yaml
 from probe_run_root import run_root
 
@@ -291,9 +292,11 @@ def test_an_envelope_that_is_not_onefollowups_is_refused_with_its_repair(tmp_pat
     assert "hooks.batch_preparing" in refused.stderr, refused.stderr
 
 
-def test_a_run_that_landed_nothing_gives_no_inputs(tmp_path: Path) -> None:
+@pytest.mark.parametrize("named", ["unlanded", "unlanded.v2"], ids=["plain", "dotted"])
+def test_a_run_that_landed_nothing_gives_no_inputs(tmp_path: Path, named: str) -> None:
+    """Whatever run id the engine minted, a dotted one included, which the hook holds to none."""
     environment = budgeted_host(tmp_path)
-    run = f"unlanded-{os.getpid()}"
+    run = f"{named}-{os.getpid()}"
     recorded_run(tmp_path / "runs", run, {})
 
     answered = _hook(run, environment)

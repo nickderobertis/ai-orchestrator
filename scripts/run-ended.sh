@@ -59,14 +59,11 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) || fail "this hook 
     "name it by an absolute path in a readable checkout"
 checkout=$(dirname -- "$script_dir")
 
-#: What a run id is: one word of letters, digits, `_` and `-`; the same in every script that
-#: holds one to it, as `tests/family_scans/test_follow_up_ownership.py` holds them.
-RUN_ID='^[A-Za-z0-9_-]+$'
-
+# What a run id is, is the engine's: this hook holds the one it is handed to nothing but being
+# a printable word, because each line it writes names the run and a manager reads them.
 run=${ONEPIPELINE_RUN_ID:-}
 [ -n "$run" ] || fail "ONEPIPELINE_RUN_ID is not set, so there is no run to report on" "$usage"
-# llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
-[[ "$run" =~ $RUN_ID ]] || fail "ONEPIPELINE_RUN_ID '$run' is not a run id: a run id is one word of letters, digits, '_' and '-'" "$usage"
+[[ "$run" != *[[:space:][:cntrl:]]* ]] || fail "ONEPIPELINE_RUN_ID '$run' is not a run id: it carries a space or a control character, which no run id the engine mints does" "$usage"
 
 # Discard every branch the run of this run's plan's `<plan>-spikes` project preserved,
 # reporting each outcome. Nothing it meets ends the hook: a plan whose spikes outlive their
@@ -135,11 +132,10 @@ case "${ONEPIPELINE_HOOK:-}" in
             echo "run-ended: main work of run $run is complete, but 'just follow-ups $run' exited $status, so no follow-up run was launched; the diagnostic above names why, and 'just follow-ups $run' verifies its drafts by hand"
             exit "$status"
         fi
-        # Announced only when the recipe named exactly one follow-up run, spelled as a run id
-        # is; anything else is relayed as the recipe said it.
+        # Announced only when the recipe named exactly one follow-up run, as one printable
+        # word; anything else is relayed as the recipe said it.
         follow_up=$(sed -n 's/^follow-up run: \([^;]*\); watch it with: just watch .*$/\1/p' <<<"$output")
-        # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
-        if [[ "$follow_up" =~ $RUN_ID ]]; then
+        if [ -n "$follow_up" ] && [[ "$follow_up" != *[[:space:][:cntrl:]]* ]]; then
             echo "main work of run $run is complete; follow-ups are being verified in run $follow_up; watch it with: just watch $follow_up"
         else
             printf '%s\n' "$output"

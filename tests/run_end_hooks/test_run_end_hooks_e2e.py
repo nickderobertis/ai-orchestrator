@@ -639,7 +639,7 @@ REFUSALS = (
     Refused(
         {"ONEPIPELINE_HOOK": "failure", "ONEPIPELINE_RUN_ID": "not a run id"},
         2,
-        "ONEPIPELINE_RUN_ID 'not a run id' is not a run id",
+        "ONEPIPELINE_RUN_ID 'not a run id' is not a run id: it carries a space",
     ),
     Refused(
         {
@@ -810,6 +810,27 @@ def test_the_failure_hook_names_every_reason_kind_and_always_exits_zero(
     assert ran.stdout.rstrip().endswith(
         "no follow-up run was launched; verify its drafts by hand with: just follow-ups demo"
     ), ran.stdout
+
+
+def test_the_failure_hook_reports_a_run_whose_id_carries_a_dot(tmp_path: Path) -> None:
+    """A run id is the engine's, so one it mints with a dot is reported like any other."""
+    environment = {"ONEPIPELINE_HOOK": "failure", "ONEPIPELINE_RUN_ID": "release.v2"}
+    document = json.dumps(
+        {
+            "version": 1,
+            "hook": "failure",
+            "run_id": "release.v2",
+            "reason": {"kind": "stopped", "nodes": []},
+        }
+    )
+
+    ran = _hook(tmp_path, environment, document)
+
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert ran.stdout.startswith("run-ended: run release.v2 ended without every node done ")
+    assert ran.stdout.rstrip().endswith(
+        "verify its drafts by hand with: just follow-ups release.v2"
+    )
 
 
 #: What the failure hook's line ends with whatever reason it could read.

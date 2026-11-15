@@ -295,21 +295,24 @@ def test_a_file_outside_the_list_that_touches_the_loop_is_named(tmp_path: Path) 
     assert not touches("orchestrator/new.py", 'ROW = "pypi:onefollowup-cli"\n')
 
 
-#: The scripts that hold a run id to a grammar, each declaring it once as `RUN_ID`.
-RUN_ID_HOLDERS = (RUN_ENDED, "scripts/follow-up-budget-inputs.sh")
-#: A run-id-shaped grammar literal, wherever it is spelled.
-RUN_ID_LITERAL = re.compile(r"\^\[A-Za-z0-9_-\]\+\$")
+#: The follow-up wrappers that are handed a run id, which the engine alone says the shape of.
+RUN_ID_HOLDERS = (RUN_ENDED, "scripts/follow-up-budget-inputs.sh", "scripts/follow-up-draft.sh")
+#: A character-class grammar a script would hold a run id to: a bracket class anchored whole.
+RUN_ID_GRAMMAR = re.compile(r"\^\[[^\]]*A-Za-z[^\]]*\][+*]?(?:\[[^\]]*\][+*])?\$")
 
 
-def test_every_script_holding_a_run_id_states_one_grammar_and_uses_only_it() -> None:
-    """A run id's grammar is declared once per script, identically, and spelled nowhere else."""
-    declared: dict[str, list[str]] = {}
-    for script in RUN_ID_HOLDERS:
-        text = (REPO_ROOT / script).read_text(encoding="utf-8")
-        declared[script] = re.findall(r"^RUN_ID='([^']*)'$", text, re.MULTILINE)
-        assert len(RUN_ID_LITERAL.findall(text)) == 1, (
-            f"{script} must spell a run id's grammar exactly once, as its RUN_ID declaration"
-        )
+def test_no_follow_up_wrapper_holds_a_run_id_to_a_grammar_of_its_own() -> None:
+    """What a run id is, is the engine's: a wrapper restating a grammar refuses ids it mints.
 
-    assert all(len(found) == 1 for found in declared.values()), declared
-    assert len({found[0] for found in declared.values()}) == 1, declared
+    The engine mints run ids with a dot in them, which the grammar these scripts once shared
+    refused, so each passes the id through and lets the engine's own reads refuse a run it
+    does not know.
+    """
+    restated = {
+        script: RUN_ID_GRAMMAR.findall((REPO_ROOT / script).read_text(encoding="utf-8"))
+        for script in RUN_ID_HOLDERS
+    }
+
+    assert not {script: found for script, found in restated.items() if found}, restated
+    assert RUN_ID_GRAMMAR.search("RUN_ID='^[A-Za-z0-9_-]+$'")
+    assert RUN_ID_GRAMMAR.search("'^[A-Za-z0-9_][A-Za-z0-9_-]*$'")

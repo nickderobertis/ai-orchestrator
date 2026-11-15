@@ -50,6 +50,11 @@ class Drafted(NamedTuple):
     record: dict[str, object]
 
 
+# llmlint: ignore-block[tests_mirror_real_usage] An observer member's name is the one
+# `graphs/dag-scope.yaml` gives it, so no launch of this checkout produces a member whose name
+# carries quotes and a space, the identifier this journey must pass through; the journal is
+# written in the engine's own event shape, and everything that reads it — the drafting
+# command, onefollowup and the engine's `monitor` — is real.
 def _recorded_run(runs: Path) -> None:
     """A run the engine reads, its journal holding the observer's two members' events."""
     root = run_root(runs, RUN)
@@ -82,6 +87,9 @@ def _recorded_run(runs: Path) -> None:
     (root / "events.jsonl").write_text(
         "".join(json.dumps(event) + "\n" for event in events), encoding="utf-8"
     )
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
 
 
 @pytest.fixture

@@ -37,14 +37,12 @@ checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd) ||
     fail "the checkout this hook belongs to could not be resolved; name it by its path in a readable checkout, as onefollowup.yaml does, then retry"
 export PATH="$checkout/node_modules/.bin:$checkout/.venv/bin:$PATH"
 
-#: The grammar of a run id, the same in every script that holds one to it, as
-#: `tests/family_scans/test_follow_up_ownership.py` holds them.
-RUN_ID='^[A-Za-z0-9_-]+$'
-
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when onefollowup's own standard-input pipe fails to read, which no journey can produce through the real hook runner.
 envelope=$(cat) ||
     fail "standard input could not be read; run this as onefollowup.yaml's hooks.batch_preparing, which hands it the batch envelope, then retry"
-run=$(jq -er --arg grammar "$RUN_ID" 'select(.schema_version == 1) | .batch | select(type == "string" and test($grammar))' <<<"$envelope") ||
+# The batch is the run's public id, any non-empty string: what a run id is, is the engine's,
+# and the telemetry read below refuses a run it does not know.
+run=$(jq -er 'select(.schema_version == 1) | .batch | select(type == "string" and length > 0)' <<<"$envelope") ||
     fail "standard input is not onefollowup's batch_preparing envelope, {\"schema_version\": 1, \"batch\": \"<run id>\"}; run this as onefollowup.yaml's hooks.batch_preparing, which hands it that"
 runs=${ONEPIPELINE_RUNS_DIR:-$checkout/runs}
 
@@ -54,8 +52,10 @@ telemetry=$(onepipeline telemetry "$run" --changes --json) ||
 changes=$(jq -ce 'if (.changes | type) == "array" then . else error("changes is not a list") end
     | [.changes[] | select(.landing != null)]
     | if all(.[]; (.node | type) == "string" and (.repository | type) == "string" and (.landing | type) == "string")
-      then . else error("a landed change without a node, repository or landing") end' <<<"$telemetry") ||
-    fail "the engine's change telemetry for run '$run' is not the shape this hook reads, {\"changes\": [{\"node\", \"repository\", \"landing\"}]}; adopt the engine config/onepipeline.version names with 'just bootstrap', then retry"
+      then . else error("a landed change without a node, repository or landing") end
+    | if all(.[]; (.change_url | type) == "string" or .change_url == null)
+      then . else error("a change URL that is neither a string nor null") end' <<<"$telemetry") ||
+    fail "the engine's change telemetry for run '$run' is not the shape this hook reads, {\"changes\": [{\"node\", \"repository\", \"landing\", \"change_url\"}]}; adopt the engine config/onepipeline.version names with 'just bootstrap', then retry"
 
 repositories=$(jq -r '.[].repository' <<<"$changes" | sort -u)
 checkouts='{}'

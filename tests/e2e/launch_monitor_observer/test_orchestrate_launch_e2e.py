@@ -411,10 +411,13 @@ def _environment(
     # Every launch through the recipe names the run-end hooks, and the success hook creates
     # and launches the run's follow-up plan over its drafts. So the drafts root and the
     # authoring root are this journey's own, never the real stores of the tree the suite
-    # runs in.
+    # runs in. Both exist, as session setup creates every local root on a host: each is
+    # declared private, so a read asking every private source asks them.
     root_name, plugin_name, command_name = follow_up_variables.all_names()
     environment.pop(command_name, None)
-    environment[root_name] = str(tmp_path / "follow-ups")
+    drafts = tmp_path / "follow-ups"
+    drafts.mkdir(parents=True, exist_ok=True)
+    environment[root_name] = str(drafts)
     environment[plugin_name] = WRITABLE_PLUGIN
     authoring = tmp_path / "plans"
     authoring.mkdir(parents=True, exist_ok=True)

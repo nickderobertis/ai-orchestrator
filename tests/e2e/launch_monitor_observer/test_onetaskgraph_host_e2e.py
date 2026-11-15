@@ -1871,18 +1871,6 @@ def test_the_cache_rules_agents_md_restates_are_the_adopted_stores_and_this_host
     assert pinned == [], f"a store read in orchestrator/ is pinned now: {pinned}"
 
 
-# llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell test: a Python journey
-
-
-# llmlint: ignore-block[budgets_scoped_to_minimal_tree] The budget sits in orchestrator/budgets.yaml beside follow-up-run-points and ticket-lifecycle-points, whose journeys are this module's: all three price the loopback board through tests/github_board.py, and orchestrator:budgets reads the telemetry this project's test target records, an edge orchestrator/project.json states; orchestrator/ holds the package alone, as that budgets file says.  # noqa: E501 - llmlint reads a directive and its reason off one line
-
-
-# llmlint: ignore-end[budgets_scoped_to_minimal_tree]
-
-
-# llmlint: ignore-end[shell_test_tiers_stay_split]
-
-
 @pytest.mark.reads_checkouts
 def test_request_prices_match_the_adopted_stores_table() -> None:
     """Reconcile prices with the registered checkout's adopted tag, fetching nothing."""
@@ -3548,7 +3536,7 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
     (run,) = [
         held
         for held in Path(launching["ONEPIPELINE_RUNS_DIR"]).iterdir()
-        if held.is_dir() and held.name != ITEM_STORE
+        if held.is_dir() and held.name != ITEM_STORE and not held.name.endswith(FOLLOW_UPS_SUFFIX)
     ]
     record = json.loads((run / "launch.json").read_text("utf-8"))
     assert record["require_rendered"] is True, record
@@ -3611,7 +3599,11 @@ def test_a_hand_written_plan_is_refused_by_check_plan_and_at_launch_unless_the_c
         )
     assert not refused_runs, f"a refused launch minted {refused_runs}"
     assert kept.returncode == 0, kept.stdout + kept.stderr
-    (run,) = [held for held in runs.iterdir() if held.is_dir() and held.name != ITEM_STORE]
+    (run,) = [
+        held
+        for held in runs.iterdir()
+        if held.is_dir() and held.name != ITEM_STORE and not held.name.endswith(FOLLOW_UPS_SUFFIX)
+    ]
     record = json.loads((run / "launch.json").read_text("utf-8"))
     assert record.get("require_rendered", False) is False, record
 

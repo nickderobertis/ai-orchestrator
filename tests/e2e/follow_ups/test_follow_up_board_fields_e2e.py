@@ -168,7 +168,7 @@ def _published(root: Path) -> Iterator[Published]:
         )
         # Set up as the operator set up the live board, through the plan-store verb.
         fields = subprocess.run(  # noqa: S603 - this checkout's own recipe
-            ["just", "plans", "sources", "fields", "followups", "--apply"],  # noqa: S607
+            ["just", "plans", "sources", "fields", "followups", "--apply"],  # noqa: S607 - `just` from the search path, as the operator runs it
             cwd=REPO_ROOT,
             env=environment,
             text=True,
@@ -253,7 +253,11 @@ def _published(root: Path) -> Iterator[Published]:
         answers.write_text(json.dumps(held, indent=2) + "\n", encoding="utf-8")
         assert _onefollowup(environment, "check", "--batch", BATCH)["sound"] is True
         sent = _onefollowup(environment, "publish", "--batch", BATCH)
-        assert [o["outcome"] for o in sent["outcomes"]] == ["written", "created"], [  # type: ignore[union-attr]
+        outcomes = sent["outcomes"]
+        assert isinstance(outcomes, list), sent
+        # The earlier ticket's evidence comment, then the new ticket's create; on a refusal,
+        # each receipt's error says what the store refused.
+        assert [outcome["outcome"] for outcome in outcomes] == ["written", "created"], [
             json.loads(line)["outcome"].get("error")
             for line in (store.work / "receipts" / f"{BATCH}.jsonl").read_text("utf-8").splitlines()
         ]
