@@ -581,12 +581,12 @@ def test_the_tracked_configuration_declares_its_drafting_sources_private_and_its
 ):
     """The store's own resolution, read through `config show`, answers each source's visibility.
 
-    The sources a plan is drafted or launched from are declared private, the boards public, and
-    `drafts` declares nothing, which is not private.
+    The sources a plan or a follow-up is drafted or launched from are declared private, and
+    the boards public.
     """
     assert plan_store.declared_private("authoring")
     assert plan_store.declared_private("follow-up-runs")
     assert plan_store.declared_private("test-fixtures")
     assert not plan_store.declared_private("plans")
     assert not plan_store.declared_private("followups")
-    assert not plan_store.declared_private("drafts")
+    assert plan_store.declared_private("drafts")

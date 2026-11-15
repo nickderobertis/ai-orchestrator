@@ -8,11 +8,8 @@
     "type:tests"
   ],
   "implicitDependencies": [
-    "support-boundary-home",
     "support-conftest",
-    "support-fake-codex",
     "support-follow-up-variables",
-    "support-no-paid-provider",
     "support-nx-inputs",
     "support-onejudge-bundle",
     "support-onetaskgraph-user-layer",
@@ -44,7 +41,6 @@
       "{workspaceRoot}/scripts/**/*",
       "{workspaceRoot}/templates/**/*",
       "{workspaceRoot}/orchestrator/**/*",
-      "{workspaceRoot}/tests/fixtures/cycle-time/**/*",
       "{workspaceRoot}/tests/plan_guidance/**/*"
     ]
   },

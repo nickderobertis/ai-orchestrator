@@ -109,8 +109,8 @@ FOLLOW_UP_SETTLE_SECONDS = 300
 CONFIGURED_TITLE = "A developer's own draft, which no test may read"
 ISOLATED_TITLE = "The draft this journey's own launch leaves"
 #: The repository both drafts are about, registered public in a registry of this module's
-#: own: the store classifies a draft by its repository, and the drafts source, which this
-#: host declares no visibility for, refuses one it cannot classify as public.
+#: own: the store classifies a draft by its repository, so both seeds are recorded public, as
+#: a draft about this repository is on any host.
 REPOSITORY = boundary_home.THIS_REPOSITORY
 
 #: The source the follow-up recipes create their plans in.
@@ -186,6 +186,8 @@ def _drafted(drafts: Path, run: str, title: str, registry: Path) -> Path:
         env={
             **boundary_home.environment(None, registry),
             follow_up_variables.root_name(): str(drafts),
+            # The owner the review sink names, as the launching session's launch exports it.
+            "ONEFOLLOWUP_HOOKS__OWNER__SESSION": LAUNCHING_SESSION,
         },
         input=(
             "## What happened\nThe cursor skipped a page.\n\n## Where\n`src/cursor.py`.\n\n"

@@ -90,8 +90,10 @@ nothing written. The tracked document declares the two boards, `plans` and `foll
 and local folders of this machine private: `authoring`, where every plan, design document, spike
 report and budget answer is drafted, so an organization's plan is drafted there like any other,
 and `follow-up-runs`, where the follow-up recipes create their plans, because a task there
-quotes drafts and board comments that may name private work. `drafts` declares no visibility, so a follow-up
-draft naming a private repository is refused there; `examples` declares none either.
+quotes drafts and board comments that may name private work. `drafts` is private too, because
+onetaskgraph records a private draft only on a source declared private and onefollowup leaves
+that declaration to the host: a draft naming a private repository is recorded private there,
+and one about public work public. `examples` declares none.
 `test-fixtures` is private because local journeys include deliberately private projects. Writes
 there are accepted as private; a copy to a public board is screened at that destination.
 Session setup creates every private folder, because an absent root fails a dependency read that
@@ -2007,11 +2009,14 @@ each one's publication checkout, onebudgetspec's per-subject `check`, held to th
 each over result into a `budget-overrun` input and each subject onebudgetspec could not check
 into a `budget-unanswered` one. The verifying agent disposes them like any draft.
 
-**The review item is an upstream gap.** `onefollowup.yaml` names the engine's `onepipeline
-human-items raise --phase follow-up-review` as the `batch_settled` hook, which `settle` runs.
-The engine's `raise --phase` requires a `--context` file that onefollowup's settle does not
-hand it, so it refuses, settle records that exit, and no `follow-up-review` item is raised
-until that gap is closed upstream; `tests/e2e/follow_ups/` holds both halves of it.
+**The review item.** `onefollowup.yaml` names the engine's `onepipeline human-items raise
+--phase follow-up-review --context {context_file}` as the `batch_settled` hook, which `settle`
+runs with the context file it writes: the batch, the tickets it touched, a dedup key, and
+the owner, `hooks.owner.session`. That owner is the launching manager session, which every
+launch and the drafting command export at onefollowup's environment layer,
+`ONEFOLLOWUP_HOOKS__OWNER__SESSION`, and without which onefollowup refuses every verb. The
+item's title and body in `.onepipeline/config.yaml` expand only what that context supplies.
+`tests/e2e/follow_ups/` holds settle running the hook and the engine raising the item.
 
 **Answering comments.** `just follow-ups-answer-comments` creates the `follow-up-comments`
 plan from `templates/follow-up-comments.md.j2` and runs it attached in a flow: `gather`
@@ -3840,8 +3845,8 @@ going.
 * **A follow-up batch's review**: one task per batch, holding nothing, linking every ticket
   the batch created or updated once, grouped by priority with a separate "No priority"
   group, by the engine's `ticket_review` rule. onefollowup's `settle` runs the configured
-  `follow-up-review` hook, which the engine refuses today for the `--context` file settle
-  does not hand it, so none is raised until that upstream gap is closed.
+  `follow-up-review` hook with the context file it writes, naming the batch and its owner,
+  the session that launched it.
 
 **A question is answered by a choice, in the person's own words, or both.** Every question
 a manager puts to the user is a question item, by `AGENTS.md`'s manager-loop rule; one a few

@@ -5,8 +5,9 @@ a batch — verifying, filing, answering — is proven in their own repositories
 
 **Verifying a run's follow-ups.** A real `just orchestrate` run lands one change on each of
 two scratch repositories registered with `onevcs` — one whose `cycle-time` delivery budget
-the change exceeds, one whose budget it keeps within — and its node drafts two follow-ups:
-one through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, one through `just follow-up`. The run ends with
+the change exceeds, one whose budget it keeps within — and its node drafts three follow-ups:
+two through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, one of them about a private repository, and one
+through `just follow-up`. The run ends with
 every node done, so the real success hook, `scripts/run-ended.sh`, runs `just follow-ups`,
 which creates the `follow-ups` plan from `templates/follow-ups.md.j2` and launches it
 detached; its steps are real `onefollowup prepare|check|publish|settle`, its `prepare` runs
@@ -28,12 +29,12 @@ worker and judge, whose turn runs the commit and drafting commands a model would
 `tests/e2e/follow_ups/scripted_agent.py` — the agent's choices, made with the real
 onefollowup and plan-store commands.
 
-**The review item is the known upstream gap.** `onefollowup.yaml` names the engine's
-`onepipeline human-items raise --phase follow-up-review` as the `batch_settled` hook. The
-pinned engine refuses that argv, because `raise --phase` requires a `--context` file that
-onefollowup's settle does not hand it, so no `follow-up-review` item is raised until that is
-fixed upstream. The journey holds the settle step to running the configured hook and to the
-engine's refusal of it, so the day either side moves, this fails and says so.
+**The review item.** `onefollowup.yaml` names the engine's `onepipeline human-items raise
+--phase follow-up-review --context {context_file}` as the `batch_settled` hook, and settle
+hands it the context file it writes, naming the launching manager session as the owner a
+launch exports. The journey holds settle to running that configured hook and the engine to
+raising one review item naming the batch and its ticket, in the item store the engine keeps
+under the journey's own runs root.
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] `xdist_group` selects an xdist
 worker under this project's `--dist loadgroup`, keeping each module-scoped launch on one
@@ -98,10 +99,14 @@ INHERITED = (
     follow_up_store.RUNS_ROOT,
 )
 
-#: The two drafts the run's node writes, and the repository they are about.
+#: The drafts the run's node writes, and the repositories they are about: two about a public
+#: repository, and one about a private repository no registry declares public, which the
+#: store records as private.
 NEW_TITLE = "The listing cursor skips the last page"
 EVIDENCE_TITLE = "The export dialog drops unicode"
+PRIVATE_TITLE = "The private exporter retries forever"
 ABOUT = "github.com/nickderobertis/some-service"
+PRIVATE_ABOUT = "github.com/nickderobertis/private-exporter"
 DRAFT_BODY = (
     "## What happened\nA reader missed results.\n\n## Where\n`src/cursor.py`.\n\n"
     "## Why it is out of scope\nThe run was about something else.\n\n"
@@ -153,8 +158,16 @@ UNCLAIMED_PERSONA = "no-role-claims-this-name"
 #: What the success hook prints once it launched the follow-up run.
 LAUNCHED = re.compile(r"follow-ups are being verified in run (\S+); watch it with: just watch")
 
-#: The engine's refusal of the configured review sink, which the settle step records.
-SINK = ["onepipeline", "human-items", "raise", "--phase", "follow-up-review"]
+#: The configured review sink, as the settle step records running it.
+SINK = [
+    "onepipeline",
+    "human-items",
+    "raise",
+    "--phase",
+    "follow-up-review",
+    "--context",
+    "{context_file}",
+]
 
 
 class Repository(NamedTuple):
@@ -280,8 +293,8 @@ def _repositories(root: Path) -> tuple[Repository, Repository, Path]:
     assert registered.returncode == 0, registered.stdout + registered.stderr
     # Both scratch repositories are public, as a public repository's worker drafts from.
     # onefollowup records the drafting worktree in the draft, and a worktree of a private
-    # repository carries that repository's name, which the store refuses on the drafts
-    # source this host declares no visibility for — the gap drafted upstream to onefollowup.
+    # repository carries that repository's name, which would make every draft written there
+    # private; this journey's private draft is private for what it is about instead.
     public = root / "public.rules.yml"
     public.write_text(
         (root / "over" / "onevcs.rules.yml")
@@ -351,6 +364,9 @@ def _draft_commands(scratch_marker: str, log: Path) -> list[list[str]]:
             '[ -e "$sentinel" ] && exit 0; '
             f'printf %s {body} | "$ORCHESTRATOR_FOLLOW_UP_DRAFT" '
             f"--title {shlex.quote(NEW_TITLE)} --repository {ABOUT} --path src/cursor.py "
+            f"2>>{logged} && "
+            f'printf %s {body} | "$ORCHESTRATOR_FOLLOW_UP_DRAFT" '
+            f"--title {shlex.quote(PRIVATE_TITLE)} --repository {PRIVATE_ABOUT} "
             f"2>>{logged} && "
             f'printf %s {body} | just --justfile {justfile} follow-up "$ONEPIPELINE_RUN_ID" '
             f"--title {shlex.quote(EVIDENCE_TITLE)} --repository {ABOUT} 2>>{logged} "
@@ -520,7 +536,7 @@ def test_the_batch_was_prepared_with_both_drafts_and_exactly_the_one_overrun(
     inputs = _state(verified)["inputs"]
     assert isinstance(inputs, list)
     drafts = sorted(str(entry["title"]) for entry in inputs if entry["source"] == "draft")
-    assert drafts == sorted([NEW_TITLE, EVIDENCE_TITLE]), inputs
+    assert drafts == sorted([NEW_TITLE, EVIDENCE_TITLE, PRIVATE_TITLE]), inputs
 
     overruns = [entry for entry in inputs if entry["source"] == "budget-overrun"]
     assert len(overruns) == 1, inputs
@@ -544,7 +560,7 @@ def test_every_draft_and_the_overrun_carry_one_disposition(verified: Verified) -
     inputs = _state(verified)["inputs"]
     assert isinstance(inputs, list)
     assert sorted(disposed) == sorted(str(entry["id"]) for entry in inputs)
-    assert len(disposed) == len(set(disposed)) == 3
+    assert len(disposed) == len(set(disposed)) == 4
 
 
 @pytest.mark.xdist_group("follow-ups")
@@ -583,22 +599,28 @@ def test_the_existing_ticket_keeps_its_record_and_comments_and_gains_this_runs_e
             [str(REPO_ROOT / ".venv/bin/onefollowup"), "ticket", "validate"]
             + ["--batch", verified.run, EXISTING],
             cwd=REPO_ROOT,
-            env=verified.environment,
+            # The owner a launch exports, which this read outside the run states for itself.
+            env=verified.environment | {"ONEFOLLOWUP_HOOKS__OWNER__SESSION": SESSION},
             text=True,
             capture_output=True,
             check=False,
         )
     finally:
         held.unlink()
+    assert validated.stdout, validated.stderr
     answer = json.loads(validated.stdout)
     assert not [p for p in answer.get("problems", []) if "schema" in str(p)], answer
 
 
 @pytest.mark.xdist_group("follow-ups")
-def test_settle_runs_the_configured_review_sink_and_the_engine_refuses_it_for_its_context(
+def test_settle_runs_the_configured_review_sink_and_the_engine_raises_the_batchs_review(
     verified: Verified,
 ) -> None:
-    """The known upstream gap: no `follow-up-review` item is raised until it is fixed."""
+    """`onefollowup.yaml`'s sink, unmodified, raises one `follow-up-review` item for the batch.
+
+    Read from the item store the engine keeps under this journey's own runs root, through
+    the engine's own listing.
+    """
     log = (
         Path(verified.environment["ONEPIPELINE_RUNS_DIR"])
         / verified.follow_up
@@ -607,7 +629,23 @@ def test_settle_runs_the_configured_review_sink_and_the_engine_refuses_it_for_it
     ).read_text("utf-8")
     settled = json.loads(log[log.index("{") :].split("\n}\n")[0] + "\n}")
     assert settled["hook"]["argv"] == SINK
-    assert settled["hook"]["exit"] == 2
+    assert settled["hook"]["exit"] == 0, log
+
+    listed = _just(verified.environment, "human-items", "list", "--json", "--all", "--full")
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    items = [entry["item"] for entry in json.loads(listed.stdout)]
+    reviews = [item for item in items if "follow-up tickets from batch" in json.dumps(item)]
+    assert len(reviews) == 1, items
+    (review,) = reviews
+    assert review["kind"] == "task", review
+    assert review["owner"]["session"] == SESSION, review
+    assert review["title"] == f"Accept or defer the follow-up tickets from batch {verified.run}"
+    held = json.dumps(review)
+    assert f"follow-up batch {verified.run} filed or updated" in held, review
+    (filed,) = [
+        item for item in (verified.store.board / "tasks").glob("*.md") if item.stem != EXISTING_ITEM
+    ]
+    assert filed.stem in held, review
 
 
 def _replies(case: Verified, item: Path, comment: str) -> int:
@@ -670,6 +708,43 @@ def test_each_draft_names_who_drafted_it_and_where_its_turns_are_read(
     assert manager["run"] == verified.run
     assert manager["author"] == {"kind": "manager", "node": None, "member": None}
     assert manager["transcript"] is None
+
+
+def _stored_draft(case: Verified, title: str) -> dict[str, object]:
+    """The draft recorded for ``title``, as the installed plan store reads it back."""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    shown = subprocess.run(  # noqa: S603 - the installed plan store, as anyone reads a draft
+        [str(REPO_ROOT / ".venv/bin/onetaskgraph"), "--no-interactive", "task", "show"]
+        + [f"{follow_up_variables.source()}:{slug}", "--json"],
+        cwd=case.store.directory,
+        env=case.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    item: dict[str, object] = json.loads(shown.stdout)["items"][0]["item"]
+    return item
+
+
+@pytest.mark.xdist_group("follow-ups")
+def test_a_draft_about_private_work_is_recorded_private_beside_the_public_ones(
+    verified: Verified,
+) -> None:
+    """Both drafted through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, both in the batch's project.
+
+    The store records a draft about a repository no registry declares public as private,
+    which it does only on a source declared private, and leaves one about public work public.
+    """
+    private = _stored_draft(verified, PRIVATE_TITLE)
+    public = _stored_draft(verified, NEW_TITLE)
+
+    assert private["project"] == public["project"] == verified.run, (private, public)
+    assert private["repositories"] == [PRIVATE_ABOUT], private
+    assert private["classification"] == "private", private
+    assert public["repositories"] == [ABOUT], public
+    assert public.get("classification", "public") == "public", public
 
 
 #: The draft the run's monitor writes, after the run, through the same drafting command.

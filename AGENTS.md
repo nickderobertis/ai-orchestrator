@@ -597,9 +597,9 @@ the link to every follow-up issue it created or updated, the drafts it disposed 
 ticket and why, and anything it found that should have been surfaced during the run. Each
 landed change's delivery-budget overrun is one more input the verifying agent disposes; a
 verified miss in an uncovered dimension proposes a general planner-checklist concept and the
-repository's own budget through a plan, never by editing the planner directly. No
-`follow-up-review` item is raised when the plan settles yet, an upstream gap, so relay its
-tickets yourself.
+repository's own budget through a plan, never by editing the planner directly. Its settle
+raises one `follow-up-review` item for your session linking every ticket it touched; relay
+that item, and its tickets, like any other.
 
 **When a run ends any other way**, the failure hook launches nothing. Raise a question item
 asking the user whether to verify its drafts by hand with `just follow-ups <run-id>`, which
