@@ -143,9 +143,15 @@ fi
 
 # The follow-up drafting command every dispatch and the monitor draft with, this checkout's
 # own `scripts/follow-up-draft.sh` over `onefollowup draft`; it reaches a dispatch only by
-# inheritance, so the launch is the last place that can put it there.
+# inheritance, so the launch is the last place that can put it there. Beside it, the owner
+# `onefollowup.yaml`'s review sink names in the context it hands the engine — the launching
+# manager's session, at onefollowup's environment layer — without which onefollowup refuses
+# every verb, a dispatch's draft and a follow-up run's settle among them.
 if [ "$launching" = true ]; then
     export ORCHESTRATOR_FOLLOW_UP_DRAFT="$script_dir/follow-up-draft.sh"
+    if [ -z "${ONEFOLLOWUP_HOOKS__OWNER__SESSION:-}" ] && [ -n "${ONEPIPELINE_LAUNCHER_SESSION:-}" ]; then
+        export ONEFOLLOWUP_HOOKS__OWNER__SESSION="$ONEPIPELINE_LAUNCHER_SESSION"
+    fi
 fi
 
 # Which `onepipeline` every verb runs: the binary `bun.lock` installs from npmjs.com into

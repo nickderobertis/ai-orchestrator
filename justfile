@@ -662,10 +662,9 @@ follow-ups run:
         --var "project=$project" --var "run=$run" --var "batch=$batch" --var "checkout={{repo_root}}" \
         --var "store=$store" --var "task_loader=$loader" --no-interactive \
         --metadata 'onepipeline.schema_version=3' \
-        --metadata "onepipeline.goal={\"text\": \"Verify the follow-ups of run $run\"}" \
-        --metadata 'orchestrator.plan-kind={"kind": "follow-ups", "nodes": ["prepare", "verify", "check", "publish", "settle"]}' >/dev/null
+        --metadata "onepipeline.goal={\"text\": \"Verify the follow-ups of run $run\"}" >/dev/null
     ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off --detach \
-        --label kind=follow-ups --success-hook= --failure-hook= --pr-author-graph= >&2
+        --label kind=follow-ups --launch-config config/onepipeline.workflows.yaml >&2
     printf 'follow-up run: %s; watch it with: just watch %s\n' "$project" "$project"
 
 # Answer people's comments on follow-up tickets through onefollowup:
@@ -713,10 +712,9 @@ follow-ups-answer-comments *args:
                     --var "project=$project" --var "batch=$batch" --var "checkout={{repo_root}}" \
                     --var "feedback=$feedback" --var "task_loader=$loader" --no-interactive \
                     --metadata 'onepipeline.schema_version=3' \
-                    --metadata "onepipeline.goal={\"text\": \"Answer the comments on batch $batch\"}" \
-                    --metadata 'orchestrator.plan-kind={"kind": "follow-ups", "nodes": ["answer"]}' >/dev/null
+                    --metadata "onepipeline.goal={\"text\": \"Answer the comments on batch $batch\"}" >/dev/null
                 ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off \
-                    --label kind=follow-ups --success-hook= --failure-hook= --pr-author-graph= || failed=1
+                    --label kind=follow-ups --launch-config config/onepipeline.workflows.yaml || failed=1
             done <<<"$listed"
             exit "$failed"
             ;;
@@ -729,11 +727,10 @@ follow-ups-answer-comments *args:
                 --template "{{repo_root}}/templates/follow-up-comments.md.j2" --search-path "{{repo_root}}/templates" \
                 --var "project=$project" --no-interactive \
                 --metadata 'onepipeline.schema_version=3' \
-                --metadata 'onepipeline.goal={"text": "Answer the comments on follow-up tickets"}' \
-                --metadata 'orchestrator.plan-kind={"kind": "follow-ups", "nodes": ["gather", "answer", "settle"]}' >/dev/null
+                --metadata 'onepipeline.goal={"text": "Answer the comments on follow-up tickets"}' >/dev/null
             exec ./scripts/onepipeline.sh flow run --name "$project" -- \
                 ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off \
-                --label kind=follow-ups --success-hook= --failure-hook= --pr-author-graph=
+                --label kind=follow-ups --launch-config config/onepipeline.workflows.yaml
             ;;
         *)
             echo "follow-ups-answer-comments: '$1' is not an option; usage: just follow-ups-answer-comments [--dry-run]" >&2

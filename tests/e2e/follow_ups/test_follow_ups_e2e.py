@@ -499,9 +499,10 @@ def _state(case: Verified) -> dict[str, object]:
 
 
 def _results(case: Verified, run: str) -> dict[str, str]:
-    result = json.loads(
-        (Path(case.environment["ONEPIPELINE_RUNS_DIR"]) / run / "result.json").read_text()
-    )
+    """Each node's status, as `just results` folds the detached run's journal."""
+    read = _just(case.environment, "results", run, "--json", seconds=60)
+    assert read.returncode == 0, read.stdout + read.stderr
+    result = json.loads(read.stdout)
     return {str(node["id"]): str(node["status"]) for node in result["nodes"]}
 
 

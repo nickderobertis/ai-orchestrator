@@ -61,10 +61,10 @@ repositories=$(jq -r '.[].repository' <<<"$changes" | sort -u)
 checkouts='{}'
 while IFS= read -r repository; do
     [ -n "$repository" ] || continue
+    # onevcs refuses a repository it has no registration for and a registered checkout that
+    # is gone alike, saying which above; this line names the change and both repairs.
     directory=$(onevcs resolve "$repository" | jq -er '.publication_checkout | select(type == "string" and . != "")') ||
-        fail "onevcs could not resolve the publication checkout of $repository, where run '$run' landed a change; register it with 'just repos-apply', then retry"
-    [ -d "$directory" ] ||
-        fail "the publication checkout onevcs names for $repository, $directory, is not a directory; re-provision it with 'just bootstrap', then retry"
+        fail "onevcs could not resolve the publication checkout of $repository, where run '$run' landed a change (its reason is above); register it with 'just repos-apply', or re-provision a registered checkout that is gone with 'just bootstrap', then retry"
     checkouts=$(jq -c --arg repository "$repository" --arg directory "$directory" \
         '. + {($repository): $directory}' <<<"$checkouts")
 done <<<"$repositories"

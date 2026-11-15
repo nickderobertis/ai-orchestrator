@@ -46,6 +46,7 @@
       "{workspaceRoot}/config/onejudge.base.yaml",
       "{workspaceRoot}/config/onemessagebus.yaml",
       "{workspaceRoot}/config/onepipeline.launch.yaml",
+      "{workspaceRoot}/config/onepipeline.workflows.yaml",
       "{workspaceRoot}/config/onetaskgraph.version",
       "{workspaceRoot}/config/onevcs.releases.yml",
       "{workspaceRoot}/config/onevcs.workspaces.yml",

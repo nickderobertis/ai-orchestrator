@@ -2,10 +2,11 @@
 
 `just follow-up` and `scripts/follow-up-draft.sh` hand onefollowup what the environment and
 their arguments say; before they do, each refuses what it cannot hand on — a missing run, a
-flag given no value, an author it does not know, a monitor that names no member, a run the
-engine names no public id for, and the provenance the manager's recipe decides itself — with
-a diagnostic saying what to do. Each case runs the real recipe or script with the real engine
-over a runs root of the test's own.
+flag given no value, an author it does not know, a monitor that names no member, a draft no
+manager session owns, a run the engine names no public id for, and the provenance the
+manager's recipe decides itself — with a diagnostic saying what to do. Each case runs the real
+recipe or script with the real engine over a runs root of the test's own, as a manager
+session does unless the case says otherwise.
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ class Refusal(NamedTuple):
     argv: list[str]
     status: int
     says: str
+    #: Whether a manager session is in the environment, as one is wherever a manager runs.
+    session: bool = True
 
 
 CASES = {
@@ -47,6 +50,12 @@ CASES = {
     "draft-monitor-no-member": Refusal(
         [str(DRAFT), "--as", "monitor", "--run", "some-run", *DRAFTED], 2, "names its member"
     ),
+    "draft-no-session": Refusal(
+        [str(DRAFT), "--as", "manager", "--run", "some-run", *DRAFTED],
+        2,
+        "no manager session is named",
+        session=False,
+    ),
     "draft-unknown-run": Refusal(
         [str(DRAFT), "--as", "manager", "--run", "never-launched", *DRAFTED],
         2,
@@ -62,8 +71,11 @@ def test_a_drafting_wrapper_refuses_what_it_cannot_hand_on(case: str, tmp_path: 
         name: value
         for name, value in os.environ.items()
         if name not in ("ONEPIPELINE_RUN_ID", "ONEPIPELINE_NODE_ID")
+        and not name.startswith("ONEFOLLOWUP_")
     }
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
+    if refusal.session:
+        environment["CLAUDE_CODE_SESSION_ID"] = "e2e-wrapper-refusals"
 
     ran = subprocess.run(  # noqa: S603 - this checkout's own recipe and drafting command
         refusal.argv,

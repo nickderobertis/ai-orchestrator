@@ -266,7 +266,10 @@ def test_a_publication_checkout_that_is_gone_fails_the_hook_naming_it(tmp_path: 
 
     assert answered.returncode == 2, answered.stderr
     assert answered.stdout == ""
-    assert OVER in answered.stderr and "just bootstrap" in answered.stderr, answered.stderr
+    # onevcs refuses the checkout that is gone, and the hook names the change and the repair.
+    assert "that directory does not exist" in answered.stderr, answered.stderr
+    assert f"could not resolve the publication checkout of {OVER}" in answered.stderr
+    assert "just bootstrap" in answered.stderr, answered.stderr
 
 
 def test_an_envelope_that_is_not_onefollowups_is_refused_with_its_repair(tmp_path: Path) -> None:

@@ -65,6 +65,7 @@
       "{workspaceRoot}/scripts/launcher-session.sh",
       "{workspaceRoot}/scripts/onepipeline.sh",
       "{workspaceRoot}/config/onepipeline.launch.yaml",
+      "{workspaceRoot}/config/onepipeline.workflows.yaml",
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
       "{workspaceRoot}/scripts/require-provisioned.sh",

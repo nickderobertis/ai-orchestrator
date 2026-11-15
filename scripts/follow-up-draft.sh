@@ -88,13 +88,27 @@ case "$author" in
     *) echo "follow-up-draft: --as is node, monitor or manager, not '$author'; usage: $usage" >&2; exit 2 ;;
 esac
 
+# The owner `onefollowup.yaml`'s review sink names, without which onefollowup refuses every
+# verb: what a launch exported, else the manager session this process runs in, as
+# `scripts/launcher-session.sh` answers it for every launch.
+if [ -z "${ONEFOLLOWUP_HOOKS__OWNER__SESSION:-}" ]; then
+    # shellcheck source=scripts/launcher-session.sh
+    # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+    . "$checkout/scripts/launcher-session.sh"
+    [ -n "${ONEPIPELINE_LAUNCHER_SESSION:-}" ] || {
+        echo "follow-up-draft: no manager session is named: draft from a dispatch of a run a manager session launched, or from that session itself, whose session id names the owner of the batch's review item; usage: $usage" >&2
+        exit 2
+    }
+    export ONEFOLLOWUP_HOOKS__OWNER__SESSION="$ONEPIPELINE_LAUNCHER_SESSION"
+fi
+
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only in a checkout whose provisioning removed a pinned tool; a journey that deleted one would break every other test sharing this checkout's install.
 for tool in "$engine" "$onefollowup"; do
     [ -x "$tool" ] || { echo "follow-up-draft: $tool is not installed; provision this checkout with 'just bootstrap', then retry" >&2; exit 2; }
 done
 
 # The batch is the run's public id as the engine reads it, any non-empty string.
-# llmlint: ignore[changed_behavior_has_e2e] The engine names a public id other than the run id only for a run whose id carries a private repository's term, and a draft into such a run carries that id in its transcript stamp, which the store refuses on the drafts source this host declares no visibility for (the onefollowup gap drafted upstream); no journey can land one until that is fixed, and the journeys hold this read where the two ids agree.
+# llmlint: ignore[changed_behavior_has_e2e] The engine names a public id other than the run id only for a run whose id carries a private repository's term, which no journey's run id does: each is named for its own case, so the journeys hold this read where the two ids agree.
 batch=$("$engine" status "$run" --json | jq -er '.public_id | select(type == "string" and length > 0)') || {
     echo "follow-up-draft: the engine named no public id for run '$run', so there is no batch to draft into; check the run with 'just status $run', then retry" >&2
     exit 2
