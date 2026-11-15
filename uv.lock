@@ -42,7 +42,7 @@ requires-dist = [
     { name = "oneharness-cli", specifier = "==0.26.1" },
     { name = "onejudge", specifier = "==0.23.1" },
     { name = "onemessagebus-cli", specifier = "==0.11.1" },
-    { name = "onetaskgraph-sdk", specifier = "==0.14.15" },
+    { name = "onetaskgraph-sdk", specifier = "==0.14.16" },
     { name = "onevcs-cli", specifier = "==0.67.0" },
     { name = "pyyaml", specifier = "==6.0.3" },
 ]
@@ -432,26 +432,26 @@ wheels = [
 
 [[package]]
 name = "onetaskgraph-cli"
-version = "0.14.15"
+version = "0.14.16"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3a/39/8cb225732861884be6aa1f00ef3e12f02f221712bfdb17e6066664bbbb5d/onetaskgraph_cli-0.14.15-py3-none-macosx_11_0_arm64.whl", hash = "sha256:e4b78a5627a52c6f4b1fc61e0164456c1640d36f261628a1533590234398dd15", size = 17177533, upload-time = "2026-11-13T23:18:14.463Z" },
-    { url = "https://files.pythonhosted.org/packages/d5/6f/95cb845ea8d2b1d91259f8d75efca45db6698d582dca822058c0c17f4f2f/onetaskgraph_cli-0.14.15-py3-none-manylinux_2_39_aarch64.whl", hash = "sha256:a238af9d32e99b22fcd412ac2ad7ea5abb6aba824d5af81f1ffe20688b71a686", size = 22281365, upload-time = "2026-11-13T22:39:43.398Z" },
-    { url = "https://files.pythonhosted.org/packages/eb/a9/06384a7a36cc81a056cec3cb5154b4f2b391f3bd263f4a1dfc1b3704e4da/onetaskgraph_cli-0.14.15-py3-none-manylinux_2_39_x86_64.whl", hash = "sha256:84c26f77cbcaf84d416b909b879fc63445ab24346a8ad9bf8cf63e8bc2620d95", size = 23337269, upload-time = "2026-11-13T22:41:37.941Z" },
-    { url = "https://files.pythonhosted.org/packages/3b/fc/b261db1259d52854478aa323ec74f65c4261bd956ed0f2c4a8e1859853cc/onetaskgraph_cli-0.14.15-py3-none-win_amd64.whl", hash = "sha256:42cf7380946a53cf5f5a3a64d7a059cf7c2f2aecb390727e0e1045b2b3276f39", size = 19457569, upload-time = "2026-11-13T22:45:50.306Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/5b/a339e60a33816590d0893ab693eb2e72f9331aa353f7436050f9c2d17a0f/onetaskgraph_cli-0.14.16-py3-none-macosx_11_0_arm64.whl", hash = "sha256:9e34b008f160e79404528f563234cc3d3d36a2c5f035baaf63f97362e43b62c0", size = 17186123, upload-time = "2026-11-14T05:34:22.884Z" },
+    { url = "https://files.pythonhosted.org/packages/38/4d/3948a5320951d9be781c37f8ea6abd141a92d7e27b53f3943ff9e9ba68dd/onetaskgraph_cli-0.14.16-py3-none-manylinux_2_39_aarch64.whl", hash = "sha256:27baa45d3038630d2bd0e7bbf58a3bcecdccfda8846afa6a4ca7cf29a755df89", size = 22284373, upload-time = "2026-11-14T05:32:02.91Z" },
+    { url = "https://files.pythonhosted.org/packages/98/e6/ebce9c1c09fb94fecc523c2087e0c8cadda9fe87d5c7d0758a2914ac8fde/onetaskgraph_cli-0.14.16-py3-none-manylinux_2_39_x86_64.whl", hash = "sha256:f77a7f703d3739f278f69543e779a64dd385628385b13f8cb444918b904647ef", size = 23353996, upload-time = "2026-11-14T05:32:22.836Z" },
+    { url = "https://files.pythonhosted.org/packages/03/21/e38e229458058c234c25c27a0843f07c7af242ac1ae88649fbf4d521a9da/onetaskgraph_cli-0.14.16-py3-none-win_amd64.whl", hash = "sha256:0e8f91a0dbc80a58732c3fffa535bdec77820a5c39c0095abe5daf930277a85a", size = 19474129, upload-time = "2026-11-14T05:36:21.448Z" },
 ]
 
 [[package]]
 name = "onetaskgraph-sdk"
-version = "0.14.15"
+version = "0.14.16"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "onetaskgraph-cli" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c4/14/7df4e0689b603d9c44872c0431fd7bf15e1cf7faa2eddbc021211bd812d9/onetaskgraph_sdk-0.14.15.tar.gz", hash = "sha256:2fc7cd7ded5c462ec2eff24f0beb68b438637520063f1144b85d793e3b53984b", size = 244460, upload-time = "2026-11-13T23:24:53.617Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/39/9c5aa250fa6d146e24872c8eefcb9ce03eb64a635495e9f906e8f8f350c0/onetaskgraph_sdk-0.14.16.tar.gz", hash = "sha256:76ef191e5e5417a1ca7d3a858f385cfa1c810370bd88dd7d59c4f21d42eda6ec", size = 245290, upload-time = "2026-11-14T05:43:34.666Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/05/7c/dc873c91ee000e6def1dc42e9553761a86f52b87b5226f67918de20120ea/onetaskgraph_sdk-0.14.15-py3-none-any.whl", hash = "sha256:55238428844ce0a4ae6626cd286e467ce121b0e4f0129e53e88fb46f7abb2342", size = 233358, upload-time = "2026-11-13T23:24:52.241Z" },
+    { url = "https://files.pythonhosted.org/packages/15/82/a6c83501a6b67958e7e0de70c188487a70404be787f2d66a2331ecefb270/onetaskgraph_sdk-0.14.16-py3-none-any.whl", hash = "sha256:6541ddb0eb3fe98e81909919cf038ac8a568f6c1f6817bbaca747b544a3bf67f", size = 233358, upload-time = "2026-11-14T05:43:33.28Z" },
 ]
 
 [[package]]

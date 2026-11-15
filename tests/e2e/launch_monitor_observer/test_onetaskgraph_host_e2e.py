@@ -98,7 +98,12 @@ from github_board import (
     planted_comment,
     written_drafts,
 )
-from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask, TaskDetail
+from onetaskgraph_sdk import (
+    CopyReport,
+    ProjectAttestationCheck,
+    QueryResponseOfQualifiedTask,
+    TaskDetail,
+)
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
 from plan_store_pin import (
     PACING_FLOOR,
@@ -1313,6 +1318,122 @@ def test_a_copy_onto_the_board_reports_what_it_spent(tmp_path: Path) -> None:
     assert any(entry["budget"] == "graphql" for entry in budgets), (
         f"a board copy spends the GraphQL budget, and its report names only {budgets}"
     )
+
+
+#: The plan the review-through-a-copy journey authors: one task depending on the other, as
+#: every real plan's tasks do, and the attestation its review records on each.
+REVIEWED_PROJECT = _ProjectId("reviewed")
+REVIEWED_UPSTREAM = "feat: upstream"
+REVIEWED_DOWNSTREAM = "feat: downstream"
+REVIEW_KIND = "plan-review"
+REVIEW_BAR = "plan-bar-fingerprint"
+
+
+def _review_states(environment: dict[str, str], project: str) -> dict[str, str]:
+    """Each task of ``project`` mapped to what `project attestation check --tasks` answers.
+
+    Read without `_store`'s exit assertion, because the check exits 3 whenever a record is
+    not valid, and that answer — each state and its reason — is what a failure has to show.
+    """
+    checked = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            *("project", "attestation", "check", project),
+            *("--kind", REVIEW_KIND, "--bar", REVIEW_BAR, "--tasks", "--json"),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert checked.returncode in (0, 3), checked.stdout + checked.stderr
+    report = ProjectAttestationCheck.model_validate_json(checked.stdout)
+    return {
+        entry.id.root: entry.state.value + (f" ({entry.reason.value})" if entry.reason else "")
+        for entry in report.tasks
+    }
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The edge this journey runs
+# behind is the one every board journey in this module already pays — the installed
+# plan-store CLI against the module's loopback board, in `launch-monitor-observer:test` —
+# and the task adopting the store this proves names this module as its home; re-homing
+# the module's journeys is enforcement configuration this change may not move.
+def test_a_plan_review_stays_valid_on_the_board_copy_of_a_task_with_a_dependency(
+    tmp_path: Path,
+) -> None:
+    """A task's `plan-review` survives the copy that puts its plan on the board.
+
+    The launch gate refuses a task whose plan review is not valid, and onetaskgraph 0.14.15
+    voided the review of every task with a dependency once the plan was copied onto the
+    board, because the copy renumbers the dependency edge the digest covers — so every real
+    plan was refused at launch. Driven through the installed `.venv/bin/onetaskgraph`: the
+    review is attested on both tasks of an authoring plan, the plan is copied with its
+    documents onto the loopback GitHub Projects board, and the copy is checked.
+    """
+    write_plan_project(
+        tmp_path,
+        {
+            "schema_version": 3,
+            "name": REVIEWED_PROJECT,
+            "tasks": [
+                {
+                    "id": "upstream",
+                    "persona": "engineer",
+                    "title": REVIEWED_UPSTREAM,
+                    "task": "## What\nBuild the base.\n",
+                },
+                {
+                    "id": "downstream",
+                    "persona": "engineer",
+                    "title": REVIEWED_DOWNSTREAM,
+                    "deps": ["upstream"],
+                    "task": "## What\nBuild on the base.\n",
+                },
+            ],
+        },
+    )
+    authored = f"{AUTHORING_SOURCE}:{REVIEWED_PROJECT}"
+    with _serving_board() as remote:
+        environment = _plan_environment(tmp_path)
+        environment.update(remote)
+        # How fast a copy writes is the pacing journey's subject, not this one's.
+        environment["ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = "0"
+        tasks = _listed(environment, "--project", authored)
+        assert len(tasks) == 2, tasks
+        for task in tasks:
+            _store(
+                environment,
+                *("task", "attest", task, "--kind", REVIEW_KIND),
+                *("--by", "plan-review judge", "--bar", REVIEW_BAR),
+            )
+        assert set(_review_states(environment, authored).values()) == {"valid"}
+
+        report = CopyReport.model_validate_json(
+            _store(environment, "project", "copy", authored, "--to", "plans", "--documents")
+        )
+        placed = {
+            outcome.root.source.root: outcome.root.destination.root
+            for outcome in report.items
+            if getattr(outcome.root, "destination", None) is not None
+        }
+        board_project = placed[authored]
+        upstream, downstream = (
+            placed[task] for task in sorted(tasks, key=lambda task: "downstream" in task)
+        )
+        # The edge reached the board, so the digest the copy is checked against covers one.
+        edges = _store(environment, "task", "deps", downstream)
+        assert upstream in edges, f"the copy of {downstream} carries no edge to {upstream}: {edges}"
+
+        on_board = _review_states(environment, board_project)
+
+    assert on_board == {upstream: "valid", downstream: "valid"}, (
+        f"the board copy of {authored} answers {on_board} where both reviews must stay valid"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 #: The project, task and metadata value the native-query journey files, named once so the
