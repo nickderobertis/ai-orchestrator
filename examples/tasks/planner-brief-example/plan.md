@@ -387,29 +387,22 @@ escalated warning about it in their own task and failed anyway. A bar finished w
 cannot clear teaches everyone to route around the thing that enforces quality; the
 property above is what that demand was serving, and it is what survives.
 
-### State the bar in `## Acceptance criteria`, not only here
+### These notes are part of the bar, and proof is proportionate
 
-A judge reads this node's `## Acceptance criteria` and its own review bar. Where the
-criteria are silent about something the bar demands, it imports the demand and applies its
-own reading of it — and finished, gate-green work has been failed twice that way: once for
-running the gate's parts separately, and once for never having *"provided a final verified
-completion report"*, a demand in neither the task nor the shared completion clause.
+These notes are part of every task's bar as written: a judge holds the dispatch to them
+whether or not its `## Acceptance criteria` repeat them, so a plan never restates them as
+criteria, and the criteria add only the proof specific to that node.
 
-So every demand this node will be held to is stated as a criterion of its own, including
-the two the bar makes of every implementation dispatch:
-
-- the behavior this node adds is **proven end to end** by a test or journey that drives the
-  real interface, rather than by inspection;
-- every claim the dispatch makes about the finished work — what it verified, and the
-  evidence for it — is **true of the tree as it finally stands**.
-
-Criteria state properties of the finished tree; the commands that produce them belong in
-this section. Whether the criteria answer every demand their own bar — or this appendix —
-makes of them is read by `just review-plan <source:project>`, which spends a judged turn
-on it and judges it by meaning: criteria that state a demand in their own words answer it,
-and no criterion is refused for failing to use a particular phrase. Nothing reads it
-deterministically any more, because the phrase matching that did refused wordings the same
-review had just asked for.
+**Prove a change by what it leaves behind, and never by inspection alone.** Durable
+behaviour — anything that runs again, or that something relies on after the change lands,
+so a regression would harm the product owner — gets a committed, realistic test driving
+the real interface without mocking the layer under test. One-off or point-in-time work — a
+one-time data fix or backfill, a cutover, a pin adoption with no local reader to change, a
+measurement, a check of current state — is proved by commands run once inside the
+dispatch, their output quoted in its report for the judge to read. A test's cost weighs
+against committing it: its runtime, the code it adds, its maintenance and its flakiness,
+and the costlier it is, the further the choice leans to one-off proof. A schema migration
+that replays on every fresh database is durable; a one-time data backfill is not.
 
 ## The plan checklist this plan is judged against
 
@@ -445,12 +438,12 @@ that project will depend on. A plan that states nothing a rule could judge
 makes that rule not relevant; never report a rule against a file only because
 the repository it describes is not visible to you.
 
-Who ruled on a decision does not settle it. A decision the plan records as the
-manager's ruling, an answer to the planner's question or an exception the manager
-accepted, is judged against every rule like anything the planner chose. Only a
-decision the plan attributes to the user's own words is exempt: the user's ruling
-binds, so never report a violation in what the plan records as the user's own
-words, quoted or attributed to the user in its **Decided** or **Requested** part.
+Never report a violation in a decision the plan records as a manager ruling together
+with its ruling reference: the plan's reviewer judges that ruling against these rules
+and declines one it finds wrong to the manager. A ruling recorded without its
+reference has no such exemption. Never report one in what the plan records as the
+user's own words, quoted or attributed to the user in its **Decided** or
+**Requested** part: the user's ruling binds.
 
 ### The rules
 
@@ -621,12 +614,19 @@ outside it.
 
 Judged when the task document has an `## Acceptance criteria` section.
 
-#### `plan_criteria_require_realistic_tests`
+#### `plan_criteria_require_realistic_proof`
 
-true when every criterion asking for proof of behaviour requires a test that drives
+true when every criterion asking for proof fits it to the work. Proof of durable
+behaviour, which is exercised again or depended on once landed (a schema migration
+replayed on each fresh database among it), requires a committed test that drives
 the real interface the behaviour is reached by, doubling at most a paid, external or
 third-party boundary, and asserts the behaviour itself rather than internal state or
-a snapshot of output.
+a snapshot of output. Proof of one-off or point-in-time work (data fixes and
+backfills done once, cutovers, a pin adopted where no local reader changes,
+measurements, current-state checks) asks for, or accepts, commands run once whose
+output the dispatch reports; the more a test would cost in runtime, code,
+maintenance or flakiness, the more that proof fits. false when a criterion demands a
+committed test for one-off work, or accepts proof by inspection alone.
 
 Judged when the task's acceptance criteria ask for a test or other proof of behaviour.
 

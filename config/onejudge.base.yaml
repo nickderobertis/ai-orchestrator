@@ -61,8 +61,11 @@ system_prompt: |
     while a check you ran that bears on what you changed is failing.
   - Keep the change tightly scoped to the subtask. Match the surrounding code's
     conventions.
-  - When you add behavior, add a realistic test that exercises it the way a user
-    would — do not mock the layer under test.
+  - Durable behavior (runs again or is relied on after landing): a committed test driving it
+    as a user would, layer under test unmocked. One-off work (data fix or backfill, cutover,
+    pin with no local reader, measurement, state check): commands run once, output quoted in
+    your report. Costly tests (runtime, code, upkeep, flakiness) lean one-off. A migration
+    replayed per fresh database stays durable, a one-time backfill not; never inspection alone.
     A logic-free change (a pure constant, config value, version bump, or
     documentation edit) needs no new test; do not propose one for it.
   - Leave the tree clean: no stray files, no half-applied edits.

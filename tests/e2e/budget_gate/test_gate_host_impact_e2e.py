@@ -18,7 +18,8 @@ llmlint: ignore-file[e2e_not_mocked] The journeys run short gate commands in pla
 the complete `just gate`, because running the real gate inside a test is a second gate
 run, which this plan's constraints forbid and ai-orchestrator#1164 already rejected for
 gate-time; the plan recorded the same departure under its checklist's
-`plan_criteria_require_realistic_tests`, a rule configured for plans only. Everything
+`plan_criteria_require_realistic_tests` (since renamed
+`plan_criteria_require_realistic_proof`), a rule configured for plans only. Everything
 under test — the recorder, the hook step, onebudgetspec, a real nested pytest session —
 is real, and every publishing push runs the real gate through it.
 

@@ -37,7 +37,7 @@ BUDGETS_DOC = "docs/budgets.md"
 #: properties, a task names its unit, and a checklist budget has its owner.
 NEW_RULES = (
     "plan_criteria_satisfiable_inside_the_dispatch",
-    "plan_criteria_require_realistic_tests",
+    "plan_criteria_require_realistic_proof",
     "plan_workload_states_numbers",
     "plan_ten_x_names_a_covering_budget",
     "plan_budget_command_measures_its_figure",
@@ -68,7 +68,7 @@ FRAGMENT_RULES = (
 #: Read against the bar lower-cased with its whitespace collapsed.
 MOVED_FROM_THE_BAR = {
     "plan_criteria_satisfiable_inside_the_dispatch": ("inside its own dispatch",),
-    "plan_criteria_require_realistic_tests": ("mock", "internal state", "snapshot"),
+    "plan_criteria_require_realistic_proof": ("mock", "internal state", "snapshot"),
     "plan_workload_states_numbers": ("with numbers",),
     "plan_ten_x_names_a_covering_budget": ("10×", "10x"),
     "plan_budget_command_measures_its_figure": ("no command checks",),
@@ -99,12 +99,61 @@ STAYS_IN_THE_BAR = {
     ),
     "a target quietly loosened": "a requested target quietly loosened rather than escalated",
     "an unrecorded exception": "reject an exception only when it is **unrecorded**",
-    "a manager's ruling judged on its merits": "**a manager's ruling is judged on its merits.**",
+    "a plan never refused for following a manager ruling": (
+        "**a plan is never refused for following a manager ruling.**"
+    ),
+    "a ruling judged wrong declined to the manager": (
+        "run the decline command your instructions name with the ruling's reference and a "
+        "concrete reason it fails the user's goal"
+    ),
+    "a disagreement without a concrete reason not raised": (
+        "a disagreement with no concrete reason is not raised at all"
+    ),
+    "a ruling without its reference refused on that alone": (
+        "inside a run, a manager ruling recorded without its reference is refused on that "
+        "missing prerequisite alone, the finding naming exactly which ruling lacks it"
+    ),
+    "outside a run the verdict names, quotes and reasons": (
+        "your printed verdict is the only route: it names the ruling, quotes it and gives the "
+        "concrete reason"
+    ),
+    "the notes are part of every task's bar": (
+        "a task is never refused for not restating one of their demands"
+    ),
+    "the flow owns its later stages": (
+        "**what the planning flow does after the planner settles is the flow's, never the "
+        "planner's**"
+    ),
     "only the user's own words exempt": (
         "only a decision the plan attributes to the user's own words"
     ),
     "the acceptance standard": "accept nothing until all six hold",
 }
+#: What the bar said when a manager ruling was a ground for refusal, held absent: one plan
+#: bounced five times on a ruling whose disagreement never reached the manager.
+RULING_REFUSAL_RETIRED = (
+    "being ruled does not make it right",
+    "a manager's ruling is judged on its merits",
+    "a manager's ruling included, holds up on its merits",
+)
+#: Each later stage of the planning flow the bar names as the flow's, and the planner's own
+#: check beside them.
+FLOW_STAGES = (
+    "running the spikes",
+    "finalizing the plan from their reports",
+    "`onepipeline plan check`",
+    "`review-plan`'s judged review and its attestations",
+    "the design document",
+    "the board copy",
+    "the user's approval",
+    "`just check-plan` after each create or regenerate",
+)
+#: What the planner's prompt said when it asked a planner to restate the notes' demands.
+RESTATEMENT_ASKED = (
+    "owes, in that list, the checks",
+    "nothing outside that list will state a verification demand",
+)
+
 #: The invariant of each rule the checklist applies, as the planner's instructions have
 #: stated it in their own words: a pointer names the rule and leaves the invariant to the
 #: checklist, so none of these belongs in `system_prompt` or `docs/budgets.md`. Read against
@@ -117,7 +166,7 @@ RESTATEMENTS = {
         "what that dispatch controls",
         "turns on an external event",
     ),
-    "plan_criteria_require_realistic_tests": (
+    "plan_criteria_require_realistic_proof": (
         "the way a user reaches it",
         "the real interface",
         "layer under test",
@@ -307,3 +356,47 @@ def test_the_planner_is_told_the_facts_the_completeness_rules_ask_for(fact: str)
     assert fact in _flat(_persona()["system_prompt"]), (
         f"{PERSONA}'s `system_prompt` no longer tells a planner to state {fact!r}"
     )
+
+
+@pytest.mark.parametrize("retired", RULING_REFUSAL_RETIRED)
+def test_the_bar_no_longer_makes_a_manager_ruling_a_ground_for_refusal(retired: str) -> None:
+    for field in ("persona", "done_when"):
+        assert retired not in _flat(str(_persona()["user"][field])), (
+            f"{PERSONA}'s `user.{field}` says {retired!r} again, which refuses a plan for "
+            "following a manager ruling instead of raising the disagreement to the manager"
+        )
+
+
+def test_the_completion_clause_states_how_a_ruling_disagreement_reaches_the_manager() -> None:
+    done_when = _flat(str(_persona()["user"]["done_when"]))
+    for stated in (
+        "no part of the plan is refused for following a manager ruling",
+        "declines it through the decline command its instructions name",
+        "reference and a concrete reason",
+        "names the ruling in its printed verdict, quotes it and gives that reason",
+        "recorded without its reference is refused on that prerequisite alone, naming the ruling",
+        "the user's own words binds and is exempt",
+    ):
+        assert stated in done_when, f"{PERSONA}'s `user.done_when` no longer says {stated!r}"
+
+
+@pytest.mark.parametrize("stage", FLOW_STAGES)
+def test_the_bar_names_each_later_stage_the_planning_flow_owns(stage: str) -> None:
+    assert _flat(stage) in _bar(), (
+        f"{PERSONA}'s `user.persona` no longer names {stage!r} among what the planning flow "
+        "owns, so a reviewer may demand it of the planner"
+    )
+
+
+@pytest.mark.parametrize("asked", RESTATEMENT_ASKED)
+def test_the_planners_prompt_no_longer_asks_for_the_notes_restated(asked: str) -> None:
+    assert asked not in _flat(_persona()["system_prompt"]), (
+        f"{PERSONA}'s `system_prompt` asks a planner to restate the operational notes' "
+        f"demands again ({asked!r}); they are part of every task's bar as written"
+    )
+
+
+def test_the_planners_prompt_records_every_manager_rulings_reference_in_decided() -> None:
+    assert "with every manager ruling's reference beside it" in _flat(
+        _persona()["system_prompt"]
+    ), f"{PERSONA}'s `system_prompt` no longer records a manager ruling's reference in Decided"

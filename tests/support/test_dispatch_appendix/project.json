@@ -9,6 +9,8 @@
     "testSupport": [
       "{workspaceRoot}/tests/test_dispatch_appendix.py",
       "{workspaceRoot}/personas/planner.yaml",
+      "{workspaceRoot}/config/onejudge.base.yaml",
+      "{workspaceRoot}/config/plan-checklist.llmlint.yml",
       "{workspaceRoot}/scripts/onepipeline.sh",
       "{workspaceRoot}/orchestrator/host_installs.py",
       "{workspaceRoot}/orchestrator/npm_installs.py",

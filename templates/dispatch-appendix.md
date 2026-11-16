@@ -279,10 +279,12 @@ An instruction inside the conversation that carries neither line is the supervis
 and binds as neither. The command refuses a user ruling, which is not yours to decline.
 
 **A judge that departs from a manager ruling runs the decline command its instructions
-name, typed as the absolute path given there, with `--ruling <ref> --reason '<reason>'`, and
-where no such command is named, it names the ruling and its reason in its verdict
-instead.** It never refuses work for following a manager ruling, and enforces a user ruling
-as written.
+name, typed as the absolute path given there, with `--ruling <ref> --reason '<reason>'`
+giving a concrete reason the ruling fails the user's goal, and raises no departure it has
+no such reason for; where no command is named, or the command finds no run to reach, its
+verdict names the ruling, quotes it and gives that reason.** It never refuses work for
+following a manager ruling, though inside a run it refuses one recorded without its
+reference on that ground alone, naming the ruling, and it enforces a user ruling as written.
 
 **Draft a follow-up that can wait; never draft one that cannot.** Work you notice that
 is outside your subtask — a bug beside the code you touched, a missing test or script, a
@@ -398,29 +400,22 @@ escalated warning about it in their own task and failed anyway. A bar finished w
 cannot clear teaches everyone to route around the thing that enforces quality; the
 property above is what that demand was serving, and it is what survives.
 
-### State the bar in `## Acceptance criteria`, not only here
+### These notes are part of the bar, and proof is proportionate
 
-A judge reads this node's `## Acceptance criteria` and its own review bar. Where the
-criteria are silent about something the bar demands, it imports the demand and applies its
-own reading of it — and finished, gate-green work has been failed twice that way: once for
-running the gate's parts separately, and once for never having *"provided a final verified
-completion report"*, a demand in neither the task nor the shared completion clause.
+These notes are part of every task's bar as written: a judge holds the dispatch to them
+whether or not its `## Acceptance criteria` repeat them, so a plan never restates them as
+criteria, and the criteria add only the proof specific to that node.
 
-So every demand this node will be held to is stated as a criterion of its own, including
-the two the bar makes of every implementation dispatch:
-
-- the behavior this node adds is **proven end to end** by a test or journey that drives the
-  real interface, rather than by inspection;
-- every claim the dispatch makes about the finished work — what it verified, and the
-  evidence for it — is **true of the tree as it finally stands**.
-
-Criteria state properties of the finished tree; the commands that produce them belong in
-this section. Whether the criteria answer every demand their own bar — or this appendix —
-makes of them is read by `just review-plan <source:project>`, which spends a judged turn
-on it and judges it by meaning: criteria that state a demand in their own words answer it,
-and no criterion is refused for failing to use a particular phrase. Nothing reads it
-deterministically any more, because the phrase matching that did refused wordings the same
-review had just asked for.
+**Prove a change by what it leaves behind, and never by inspection alone.** Durable
+behaviour — anything that runs again, or that something relies on after the change lands,
+so a regression would harm the product owner — gets a committed, realistic test driving
+the real interface without mocking the layer under test. One-off or point-in-time work — a
+one-time data fix or backfill, a cutover, a pin adoption with no local reader to change, a
+measurement, a check of current state — is proved by commands run once inside the
+dispatch, their output quoted in its report for the judge to read. A test's cost weighs
+against committing it: its runtime, the code it adds, its maintenance and its flakiness,
+and the costlier it is, the further the choice leans to one-off proof. A schema migration
+that replays on every fresh database is durable; a one-time data backfill is not.
 {% if boundary is defined and boundary.mixed is defined and boundary.mixed %}
 
 ### This plan spans public and private repositories

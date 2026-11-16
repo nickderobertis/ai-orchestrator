@@ -66,12 +66,12 @@ agents:
       makes that rule not relevant; never report a rule against a file only because
       the repository it describes is not visible to you.
 
-      Who ruled on a decision does not settle it. A decision the plan records as the
-      manager's ruling, an answer to the planner's question or an exception the manager
-      accepted, is judged against every rule like anything the planner chose. Only a
-      decision the plan attributes to the user's own words is exempt: the user's ruling
-      binds, so never report a violation in what the plan records as the user's own
-      words, quoted or attributed to the user in its **Decided** or **Requested** part.
+      Never report a violation in a decision the plan records as a manager ruling together
+      with its ruling reference: the plan's reviewer judges that ruling against these rules
+      and declines one it finds wrong to the manager. A ruling recorded without its
+      reference has no such exemption. Never report one in what the plan records as the
+      user's own words, quoted or attributed to the user in its **Decided** or
+      **Requested** part: the user's ruling binds.
 
 rules:
   # The fragment rules a plan is held to. Each inherits its description from the fragment,
@@ -232,16 +232,23 @@ rules:
       the listed tasks, in that task's `orchestrator.budgets` record, and no budget id is
       owned by two tasks.
     require_line_attribution: true
-  - name: plan_criteria_require_realistic_tests
+  - name: plan_criteria_require_realistic_proof
     agent: plan
     files:
       include: ["tasks/**/*.md"]
     relevance: the task's acceptance criteria ask for a test or other proof of behaviour
     description: |
-      true when every criterion asking for proof of behaviour requires a test that drives
+      true when every criterion asking for proof fits it to the work. Proof of durable
+      behaviour, which is exercised again or depended on once landed (a schema migration
+      replayed on each fresh database among it), requires a committed test that drives
       the real interface the behaviour is reached by, doubling at most a paid, external or
       third-party boundary, and asserts the behaviour itself rather than internal state or
-      a snapshot of output.
+      a snapshot of output. Proof of one-off or point-in-time work (data fixes and
+      backfills done once, cutovers, a pin adopted where no local reader changes,
+      measurements, current-state checks) asks for, or accepts, commands run once whose
+      output the dispatch reports; the more a test would cost in runtime, code,
+      maintenance or flakiness, the more that proof fits. false when a criterion demands a
+      committed test for one-off work, or accepts proof by inspection alone.
     require_line_attribution: true
   - name: plan_workload_states_numbers
     agent: plan

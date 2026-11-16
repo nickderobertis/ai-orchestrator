@@ -81,6 +81,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+import yaml
 
 from orchestrator.root import REPO_ROOT
 
@@ -370,10 +371,23 @@ REWRITES_HISTORY = re.compile(
 ON_THE_REMOTE = re.compile(r"\b(?:remote|origin|published|pushed)\b", re.IGNORECASE)
 
 
-#: The heading of the section that asks for each demand to be stated as a criterion. The
-#: bullets under it are what a plan's builder copies, so a demand is asked for there or
-#: nowhere — the rest of the file recounts, argues and instructs, in the same words.
-STATE_THE_BAR = "### State the bar in `## Acceptance criteria`, not only here"
+#: The heading of the closing section: these notes are part of every task's bar as written,
+#: and proof is proportionate. It replaced a section asking a plan to restate each standing
+#: demand as a criterion, which cost about 175 plan-review refusals for a restatement the
+#: notes already made.
+NOTES_ARE_THE_BAR = "### These notes are part of the bar, and proof is proportionate"
+
+#: That the notes bind as written, so no plan restates them, and what criteria add instead.
+NOTES_BIND_AS_WRITTEN = re.compile(
+    r"part\s+of\s+every\s+task's\s+bar\s+as\s+written", re.IGNORECASE
+)
+NEVER_RESTATED = re.compile(r"never\s+restates\s+them", re.IGNORECASE)
+#: The restatement ritual, in the words that asked for it, held absent.
+RESTATEMENT_ASKED = (
+    re.compile(r"stated\s+as\s+a\s+criterion\s+of\s+its\s+own", re.IGNORECASE),
+    re.compile(r"proven\s+end\s+to\s+end", re.IGNORECASE),
+    re.compile(r"State\s+the\s+bar\s+in\s+`##\s+Acceptance\s+criteria`"),
+)
 
 #: A command put into the background, which is what the sentinel example does, and the
 #: sentinel that example polls. The pair is what makes the wait an answer about the
@@ -865,7 +879,7 @@ def test_a_commit_that_cannot_affect_a_check_leaves_its_evidence_standing(
     because the clause limits that rule rather than replacing it, and the two earlier
     incidents are the reasons the rest of the section stands.
     """
-    section = appendix[: appendix.index(STATE_THE_BAR)]
+    section = appendix[: appendix.index(NOTES_ARE_THE_BAR)]
     for stated, missing in (
         (
             INERT_COMMIT_LEAVES_EVIDENCE_STANDING,
@@ -974,30 +988,159 @@ def test_the_worked_wait_backgrounds_one_command_behind_its_own_sentinel(
         )
 
 
-def test_the_appendix_asks_for_the_bar_to_be_stated_as_criteria(appendix: str) -> None:
-    """The demands a judge imports when the criteria are silent, named here as criteria.
-
-    Two branches were failed by demands nobody wrote down: end-to-end proof, which the
-    built-in `engineer` bar makes of every implementation dispatch, and a final
-    completion report, which is in neither the task nor the shared clause. Asking for
-    both here is what gives `just review-plan`'s judged turn something to read the
-    criteria against — this file is one of the two places a demand is made, and whether
-    the criteria answer it is judged by meaning rather than by the phrase matching that
-    used to ask it deterministically and refused wordings the same review had asked for.
-
-    The second demand is asked for as the *property* rather than as the artifact, and this
-    reads the section that asks rather than the whole file for that reason: both wordings
-    also occur elsewhere here — `"completion report"` where the incident is recounted, the
-    property where a worker is told it — so a whole-file assertion would go on passing
-    after the bullet asking for either had been replaced by anything at all.
-    """
-    asked = appendix[appendix.index(STATE_THE_BAR) :]
-
-    for demand in ("proven end to end", "true of the tree as it finally stands"):
-        assert demand in asked, (
-            f"{APPENDIX} no longer asks for {demand!r} as an acceptance criterion, so a "
-            "node that omits it is judged on the bar's own reading of it instead"
+def test_the_appendix_makes_its_notes_part_of_the_bar_rather_than_asking_for_them_restated(
+    appendix: str,
+) -> None:
+    """The notes bind as written, so nothing asks a plan to restate them as criteria:
+    a request to restate them is what plan review refused tasks for."""
+    closing = appendix[appendix.index(NOTES_ARE_THE_BAR) :]
+    assert NOTES_BIND_AS_WRITTEN.search(closing), (
+        f"{APPENDIX} no longer says its notes are part of every task's bar as written"
+    )
+    assert NEVER_RESTATED.search(closing), (
+        f"{APPENDIX} no longer says a plan never restates its notes as criteria"
+    )
+    flat = " ".join(appendix.split())
+    for asked in RESTATEMENT_ASKED:
+        found = asked.search(flat)
+        assert found is None, (
+            f"{APPENDIX} asks for its standing demands to be restated as criteria again "
+            f"({found.group(0)!r}); each such request cost a judged refusal per task"
         )
+
+
+#: The four places that decide proof on this host, each read where its reader meets it: the
+#: file, the YAML key (and rule) holding the prose, and the words opening the policy's own
+#: passage there. A passage is read alone because a whole prompt says "runtime", "code" and
+#: "output" elsewhere, so a part deleted from the policy would still match beside it.
+PROOF_POLICY_PLACES = (
+    ("templates/dispatch-appendix.md", "", NOTES_ARE_THE_BAR),
+    ("config/onejudge.base.yaml", "system_prompt", "- Durable behavior"),
+    (
+        "config/plan-checklist.llmlint.yml",
+        "plan_criteria_require_realistic_proof",
+        "true when every criterion",
+    ),
+    ("personas/planner.yaml", "system_prompt", "**Ask for proof in proportion"),
+)
+
+#: Every part of the proportionate-proof policy, each held by the words no wording of it
+#: avoids, and words a part pairs within one clause so a stray match elsewhere cannot stand
+#: in; every pattern of a part must match. Read against each passage whitespace-collapsed.
+PROOF_POLICY_PARTS = (
+    (
+        "durable behaviour earns a committed test",
+        (r"durable[^.;]*?committed,?\s+(?:realistic\s+)?test",),
+    ),
+    (
+        "one-off or point-in-time work is proved by commands run once",
+        (r"one-off[^.;]*?run\s+once",),
+    ),
+    ("that run-once proof is reported with its output", (r"run\s+once[^.;]*?output",)),
+    (
+        "the one-off examples",
+        (r"backfill", r"cutover", r"\bpin\b", r"measurement", r"current[\s-]+state|state\s+check"),
+    ),
+    (
+        "a test's cost weighs against committing it: runtime, code added, maintenance, flakiness",
+        (r"runtime|\bto\s+run\b", r"\bcode\b|\bwrite\b", r"maint|upkeep", r"flak"),
+    ),
+    (
+        "a replayed migration is durable and a one-time backfill is not",
+        (
+            r"migration[^.]*?fresh\s+database",
+            r"one-time\s+(?:data\s+)?backfill|backfills?\s+done\s+once",
+        ),
+    ),
+    ("proof is never by inspection alone", (r"inspection\s+alone",)),
+)
+
+#: Where a policy passage ends: a blank line, or the next bullet of a list.
+PASSAGE_END = re.compile(r"\n\s*\n|\n- |\{%")
+
+
+def _proof_policy_passage(path: str, key: str, opening: str) -> str:
+    text = (REPO_ROOT / path).read_text(encoding="utf-8")
+    if key == "system_prompt":
+        text = str(yaml.safe_load(text)[key])
+    elif key:
+        (rule,) = [rule for rule in yaml.safe_load(text)["rules"] if rule["name"] == key]
+        text = str(rule["description"])
+    assert opening in text, f"{path} no longer opens its proof policy with {opening!r}"
+    passage = text[text.index(opening) :]
+    if path.endswith(".md"):
+        # The appendix's section runs past its paragraph breaks, to the template's next block.
+        return passage.split("{%", 1)[0]
+    end = PASSAGE_END.search(passage, len(opening))
+    return passage[: end.start()] if end else passage
+
+
+@pytest.mark.parametrize(
+    ("path", "key", "opening"), PROOF_POLICY_PLACES, ids=[row[0] for row in PROOF_POLICY_PLACES]
+)
+@pytest.mark.parametrize(
+    ("part", "patterns"), PROOF_POLICY_PARTS, ids=[row[0] for row in PROOF_POLICY_PARTS]
+)
+def test_each_place_that_decides_proof_states_every_part_of_the_policy(
+    path: str, key: str, opening: str, part: str, patterns: tuple[str, ...]
+) -> None:
+    """Each place has readers who see only it, so a place that drops a part — the run-once
+    option above all — brings back committed tests demanded for one-off work."""
+    prose = " ".join(_proof_policy_passage(path, key, opening).split())
+    missing = [pattern for pattern in patterns if not re.search(pattern, prose, re.IGNORECASE)]
+    assert not missing, f"{path} no longer states {part} (no match for {missing}):\n{prose}"
+
+
+#: What durable proof requires, beyond a committed test: what makes behaviour durable, and
+#: the test driving the real interface with the layer under test left real (the checklist
+#: states that as doubling at most a paid, external or third-party boundary). Each part is a
+#: pattern matched within one clause, and whether the planner may state it by its link.
+DURABLE_PROOF_PARTS = (
+    (
+        "durable means it runs again or is relied on after landing",
+        r"durable[^.;]*?(?:runs|exercised)\s+again[^.;]*?(?:relie[sd]|depended)\s+on",
+        False,
+    ),
+    (
+        "its committed test drives the real interface",
+        r"committed,?\s+(?:realistic\s+)?test[^.;]*?(?:real\s+interface|as\s+a\s+user\s+would)",
+        True,
+    ),
+    (
+        "without mocking the layer under test, doubling at most an outside boundary",
+        r"without\s+mocking\s+the\s+layer\s+under\s+test|layer\s+under\s+test\s+unmocked"
+        r"|doubling\s+at\s+most\s+a\s+paid,\s+external\s+or\s+third-party\s+boundary",
+        True,
+    ),
+)
+
+#: A place that states a durable-proof part by naming the rule that states it, rather than in
+#: its own words: the planner's prompt points at the checklist rule and leaves the invariant
+#: there, which `RESTATEMENTS` in `tests/plan_guidance/test_plan_checklist_rules.py` holds.
+DURABLE_PROOF_LINKS = {"personas/planner.yaml": PROOF_POLICY_PLACES[2]}
+
+
+@pytest.mark.parametrize(
+    ("path", "key", "opening"), PROOF_POLICY_PLACES, ids=[row[0] for row in PROOF_POLICY_PLACES]
+)
+@pytest.mark.parametrize(
+    ("part", "pattern", "linkable"),
+    DURABLE_PROOF_PARTS,
+    ids=[row[0] for row in DURABLE_PROOF_PARTS],
+)
+def test_each_place_that_decides_proof_states_what_durable_proof_requires(
+    path: str, key: str, opening: str, part: str, pattern: str, linkable: bool
+) -> None:
+    """A committed test that mocks the layer under test, or one demanded of behaviour
+    nothing runs again, is the cost this policy exists to spend only where it protects."""
+    prose = " ".join(_proof_policy_passage(path, key, opening).split())
+    if linkable and path in DURABLE_PROOF_LINKS:
+        linked = DURABLE_PROOF_LINKS[path]
+        assert f"`{linked[1]}`" in prose, (
+            f"{path} no longer points at `{linked[1]}` for {part}:\n{prose}"
+        )
+        path, prose = linked[0], " ".join(_proof_policy_passage(*linked).split())
+    assert re.search(pattern, prose, re.IGNORECASE), f"{path} no longer states {part}:\n{prose}"
 
 
 def test_the_polling_rule_is_about_pgrep_rather_than_about_gates(appendix: str) -> None:
@@ -1296,10 +1439,26 @@ JUDGE_DEPARTURE_SAYS = (
         re.compile(r"`--ruling\s+<ref>\s+--reason\s+'<reason>'`"),
     ),
     (
-        "that the verdict carries the departure only where no command is named",
+        "that the reason given is a concrete one about the user's goal",
+        re.compile(r"concrete\s+reason\s+the\s+ruling\s+fails\s+the\s+user's\s+goal"),
+    ),
+    (
+        "that a departure with no concrete reason is not raised",
+        re.compile(r"raises\s+no\s+departure\s+it\s+has\s+no\s+such\s+reason\s+for"),
+    ),
+    (
+        "that the verdict names, quotes and reasons where no command or no run reaches",
         re.compile(
-            r"where\s+no\s+such\s+command\s+is\s+named,\s+it\s+names\s+the\s+ruling\s+and\s+its"
-            r"\s+reason\s+in\s+its\s+verdict\s+instead"
+            r"where\s+no\s+command\s+is\s+named,\s+or\s+the\s+command\s+finds\s+no\s+run"
+            r"\s+to\s+reach,\s+its\s+verdict\s+names\s+the\s+ruling,\s+quotes\s+it\s+and"
+            r"\s+gives\s+that\s+reason"
+        ),
+    ),
+    (
+        "that inside a run a ruling without its reference is refused on that alone",
+        re.compile(
+            r"inside\s+a\s+run\s+it\s+refuses\s+one\s+recorded\s+without\s+its\s+reference"
+            r"\s+on\s+that\s+ground\s+alone,\s+naming\s+the\s+ruling"
         ),
     ),
     (

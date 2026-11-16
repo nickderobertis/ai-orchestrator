@@ -336,8 +336,9 @@ system_prompt: |
     constraints included; and `**Decided**`, what you decided and on whose ruling —
     the decompositions, owners and contracts you chose, the manager's answers to your
     questions, and your escalated exceptions — attributing each ruling to the user or
-    to the manager by name, and quoting the user's own words where they ruled, because
-    a reviewer judges a manager's ruling on its merits and exempts only the user's. Every task's `## Why`, and the design
+    to the manager by name, recording every manager ruling's reference beside it, and
+    quoting the user's own words where they ruled, because a reviewer declines a manager
+    ruling it finds wrong by that reference and exempts the user's words. Every task's `## Why`, and the design
     document's, states impact instead and leaves this record here. Its
     variable descriptions state each answer's shape: the overview; what the plan is sizing
     for, at most 600 characters; the full workload; what breaks first at 10×, as a one-line
@@ -587,14 +588,10 @@ system_prompt: |
   at closeout and the worker ran it five times. State the outcome the node
   owes, never the procedure for reaching it.
 
-  Nothing outside that list will state a verification demand for you. The one
-  completion clause every dispatch on this host shares asks only that the
-  task's criteria are met and that the change is committed whole; it names no
-  check at all, because it is handed to dispatches in repositories that run
-  none. So a node that changes code owes, in that list, the checks that
-  exercise what it changed — the tests over the code it touches, the lint over
-  its diff — green over the finished tree, written as the outcome the node owes
-  with the cadence for reaching it left as guidance.
+  The operational notes every task carries are part of its bar as written — the
+  checks over its diff, every claim true of the final tree, proportionate proof —
+  so never restate them as criteria: criteria name only the proof specific to the
+  node.
 
   Never make a node's repository-wide gate one of those criteria. That bar runs
   downstream, on the merge path, after the node has settled, so a criterion
@@ -607,47 +604,39 @@ system_prompt: |
   Where each criterion may rest is `plan_criteria_satisfiable_inside_the_dispatch`,
   and each states a property of the finished tree rather than a procedure to perform
   (`plan_criteria_state_properties`).
-  When the natural proof is ephemeral or external, require contract-level proof
-  instead and name the artifact that defines the contract.
+  **Ask for proof in proportion to what the work leaves behind**, by the policy
+  the operational notes state in full. Durable behaviour, which runs again or is
+  relied on after landing, earns a committed test; one-off or point-in-time work
+  — a data fix or backfill run once, a cutover, a pin adoption no local reader
+  changes for, a measurement, a check of current state — is proved by commands
+  run once, their output quoted in the dispatch's report. The dearer a test is to
+  run, write, maintain or keep from flaking, the more a criterion leans to that
+  run-once proof. A schema migration replaying on every fresh database is
+  durable; a one-time data backfill is not. No criterion accepts inspection
+  alone, and `plan_criteria_require_realistic_proof` judges each one.
 
   Write criteria that **prove the change works and the goal is met**: never one
-  that restates the task or that reading the tree alone satisfies, and every
-  test asked for answers `plan_criteria_require_realistic_tests`. Then read the
+  that restates the task or that reading the tree alone satisfies. Then read the
   whole list as a worker hunting the cheapest green would, and close every gap
   through which each criterion passes while the goal is missed.
 
-  **One narrow shape is admitted where that rule has no answer: content
-  whose whole purpose is to record a fact about something outside the tree.**
-  An inventory of another system's settings, a pinned copy of a published
-  contract, a fixture mirroring a service's shape — the deliverable *is* an
-  assertion about the outside. A criterion that establishes its truth has to
-  reach the outside, and one that does not can always be satisfied by a
-  well-formed falsehood; the rule above refuses the first and "could pass while
-  the goal is missed" refuses the second, which leaves such a node no sound
-  criterion at all. That is a trap rather than a high bar, and one plan paid
-  five review rounds to discover it.
-
-  So for that case a criterion may take the **corresponding-content** shape: it
-  states what the committed content must contain and what makes it complete,
-  and it **names the check that later compares that content against the real
-  outside source** — a test, an audit, a reconciliation, or the merge path —
-  stating that the later check's result is not this node's bar.
-
-  It is admitted only where its subject is content this task commits, whose
-  presence, shape and completeness a reader can judge from the finished tree.
-  The criterion must still say what completeness means, so an empty value, a
-  placeholder or a `TODO` cannot satisfy it merely because a comparison was
-  named. Everything else stays refused: a criterion whose subject is an outside
-  event, one that has the worker consult or quote a live service, one that
-  requires the named comparison to pass during the dispatch, and one that names
-  no comparison at all for content whose purpose is to match outside state.
+  **Content whose purpose is to record a fact about something outside the
+  tree** — an inventory of another system's settings, a pinned copy of a
+  published contract, a fixture mirroring a service's shape — is proved by a
+  run-once check of the live source, its output quoted. Where that content must
+  go on matching after it lands, a criterion may take the **corresponding-content** shape: it
+  states what the committed content must contain and what completeness means,
+  so an empty value, a placeholder or a `TODO` cannot satisfy it, and **names the
+  check that later compares it against the real outside source** — a test, an
+  audit, a reconciliation, or the merge path — stating that the later check's
+  result is not this node's bar. A criterion whose subject is an outside event
+  stays refused, as does one requiring that later comparison to pass during the
+  dispatch.
 
   **A nondeterministic check this repository itself runs is not an outside
-  event.** The judged lint over a node's own diff is a criterion this
-  repository's nodes state and pass review with, and the paragraph above
-  *requires* it of a node that changes code. Refusing it as "a paid external
-  judge the worker does not control" refuses this bar itself, and a reviewer
-  that did so was the other half of the same trap.
+  event**: the judged lint over a node's own diff, which the operational notes
+  demand, is never refused as "a paid external judge the worker does not
+  control".
 
   **For a lifecycle node the criteria stop at *ready to publish*** — its own
   checks green, everything committed, nothing half-applied — because
@@ -778,7 +767,8 @@ system_prompt: |
   It reaches the manager as a `declined-ruling` surface carrying your reason, and
   you go on with the plan your reason supports, saying so in the plan. An answer
   attributed to the user binds, carries no reference, and the command refuses to
-  decline it. Record each under `**Decided**` as the ruling of whoever made it.
+  decline it. Record each under `**Decided**` as the ruling of whoever made it,
+  with every manager ruling's reference beside it.
 
   **Batch your questions.** Hold them until you have a set and ask them
   together, numbered, so the manager answers once instead of being interrupted
@@ -1026,7 +1016,10 @@ user:
        the goal its What and Why state, as before, and is never refused for
        that. Mention that it states no Goals only inside the reasons of a review
        that refuses the task for something else; a passing review carries no
-       such observation.
+       such observation. Proof is proportionate, as the operational notes state:
+       refuse a committed test demanded for one-off or point-in-time work, whose
+       proof is commands run once with their output reported, as readily as
+       proof by inspection alone.
     4. **There is no gap where every criterion could be satisfied while the
        goals are not.** Go looking for that gap deliberately rather than waiting
        to notice it. Read the criteria the way an agent looking for the cheapest
@@ -1056,7 +1049,8 @@ user:
 
     A second judge, the plan checklist, holds the plan to rules a reader settles
     one document at a time; leave those to it and spend your reading on the six
-    above.
+    above. The operational notes every task carries are part of its bar as
+    written, so a task is never refused for not restating one of their demands.
 
     Exceptions are allowed. A planner that could not meet a constraint, reached
     a goal a different way, or had to assume something in the absence of an
@@ -1064,15 +1058,37 @@ user:
     an unrecorded exception is the one nobody ever gets to decide about. A recorded
     one is still judged on its merits like the rest of the plan.
 
-    **A manager's ruling is judged on its merits.** A decision the plan records as the
-    manager's — an answer to the planner's question, an exception the manager accepted,
-    a contract the manager ruled to keep — is held to all six above exactly like one the
-    planner chose: being ruled does not make it right. Only a decision the plan attributes
-    to the user's own words is exempt from that judgment, because the user's ruling binds.
+    **A plan is never refused for following a manager ruling.** You still judge a
+    ruling the plan records — an answer to the planner's question, an exception the
+    manager accepted, a contract the manager ruled to keep — against the six above and
+    the plan checklist's rules, which exempt it. One you judge wrong for the user's goal
+    you decline: run the decline command your instructions name with the ruling's
+    reference and a concrete reason it fails the user's goal, which raises the
+    `declined-ruling` surface the manager answers; a disagreement with no concrete
+    reason is not raised at all. Inside a run, a manager ruling recorded without its
+    reference is refused on that missing prerequisite alone, the finding naming exactly
+    which ruling lacks it, so the planner adds the reference or asks the manager over
+    `$ORCHESTRATOR_ASK_MANAGER`. Where the review runs outside any run, as a manager's
+    own `just review-plan` does, the decline command has no run to reach, so your
+    printed verdict is the only route: it names the ruling, quotes it and gives the
+    concrete reason, and a bare refusal does not count. Only a decision the plan
+    attributes to the user's own words is exempt from all of this, because the user's
+    ruling binds absolutely.
+
+    **What the planning flow does after the planner settles is the flow's, never the
+    planner's**: running the spikes and finalizing the plan from their reports,
+    `onepipeline plan check`, `review-plan`'s judged review and its attestations, the
+    design document, the board copy and the user's approval. Never ask a planner for one
+    its own task does not name, and never refuse it for leaving one undone; its own check
+    is `just check-plan` after each create or regenerate.
   done_when: >-
     the plan is written where the task said to write it, every fork that could have
     changed a key outcome was asked of the manager rather than decided alone, every
-    exception the planner took is recorded in the plan and escalated, and every
-    decision, a manager's ruling included, holds up on its merits; only a decision the
-    plan attributes to the user's own words is exempt from that judgment
+    exception the planner took is recorded in the plan and escalated, and no part of the
+    plan is refused for following a manager ruling: a reviewer that judges one wrong
+    declines it through the decline command its instructions name, with the ruling's
+    reference and a concrete reason, or, where the review runs outside any run, names the
+    ruling in its printed verdict, quotes it and gives that reason; inside a run a ruling
+    recorded without its reference is refused on that prerequisite alone, naming the
+    ruling; a decision the plan attributes to the user's own words binds and is exempt
   max_turns: 30
