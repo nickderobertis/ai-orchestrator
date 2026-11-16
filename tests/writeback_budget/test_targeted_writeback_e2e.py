@@ -73,8 +73,9 @@ WAITING = (SETTLED_NODE, EDITED_NODE, REMOVED_NODE)
 #: The node a live edit adds, which the run has no item for until a copy creates one.
 ADDED_NODE = NodeId("follow-up")
 UNCLASSIFIED_NODE = NodeId("close-ticket")
-#: A ticket in a configured source that holds no item, so no screened copy can classify it.
-MISSING_TICKET = "drafts:no-such-ticket"
+#: A ticket in a configured source that declares no visibility and holds no such item, so no
+#: screened copy can classify it. Not `drafts`, which this host declares private.
+MISSING_TICKET = "examples:no-such-ticket"
 #: What the parked node's requeue restates as its task, which its one item has to come to
 #: carry.
 REQUEUED_WHAT = "Requeued: the item's body is updated in place."
@@ -422,8 +423,8 @@ def test_a_screened_board_takes_an_added_node_and_refuses_an_unclassifiable_refe
         waiting_nodes=(),
         # This local Markdown destination stands in for a public board. Unlike the
         # default private fixture source, every write here crosses the public boundary.
-        # The `drafts` source is rooted in an empty directory, so a ticket named in it
-        # exists nowhere and its classification cannot be established.
+        # The `examples` source declares no visibility and holds no ticket of that id, so its
+        # classification cannot be established.
         extra_environment={
             "ONETASKGRAPH_SOURCES__TEST_FIXTURES__VISIBILITY": "public",
             follow_up_variables.root_name(): str(tickets),

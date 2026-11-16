@@ -3374,7 +3374,7 @@ def _copied(reported: str) -> dict[str, str]:
     return {row[0]: row[1] for row in rows if len(row) >= 3 and ":" in row[0] and ":" in row[1]}
 
 
-def _review_states(environment: Mapping[str, str], project: str) -> dict[str, str]:
+def _current_bar_review_states(environment: Mapping[str, str], project: str) -> dict[str, str]:
     """Each task's `plan-review` state under the current bar: what the launch check reads."""
     checked = subprocess.run(
         [
@@ -3468,9 +3468,9 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
         assert rendered.returncode == 0, rendered.stdout + rendered.stderr
         after = _rendered_task(changed)
 
-        unreviewed = _review_states(environment, RENDERED_QUALIFIED)
+        unreviewed = _current_bar_review_states(environment, RENDERED_QUALIFIED)
         reviewed(RENDERED_QUALIFIED)
-        rereviewed = _review_states(environment, RENDERED_QUALIFIED)
+        rereviewed = _current_bar_review_states(environment, RENDERED_QUALIFIED)
         rechecked = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
         second = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "plans")
         assert second.returncode == 0, second.stdout + second.stderr

@@ -615,7 +615,9 @@ def test_a_run_ending_with_a_failed_node_keeps_the_spike_branch(sequence: Sequen
 
 
 BY_HAND = "'just reclaim-branch <branch> --repo <identity> --discard'"
-FOLLOW_UPS = "holds no follow-up drafts"
+#: The success hook launches the follow-up run whatever the batch holds: onefollowup has no
+#: empty-batch skip yet, so a run with no drafts still gets one.
+FOLLOW_UPS = "follow-ups are being verified in run"
 
 
 def test_an_unreadable_project_stops_the_discard_saying_so_and_follow_ups_still_run(
