@@ -65,6 +65,7 @@
       "{workspaceRoot}/config/plan-checklist.llmlint.yml",
       "{workspaceRoot}/tests/fixtures/**/*",
       "!{workspaceRoot}/tests/fixtures/follow-up-drafts/retired-pacemaker/**/*",
+      "!{workspaceRoot}/tests/fixtures/follow-ups/**/*",
       "{workspaceRoot}/tests/test_launcher_session.py",
       "{workspaceRoot}/tests/fixtures/planner-channel.json",
       "{workspaceRoot}/config/onemessagebus.yaml",

@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 import tomllib
 from typing import Any
 
@@ -101,11 +102,16 @@ def _environment() -> dict[str, str]:
     read in place of the file under test. `ORCHESTRATOR_DECLINE_RULING` is set to this
     checkout's wrapper, as every dispatch's environment sets it, because the dispatch
     judge's grant resolves through it and a run with it unset is refused before spawning.
+    `ONEPIPELINE_NODE_SCRATCH_DIR` is set for the same reason: every dispatch is handed one,
+    and the dispatched roles' variants take `XDG_RUNTIME_DIR` from it, so a run without it is
+    refused too. Every run here is a `config`, `list` or `--print-command` read that spawns
+    nothing and writes nothing there, so the temporary directory stands in for it.
     """
     environment = {
         key: value for key, value in os.environ.items() if not key.startswith("ONEHARNESS_")
     }
     environment["ORCHESTRATOR_DECLINE_RULING"] = DECLINE_WRAPPER
+    environment["ONEPIPELINE_NODE_SCRATCH_DIR"] = tempfile.gettempdir()
     return environment
 
 
@@ -346,9 +352,9 @@ def test_only_the_dispatch_judge_states_a_run_level_grant_and_no_judge_a_sync_po
                 assert fields.get("allowed_tools", {}).get("value") is None, (config, variant)
         sync = resolved["sync"]
         assert sync["harness"] == {}, f"{config} resolves a [sync] policy: {sync}"
-        assert all(
-            field["value"] is None for key, field in sync.items() if key != "harness"
-        ), f"{config} resolves a [sync] policy: {sync}"
+        assert all(field["value"] is None for key, field in sync.items() if key != "harness"), (
+            f"{config} resolves a [sync] policy: {sync}"
+        )
 
 
 @pytest.mark.parametrize("config", CONNECTOR_ROLES)

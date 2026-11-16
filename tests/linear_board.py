@@ -273,6 +273,10 @@ class IdConflict(ValueError):
 NativeId = NewType("NativeId", str)
 StateId = NewType("StateId", str)
 IssueIdentifier = NewType("IssueIdentifier", str)
+#: A workspace user's id, which an assignee write names them by; never their display name.
+UserId = NewType("UserId", str)
+#: A user's display name, which an issue's `assignee` answers them by and a lookup asks for.
+DisplayName = NewType("DisplayName", str)
 
 
 @dataclass(frozen=True)
@@ -326,6 +330,8 @@ class Issue(Record):
     state: State
     priority: int = 0
     project_id: NativeId | None = None
+    #: The display name of the one person the issue is assigned to, or `None`.
+    assignee: DisplayName | None = None
 
 
 @dataclass(kw_only=True)
@@ -353,6 +359,18 @@ class Relation(Record):
     source_id: NativeId
     target_id: NativeId
     type: str
+
+
+def user_id(display_name: DisplayName) -> UserId:
+    """The id the workspace holds the user displayed as ``display_name`` under."""
+    return UserId(f"user-{display_name}")
+
+
+def display_name_of(held: UserId) -> DisplayName:
+    """The display name of the user whose id :func:`user_id` gave."""
+    if not held.startswith("user-"):
+        raise ValueError(f"no user of the workspace has the id {held!r}")
+    return DisplayName(held.removeprefix("user-"))
 
 
 def _text(fields: dict[str, Any], key: str) -> str:
@@ -404,8 +422,15 @@ class LinearBoard:
         self._listings_miss = False
         self._lock = threading.RLock()
 
-    def environment(self, source: str) -> dict[str, str]:
-        settings = plan_store.configured_settings()
+    def environment(
+        self, source: str, settings: Mapping[str, object] | None = None
+    ) -> dict[str, str]:
+        """What points ``source`` at this wire, its workflow states taken from ``settings``.
+
+        ``settings`` is a resolved configuration's flat `sources.<name>.config.<key>` entries;
+        omitted, this checkout's own, and a journey whose store is its own passes that store's.
+        """
+        settings = plan_store.configured_settings() if settings is None else settings
         prefix = f"sources.{source}.config."
         key = settings.get(prefix + "api_key_env")
         if not isinstance(key, str):
@@ -465,6 +490,9 @@ class LinearBoard:
                     priority=item.priority,
                     project=_reference(item.project_id),
                     labels=_connection([]),
+                    assignee=None
+                    if item.assignee is None
+                    else {"id": user_id(item.assignee), "displayName": item.assignee},
                 )
                 kind, relations = "issue", self._issue_relations
                 held["comments"] = _connection(
@@ -672,6 +700,9 @@ class LinearBoard:
                     if type(priority) is not int or not 0 <= priority <= 4:
                         raise ValueError("priority must be an integer from 0 to 4")
                     issue.priority = priority
+                if "assigneeId" in fields:
+                    held = fields["assigneeId"]
+                    issue.assignee = None if held is None else display_name_of(UserId(str(held)))
                 item: Record = issue
             case "project":
                 project = self._projects.setdefault(
@@ -861,6 +892,14 @@ class LinearBoard:
                 }
             case "viewer":
                 return {operation: {"id": "synthetic-user"}}
+            case "users":
+                # Every display name an assignee write looks up names a user of the workspace.
+                names = variables.get("names") or []
+                return {
+                    operation: _connection(
+                        [{"id": user_id(DisplayName(name)), "displayName": name} for name in names]
+                    )
+                }
             case "issueLabels" | "projectLabels":
                 return {operation: _connection([])}
             case "fileUpload":

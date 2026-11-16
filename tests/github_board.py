@@ -179,6 +179,10 @@ _FieldOptionId = NewType("_FieldOptionId", str)
 
 
 _RepositoryNodeId = NewType("_RepositoryNodeId", str)
+#: A person's node id, which an assignee write names them by; never their login.
+_UserNodeId = NewType("_UserNodeId", str)
+#: A person's login, which an issue's `assignees` answers them by and a lookup asks for.
+_Login = NewType("_Login", str)
 
 
 #: The board field the source owns and reads a copy's origin back out of, and the
@@ -196,10 +200,9 @@ ORIGIN_FIELD_NAME = "onetaskgraph.origin"
 #: nothing, so carrying it there changes nothing it writes.
 HOST_FIELD_NAME = "Host"
 #: The other board text fields the live `followups` board carries, beside `Host`, and the id
-#: each is answered under: the three more the source projects onefollowup's ticket record
-#: onto, and the three only an older record filled, which no copy writes any more. Every
-#: board here carries them, as it carries `Host`, unless a journey takes one away.
-PROJECTED_FIELD_NAMES = (
+#: each is answered under: the six more the source projects onefollowup's ticket record onto.
+#: Every board here carries them, as it carries `Host`, unless a journey takes one away.
+FOLLOWUPS_TEXT_FIELDS = (
     "Owning runs",
     "Basis",
     "Drafts",
@@ -207,6 +210,10 @@ PROJECTED_FIELD_NAMES = (
     "Witnesses",
     "Verified at",
 )
+#: A text field no board carries until `sources fields --apply` creates it: the one a journey's
+#: own `metadata_fields` entry projects a kind's rendered `projected` value onto.
+PROJECTION_FIELD_NAME = "Who is affected"
+PROJECTED_FIELD_NAMES = (*FOLLOWUPS_TEXT_FIELDS, PROJECTION_FIELD_NAME)
 PROJECTED_FIELD_IDS = {
     name: f"FIELD_text_{re.sub(r'[^a-z]+', '_', name.lower())}" for name in PROJECTED_FIELD_NAMES
 }
@@ -314,6 +321,8 @@ PRIVATE_LIBRARY_REPOSITORY = _Repository(owner=PRIVATE_OWNER, name="hidden-libra
 #: that owner so a `plans` view of it is filed in it beneath the configured repository's
 #: project issue, as GitHub files a sub-issue only in a repository of its parent's owner.
 PUBLIC_SAMPLE_REPOSITORY = _Repository(owner=CONFIGURED_REPOSITORY.owner, name="open-sample")
+#: The plan store's public repository, which a follow-up ticket read from the live board names.
+PLAN_STORE_REPOSITORY = _Repository(owner=CONFIGURED_REPOSITORY.owner, name="onetaskgraph")
 
 
 REPOSITORY_NODE_IDS: dict[_Repository, _RepositoryNodeId] = {
@@ -322,6 +331,7 @@ REPOSITORY_NODE_IDS: dict[_Repository, _RepositoryNodeId] = {
     PRIVATE_STORE_REPOSITORY: _RepositoryNodeId("R_private_store"),
     PRIVATE_LIBRARY_REPOSITORY: _RepositoryNodeId("R_hidden_library"),
     PUBLIC_SAMPLE_REPOSITORY: _RepositoryNodeId("R_open_sample"),
+    PLAN_STORE_REPOSITORY: _RepositoryNodeId("R_onetaskgraph"),
 }
 
 
@@ -393,6 +403,18 @@ def _one_second_after(moment: str) -> str:
     return later.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def user_id(login: _Login) -> _UserNodeId:
+    """The node id GitHub answers for the person ``login``: every login names somebody here."""
+    return _UserNodeId(f"U_{login}")
+
+
+def login_of(node_id: _UserNodeId) -> _Login:
+    """The login of the person whose node id :func:`user_id` gave."""
+    if not node_id.startswith("U_"):
+        raise ValueError(f"no person here has the node id {node_id!r}")
+    return _Login(node_id.removeprefix("U_"))
+
+
 @dataclass
 class _Issue:
     """One issue on the board, under the two node ids GitHub gives it.
@@ -453,6 +475,10 @@ class _Issue:
     priority: str | None = None
     #: The comments on this issue, oldest first, as GitHub lists an issue's `comments`.
     comments: list[dict[str, object]] = field(default_factory=list)
+    #: The logins this issue is assigned to, as the last `assigneeIds` a create or an update
+    #: sent left them: answered on every read of the issue, which is where a source opted in to
+    #: assignees selects them, and on each write's own answer, which it checks the write by.
+    assignees: list[_Login] = field(default_factory=list)
     #: The board holding this issue, set by that board as it takes the issue on. Two boards
     #: are served at once for the launch journey — this repository's `plans` and its
     #: `followups` — and both the Status options a row answers with and the project number
@@ -618,7 +644,26 @@ class _Issue:
             "commentCount": {"totalCount": len(self.comments)},
             "relationshipEvents": {"totalCount": self.relationship_events},
             "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+            "assignees": self.assignees_answer(),
         }
+
+    def assignees_answer(self) -> dict[str, object]:
+        """The issue's `assignees` connection, each person by the node id a lookup answers."""
+        return {"nodes": [{"id": user_id(login), "login": login} for login in self.assignees]}
+
+    def assigned(self, payload: Mapping[str, object]) -> dict[str, object]:
+        """What a write's own answer says of whom the issue holds: its `assignees`, for a write
+        naming `assigneeIds` — the one a source opted in to assignees checks — and nothing
+        for any other, as GitHub answers only what a document selects."""
+        return {"assignees": self.assignees_answer()} if "assigneeIds" in payload else {}
+
+    def assign(self, payload: Mapping[str, object]) -> None:
+        """Replace whoever the issue holds with the people a write's `assigneeIds` names."""
+        if (ids := payload.get("assigneeIds")) is None:
+            return
+        if not isinstance(ids, list):
+            raise ValueError("assigneeIds must be a list of user node ids")
+        self.assignees = [login_of(_UserNodeId(str(held))) for held in ids]
 
     def updated_at(self) -> str:
         """When this issue last changed, which GitHub moves when one of its comments changes.
@@ -866,8 +911,9 @@ class _Board:
         self.attachments: dict[str, bytes] = {}
         #: Whether the board carries the `Host` text field, which one journey takes away.
         self.has_host_field = True
-        #: The other projected text fields the board carries, which a journey may take away.
-        self.text_fields: set[str] = set(PROJECTED_FIELD_NAMES)
+        #: The other projected text fields the board carries, which a journey may take away
+        #: or have `sources fields --apply` add.
+        self.text_fields: set[str] = set(FOLLOWUPS_TEXT_FIELDS)
         #: How many of an issue's comments one page answers, or `None` for every one on the
         #: first page: GitHub pages an issue's comments, and a reader that reads past the first
         #: page reads an issue that can change between its pages.
@@ -1323,6 +1369,7 @@ class _Board:
             held = self._issue(parent)
             created.parent_id = held.content_id
             held.sub_issues += 1
+        created.assign(payload)
         self.created.append(created)
         self.issues.append(created)
         return {
@@ -1333,6 +1380,7 @@ class _Board:
                         "number": created.number,
                         "url": created.content()["url"],
                     }
+                    | created.assigned(payload)
                 }
             }
         }
@@ -1399,7 +1447,10 @@ class _Board:
         if isinstance(state := payload.get("stateInput"), dict):
             issue.state = str(state.get("value"))
             issue.state_reason = str(state.get("stateReason"))
-        return {"data": {"updateIssue": {"issue": {"id": issue.content_id}}}}
+        issue.assign(payload)
+        return {
+            "data": {"updateIssue": {"issue": {"id": issue.content_id} | issue.assigned(payload)}}
+        }
 
     def add_to_board(self, variables: dict[str, object]) -> dict[str, object]:
         payload = variables.get("input")
@@ -2366,12 +2417,15 @@ class _Operation(StrEnum):
     CLOSED_ITEMS = "closedItems"
     ISSUES_BY_REFERENCE = "issuesByReference"
     ISSUES_BY_CREATION = "issuesByCreation"
+    USER_IDS = "userIds"
 
 
 #: Each operation's marker in the document the source sends, in the order they are
 #: tried. The source ships its queries as constants, so the root field is a stable
 #: substring of each one and is what tells a board read from the writes that follow it.
 _OPERATIONS: dict[str, _Operation] = {
+    # The lookup of the people an assignee write names, one aliased `user` per login.
+    ":user(login:$login": _Operation.USER_IDS,
     # A copy's aliased documents, each before every marker its slots also carry: the batched
     # origin lookup carries the board-fields read, the repository read and a search; the
     # created-item read an aliased node read; and each write batch its single mutation. The
@@ -2921,6 +2975,17 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self._repository(request.repository)
             case _Operation.ISSUES_BY_CREATION:
                 return self.board.issues_by_creation(request.variables)
+            case _Operation.USER_IDS:
+                return {
+                    "data": {
+                        f"u{name.removeprefix('login')}": {
+                            "id": user_id(_Login(login)),
+                            "login": login,
+                        }
+                        for name, login in request.variables.items()
+                        if re.fullmatch(r"login\d+", name) and isinstance(login, str)
+                    }
+                }
             case _Operation.DEPENDENCIES:
                 return self.board.dependencies_response(request.variables.get("id"))
             case _Operation.CREATE_ISSUE:

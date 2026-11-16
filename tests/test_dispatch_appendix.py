@@ -1316,7 +1316,9 @@ JUDGE_DEPARTURE_SAYS = (
 #: variable as what to type — the grant matches only the absolute path, and a call typed
 #: `"$ORCHESTRATOR_DECLINE_RULING"` is refused on Claude Code and sandboxed on Codex.
 RETIRED_JUDGE_ROUTE = (
-    re.compile(r"raises\s+its\s+own\s+departure\s+from\s+a\s+manager\s+ruling,\s+in\s+its\s+verdict"),
+    re.compile(
+        r"raises\s+its\s+own\s+departure\s+from\s+a\s+manager\s+ruling,\s+in\s+its\s+verdict"
+    ),
     re.compile(r"no\s+command\s+of\s+its\s+own\s+to\s+reach\s+the\s+channel"),
 )
 

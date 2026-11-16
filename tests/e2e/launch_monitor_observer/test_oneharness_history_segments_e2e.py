@@ -416,7 +416,7 @@ DEFAULT_WINDOWS = (
     DefaultWindow(
         verb="show",
         promise="is found only by `history show <history-id> --all-time`",
-        help_says="finds a <history-id> the dated index does not hold",
+        help_says="finds a `<history-id>` the dated index does not hold",
         reaches_earlier=("--all-time",),
     ),
 )

@@ -145,6 +145,15 @@ sources:
         - field: Basis
           key: orchestrator.follow-up
           path: [basis]
+        - field: Drafts
+          key: orchestrator.follow-up
+          path: [draft_sources]
+        - field: Transcripts
+          key: orchestrator.follow-up
+          path: [transcripts]
+        - field: Witnesses
+          key: orchestrator.follow-up
+          path: [witnesses]
         - field: Verified at
           key: orchestrator.follow-up
           path: [verified_at]
@@ -197,6 +206,15 @@ sources:
         - field: Basis
           key: orchestrator.follow-up
           path: [basis]
+        - field: Drafts
+          key: orchestrator.follow-up
+          path: [draft_sources]
+        - field: Transcripts
+          key: orchestrator.follow-up
+          path: [transcripts]
+        - field: Witnesses
+          key: orchestrator.follow-up
+          path: [witnesses]
         - field: Verified at
           key: orchestrator.follow-up
           path: [verified_at]

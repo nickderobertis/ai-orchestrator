@@ -26,9 +26,13 @@ import importlib.util
 import json
 import os
 import sys
+from pathlib import Path
 
 #: What a version probe is spelled as, answered so a candidate is not skipped as absent.
 VERSION_PROBE = frozenset({"--version", "-v"})
+
+#: The claude-code option oneharness hands a role's system prompt through, by file.
+SYSTEM_PROMPT_FILE_OPTION = "--append-system-prompt-file"
 
 
 def record(binary: str) -> None:
@@ -70,14 +74,22 @@ def refuse(binary: str) -> int:
 def answer(argv: list[str]) -> int:
     """Answer the llmlint batch the turn carries, every rule holding.
 
-    claude-code takes the instruction as ``-p``'s value and the batch in another argument
-    or on stdin, so every argument and stdin are read for it.
+    claude-code takes the instruction as ``-p``'s value and the batch in another argument,
+    on stdin, or — from oneharness 0.30.0 — in the file ``--append-system-prompt-file``
+    names, so every argument, stdin and that file are read for it.
     """
     spec = importlib.util.spec_from_file_location("fake_codex", os.environ["IDENTITY_FAKE_CODEX"])
     assert spec is not None and spec.loader is not None
     fake_codex = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fake_codex)
-    candidates = [*argv, sys.stdin.read()]
+    system_files = [
+        argv[index + 1] for index, word in enumerate(argv[:-1]) if word == SYSTEM_PROMPT_FILE_OPTION
+    ]
+    candidates = [
+        *argv,
+        sys.stdin.read(),
+        *(Path(path).read_text(encoding="utf-8") for path in system_files),
+    ]
     batch = next(
         (found for found in map(fake_codex.llmlint_batch, candidates) if found is not None),
         None,

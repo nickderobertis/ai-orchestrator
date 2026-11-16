@@ -134,17 +134,17 @@ sources:
         high: High
         medium: Medium
         low: Low
-      # Projects onto the board's text fields the parts of a follow-up ticket's audit trail
-      # onefollowup's record writes — the machine its verification ran on, its owning runs,
-      # its basis and its verification time — so the board filters and sorts by host, run or
-      # basis the way it does by origin. Only fields that record writes are projected: a
-      # projected field whose path a record lacks is written empty on every copy, so the
-      # `Drafts`, `Transcripts` and `Witnesses` fields an older ticket filled keep their
-      # values. The record keeps every value in its description's metadata slot, which stays
-      # its one home. `sources fields followups --apply` creates the fields, and a copy onto a
-      # board without one is refused by name before anything is written.
-      # `tests/test_plan_source_roots.py` holds these entries to the CLI's resolved config;
-      # their `key` is onefollowup's ticket record key and each `path` a field of that record.
+      # Projects a follow-up ticket's audit trail onto the board's text fields — the machine
+      # its verification ran on, its owning runs, basis, drafts' sources, transcripts,
+      # witnesses and verification time — so a person deciding on it reads a body free of it
+      # and the board filters and sorts by host, run or basis the way it does by origin. The
+      # record keeps every value whole in its description's metadata slot, which stays its one
+      # home; a value over a text field's limit is shown shortened there. `sources fields
+      # followups --apply` creates the fields, and a copy onto a board without one is refused
+      # by name before anything is written. `tests/test_plan_source_roots.py` holds these
+      # entries to the CLI's resolved config; each `key` is onefollowup's ticket record key and
+      # each `path` a key of that record, as onefollowup's README states the schema-14 record
+      # (its `draft_sources`, `transcripts` and `witnesses` among them).
       metadata_fields:
         - field: Host
           key: orchestrator.follow-up
@@ -155,6 +155,15 @@ sources:
         - field: Basis
           key: orchestrator.follow-up
           path: [basis]
+        - field: Drafts
+          key: orchestrator.follow-up
+          path: [draft_sources]
+        - field: Transcripts
+          key: orchestrator.follow-up
+          path: [transcripts]
+        - field: Witnesses
+          key: orchestrator.follow-up
+          path: [witnesses]
         - field: Verified at
           key: orchestrator.follow-up
           path: [verified_at]

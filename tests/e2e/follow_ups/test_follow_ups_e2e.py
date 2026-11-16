@@ -21,11 +21,14 @@ filed ticket; `just follow-ups-answer-comments` gathers it, runs the owning batc
 plan in its flow and settles, answering it once; a second pass answers nothing.
 
 The destination is a local Markdown folder standing in for the `followups` board, seeded
-before the run with a ticket record at schema 14 and an earlier run's evidence and reply
-comments in the board's marker format, the run's evidence being for that ticket's root
-cause. **The paid model alone is doubled**: `tests/e2e/fake_backend.py` for the main run's
-worker and judge, whose turn runs the commit and drafting commands a model would, and
-`tests/e2e/fake_codex.py` for the follow-up agent, whose turn runs
+before the run with a ticket in the shape this host's own module wrote at schema 15:
+onepipeline-ui#803's record, relabelled 14 with its `impact`, and its body, read from the
+board (`tests/fixtures/follow-ups/onepipeline-ui-803.md`), and an earlier run's evidence
+comment in the collapsed block form. The run's evidence is for that ticket's root cause, and
+its agent files its new ticket in onefollowup's shipped shape, the severity values only in
+the record's `impact`. **The paid model alone is doubled**: `tests/e2e/fake_backend.py`
+for the main run's worker and judge, whose turn runs the commit and drafting commands a
+model would, and `tests/e2e/fake_codex.py` for the follow-up agent, whose turn runs
 `tests/e2e/follow_ups/scripted_agent.py` — the agent's choices, made with the real
 onefollowup and plan-store commands.
 
@@ -103,7 +106,7 @@ INHERITED = (
 #: repository, and one about a private repository no registry declares public, which the
 #: store records as private.
 NEW_TITLE = "The listing cursor skips the last page"
-EVIDENCE_TITLE = "The export dialog drops unicode"
+EVIDENCE_TITLE = "The scroll-back journey must survive the first-screen handoff"
 PRIVATE_TITLE = "The private exporter retries forever"
 ABOUT = "github.com/nickderobertis/some-service"
 PRIVATE_ABOUT = "github.com/nickderobertis/private-exporter"
@@ -113,10 +116,16 @@ DRAFT_BODY = (
     "## Evidence\nSeen in the run's own log.\n"
 )
 
-#: The ticket already on the destination, the earlier run that filed it, and its comments.
-EXISTING = "export-dialog-drops-unicode"
-EXISTING_ITEM = "export-older"
+#: The ticket already on the destination: onepipeline-ui#803 as the `followups` board holds
+#: it, one of the eleven this host's own module wrote at schema 15, its record relabelled 14
+#: with the `impact` the relabel wrote from its body lines.
+BOARD_TICKET = REPO_ROOT / "tests" / "fixtures" / "follow-ups" / "onepipeline-ui-803.md"
+EXISTING = "scroll-journey-survives-first-screen-handoff"
+EXISTING_ITEM = "scroll-journey"
+#: An earlier run whose evidence comment the ticket carries, in the block form the shipped
+#: evidence comment opens with.
 EARLIER = "earlier-run"
+EARLIER_DRAFT = f"drafts:{EARLIER}/drafts/20261115T090000Z-the-scroll-back-journey-failed-again"
 
 
 def _stored_comment(identifier: str, at: str, body: str) -> str:
@@ -128,24 +137,25 @@ def _stored_comment(identifier: str, at: str, body: str) -> str:
     )
 
 
-EXISTING_COMMENTS = (
-    "\n## Comments\n"
-    + _stored_comment(
-        "20261001T120000Z-000001",
-        "2026-10-01T12:00:00Z",
-        f"Additional evidence from follow-up run `{EARLIER}`.\n\n"
-        "Host build-host: café exported as caf.\n\n"
-        f'<!-- orchestrator:follow-up-comment run="{EARLIER}" root_cause="{EXISTING}" -->',
-    )
-    + _stored_comment(
-        "20261001T130000Z-000002",
-        "2026-10-01T13:00:00Z",
-        f"Answering your comment on follow-up run `{EARLIER}`'s ticket.\n\n"
-        "The ticket stands as written.\n\n"
-        f'<!-- orchestrator:follow-up-comment run="{EARLIER}" root_cause="{EXISTING}" '
-        'kind="reply" answers="20261001T125500Z-000003" verdict="confirms" -->',
-    )
+EARLIER_COMMENT = (
+    f"<details>\n<summary>Additional evidence from follow-up run {EARLIER}.</summary>\n\n"
+    "- Host: build-host\n"
+    f"- Basis: {'github.com/nickderobertis/some-service'} at "
+    "929baf62ea466e965fec94aa096332ede41a0b67\n"
+    f"- Draft: {EARLIER_DRAFT}; author node; node scroll-back; transcript: "
+    f"onepipeline transcript {EARLIER} scroll-back\n"
+    "- Witness: github.com/nickderobertis/some-service "
+    "apps/dag-ui-e2e/read-latency/wire-and-errors.spec.ts:137 at "
+    "929baf62ea466e965fec94aa096332ede41a0b67\n\n</details>\n\n"
+    "The scroll-back journey failed again on a busy host; an isolated rerun passed.\n\n"
+    f'<!-- orchestrator:follow-up-comment run="{EARLIER}" root_cause="{EXISTING}" -->'
 )
+EXISTING_COMMENTS = "\n## Comments\n" + _stored_comment(
+    "20261115T100000Z-000001", "2026-11-15T10:00:00Z", EARLIER_COMMENT
+)
+
+#: The estimate line onefollowup writes and rewrites in place, found by its label.
+ESTIMATE_LINE = re.compile(r"^- Priority estimate: .*$", re.MULTILINE)
 
 #: The markers keying each scripted turn, which the composed tasks carry.
 COMMIT_MARKER = "Record the measurement in MEASURED.md and commit it."
@@ -318,25 +328,19 @@ def _repositories(root: Path) -> tuple[Repository, Repository, Path]:
 
 
 def _seed_destination(store: follow_up_store.Store) -> str:
-    """The ticket an earlier run filed, as `followups` holds one today, and its file's text."""
-    record = {
-        "schema": 14,
-        "root_cause": EXISTING,
-        "repository": ABOUT,
-        "created_by_run": EARLIER,
-        "owning_runs": [EARLIER],
-        "drafts": [f"drafts:{EARLIER}/drafts/noticed"],
-        "basis": {ABOUT: "4b825dc642cb6eb9a060e54bf8d69288fbee4904"},
-        "verified_at": "2026-10-01T11:30:00Z",
-        "host": "build-host",
-        "priority_estimate": "medium",
-        "board_estimate": "medium",
-        "frequency": "intermittent",
-    }
+    """The ticket an earlier run filed, as `followups` holds it, and its file's text: its
+    title, record and body from the board, at the priority its record last estimated, and the
+    earlier run's evidence comment."""
+    _, front, body = BOARD_TICKET.read_text(encoding="utf-8").split("---\n", 2)
+    held = yaml.safe_load(front)
+    record = held["metadata"]["orchestrator.follow-up"]
     text = (
-        '---\ntitle: "some-service: the export dialog drops unicode titles"\nstatus: backlog\n'
-        f"priority: medium\nmetadata:\n  orchestrator.follow-up: {json.dumps(record)}\n---\n"
-        "## Root cause\n\nThe export dialog drops unicode titles.\n" + EXISTING_COMMENTS
+        f"---\ntitle: {json.dumps(held['title'])}\nstatus: backlog\n"
+        f"priority: {record['board_estimate']}\nmetadata:\n"
+        f"  orchestrator.follow-up: {json.dumps(record, ensure_ascii=False)}\n---\n"
+        + body.rstrip("\n")
+        + "\n"
+        + EXISTING_COMMENTS
     )
     path = store.board / "tasks" / f"{EXISTING_ITEM}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -563,33 +567,186 @@ def test_every_draft_and_the_overrun_carry_one_disposition(verified: Verified) -
     assert len(disposed) == len(set(disposed)) == 4
 
 
+def _parts(text: str) -> tuple[dict[str, object], str, str]:
+    """A local-md item's front matter, its body, and its comments section."""
+    _, front, rest = text.split("---\n", 2)
+    body, _, comments = rest.partition("\n## Comments\n")
+    held: dict[str, object] = yaml.safe_load(front)
+    return held, body, comments
+
+
+def _record(front: Mapping[str, object]) -> dict[str, object]:
+    """The ticket record a local-md item's front matter holds."""
+    metadata = front["metadata"]
+    assert isinstance(metadata, dict), front
+    record = metadata["orchestrator.follow-up"]
+    assert isinstance(record, dict), front
+    return record
+
+
+def _sections(body: str) -> dict[str, str]:
+    """Each level-2 section of ``body`` by heading, its text trimmed."""
+    return {
+        part.split("\n", 1)[0]: part.split("\n", 1)[1].strip()
+        for part in re.split(r"^## ", body, flags=re.MULTILINE)[1:]
+    }
+
+
+def _record_paths() -> list[tuple[str, list[str]]]:
+    """The `orchestrator.follow-up` paths the checkout's `followups` source shows on fields."""
+    document = yaml.safe_load((REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8"))
+    return [
+        (str(entry["field"]), [str(key) for key in entry["path"]])
+        for entry in document["sources"]["followups"]["config"]["metadata_fields"]
+    ]
+
+
+def _filed(case: Verified) -> Path:
+    (filed,) = [
+        item for item in (case.store.board / "tasks").glob("*.md") if item.stem != EXISTING_ITEM
+    ]
+    return filed
+
+
+def _collapsed(summary: str) -> str:
+    """The opening of one collapsed block, as the shipped templates write one."""
+    return f"<details>\n<summary>{summary}</summary>\n\n"
+
+
 @pytest.mark.xdist_group("follow-ups")
 def test_one_new_ticket_lands_on_the_destination_in_the_current_record_format(
     verified: Verified,
 ) -> None:
-    items = sorted((verified.store.board / "tasks").glob("*.md"))
-    filed = [item for item in items if item.stem != EXISTING_ITEM]
-    assert len(filed) == 1, items
-    front = yaml.safe_load(filed[0].read_text("utf-8").split("---\n")[1])
-    record = front["metadata"]["orchestrator.follow-up"]
+    front, _, _ = _parts(_filed(verified).read_text("utf-8"))
+    record = _record(front)
     assert record["schema"] == 14
     assert record["created_by_run"] == verified.run
     assert front["status"] == "backlog"
+    for field, path in _record_paths():
+        value: object = record
+        for key in path:
+            assert isinstance(value, dict), (field, record)
+            value = value.get(key)
+        assert value, (field, path, record)
 
 
 @pytest.mark.xdist_group("follow-ups")
-def test_the_existing_ticket_keeps_its_record_and_comments_and_gains_this_runs_evidence(
+def test_the_new_ticket_carries_the_shipped_shape(verified: Verified) -> None:
+    """No ownership section, evidence of prose alone, `## Impact` ending in its two collapsed
+    blocks, and a one-unit fix opening with its collapsed locations, then its unit."""
+    _, body, _ = _parts(_filed(verified).read_text("utf-8"))
+    sections = _sections(body)
+    assert "Owning runs" not in sections and "Owning batches" not in sections, list(sections)
+
+    evidence = sections["Evidence"]
+    assert "\n" not in evidence and not evidence.startswith(("- ", "Host", "Basis")), evidence
+    for held in ("drafts:", scripted_agent_basis(), "onepipeline transcript"):
+        assert held not in evidence, (held, evidence)
+
+    impact = sections["Impact"]
+    cost = impact.index(_collapsed("Cost of the workaround"))
+    calculation = impact.index(_collapsed("Priority calculation"))
+    assert cost < calculation, impact
+    assert impact.endswith("</details>"), impact
+    assert impact[cost:calculation].rstrip().endswith("</details>"), impact
+    assert ESTIMATE_LINE.search(impact[calculation:]), impact
+
+    fix = sections["Suggested fix"]
+    assert fix.startswith(_collapsed("Contributing locations")), fix
+    after = fix.split("</details>", 1)[1]
+    assert after.lstrip("\n").startswith("### "), fix
+    assert len(re.findall(r"^### ", after, flags=re.MULTILINE)) == 1, fix
+
+
+def scripted_agent_basis() -> str:
+    """The basis commit the scripted agent records."""
+    held = (AGENT.read_text(encoding="utf-8").split('BASIS = "', 1)[1]).split('"', 1)[0]
+    return held
+
+
+def _expected_priority(case: Verified, record: Mapping[str, object], occurrences: int) -> str:
+    """The priority the configured rubric gives ``record``'s `impact` and frequency at
+    ``occurrences``: its severity with the workaround's level, raised one level, capped, when
+    it fires consistently or reaches the raise threshold."""
+    shown = subprocess.run(  # noqa: S603 - the pinned onefollowup, reading its configuration
+        [str(REPO_ROOT / ".venv/bin/onefollowup"), "config", "show"],
+        cwd=REPO_ROOT,
+        env=case.environment | {"ONEFOLLOWUP_HOOKS__OWNER__SESSION": SESSION},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    config = json.loads(shown.stdout)["config"]
+    order = ["urgent", "high", "medium", "low"]
+    impact = record["impact"]
+    assert isinstance(impact, dict), record
+    (level,) = [
+        held
+        for held in config["rubric"]["levels"]
+        if held["name"] == impact["Severity with the workaround"]
+    ]
+    at = order.index(level["priority"])
+    cap = order.index(config["estimate"]["raise_cap"])
+    if (
+        record.get("frequency") == "consistent" or occurrences >= config["estimate"]["raise_at"]
+    ) and at > cap:
+        at = max(at - 1, cap)
+    return order[at]
+
+
+@pytest.mark.xdist_group("follow-ups")
+def test_the_existing_ticket_keeps_its_record_body_and_comment_and_is_re_estimated(
+    verified: Verified,
+) -> None:
+    """The seeded ticket in the schema-15 shape, after this run's evidence and re-estimate:
+    every part but the estimate line as it was, its earlier evidence comment untouched and
+    counted, and its priority the rubric's for its record's `impact` and frequency."""
+    after = (verified.store.board / "tasks" / f"{EXISTING_ITEM}.md").read_text("utf-8")
+    before_front, before_body, before_comments = _parts(verified.seeded)
+    after_front, after_body, after_comments = _parts(after)
+
+    unchanged = ESTIMATE_LINE.sub("<estimate>", before_body)
+    assert ESTIMATE_LINE.sub("<estimate>", after_body) == unchanged
+    assert after_comments.startswith(before_comments), after_comments
+
+    estimated = ("priority_estimate", "board_estimate", "priority")
+    record, after_record = _record(before_front), _record(after_front)
+    assert {k: v for k, v in after_record.items() if k not in estimated} == {
+        k: v for k, v in record.items() if k not in estimated
+    }
+    assert {k: v for k, v in after_front.items() if k not in ("metadata", "priority")} == {
+        k: v for k, v in before_front.items() if k not in ("metadata", "priority")
+    }
+
+    # Its own evidence, the earlier run's comment, and this run's: three occurrences, the
+    # earlier comment counted as its marker's run's.
+    (line,) = ESTIMATE_LINE.findall(after_body)
+    assert "; 3 occurrences;" in line, line
+    expected = _expected_priority(verified, record, 3)
+    assert after_front["priority"] == expected, (after_front["priority"], expected, line)
+    assert line.startswith(f"- Priority estimate: {expected} "), line
+    assert before_front["priority"] != expected, before_front
+
+
+@pytest.mark.xdist_group("follow-ups")
+def test_the_runs_evidence_comment_opens_with_its_collapsed_sources_and_ends_with_its_marker(
     verified: Verified,
 ) -> None:
     after = (verified.store.board / "tasks" / f"{EXISTING_ITEM}.md").read_text("utf-8")
-    before_front, after_front = verified.seeded.split("\n---\n")[0], after.split("\n---\n")[0]
-    assert after_front == before_front
-    assert after.startswith(verified.seeded.rstrip("\n")), after
-    added = after[len(verified.seeded.rstrip("\n")) :]
+    added = _parts(after)[2][len(_parts(verified.seeded)[2]) :]
+    body = added.split(" -->\n", 1)[1].split("\n<!-- /onetaskgraph:comment -->", 1)[0]
+    body = body.split("\n\n", 1)[1].strip()
+    assert body.startswith(_collapsed(f"Additional evidence from follow-up run {verified.run}.")), (
+        body
+    )
     marker = f'<!-- orchestrator:follow-up-comment run="{verified.run}" root_cause="{EXISTING}" -->'
-    assert marker in added, added
+    assert body.splitlines()[-1] == marker, body
 
-    # onefollowup's own validator accepts the record as it stands on the destination.
+
+@pytest.mark.xdist_group("follow-ups")
+def test_onefollowup_still_reads_the_existing_ticket_s_record(verified: Verified) -> None:
+    """onefollowup's own validator accepts the record as it stands on the destination."""
+    after = (verified.store.board / "tasks" / f"{EXISTING_ITEM}.md").read_text("utf-8")
     tickets = verified.store.work / "tasks" / verified.run / "tickets"
     tickets.mkdir(parents=True, exist_ok=True)
     held = tickets / f"{EXISTING}.md"
@@ -642,10 +799,7 @@ def test_settle_runs_the_configured_review_sink_and_the_engine_raises_the_batchs
     assert review["title"] == f"Accept or defer the follow-up tickets from batch {verified.run}"
     held = json.dumps(review)
     assert f"follow-up batch {verified.run} filed or updated" in held, review
-    (filed,) = [
-        item for item in (verified.store.board / "tasks").glob("*.md") if item.stem != EXISTING_ITEM
-    ]
-    assert filed.stem in held, review
+    assert _filed(verified).stem in held, review
 
 
 def _replies(case: Verified, item: Path, comment: str) -> int:

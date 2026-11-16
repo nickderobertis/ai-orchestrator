@@ -1966,7 +1966,10 @@ runs the loop as plans created from templates, which the engine journals and wat
 any run. What a draft, a ticket record, a comment marker or a receipt is, the rubric a
 ticket's priority is estimated from, the status roles and who owns what on the board are
 onefollowup's own README and `onefollowup config show`; the board's options for those roles
-are the `followups` source's `status_mapping` in `onetaskgraph.yaml`.
+are the `followups` source's `status_mapping` in `onetaskgraph.yaml`. The shape a ticket's
+body and its evidence comment take is onefollowup's shipped default too, which
+`onefollowup.yaml` leaves as shipped; this host's only part in it is the `followups` source's
+`metadata_fields`, which show seven of the ticket record's values on the board's fields.
 
 **Drafting.** Every launch exports `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, the path of
 `scripts/follow-up-draft.sh`, the one command every party drafts with: a worker as itself,

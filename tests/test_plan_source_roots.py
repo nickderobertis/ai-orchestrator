@@ -426,13 +426,16 @@ def test_the_follow_ups_board_maps_every_priority_and_the_plans_board_maps_none(
 #: The board text fields a follow-up ticket's record is projected onto, and the field of
 #: onefollowup's ticket record each reads. Stated here for the reason
 #: :data:`FOLLOWUPS_PRIORITIES` is: the other party is the live board, so what is held is the
-#: projection the installed CLI resolves. Only fields onefollowup's record writes are
-#: projected, so its copies never blank a field an older record filled. The tracked document
+#: projection the installed CLI resolves. Each path is a key onefollowup's schema-14 record
+#: writes, `draft_sources`, `transcripts` and `witnesses` among them. The tracked document
 #: declares no other board; a host's own follow-up trackers are its user layer's.
 RECORD_FIELDS = (
     ("Host", "host"),
     ("Owning runs", "owning_runs"),
     ("Basis", "basis"),
+    ("Drafts", "draft_sources"),
+    ("Transcripts", "transcripts"),
+    ("Witnesses", "witnesses"),
     ("Verified at", "verified_at"),
 )
 

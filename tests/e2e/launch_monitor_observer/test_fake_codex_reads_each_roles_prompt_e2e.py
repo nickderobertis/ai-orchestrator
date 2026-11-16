@@ -63,6 +63,10 @@ def _environment() -> dict[str, str]:
         name: value
         for name, value in os.environ.items()
         if not name.startswith(("ONEHARNESS_", "FAKE_CODEX_", "ONEPIPELINE_NODE_SCRATCH_DIR"))
+    } | {
+        # Every launcher exports the decline wrapper, and the dispatch judge's run-level grant
+        # resolves through it, so a run of that role is refused before spawning without it.
+        "ORCHESTRATOR_DECLINE_RULING": str(REPO_ROOT / "scripts" / "decline-ruling.sh"),
     }
 
 
@@ -105,10 +109,17 @@ def test_the_stand_in_records_the_prompt_each_role_sends(
             check=False,
         )
         assert log.is_file(), f"{identity} under {config} never reached the stand-in"
-        # A structured role re-prompts on the stand-in's answer, so only the first launch's
+        # A structured role re-prompts on the stand-in's answer, so only the first turn's
         # prompt is the one this turn was sent; oneharness wraps it in a plan-mode template or
         # a schema where the role asks for one, so the sent text is read inside the record.
-        first = json.loads(log.read_text(encoding="utf-8").splitlines()[0])["prompt"]
+        # A run carrying a run-level grant — the dispatch judge's decline wrapper — also starts
+        # `codex app-server` around its turn to keep Codex's thread index, from oneharness
+        # 0.30.0; those launches are bookkeeping that carries no prompt, so the first `exec`
+        # launch is the turn.
+        launches = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        turns = [launch for launch in launches if launch["argv"][:1] == ["exec"]]
+        assert turns, f"{identity} under {config} started no `exec` turn: {launches}"
+        first = turns[0]["prompt"]
         assert PROMPT in first, (
             f"the stand-in recorded {first[:200]!r} as the prompt {identity} was sent under "
             f"{config}, so it read some other word of the argv oneharness built"

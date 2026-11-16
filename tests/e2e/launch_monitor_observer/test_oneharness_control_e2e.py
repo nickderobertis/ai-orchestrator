@@ -237,20 +237,24 @@ def test_a_multi_identity_chain_takes_control_and_streaming_together(
 
 def test_streaming_alone_asks_for_no_control_channel(tmp_path: Path, oneharness_bin: str) -> None:
     """The two are separable in the other direction too, which is why one is not a lever
-    for the other: a streamed turn opens no control channel and carries the prompt on argv."""
+    for the other: a streamed turn opens no control channel.
+
+    From oneharness 0.30.0 every turn hands its prompt over stdin — claude-code as
+    `--input-format text`, codex as `exec … -` — so the prompt's absence from argv no longer
+    tells a controlled turn apart; the channel's own input format and the app server do."""
     config = _single_family_chain(WORKER_CONFIG, tmp_path).config
 
     planned = _plan(oneharness_bin, config, "--stream")
 
     assert planned.refusal is None, planned.refusal
     for candidate in planned.candidates:
-        assert candidate.flag_value(CONTROL_ARGV[0]) is None, (
+        assert candidate.flag_value(CONTROL_ARGV[0]) != CONTROL_ARGV[1], (
             f"streaming alone requested a control channel: {candidate.argv}"
         )
-        assert candidate.flag_value(STREAM_ARGV[0]) == STREAM_ARGV[1], candidate.argv
-        assert PROMPT in candidate.argv, (
-            f"a streamed turn without control keeps its prompt on argv: {candidate.argv}"
+        assert "app-server" not in candidate.argv, (
+            f"streaming alone planned the codex control server: {candidate.argv}"
         )
+        assert candidate.flag_value(STREAM_ARGV[0]) == STREAM_ARGV[1], candidate.argv
 
 
 def test_no_graph_member_disables_streaming(oneagentgraph_bin: str) -> None:

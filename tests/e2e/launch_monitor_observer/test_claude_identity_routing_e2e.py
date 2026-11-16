@@ -244,6 +244,12 @@ def test_the_real_cli_refuses_a_run_whose_new_claude_indirection_is_unset(
         (tmp_path / indirection).mkdir()
         host.environment[indirection] = str(tmp_path / indirection)
     host.environment["ORCHESTRATOR_CODEX_ALT_HOME"] = str(tmp_path / "codex-alt")
+    # Every launcher exports the decline wrapper (`scripts/decline-ruling-env.sh`), and the
+    # dispatch judge's run-level grant resolves through it, so it is set here too: the
+    # missing indirection stays the only thing that can refuse the run.
+    host.environment["ORCHESTRATOR_DECLINE_RULING"] = str(
+        REPO_ROOT / "scripts" / "decline-ruling.sh"
+    )
     del host.environment[missing]
 
     refused = _run(

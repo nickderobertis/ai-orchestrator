@@ -48,7 +48,26 @@ def _slug(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
 
 
+#: When the agent verified its ticket, as its record states it.
+VERIFIED_AT = "2026-11-13T12:00:00Z"
+
+#: What the agent judged of the root cause, in the record's `impact` alone, as the shipped
+#: task teaches: never as lines in the body.
+IMPACT = {
+    "Severity": "high",
+    "Workaround": "request the last page by number",
+    "Severity with the workaround": "medium",
+}
+
+
+def witness(repository: str) -> str:
+    """The `path:line` the agent's claim rests on, at the basis commit."""
+    return f"{repository} src/cursor.py:12 at {BASIS}"
+
+
 def _ticket(batch: str, repository: str, host: str, draft: str, title: str) -> str:
+    """A ticket in onefollowup's shipped default shape: every part plain, a one-unit fix,
+    prose-only evidence, and every value the priority and the board read in its record."""
     record = {
         "schema": 14,
         "root_cause": NEW_ROOT_CAUSE,
@@ -57,37 +76,54 @@ def _ticket(batch: str, repository: str, host: str, draft: str, title: str) -> s
         "owning_runs": [batch],
         "drafts": [draft],
         "basis": {repository: BASIS},
-        "verified_at": "2026-11-13T12:00:00Z",
+        "witnesses": [witness(repository)],
+        "verified_at": VERIFIED_AT,
         "host": host,
         "frequency": "intermittent",
+        "impact": IMPACT,
     }
+    name = repository.rsplit("/", 1)[-1]
     sections = {
-        "Root cause": "The listing cursor stops one page early, so a reader misses the last page.",
+        "Root cause": (
+            "A listing stops one page early, so a reader of a long listing never sees its last "
+            "page of results."
+        ),
         "Impact": (
             "**Who is affected.** Readers of long listings.\n"
-            "**What it costs them.** The last page of results.\n"
+            "**What it costs them.** The last page of results, on every long listing.\n"
             "**What it costs the product owner.** Some readers miss results each week.\n"
             "**Cost of the workaround.**\n"
             "- Applying it: one more request per listing, by the reader\n"
             "- Side effects on the outcome: none\n"
-            "- Discovery: the failure names it\n\n"
-            "- Severity: high\n"
-            "- Workaround: request the last page by number\n"
-            "- Severity with the workaround: medium"
+            "- Discovery: the failure names it"
         ),
         "Examples": f"{title}.",
         "Suggested fix": (
-            "Stop the cursor after the last page rather than before it.\n\n"
-            "**Contributing locations.**\n- some-service `src/cursor.py`: stops one page early"
+            "**Contributing locations.**\n"
+            f"- {name} `src/cursor.py`: stops the cursor before the last page\n\n"
+            f"### Stop the cursor after the last page — `{name}`\n\n"
+            "Stop the cursor after the last page rather than before it, so every page of a "
+            "listing is read. This changes behaviour without changing an interface."
         ),
-        "Owning batches": f"- {batch}",
-        "Evidence": f"Host {host}: page 9 of 9 never rendered at the basis.",
+        "Evidence": "A reader paged a long listing at the basis and page 9 of 9 never rendered.",
     }
-    body = "".join(f"## {name}\n\n{text}\n\n" for name, text in sections.items())
-    name = repository.rsplit("/", 1)[-1]
+    body = "".join(f"## {heading}\n\n{text}\n\n" for heading, text in sections.items())
     return (
         f'---\ntitle: "{name}: {title}"\nmetadata:\n  orchestrator.follow-up: '
         f"{json.dumps(record)}\n---\n{body.rstrip()}\n"
+    )
+
+
+def sources(host: str, repository: str, drafts: list[str]) -> str:
+    """The `--sources-file` an evidence comment is staged with: its provenance, held as a
+    ticket record's is, which the shipped comment collapses under its opening summary."""
+    return json.dumps(
+        {
+            "host": host,
+            "basis": {repository: BASIS},
+            "drafts": drafts,
+            "witnesses": [witness(repository)],
+        }
     )
 
 
@@ -113,12 +149,17 @@ def verify(checkout: Path, batch: str, new: str, evidence: str, item: str, cause
     )
     _run(checkout, ["onefollowup", "ticket", "validate", "--batch", batch, NEW_ROOT_CAUSE])
     _run(checkout, ["onefollowup", "ticket", "copy", "--batch", batch, NEW_ROOT_CAUSE])
+    provenance = work / "tasks" / batch / "evidence-sources.json"
+    provenance.write_text(sources(host, repository, [evidence_draft]), encoding="utf-8")
     _run(
         checkout,
         ["onefollowup", "ticket", "comment", "--batch", batch, "--item", item]
-        + ["--root-cause", cause],
-        f"Host {host}: the export dialog dropped a unicode title again at the basis.\n",
+        + ["--root-cause", cause, "--sources-file", str(provenance)],
+        "The scroll-back journey failed again on a detached button while the first screen "
+        "was handed off.\n",
     )
+    # The shipped task's step 10: after every evidence comment, a re-estimate of that item.
+    _run(checkout, ["onefollowup", "ticket", "re-estimate", "--batch", batch, item])
 
     dispositions = [
         {
