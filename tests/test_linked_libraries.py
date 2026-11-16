@@ -317,6 +317,16 @@ RULING_PROVENANCE_ENGINE_FLOOR = Release(0, 110, 0)
 #: each links rather than through `config/onevcs.version`.
 WARM_HOST_READS_ONEVCS_FLOOR = Release(0, 65, 2)
 
+#: onevcs https://github.com/nickderobertis/onevcs/pull/680 (`56544dc0`), first cut as
+#: 0.67.1 and linked, at 0.67.2, by onepipeline 0.113.3 and onepipeline-api 0.83.3:
+#: crates/onevcs/src/cleanliness.rs files each worktree's cleanliness under
+#: `$ONEVCS_HOME/cache/cleanliness/`, rechecks an active worktree when its inputs change and
+#: answers an idle pool slot from its record until the slot is next opened or claimed, never
+#: reusing an answer by age, and the host-wide read walks checkouts concurrently. Below it
+#: `onepipeline unpublished --host` took about 5 s warm on this host. Held on both packages'
+#: linked copies for the reason the floor above is.
+SUB_SECOND_HOST_READS_ONEVCS_FLOOR = Release(0, 67, 1)
+
 
 #: The three sibling releases carrying https://github.com/nickderobertis/ai-orchestrator/issues/1004's
 #: linked-library fixes, which the engine linked in
@@ -638,6 +648,11 @@ def test_the_linked_onevcs_answers_a_warm_host_wide_read_without_rederiving(
         "that reuses a recovery decision per branch and checkout; every host-wide "
         "unpublished read would derive every branch again"
     )
+    assert linked >= SUB_SECOND_HOST_READS_ONEVCS_FLOOR, (
+        f"{distribution} links onevcs {linked}, below the "
+        f"{SUB_SECOND_HOST_READS_ONEVCS_FLOOR} that answers an idle worktree's cleanliness "
+        "from its record; every warm host-wide unpublished read would walk every worktree"
+    )
 
 
 def test_the_linked_onevcs_lets_a_session_open_its_own_draft() -> None:
@@ -865,7 +880,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.13.0", core="0.29.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.23.1", core="0.29.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.113.1", core="0.29.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.113.3", core="0.29.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source

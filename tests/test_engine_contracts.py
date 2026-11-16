@@ -2929,11 +2929,11 @@ def test_the_built_run_root_reads_the_start_time_field_onevcs_records() -> None:
     against `onevcs`'s one declaration. A copy reading the wrong field verifies nothing
     while looking like it does: every built dispatch reads as a reused pid.
     """
-    declared = ONEVCS_STAT_FIELD.search(_source(ONEVCS, "workspace.rs"))
+    declared = ONEVCS_STAT_FIELD.search(_source(ONEVCS, "workspace_process_start.rs"))
     assert declared is not None, (
         f"{ONEVCS.crate} {ONEVCS.ref} no longer reads a numbered field out of "
-        "/proc/<pid>/stat in workspace.rs, so what a process's creation identity means "
-        "has moved; re-read it and correct every copy"
+        "/proc/<pid>/stat in workspace_process_start.rs, so what a process's creation "
+        "identity means has moved; re-read it and correct every copy"
     )
     copied = RINDEX_STAT_FIELD.search(PROBE_RUN_ROOT.read_text("utf-8"))
     assert copied is not None, (

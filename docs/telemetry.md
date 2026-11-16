@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.113.1 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.113.3 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -474,7 +474,7 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.83.2**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.83.3**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 29 on the envelope, as 0.81.2 and 0.82.0 served, where 0.81.1, 0.81.0, 0.80.0 and 0.79.0
    served 28, 0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
@@ -501,7 +501,7 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
    runs read here. On 0.80.0, ten of this host's own recent runs served telemetry 28
    and timeline 15, and 0.81.0 and 0.81.1 declare the same two in their own `src/contract.rs`;
-   0.81.2, 0.82.0, 0.83.0 and 0.83.2 declare telemetry 29 and timeline 15 there, and on 0.82.0 ten of this
+   0.81.2, 0.82.0, 0.83.0, 0.83.2 and 0.83.3 declare telemetry 29 and timeline 15 there, and on 0.82.0 ten of this
    host's own recent runs served telemetry 29 and timeline 15.
    On 0.12.1 this was re-read against the recorded runs under
    `tests/fixtures/timeline-runs/`, which serve both schema numbers, every phase above,

@@ -51,7 +51,7 @@ WRAPPERS: dict[str, frozenset[str]] = {
         {"onepipeline", "onevcs", "onebudgetspec", "jq"}
     ),
     "recipe:follow-up": frozenset(),
-    "recipe:follow-ups": LAUNCH | {"jq"},
+    "recipe:follow-ups": LAUNCH | {"onefollowup", "jq"},
     "recipe:follow-ups-answer-comments": LAUNCH | {"onefollowup", "jq"},
 }
 #: `scripts/run-ended.sh`'s success branch runs `just follow-ups`, so it is a wrapper by
