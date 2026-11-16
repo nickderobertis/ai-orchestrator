@@ -35,6 +35,11 @@ fi
 store="$root/.venv/bin/onetaskgraph"
 graph="$root/.venv/bin/oneagentgraph"
 judge=("$graph" run graphs/planner.yaml --judge-only --member worker)
+# Every task is judged under the planner persona's plan-review bar ("a principal engineer
+# reviewing a plan before anyone builds from it"), never under the task's own worker persona:
+# a worker persona's bar is a completion check, and a task description is never finished
+# work, so judging under it refuses tasks as "no commits, no tests" regardless of content.
+plan_reviewer=../personas/planner.yaml
 
 if ! scratch=$(mktemp -d "${TMPDIR:-/tmp}/review-plan-item.XXXXXX") ||
     ! mkdir -p "$scratch/tasks" "$scratch/projects"; then
@@ -114,7 +119,7 @@ if [ "$#" -eq 0 ]; then
     composed=$(jq -r '"---\n" + ({title: .task.title} | tojson) + "\n---\n" + .task.body' <<<"$hook") || exit 2
     printf '%s\n' "$composed" >"$file" || scratch_failed "$file"
     status=0
-    judged "$file" "$(jq -r '.node.persona // ""' <<<"$hook")" || status=$?
+    judged "$file" "$plan_reviewer" || status=$?
     exit "$status"
 fi
 
@@ -170,7 +175,7 @@ for id in ${stale[@]+"${stale[@]}"}; do
     fi
     file=$(native_file "$id" "$scratch/tasks") || exit 2
     status=0
-    judged "$file" "$persona" || status=$?
+    judged "$file" "$plan_reviewer" || status=$?
     case "$status" in
         0) "$store" task attest "$id" --kind plan-review --by review-plan --bar "$bar" "${settled[@]}" --no-interactive >/dev/null ;;
         1) refused=1 ;;
