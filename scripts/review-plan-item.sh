@@ -9,16 +9,18 @@
 #       Reviews what is not yet reviewed. The bar is the planner member's fingerprint
 #       (`--bar-fingerprint`); every task whose `plan-review` attestation does not check
 #       `valid` under it (`onetaskgraph project attestation check --tasks`) is judged under
-#       its own node persona and, on a pass, attested with `onetaskgraph task attest`. Then,
-#       unless the project's own attestation is valid, the project's description is judged
-#       the same way, every task beside it for the judge to read, and attested on a pass.
+#       the planner persona's plan-review bar (`personas/planner.yaml`), never its own worker
+#       persona's, and on a pass attested with `onetaskgraph task attest`. Then, unless the
+#       project's own attestation is valid, the project's description is judged by the same
+#       panel with no persona named, every task beside it for the judge to read, and
+#       attested on a pass.
 #       Exit 0 when everything is reviewed, 1 when a judge refused something (nothing is
 #       recorded for it), 2 when something could not be read or judged.
 #
 #   review-plan-item.sh < <hook document>
 #       The engine's plan-edit hook (`plan_edit_hook` in config/onepipeline.launch.yaml):
 #       the document on stdin is one live edit's composed task, judged the same way under
-#       the node's persona and recorded nothing. Exit 0 passes, 1 refuses with the judge's
+#       the planner persona's plan-review bar and recorded nothing. Exit 0 passes, 1 refuses with the judge's
 #       findings on stderr, anything else is "could not be judged".
 #
 # The judged material is written under a scratch directory laid out as the checklist's

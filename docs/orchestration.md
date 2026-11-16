@@ -351,9 +351,10 @@ is `scripts/review-plan-item.sh`, the planning run's `review` step exactly. Its 
 planner member's fingerprint, `oneagentgraph run graphs/planner.yaml --judge-only --member
 worker --bar-fingerprint`; every task whose `plan-review` attestation does not check `valid`
 under it (`onetaskgraph project attestation check --tasks`) is judged by that judge-only run
-under its own node persona and, on a pass, attested with `onetaskgraph task attest --kind
-plan-review`; then the project's description is judged the same way, with every task beside
-it, and attested with `onetaskgraph project attest`. The judge panel is
+under the planner persona's plan-review bar (`personas/planner.yaml`), never its own worker
+persona's completion bar, and on a pass attested with `onetaskgraph task attest --kind
+plan-review`; then the project's description is judged by the same panel with no persona
+named, with every task beside it, and attested with `onetaskgraph project attest`. The judge panel is
 `graphs/planner.yaml`'s: the planner's `reviewer` and the `plan-checklist` llmlint judge
 under `config/plan-checklist.llmlint.yml`, whose rules read each record's metadata — budget
 records, the unit — as well as its body. Whether an attestation is `valid`, `void` with its

@@ -5,7 +5,9 @@
 # plan's description, and attests under this member's `--bar-fingerprint`.
 #
 # - `reviewer` is the simulated user every dispatch has, holding the review bar of the
-#   persona judged under: the judgment calls. It runs `oneharness.judge.toml`, which is
+#   persona judged under: the judgment calls. A plan review names `personas/planner.yaml`
+#   for every task, so a task is held to the plan-review bar rather than to its own worker
+#   persona's completion bar, which no task description can meet. It runs `oneharness.judge.toml`, which is
 #   `read-only`, so the panel starts as it is: onejudge refuses a panel holding a judge
 #   in a writable mode, and this graph sets no `allow_writable_judges`, because a
 #   read-only reviewer needs none.
