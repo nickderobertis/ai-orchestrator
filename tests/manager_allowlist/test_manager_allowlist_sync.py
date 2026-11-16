@@ -182,13 +182,22 @@ def test_the_sync_reports_unmapped_each_exact_grant_and_path_rule_left_to_claude
 
 
 def _source_rules() -> list[str]:
-    rules = tomllib.loads(SOURCE.read_text(encoding="utf-8"))["allowed_tools"]
+    rules = tomllib.loads(SOURCE.read_text(encoding="utf-8"))["sync"]["allowed_tools"]
     assert isinstance(rules, list)
     return [str(rule) for rule in rules]
 
 
-def test_nothing_discovers_the_source_and_no_role_config_carries_a_permission_list() -> None:
-    """Loaded only by `--config`: a dispatched side never runs under the manager's policy."""
+#: The one role config that carries a run-level `allowed_tools`: the dispatch judge's grant
+#: of the decline command, applied by `oneharness run` to each judge run alone.
+RUN_LEVEL_GRANT = "oneharness.judge.toml"
+
+
+def test_nothing_discovers_the_source_and_no_role_config_but_the_judge_carries_a_grant() -> None:
+    """Loaded only by `--config`: a dispatched side never runs under the manager's policy.
+
+    No role config carries a sync policy — no `[sync]` table and no `denied_tools` — and
+    only the dispatch judge's carries a run-level `allowed_tools`, which oneharness applies
+    to one run alone and never syncs."""
     environment = {
         name: value for name, value in os.environ.items() if not name.startswith("ONEHARNESS_")
     }
@@ -207,6 +216,11 @@ def test_nothing_discovers_the_source_and_no_role_config_carries_a_permission_li
     for role in sorted(REPO_ROOT.glob("oneharness*.toml")):
         text = role.read_text(encoding="utf-8")
         assert SOURCE.name not in text, f"{role.name} names the manager's allowlist"
-        assert not re.search(r"^\s*(allowed|denied)_tools\s*=", text, re.MULTILINE), (
-            f"{role.name} carries a permission list; the role configs carry no manager policy"
+        assert not re.search(r"^\s*denied_tools\s*=|^\s*\[+\s*sync\b", text, re.MULTILINE), (
+            f"{role.name} carries a sync policy; the role configs carry no manager policy"
+        )
+        granted = re.search(r"^\s*allowed_tools\s*=", text, re.MULTILINE) is not None
+        assert granted == (role.name == RUN_LEVEL_GRANT), (
+            f"{role.name} {'carries' if granted else 'lacks'} a run-level `allowed_tools`; "
+            f"only {RUN_LEVEL_GRANT} grants a run anything"
         )

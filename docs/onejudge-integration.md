@@ -187,6 +187,39 @@ argv each builds is oneharness's own (`crates/oneharness-core/src/domain/harness
   oneharness's read-only tool set — `--tools Read Grep Glob WebFetch WebSearch` at the
   pinned oneharness, the web reads included — so no shell and no writer.
 
+**The dispatch judge is granted exactly one command: the decline wrapper.**
+`oneharness.judge.toml` sets the run-level `allowed_tools =
+["Bash($ORCHESTRATOR_DECLINE_RULING:*)"]` beside its mode, which oneharness (0.30.0 on)
+applies to each judge run alone and writes nowhere that outlives it. It resolves the variable
+to the absolute path every dispatch's environment holds, refuses the run before spawning if
+that is unset, and adds a line to the turn's system instructions naming that path and how to
+type it. The grant matches only a call typed as that absolute path, as one plain command,
+with the reason as one quoted argument (`--reason`); a call typed `"$ORCHESTRATOR_DECLINE_RULING"`,
+a compound, a redirection or any other executable stays refused. Per harness in the judge
+chain, on Linux (off Linux every harness withholds the grant and runs as above):
+
+- **Claude Code** — applied on per-run flags: `--permission-mode dontAsk` in place of
+  `bypassPermissions`, `Bash` added to the read-only tools, and `--allowedTools` naming
+  those tools plus `Bash(<absolute path>:*)`, so every other shell call is refused.
+- **Codex** — applied through a per-run overlay `CODEX_HOME` whose `rules/` adds one
+  `prefix_rule` allowing the path, removed when the run ends; `--sandbox read-only` is
+  unchanged, so the wrapper runs outside the sandbox and every other command stays in it.
+  A granted turn runs on its own app-server, started on the overlay home and retired with
+  the run, rather than the pooled one, whose rules are its own home's. Codex withholds the
+  grant for a keyring login or a home that does not exist.
+
+A harness that withholds it runs exactly as it would with no grant and reports the
+withheld rule in the run's `diagnostics`; the judge then names the ruling and its reason in
+its verdict, as `templates/dispatch-appendix.md` tells it to where no command is named.
+
+`graphs/planner.yaml`'s `reviewer` runs the same file, so `scripts/review-plan-item.sh`
+exports the variable as every launcher does; outside a run the wrapper has no
+`ONEPIPELINE_RUN_ID` to decline on and refuses, so that grant is inert there.
+
+**The design-document judge has no grant.** It holds a document to the `design-doc`
+template in `just plan`'s flow, outside any node's dispatch, and any manager ruling it would
+see is already in the plan's Decided part, which plan review and the user's approval judge.
+
 **`--strict-mcp-config` is the one remaining fill.** oneharness's read-only mode still
 loads every MCP server the worktree or identity configures, and under `bypassPermissions`
 their tools would run unprompted, so each judge file's `[harness.claude-code] args` carries
@@ -213,7 +246,11 @@ roles and the shared parents carry none of these settings.
 `tests/e2e/launch_monitor_observer/test_supervisory_codex_posture_e2e.py` holds them to what the real CLI
 resolves and to the argv a dry run builds per identity, and fails on a mode other than
 `read-only`, a sandbox pinned by hand or missing from Codex's argv, a Claude Code tool
-set other than the read-only one, or a lost `--strict-mcp-config`.
+set other than the read-only one (plus `Bash` under `dontAsk` and the decline rule alone,
+for the dispatch judge), a grant on the design-document judge, or a lost
+`--strict-mcp-config`. `tests/judge_grant/` drives the real Claude Code and Codex CLIs under
+the dispatch judge's grant against a scripted model endpoint, and holds that a worktree
+write is refused while the decline reaches the run's channel.
 
 ### The access a channel-writing supervisory member runs with
 
@@ -382,10 +419,15 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.26.1 is
-the adopted release. What the releases since 0.17.0 change is how a reader meets the
+`config/oneharness.version` release and rejects a stale binary. Version 0.30.0 is
+the adopted release. Up to 0.28.8 the releases since 0.17.0 change how a reader meets the
 CLI and what a Codex process it starts downloads, and none of it moves what this host's
-configs select. 0.23.0 launches every Codex run and usage probe with plugins off
+configs select. 0.29.0 moves every sync-policy field into a `[sync]` section
+([oneharness#1597](https://github.com/nickderobertis/oneharness/pull/1597)), so
+`config/manager-allowlist.toml` states its list there, and 0.30.0 applies a top-level
+`allowed_tools` to one run alone
+([oneharness#1626](https://github.com/nickderobertis/oneharness/pull/1626)), the dispatch
+judge's grant described under "The mode a judge runs in". 0.23.0 launches every Codex run and usage probe with plugins off
 (`-c features.plugins=false`) unless a config's typed `plugins = true` opts in
 ([oneharness#1457](https://github.com/nickderobertis/oneharness/pull/1457)), which
 `tests/e2e/launch_monitor_observer/test_codex_plugins_off_e2e.py` reads off the argv
@@ -1056,7 +1098,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.26.1, a config's per-harness `model` **beats** the variable, while the `--model`
+0.30.0, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/release_pins/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -1193,7 +1235,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.26.1, confirmed against the binary:
+candidate it ended up running — through oneharness 0.30.0, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex

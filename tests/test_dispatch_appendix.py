@@ -1259,7 +1259,9 @@ def test_the_appendix_tells_a_worker_to_ask_rather_than_stop(appendix: str) -> N
 
 #: The rule on whose ruling binds, in what each paragraph has to say. The attribution lines
 #: are held to the engine's own sentences below rather than restated here.
-DECLINE_SEAM = re.compile(r'"\$ORCHESTRATOR_DECLINE_RULING"\s+--ruling\s+<ref>')
+DECLINE_SEAM = re.compile(
+    r'"\$ORCHESTRATOR_DECLINE_RULING"\s+--ruling\s+<ref>\s+--reason\s+\'<your\s+reason>\''
+)
 WHOSE_RULING = re.compile(r"\*\*Whose\s+ruling\s+it\s+is\s+decides\s+how\s+it\s+binds\.\*\*")
 WHOSE_RULING_SAYS = (
     ("that a user ruling binds", re.compile(r"a\s+user\s+ruling\s+binds\s+absolutely")),
@@ -1273,30 +1275,32 @@ WHOSE_RULING_SAYS = (
             r"you\s+may\s+decline\s+it\s+where\s+following\s+it\s+would\s+work\s+against\s+the\s+user's\s+goal"
         ),
     ),
-    ("the one route to decline it", DECLINE_SEAM),
-    (
-        "that a decline carries its reason",
-        re.compile(r"piping\s+your\s+reason\s+into\s+it"),
-    ),
+    ("the one route to decline it, its reason given as `--reason`", DECLINE_SEAM),
     ("that a decline is never silent", re.compile(r"never\s+silently")),
     (
         "which text is the supervisor's",
         re.compile(r"carries\s+neither\s+line\s+is\s+the\s+supervisor's\s+own"),
     ),
 )
-JUDGE_DEPARTS = re.compile(
-    r"\*\*A\s+judge\s+raises\s+its\s+own\s+departure\s+from\s+a\s+manager\s+ruling,\s+in\s+its\s+verdict\.\*\*"
-)
+JUDGE_DEPARTS = re.compile(r"\*\*A\s+judge\s+that\s+departs\s+from\s+a\s+manager\s+ruling\b")
 JUDGE_DEPARTURE_SAYS = (
     (
-        "that the verdict itself names the ruling and the reason",
+        "that the judge runs the decline command its instructions name, by its absolute path",
         re.compile(
-            r"its\s+verdict\s+itself\s+names\s+that\s+ruling\s+by\s+its\s+reference\s+and\s+gives\s+its\s+reason"
+            r"runs\s+the\s+decline\s+command\s+its\s+instructions\s+name,\s+typed\s+as\s+the"
+            r"\s+absolute\s+path\s+given\s+there"
         ),
     ),
     (
-        "that the judge does not wait for the worker",
-        re.compile(r"rather\s+than\s+waiting\s+for\s+the\s+worker\s+to\s+raise\s+it"),
+        "that the judge gives the ruling and its reason as arguments",
+        re.compile(r"`--ruling\s+<ref>\s+--reason\s+'<reason>'`"),
+    ),
+    (
+        "that the verdict carries the departure only where no command is named",
+        re.compile(
+            r"where\s+no\s+such\s+command\s+is\s+named,\s+it\s+names\s+the\s+ruling\s+and\s+its"
+            r"\s+reason\s+in\s+its\s+verdict\s+instead"
+        ),
     ),
     (
         "that the judge never refuses work for following a manager ruling",
@@ -1304,10 +1308,20 @@ JUDGE_DEPARTURE_SAYS = (
     ),
     (
         "that the judge enforces a user ruling",
-        re.compile(r"A\s+user\s+ruling\s+it\s+enforces\s+as\s+written"),
+        re.compile(r"enforces\s+a\s+user\s+ruling\s+as\s+written"),
     ),
-    # Not a command: a dispatched judge runs read-only, so no guidance tells it to run one.
 )
+
+#: What the judge's instruction must never say again: the verdict as its only route, or the
+#: variable as what to type — the grant matches only the absolute path, and a call typed
+#: `"$ORCHESTRATOR_DECLINE_RULING"` is refused on Claude Code and sandboxed on Codex.
+RETIRED_JUDGE_ROUTE = (
+    re.compile(r"raises\s+its\s+own\s+departure\s+from\s+a\s+manager\s+ruling,\s+in\s+its\s+verdict"),
+    re.compile(r"no\s+command\s+of\s+its\s+own\s+to\s+reach\s+the\s+channel"),
+)
+
+#: At most this many sentences: every dispatch loads the appendix.
+JUDGE_DEPARTURE_SENTENCES = 2
 
 
 def _paragraph(appendix: str, opening: re.Pattern[str]) -> str:
@@ -1353,11 +1367,35 @@ def test_the_appendix_gives_the_judge_its_own_duty_to_raise_a_departure(
 ) -> None:
     """The judge reads the same ruling and must raise its own departure: one that reached
     the manager only when the worker chose to relay it would leave the supervisor that saw
-    the problem with no way to say so. A dispatched judge runs read-only — no shell on one
-    chain, a sandbox refusing the channel's write on the other — so the duty is stated as
-    what it can do, in its verdict, and the paragraph tells it to run no command."""
+    the problem with no way to say so. A dispatched judge runs read-only, granted the decline
+    command alone by oneharness, which names its absolute path in the judge's instructions —
+    the only spelling the grant matches — so the paragraph sends it there, with the reason as
+    an argument because no stdin form passes Codex's sandbox, and keeps the verdict for a
+    judge no command was named to."""
     paragraph = _paragraph(appendix, JUDGE_DEPARTS)
     assert stated_by.search(paragraph), f"{APPENDIX}'s judge duty no longer says {what}"
+
+
+def test_the_judges_instruction_is_two_sentences_and_replaces_the_verdict_only_route(
+    appendix: str,
+) -> None:
+    """The judge's instruction is the approved design's two sentences at most; it replaces
+    the verdict-only route rather than standing beside it, and never tells a judge to type
+    the variable the grant would refuse."""
+    paragraph = _paragraph(appendix, JUDGE_DEPARTS)
+    sentences = [s for s in re.split(r"(?<=[.!?])\*{0,2}\s+(?=[A-Z*])", paragraph) if s.strip()]
+    # llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The bound is the instruction's specified form, not a measured cost: the approved design for the judge's decline replaces the verdict-only paragraph with "at most two sentences", and this node's acceptance criteria require this module to hold the appendix to that wording, so a third sentence is a departure from the approved text rather than an overrun of a budget.  # noqa: E501 - a directive is one line
+    assert len(sentences) <= JUDGE_DEPARTURE_SENTENCES, (
+        f"{APPENDIX}'s judge instruction is {len(sentences)} sentences: {sentences}"
+    )
+    # llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
+    assert "$ORCHESTRATOR_DECLINE_RULING" not in paragraph, (
+        f"{APPENDIX} tells a judge to type the variable, which its grant refuses: {paragraph}"
+    )
+    for retired in RETIRED_JUDGE_ROUTE:
+        assert not retired.search(" ".join(appendix.split())), (
+            f"{APPENDIX} still says {retired.pattern}"
+        )
     assert "$ORCHESTRATOR_DECLINE_RULING" not in paragraph, (
         f"{APPENDIX} tells a read-only judge to run a command it cannot run:\n{paragraph}"
     )

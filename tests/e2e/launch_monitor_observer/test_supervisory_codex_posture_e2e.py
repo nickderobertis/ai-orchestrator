@@ -3,7 +3,11 @@
 Both onejudge judge sides state `read-only` at their own top level, never a planning mode,
 and leave what that mode withholds to oneharness: Codex is handed its read-only sandbox by
 the mode and by no judge file, and Claude Code is handed the mode's own reading tool set,
-beside the one remaining fill, `--strict-mcp-config`. Every supervisory Codex role switches
+beside the one remaining fill, `--strict-mcp-config`. The dispatch judge alone adds one
+permission, a run-level `allowed_tools` naming the decline command, which oneharness applies
+to each judge run alone: the absolute path `$ORCHESTRATOR_DECLINE_RULING` names becomes the
+only command the turn may run, on Claude Code's per-run flags and on Codex's per-run overlay
+home, and the design-document judge carries none. Every supervisory Codex role switches
 the ChatGPT-app connector tools off; no worker role or shared parent carries any of it. Why
 is `docs/onejudge-integration.md`'s, "The mode a judge runs in". The role files are the one
 source of each setting: this module asks the real `oneharness` what each resolves to,
@@ -12,9 +16,10 @@ paid turn. The argv a mode builds is oneharness's, so it is read off the CLI rat
 restated here, and a release that changes it shows up as a changed argv below.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] Not expensive: the
-module's 22 journeys each ask the installed `oneharness` for a resolved config or a dry-run
-argv — no provider turn, no launch, no network — and the slowest takes 0.17 s
-(`pytest --durations`), so a project of its own would buy no skipped work.
+module's 21 journeys each ask the installed `oneharness` for a resolved config, a dry-run
+argv or its harness list — no provider turn, no launch, no network — and none takes more
+than a fraction of a second (`pytest --durations`), so a project of its own would buy no
+skipped work.
 """
 
 from __future__ import annotations
@@ -32,6 +37,19 @@ from orchestrator.root import REPO_ROOT
 
 #: The judge sides onejudge frames, each named by the wiring that dispatches it.
 JUDGE_ROLES = ("oneharness.judge.toml", "oneharness.design-doc-judge.toml")
+
+#: The judge that runs inside a node's dispatch, and the one run-level grant it states: the
+#: decline command, written as the variable every dispatch inherits.
+GRANTED_JUDGE = "oneharness.judge.toml"
+DECLINE_GRANT = ["Bash($ORCHESTRATOR_DECLINE_RULING:*)"]
+
+#: The design-document judge, which runs in `just plan`'s flow rather than a dispatch and
+#: is granted nothing beyond reading.
+UNGRANTED_JUDGE = "oneharness.design-doc-judge.toml"
+
+#: The real decline wrapper, as every dispatch's `ORCHESTRATOR_DECLINE_RULING` names it:
+#: the value a judge run resolves the grant's variable to.
+DECLINE_WRAPPER = str(REPO_ROOT / "scripts" / "decline-ruling.sh")
 
 #: The mode each judge file states for itself, never inherits, and oneharness enforces per
 #: harness: a sandbox on a Codex turn, a reading tool set on a Claude Code one.
@@ -80,9 +98,15 @@ def _environment() -> dict[str, str]:
     """The suite's environment less `ONEHARNESS_*`, whose overrides beat every file.
 
     A worker runs this suite from inside a dispatch, so an inherited override would be
-    read in place of the file under test.
+    read in place of the file under test. `ORCHESTRATOR_DECLINE_RULING` is set to this
+    checkout's wrapper, as every dispatch's environment sets it, because the dispatch
+    judge's grant resolves through it and a run with it unset is refused before spawning.
     """
-    return {key: value for key, value in os.environ.items() if not key.startswith("ONEHARNESS_")}
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("ONEHARNESS_")
+    }
+    environment["ORCHESTRATOR_DECLINE_RULING"] = DECLINE_WRAPPER
+    return environment
 
 
 # llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell suite, and the only tool
@@ -105,8 +129,9 @@ def _resolved(oneharness_bin: str, config: str) -> dict[str, Any]:
     return resolved
 
 
-def _planned_command(oneharness_bin: str, config: str, harness_id: str) -> str:
-    """The argv a run of `config` would hand `harness_id`, from a dry run that spends nothing."""
+def _planned(oneharness_bin: str, config: str, harness_id: str) -> dict[str, Any]:
+    """The one result a dry run of `config` plans for `harness_id`: its argv, as a list, and
+    the environment a per-run overlay would set on the harness — spending nothing."""
     proc = subprocess.run(
         [
             oneharness_bin,
@@ -118,6 +143,8 @@ def _planned_command(oneharness_bin: str, config: str, harness_id: str) -> str:
             "--print-command",
             "--prompt",
             "x",
+            "--format",
+            "json",
         ],
         cwd=REPO_ROOT,
         env=_environment(),
@@ -126,13 +153,32 @@ def _planned_command(oneharness_bin: str, config: str, harness_id: str) -> str:
         timeout=e2e_timeout(30),
     )
     assert proc.returncode == 0, f"{config} did not plan {harness_id}: {proc.stderr}"
-    commands = [
-        line.strip().removeprefix("command: ")
-        for line in proc.stdout.splitlines()
-        if line.strip().startswith("command: ")
-    ]
-    assert len(commands) == 1, f"{config} planned {commands} for {harness_id}"
-    return commands[0]
+    results: list[dict[str, Any]] = json.loads(proc.stdout)["results"]
+    assert len(results) == 1, f"{config} planned {results} for {harness_id}"
+    return results[0]
+
+
+def _planned_command(oneharness_bin: str, config: str, harness_id: str) -> str:
+    """The argv a run of `config` would hand `harness_id`, as one string."""
+    return " ".join(_planned(oneharness_bin, config, harness_id)["command"])
+
+
+def _grants_run_allowlists(oneharness_bin: str, harness: str) -> bool:
+    """Whether the pinned release applies a run-level allowlist on `harness` on this platform,
+    as `oneharness list` reports it; a harness that does not withholds the grant."""
+    proc = subprocess.run(
+        [oneharness_bin, "list", "--format", "json"],
+        cwd=REPO_ROOT,
+        env=_environment(),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+    )
+    assert proc.returncode == 0, proc.stderr
+    listed = {entry["id"]: entry for entry in json.loads(proc.stdout)["harnesses"]}
+    supported = listed[harness]["supports_run_allowed_tools"]
+    assert isinstance(supported, bool), listed[harness]
+    return supported
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
@@ -160,15 +206,23 @@ def test_the_judge_roles_are_the_judges_the_wiring_names() -> None:
     assert "judge_config: oneharness.judge.toml" in base
 
 
-def _offered_tools(command: str) -> list[str]:
-    """The tools a planned Claude Code argv names after its one `--tools` flag."""
-    words = command.split()
-    assert words.count("--tools") == 1, f"expected exactly one --tools in: {command}"
-    offered: list[str] = []
-    for word in words[words.index("--tools") + 1 :]:
+def _flag_values(command: list[str], flag: str) -> list[str] | None:
+    """The words a planned argv names after its one `flag`, or `None` when it has none."""
+    if flag not in command:
+        return None
+    assert command.count(flag) == 1, f"expected at most one {flag} in: {command}"
+    values: list[str] = []
+    for word in command[command.index(flag) + 1 :]:
         if word.startswith("-"):
             break
-        offered.append(word)
+        values.append(word)
+    return values
+
+
+def _offered_tools(command: list[str]) -> list[str]:
+    """The tools a planned Claude Code argv names after its one `--tools` flag."""
+    offered = _flag_values(command, "--tools")
+    assert offered is not None, f"expected exactly one --tools in: {command}"
     return offered
 
 
@@ -203,8 +257,20 @@ def test_every_codex_judge_takes_its_read_only_sandbox_from_the_mode(
 
     codex = _identities(oneharness_bin, config, "codex")
     assert codex, f"{config} names no Codex identity to hold to the sandbox"
+    granted = config == GRANTED_JUDGE and _grants_run_allowlists(oneharness_bin, "codex")
     for identity in codex:
-        command = _planned_command(oneharness_bin, config, identity)
+        planned = _planned(oneharness_bin, config, identity)
+        command = " ".join(planned["command"])
+        # The grant reaches Codex only as a per-run overlay home whose `rules/` holds the
+        # decline command's prefix rule; the argv, and so the sandbox, is unchanged.
+        overlay = planned.get("overlay_env")
+        if granted:
+            assert overlay == {
+                "CODEX_HOME": "<run-overlay>/codex-home",
+                "ONEHARNESS_RUN_OVERLAY": "<run-overlay>",
+            }, f"{identity} under {config}: {overlay}"
+        else:
+            assert overlay is None, f"{identity} under {config} is overlaid: {overlay}"
         assert MODE_SANDBOX in command, f"{identity} under {config}: {command}"
         assert command.count("--sandbox") == 1, f"{identity} under {config}: {command}"
         assert "sandbox_mode=" not in command, f"{identity} under {config}: {command}"
@@ -230,16 +296,59 @@ def test_every_claude_judge_is_offered_the_read_only_tool_set_and_no_mcp_server(
 
     claude = _identities(oneharness_bin, config, "claude-code")
     assert claude, f"{config} names no Claude Code identity to hold to its tools"
+    granted = config == GRANTED_JUDGE and _grants_run_allowlists(oneharness_bin, "claude-code")
     for identity in claude:
-        command = _planned_command(oneharness_bin, config, identity)
-        assert _offered_tools(command) == READ_ONLY_TOOLS, f"{identity} under {config}: {command}"
-        assert "--permission-mode bypassPermissions" in command, command
+        planned = _planned(oneharness_bin, config, identity)
+        command = planned["command"]
+        assert planned.get("overlay_env") is None, f"{identity} under {config}: {planned}"
         assert command.count(NO_MCP_SERVERS) == 1, f"{identity} under {config}: {command}"
-        assert "--allowedTools" not in command, f"{identity} under {config}: {command}"
+        assert not {"Write", "Edit", "MultiEdit", "NotebookEdit"} & set(command), command
+        if granted:
+            # The grant's one shell: `Bash` is offered, but `dontAsk` refuses every call no
+            # `--allowedTools` rule names, and the only `Bash` rule is the decline wrapper's
+            # absolute path — never a bare `Bash`, and never the variable's text.
+            assert _offered_tools(command) == [*READ_ONLY_TOOLS, "Bash"], command
+            assert _flag_values(command, "--permission-mode") == ["dontAsk"], command
+            assert _flag_values(command, "--allowedTools") == [
+                *READ_ONLY_TOOLS,
+                f"Bash({DECLINE_WRAPPER}:*)",
+            ], f"{identity} under {config}: {command}"
+        else:
+            assert _offered_tools(command) == READ_ONLY_TOOLS, f"{identity} under {config}"
+            assert _flag_values(command, "--permission-mode") == ["bypassPermissions"], command
+            assert "--allowedTools" not in command, f"{identity} under {config}: {command}"
     for identity in _identities(oneharness_bin, config, "codex"):
         command = _planned_command(oneharness_bin, config, identity)
         assert "--tools" not in command, f"{identity} under {config}: {command}"
         assert NO_MCP_SERVERS not in command, f"{identity} under {config}: {command}"
+
+
+def test_only_the_dispatch_judge_states_a_run_level_grant_and_no_judge_a_sync_policy(
+    oneharness_bin: str,
+) -> None:
+    """The dispatch judge's file states exactly the decline command as its run-level
+    allowlist; the design-document judge resolves to none; neither carries any `[sync]` field.
+    """
+    granted = _resolved(oneharness_bin, GRANTED_JUDGE)
+    assert granted["allowed_tools"] == {"value": DECLINE_GRANT, "source": GRANTED_JUDGE}, (
+        f"{GRANTED_JUDGE} must state exactly {DECLINE_GRANT} as its own run-level "
+        f"allowed_tools; oneharness resolves {granted['allowed_tools']}"
+    )
+    ungranted = _resolved(oneharness_bin, UNGRANTED_JUDGE)
+    assert ungranted["allowed_tools"]["value"] is None, (
+        f"{UNGRANTED_JUDGE} grants {ungranted['allowed_tools']}; the design-document judge "
+        "is granted nothing beyond reading"
+    )
+    for config, resolved in ((GRANTED_JUDGE, granted), (UNGRANTED_JUDGE, ungranted)):
+        for name, harness in resolved["harness"].items():
+            assert harness.get("allowed_tools", {}).get("value") is None, (config, name)
+            for variant, fields in harness.get("variant", {}).items():
+                assert fields.get("allowed_tools", {}).get("value") is None, (config, variant)
+        sync = resolved["sync"]
+        assert sync["harness"] == {}, f"{config} resolves a [sync] policy: {sync}"
+        assert all(
+            field["value"] is None for key, field in sync.items() if key != "harness"
+        ), f"{config} resolves a [sync] policy: {sync}"
 
 
 @pytest.mark.parametrize("config", CONNECTOR_ROLES)

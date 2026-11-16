@@ -33,7 +33,7 @@ provider:
 #
 # The bound on the simulated supervisor's authority, and the authority each party's ruling
 # carries — the user's binds, the manager's may be declined only through
-# `$ORCHESTRATOR_DECLINE_RULING` with a reason — are in `system_prompt`, and the reason
+# `$ORCHESTRATOR_DECLINE_RULING` with a `--reason` — are in `system_prompt`, and the reason
 # is how a persona takes each of the three fields: it APPENDS to `system_prompt`, it
 # REPLACES `user.persona` — the property that left the bound deleted from there reaching
 # nobody — and it MERGES `user.done_when`, enforced alongside a role's own. So arrival is
@@ -86,9 +86,8 @@ system_prompt: |
   ruling binds absolutely: follow it as written, and where you think it wrong, ask
   rather than depart from it. A manager ruling is a strong default that wins over your
   supervisor, and you may decline it when you judge it wrong for the user's goal — only
-  through `$ORCHESTRATOR_DECLINE_RULING --ruling <its reference>` with your reason on
-  standard input, and never silently: say in your reply which ruling you declined and
-  why.
+  through `$ORCHESTRATOR_DECLINE_RULING --ruling <its reference> --reason '<your reason>'`,
+  and never silently: say in your reply which ruling you declined and why.
 
   Commit as you go: the moment a logical change works and its tests pass,
   commit it as its own conventional commit (`git add -A && git commit`). Never

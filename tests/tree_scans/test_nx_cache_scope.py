@@ -76,6 +76,8 @@ from nx_inputs import (
     HOST_VIEWS_ROOT,
     HOST_VIEWS_SCOPED,
     JOURNEYS_THE_UNIT_GATES_READ,
+    JUDGE_GRANT_ROOT,
+    JUDGE_GRANT_SCOPED,
     MANAGER_ALLOWLIST_ROOT,
     MANAGER_ALLOWLIST_SCOPED,
     MARKER_TIER_ROOT,
@@ -864,6 +866,11 @@ SUITE_TIERS = (
     # the tiers it describes; the manager-allowlist entry sits beside the others' rather
     # than in a domain of its own because the catalog is the domain.
     (f"{MANAGER_ALLOWLIST_ROOT}/project.json", MANAGER_ALLOWLIST_SCOPED),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, which this module partitions the whole suite across, so every
+    # project's entry sits here; the judge-grant entry is one row of it.
+    (f"{JUDGE_GRANT_ROOT}/project.json", JUDGE_GRANT_SCOPED),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     (f"{HOST_VIEWS_ROOT}/project.json", HOST_VIEWS_SCOPED),
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one

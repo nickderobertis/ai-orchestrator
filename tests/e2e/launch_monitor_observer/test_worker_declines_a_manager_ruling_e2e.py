@@ -1,4 +1,5 @@
-"""A dispatched worker declines its manager's ruling itself, on a real launch.
+"""A dispatched worker, and a dispatched judge, each declines its manager's ruling itself,
+on a real launch.
 
 A manager's ruling is a strong default every party below the manager may decline when it
 judges the ruling wrong for the user's goal — only through `$ORCHESTRATOR_DECLINE_RULING`,
@@ -15,11 +16,14 @@ runs `"$ORCHESTRATOR_DECLINE_RULING" --ruling <ref>` with its reason, from its o
 environment. The run's channel then hands the manager, through the engine's channel read
 `just channel-next` wraps, the one `declined-ruling` surface carrying the worker's reason.
 
-A dispatched judge runs in oneharness's `read-only` mode and cannot run the command yet,
-so the appendix has it state a departure in its verdict, and a judge raising its own surface
-is a later change. What this host owes it now is the route: every turn's environment is read
-off the turn's own provider invocation, as `test_dispatch_environment_e2e.py` reads it, so
-the wrapper and the run it names are shown to reach the worker side and the judge side alike.
+A dispatched judge runs in oneharness's `read-only` mode granted that one command
+(`oneharness.judge.toml`'s run-level `allowed_tools`), so a second launch does the same with
+the node's judge-side turn declining instead, its reason given as one multi-line `--reason`
+argument — the one form the grant admits on every harness that applies it — and reads the
+real `oneharness config` over that turn's own `--config` layers, which is what its provider
+invocation runs under. Every turn's environment is read off the turn's own provider invocation, as
+`test_dispatch_environment_e2e.py` reads it, so the wrapper and the run it names are shown
+to reach the worker side and the judge side alike.
 """
 
 
@@ -47,9 +51,11 @@ from fake_backend import (
     DECLINE_REASON_ENV,
     DECLINE_RECORD_ENV,
     DECLINE_RULING_ENV,
+    DECLINE_SIDE_ENV,
     DISPATCHED_MEMBER,
     ENVIRONMENT_KEYS_ENV,
     JUDGE_CONFIG_NAME,
+    JUDGE_SIDE,
     MANAGER_RULING,
     MEMBER_OF_CONFIG,
     PROMPT_LOG_ENV,
@@ -98,6 +104,14 @@ MANAGER_NOTE = "Drop the failure-path test; the happy path is enough for this no
 REASON = (
     "The user's goal is a change proven on its failure path too; dropping it hides a regression."
 )
+#: The judge's reason, on several lines, as one `--reason` argument carries it.
+JUDGE_REASON = (
+    "The criteria hold the change to its failure path, and that is the user's goal.\n"
+    "Dropping the test would let me pass work that hides a regression."
+)
+
+#: The judge config's one run-level grant, as `oneharness.judge.toml` writes it.
+DECLINE_GRANT = ["Bash($ORCHESTRATOR_DECLINE_RULING:*)"]
 
 
 class Dispatched(NamedTuple):
@@ -147,21 +161,20 @@ def _reply(environment: dict[str, str], run: str, *commands: dict[str, Any]) -> 
     return receipt
 
 
-@pytest.fixture(scope="module")
-def dispatched(
-    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+def _launch(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str, side: str, reason: str
 ) -> Iterator[Dispatched]:
     """Launch the gated plan, carry a manager note to its node, open the gate, and adopt.
 
     The launch hands the run back at its gate, so the note is applied to a run nothing
     drives and is carried to the node's first dispatch; the adopt then drives the run to
     settlement, dispatching the node once, with this host's observer graph left off so the
-    only surface on the channel afterwards is the one the worker raised.
+    only surface on the channel afterwards is the one `side` raised.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    tmp_path = tmp_path_factory.mktemp("worker-declines-a-ruling")
-    run = f"worker-declines-{os.getpid()}"
+    tmp_path = tmp_path_factory.mktemp(f"{side}-declines-a-ruling")
+    run = f"{side}-declines-{os.getpid()}"
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
         environment.pop(name, None)
@@ -177,14 +190,15 @@ def dispatched(
     decline_record = tmp_path / "decline.json"
     environment[PROMPT_LOG_ENV] = str(turns_log)
     environment[ENVIRONMENT_KEYS_ENV] = f"{RUN_ID_ENV},{DECLINE_RULING_ENV}"
-    environment[DECLINE_REASON_ENV] = REASON
+    environment[DECLINE_REASON_ENV] = reason
     environment[DECLINE_RECORD_ENV] = str(decline_record)
+    environment[DECLINE_SIDE_ENV] = side
     plan = tmp_path / "plan.json"
     plan.write_text(
         json.dumps(
             {
                 "schema_version": 2,
-                "goal": {"text": "a worker declines its manager's ruling with its reason"},
+                "goal": {"text": f"a {side} declines its manager's ruling with its reason"},
                 "name": run,
                 "tasks": [
                     {"id": GATE_NODE, "kind": "human", "task": _task("Approve.")},
@@ -219,8 +233,8 @@ def dispatched(
         assert adopted.returncode == 0, f"the adopt failed:\n{adopted.stdout}\n{adopted.stderr}"
         assert turns_log.is_file(), f"no harness turn was recorded at {turns_log}"
         assert decline_record.is_file() and decline_record.read_text(encoding="utf-8"), (
-            "no worker-side turn of the dispatched node was handed a manager's ruling to "
-            "decline, so the attribution never reached the worker's prompt"
+            f"no {side}-side turn of the dispatched node was handed a manager's ruling to "
+            f"decline, so the attribution never reached the {side}'s prompt"
         )
         # `cast` rather than a validating read: `tests/e2e/fake_backend.py` writes both, and
         # `RecordedTurn` states the turn's shape beside the code that writes it.
@@ -232,6 +246,22 @@ def dispatched(
         yield Dispatched(environment, run, turns, decline)
     finally:
         _just("stop", run, environment=environment, seconds=60)
+
+
+@pytest.fixture(scope="module")
+def dispatched(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Iterator[Dispatched]:
+    """A run whose dispatched node's worker declines the manager's ruling."""
+    yield from _launch(tmp_path_factory, oneharness_bin, "worker", REASON)
+
+
+@pytest.fixture(scope="module")
+def judge_dispatched(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Iterator[Dispatched]:
+    """A run whose dispatched node's judge declines the manager's ruling."""
+    yield from _launch(tmp_path_factory, oneharness_bin, JUDGE_SIDE, JUDGE_REASON)
 
 
 def _sides(turns: list[RecordedTurn]) -> tuple[list[RecordedTurn], list[RecordedTurn]]:
@@ -313,3 +343,58 @@ def test_both_sides_of_a_dispatch_are_handed_the_wrapper_and_the_run_it_names(
             f"the {side} side was handed {sorted(map(str, carried))}; a decline from it "
             "would reach no wrapper, or the wrong run"
         )
+
+
+def test_the_judge_declines_the_managers_ruling_and_the_manager_reads_its_reason(
+    judge_dispatched: Dispatched,
+) -> None:
+    """The judge-side turn ran the absolute path its own environment names, with the ruling
+    and a multi-line reason as arguments, and the manager's next read is that decline."""
+    decline = judge_dispatched.decline
+    _, judge = _sides(judge_dispatched.turns)
+    assert Path(decline["config"] or "").name == JUDGE_CONFIG_NAME, decline
+    assert Path(decline["config"] or "") in {Path(turn["config"] or "") for turn in judge}, decline
+    inherited = {turn["environment"].get(DECLINE_RULING_ENV) for turn in judge}
+    assert inherited == {str(DECLINE_WRAPPER)} and Path(str(DECLINE_WRAPPER)).is_absolute(), (
+        inherited
+    )
+    assert decline.get("argv") == [
+        str(DECLINE_WRAPPER),
+        "--ruling",
+        decline["ruling"],
+        "--reason",
+        JUDGE_REASON,
+    ], decline
+    assert decline.get("status") == 0, decline
+
+    surface = next_surface_record(judge_dispatched.run, judge_dispatched.environment)
+    assert surface is not None, "the run's channel handed the manager nothing"
+    assert surface["kind"] == "declined-ruling", surface
+    assert surface["blocking"] is False, surface
+    record = cast(dict[str, Any], surface)["declined_ruling"]
+    assert (record["node"], record["ruling"], record["provenance"], record["text"]) == (
+        WORK_NODE,
+        decline["ruling"],
+        "manager",
+        MANAGER_NOTE,
+    ), record
+    assert record["reason"] == JUDGE_REASON, record
+    assert next_surface_record(judge_dispatched.run, judge_dispatched.environment) is None, (
+        "the run raised more than the one decline, so the judge's is not the only departure"
+    )
+
+
+def test_the_judge_that_declined_ran_read_only_granted_the_decline_command_alone(
+    judge_dispatched: Dispatched,
+) -> None:
+    """What the declining turn's provider invocation runs under, as the real `oneharness
+    config` resolves its own `--config` layers: the judge config, `read-only`, with a
+    run-level `allowed_tools` naming exactly the decline command and no `[sync]` policy."""
+    resolved = judge_dispatched.decline.get("resolved")
+    assert resolved is not None, judge_dispatched.decline
+    view = cast(dict[str, Any], resolved)
+    assert view["mode"]["value"] == "read-only", view["mode"]
+    assert view["allowed_tools"]["value"] == DECLINE_GRANT, view["allowed_tools"]
+    sync = view["sync"]
+    assert sync["harness"] == {}, sync
+    assert all(field["value"] is None for key, field in sync.items() if key != "harness"), sync

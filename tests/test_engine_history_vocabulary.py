@@ -362,7 +362,7 @@ ADOPTED_HARNESS_MOVE = re.compile(
     r"`oneharness-cli` (?P<cli>\d+\.\d+\.\d+) is compiled against `oneharness-core` "
     r"(?P<core>\d+\.\d+\.\d+), read off its wheel's own SBOM, and between "
     r"`oneharness-core-v(?P<previous>\d+\.\d+\.\d+)` and `oneharness-core-v(?P=core)` "
-    r"`domain/usage.rs` gains only the millisecond RFC 3339 reader .*? that report's own "
+    r"`domain/usage.rs` is unchanged, so that report's own "
     r"`SCHEMA_VERSION` stays `(?P<usage>[\d.]+)` .*? the history format's `SCHEMA_VERSION` "
     r"moves from `(?P<history_before>[\d.]+)` to `(?P<history>[\d.]+)`"
 )
@@ -430,11 +430,13 @@ def test_the_telemetry_upgrade_boundary_states_the_adopted_harness_move_truthful
         f"{history}'s SCHEMA_VERSION is not {stated['history_before']} at "
         f"oneharness-core-v{previous} and {stated['history']} at oneharness-core-v{core}"
     )
-    assert '#[serde(rename = "run-started")]' in _core_source(core, history), (
-        "docs/telemetry.md says the history format gained the `run-started` opening line"
+    assert "unsupported_input" not in _core_source(previous, history), (
+        "docs/telemetry.md says the history format gained the `unsupported_input` failure kind"
     )
-    before = _core_source(previous, usage)
-    after = _core_source(core, usage)
-    assert "epoch_millis_from_rfc3339" not in before and "epoch_millis_from_rfc3339" in after, (
-        "docs/telemetry.md says domain/usage.rs gained the millisecond RFC 3339 reader"
+    assert "FailureKind::UnsupportedInput" in _core_source(core, history), (
+        "docs/telemetry.md says the history format gained the `unsupported_input` failure kind"
+    )
+    assert _core_source(previous, usage) == _core_source(core, usage), (
+        f"docs/telemetry.md says {usage} is unchanged between oneharness-core-v{previous} and "
+        f"oneharness-core-v{core}"
     )

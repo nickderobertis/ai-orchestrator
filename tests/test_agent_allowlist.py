@@ -115,7 +115,9 @@ def _source() -> dict[str, object]:
 
 
 def _allowed() -> list[str]:
-    allow = _source()["allowed_tools"]
+    sync = _source()["sync"]
+    assert isinstance(sync, dict)
+    allow = sync["allowed_tools"]
     assert isinstance(allow, list)
     return [str(rule) for rule in allow]
 
@@ -215,10 +217,18 @@ def _covered(invocation: Invocation, rules: list[str], tool: str) -> bool:
 
 def test_the_source_holds_an_allow_list_and_nothing_else() -> None:
     """No `denied_tools`: a deny rule binds a bypass-mode dispatch, and Codex's rendering is
-    held to allow decisions only. No hooks, settings, or run configuration either."""
-    assert set(_source()) == {"allowed_tools"}, (
-        f"{SOURCE.name} declares {sorted(set(_source()) - {'allowed_tools'})}; the manager's "
-        "allowlist is an allow list and nothing else"
+    held to allow decisions only. No hooks, settings, or run configuration either — a
+    top-level `allowed_tools` among them, which oneharness reads as a run-level allowlist
+    that `sync` never renders."""
+    source = _source()
+    assert set(source) == {"sync"}, (
+        f"{SOURCE.name} declares {sorted(set(source) - {'sync'})} outside `[sync]`; the "
+        "manager's allowlist is a synced allow list and nothing else"
+    )
+    sync = source["sync"]
+    assert isinstance(sync, dict) and set(sync) == {"allowed_tools"}, (
+        f"{SOURCE.name}'s `[sync]` declares {sorted(set(sync) - {'allowed_tools'})}; the "
+        "manager's allowlist is an allow list and nothing else"
     )
 
 

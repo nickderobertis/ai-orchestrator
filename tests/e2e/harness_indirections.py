@@ -12,6 +12,11 @@ made those journeys pass on hosts that had run the session hook and fail everywh
 else — a bare shell, a fresh terminal, a CI job — with an assertion about something
 else entirely as the only symptom.
 
+The same holds for the variable the dispatch judge's run-level grant names,
+`ORCHESTRATOR_DECLINE_RULING`: `oneharness` refuses a run whose `$NAME` grant is unset, and
+every launcher exports it through `scripts/decline-ruling-env.sh`, so a journey that runs a
+dispatch graph's judge directly establishes it from that helper too.
+
 They are derived here through the helpers that own them rather than assembled from
 paths, and which variables to derive is read out of the configs that name them, so a
 config naming a new one reaches every journey at once instead of failing one of them
@@ -60,7 +65,14 @@ class Indirection(NamedTuple):
 INDIRECTION_SOURCES = (
     IndirectionSource("scripts/codex-alt-home.sh", "ensure_codex_alt_home"),
     IndirectionSource("scripts/claude-alt-config-dir.sh", "resolve_claude_alt_config_dir"),
+    IndirectionSource("scripts/decline-ruling-env.sh", "export_decline_ruling"),
 )
+
+#: The configs whose run-level `allowed_tools` names a command as `$NAME`.
+GRANTED_CONFIGS = (REPO_ROOT / "oneharness.judge.toml",)
+
+#: A run-level rule naming its executable through a variable.
+GRANTED_VARIABLE = re.compile(r"Bash\(\$(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::\*)?\)")
 
 #: The configs whose members run oneharness in-library, so their variants resolve from
 #: this process's environment rather than a spawned CLI's. Each is a ROLE config; the
@@ -98,13 +110,26 @@ def _configured_indirections() -> tuple[str, ...]:
 #: A shell variable name, which is what an indirection has to be to be read back out
 #: of one. A config declaring anything else is refused below rather than interpolated
 #: into the program that reads them.
+def _granted_variables() -> tuple[str, ...]:
+    """Every variable a run-level grant resolves its executable from, across each granted
+    config's `extends` chain, read the way `_configured_indirections` reads `env_from`."""
+    named = {
+        found["name"]
+        for config in GRANTED_CONFIGS
+        for document in map(harness_routing, extends_chain(config))
+        for rule in document.get("allowed_tools", [])
+        if (found := GRANTED_VARIABLE.fullmatch(rule)) is not None
+    }
+    return tuple(sorted(named))
+
+
 SHELL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 #: How the caller's own name reaches the helpers: an environment variable rather than
 #: text spliced into the program, so no value a caller passes is ever shell syntax.
 CALLER_ENV = "ORCHESTRATOR_INDIRECTION_CALLER"
 
-INDIRECTIONS = _configured_indirections()
+INDIRECTIONS = tuple(sorted({*_configured_indirections(), *_granted_variables()}))
 
 
 @functools.cache

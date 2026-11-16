@@ -52,6 +52,8 @@ from nx_inputs import (
     HOST_SWEEP_WORKSPACE,
     HOST_VIEWS_ROOT,
     HOST_VIEWS_WORKSPACE,
+    JUDGE_GRANT_ROOT,
+    JUDGE_GRANT_WORKSPACE,
     MANAGER_ALLOWLIST_ROOT,
     MANAGER_ALLOWLIST_WORKSPACE,
     MARKER_TIER_ROOT,
@@ -303,6 +305,7 @@ OWNED_PROJECTS = {
     # the tiers it describes; the manager-allowlist entry sits beside the others' rather
     # than in a domain of its own because the catalog is the domain.
     MANAGER_ALLOWLIST_ROOT: OwnedProject(key=MANAGER_ALLOWLIST_WORKSPACE, docs_tier=False),
+    JUDGE_GRANT_ROOT: OwnedProject(key=JUDGE_GRANT_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The read guard needs every
     # directory-owned project's key before it collects any of them, so this project's row is here

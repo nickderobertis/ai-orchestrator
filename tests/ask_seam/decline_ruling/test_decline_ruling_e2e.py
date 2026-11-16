@@ -267,6 +267,32 @@ def test_a_declined_manager_note_reaches_the_managers_channel_read_with_its_reas
     assert REASON in surface["message"], surface["message"]
 
 
+def test_the_reason_may_be_one_multi_line_argument_with_stdin_read_for_nothing(
+    held: Held, tmp_path: Path
+) -> None:
+    """The form every prompt here names, and the only one a read-only judge's grant admits on
+    Codex: `--reason` as one argument, multi-line, with nothing on stdin for the verb to read.
+    """
+    ruling = _noted(held, MANAGER_NOTE)
+    reason = f"{REASON}\nA second line the manager reads as well."
+
+    declined = _declined(
+        held,
+        "--ruling",
+        ruling,
+        "--reason",
+        reason,
+        stdin="",
+        cwd=_worktree(tmp_path),
+        run=held.run,
+    )
+
+    assert declined.returncode == 0, declined.stderr + declined.stdout
+    surface = next_surface_record(held.run, held.environment)
+    assert surface is not None and surface["kind"] == "declined-ruling", surface
+    assert cast(dict[str, Any], surface)["declined_ruling"]["reason"] == reason, surface
+
+
 def test_the_reason_may_be_a_file_named_after_the_ruling(held: Held, tmp_path: Path) -> None:
     """The verb's other form: the reason in a file, named by a path relative to the agent."""
     ruling = _noted(held, MANAGER_NOTE)

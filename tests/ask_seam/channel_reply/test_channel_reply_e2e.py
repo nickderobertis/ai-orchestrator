@@ -1177,7 +1177,9 @@ def _envelope_path(run: RunId) -> Path:
     """
     (grant,) = [
         rule
-        for rule in tomllib.loads(MANAGER_ALLOWLIST.read_text(encoding="utf-8"))["allowed_tools"]
+        for rule in tomllib.loads(MANAGER_ALLOWLIST.read_text(encoding="utf-8"))["sync"][
+            "allowed_tools"
+        ]
         if rule.startswith("Edit(")
     ]
     glob = grant.removeprefix("Edit(").removesuffix(")")

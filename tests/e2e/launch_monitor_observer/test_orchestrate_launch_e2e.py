@@ -195,8 +195,8 @@ THE_RULING_WINS = "Where a ruling and the supervisor disagree the ruling wins"
 A_USER_RULING_BINDS = "A user ruling binds absolutely"
 A_MANAGER_RULING_MAY_BE_DECLINED = (
     "you may decline it when you judge it wrong for the user's goal — only through "
-    "`$ORCHESTRATOR_DECLINE_RULING --ruling <its reference>` with your reason on standard "
-    "input, and never silently"
+    "`$ORCHESTRATOR_DECLINE_RULING --ruling <its reference> --reason '<your reason>'`, and "
+    "never silently"
 )
 
 #: The run's active monitor, and the member whose judgment this graph exists for.

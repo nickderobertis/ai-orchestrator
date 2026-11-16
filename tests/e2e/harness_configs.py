@@ -38,17 +38,19 @@ class Harness(TypedDict, total=False):
 
 
 class HarnessRouting(TypedDict, total=False):
-    """One oneharness config, narrowed to the three keys this suite reads.
+    """One oneharness config, narrowed to the keys this suite reads.
 
     `oneharness` owns the rest of the schema and is what validates it; these are the
     keys a journey here consults — the variants whose indirections have to exist, the
-    identity order a chain declares, and the parent a role config inherits its
-    identities from.
+    identity order a chain declares, the parent a role config inherits its
+    identities from, and the run-level grant whose variable a run must carry.
     """
 
     extends: str
     harness: dict[str, Harness]
     harnesses: list[str]
+    #: The run-level allowlist, whose `$NAME` commands a run resolves from its environment.
+    allowed_tools: list[str]
 
 
 def harness_routing(config: Path) -> HarnessRouting:

@@ -772,8 +772,7 @@ system_prompt: |
   with your reason, never silently, through the one route a decline takes:
 
   ```sh
-  printf '%s\n' "<why it is wrong for the user's goal>" \
-    | "$ORCHESTRATOR_DECLINE_RULING" --ruling "<the answer's ruling reference>"
+  "$ORCHESTRATOR_DECLINE_RULING" --ruling "<the answer's ruling reference>" --reason "<why it is wrong for the user's goal>"
   ```
 
   It reaches the manager as a `declined-ruling` surface carrying your reason, and

@@ -157,6 +157,9 @@ SHARED: dict[str, Shared] = {
     "scripts/template-env.sh": Shared("exports this checkout's template root to the engine"),
     "scripts/launcher-session.sh": Shared("names the acting manager session"),
     "scripts/ask-manager-env.sh": Shared("exports the ask-manager seam every launch carries"),
+    "scripts/decline-ruling-env.sh": Shared(
+        "exports the decline-ruling seam the judge config's run-level grant names"
+    ),
     "scripts/follow-up-draft.sh": Shared("drafts one follow-up into the drafts source"),
     "scripts/dispatch-env-hook.sh": Shared(
         "the engine's dispatch-env hook: each dispatch's environment"

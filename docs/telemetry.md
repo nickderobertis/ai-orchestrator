@@ -161,7 +161,7 @@ a schema version, not a field to discover.
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
 under the 0.22.0 CLI and onejudge 0.19, and read off the tags as unchanged through
-the 0.22.0/0.20.0 upgrade, the 0.26.1/0.21.0 upgrade, the 0.26.1/0.22.0 upgrade, the 0.26.1/0.22.1 upgrade, the 0.26.1/0.22.2 upgrade, the 0.26.1/0.22.5 upgrade and the 0.26.1/0.23.1 upgrade (`config/oneharness.version` and
+the 0.22.0/0.20.0 upgrade, the 0.26.1/0.21.0 upgrade, the 0.26.1/0.22.0 upgrade, the 0.26.1/0.22.1 upgrade, the 0.26.1/0.22.2 upgrade, the 0.26.1/0.22.5 upgrade, the 0.26.1/0.23.1 upgrade and the 0.30.0/0.23.1 upgrade (`config/oneharness.version` and
 `config/onejudge.version`); the pair before it is the boundary the older per-party
 accounting sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -329,15 +329,21 @@ gains the reset-credit report above and a millisecond RFC 3339 reader
 ([oneharness#1464](https://github.com/nickderobertis/oneharness/pull/1464)), touching
 no per-turn token usage, and it is unchanged from there to `oneharness-core-v0.29.1`; this
 was read off the tags and was not re-taken on judge turns.
-The oneharness half then moved to 0.26.1 with that engine: `oneharness-cli` 0.26.1 is
-compiled against `oneharness-core` 0.29.1, read off its wheel's own SBOM, and between
+The oneharness half then moved to 0.26.1 with that engine: `oneharness-cli` 0.26.1 was
+built on `oneharness-core` 0.29.1, read off its wheel's own SBOM, and between
 `oneharness-core-v0.25.0` and `oneharness-core-v0.29.1` `domain/usage.rs` gains only the
 millisecond RFC 3339 reader above, so that report's own `SCHEMA_VERSION` stays `0.1` and no
 per-turn token usage moves, while the history format's `SCHEMA_VERSION` moves from `1.9` to
 `1.11` — `1.10` adds the `app_server_lost` failure kind and `1.11` the `run-started` opening
 line carrying a turn's whole prompt, neither touching the `usage` a run line carries.
-`tests/test_engine_history_vocabulary.py` re-reads that move off the wheel and the two tags;
-it was not re-taken on judge turns.
+It moved again to 0.30.0 with the same engine: `oneharness-cli` 0.30.0 is compiled against
+`oneharness-core` 0.33.0, read off its wheel's own SBOM, and between `oneharness-core-v0.29.1`
+and `oneharness-core-v0.33.0` `domain/usage.rs` is unchanged, so that report's own
+`SCHEMA_VERSION` stays `0.1` and no per-turn token usage moves, while the history format's
+`SCHEMA_VERSION` moves from `1.11` to `1.12`, which adds only the `unsupported_input` failure
+kind and touches no `usage` a run line carries.
+`tests/test_engine_history_vocabulary.py` re-reads that latest move off the wheel and the two
+tags; it was not re-taken on judge turns.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; each surface read restarts the monitor's `progress-report` note clock.

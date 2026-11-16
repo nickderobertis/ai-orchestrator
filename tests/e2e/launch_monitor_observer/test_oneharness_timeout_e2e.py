@@ -185,10 +185,11 @@ FOLLOW_UP_MEMBER = "worker"
 FOLLOW_UP_DEADLINE_SECONDS = 7200
 
 #: The credentials that config alone leaves unmasked — the board token and the production
-#: Linear key — and the one field besides the four above it may differ from the judge's in:
-#: the history labels that say which side ran.
+#: Linear key — and the fields besides the four above it may differ from the judge's in:
+#: the history labels that say which side ran, and the judge's run-level grant of the
+#: decline command, which the follow-up agent, judging no ruling, does not carry.
 PLAN_STORE_CREDENTIALS = list(plan_store_credentials.PLAN_STORE_CREDENTIALS)
-FOLLOW_UP_DIFFERENCES = {"timeout", "stream", "history_labels", "harness", "mode"}
+FOLLOW_UP_DIFFERENCES = {"timeout", "stream", "history_labels", "harness", "mode", "allowed_tools"}
 
 #: The worker's agent side for a plan node that must prove behaviour against the real
 #: board, which only a node naming it per node reaches — no graph names it, so it is named
@@ -680,7 +681,8 @@ def test_every_side_resolves_its_intended_effective_deadline(
     }
     assert differing <= FOLLOW_UP_DIFFERENCES, (
         "oneharness.follow-up.toml must be oneharness.judge.toml's routing with only the "
-        "deadline, streaming, labels, mode and plan-store credential masks changed; these "
+        "deadline, streaming, labels, mode, judge grant and plan-store credential masks "
+        "changed; these "
         f"also differ: {sorted(differing - FOLLOW_UP_DIFFERENCES)}"
     )
     assert _with_command_ceiling(judge_routing["harness"]) != judge_routing["harness"], (

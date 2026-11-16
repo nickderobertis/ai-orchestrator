@@ -75,7 +75,8 @@ STATEMENTS = (
     (
         "personas/planner.yaml",
         "the decline command the planner runs",
-        '| "$ORCHESTRATOR_DECLINE_RULING" --ruling "<the answer\'s ruling reference>"',
+        '"$ORCHESTRATOR_DECLINE_RULING" --ruling "<the answer\'s ruling reference>" '
+        '--reason "<why it is wrong for the user\'s goal>"',
     ),
     (
         "personas/planner.yaml",

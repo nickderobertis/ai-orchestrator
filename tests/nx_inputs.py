@@ -203,6 +203,12 @@ SESSION_OPEN_CONFLICT_WORKSPACE = "sessionOpenConflictWorkspace"
 #: chain the probe reads its identities from, and the modules the journeys import. Files
 #: rather than trees, for the reason `unwatchedWorkspace` names.
 MANAGER_ALLOWLIST_WORKSPACE = "managerAllowlistWorkspace"
+#: The key the `judge-grant` project's one tier is memoized on: the dispatch judge's config
+#: and the parents it extends, the pins and their locks, and the decline wrapper; its held
+#: run is launched by the pinned engine from a plan store of its own, so no recipe, graph or
+#: launch config of this checkout is in it. Its own project so an edit elsewhere spends none
+#: of its real harness turns.
+JUDGE_GRANT_WORKSPACE = "judgeGrant"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 #: The key the `merge-policy` project's one tier is memoized on. Files rather than trees,
 #: for the reason `unwatchedWorkspace` names: every journey there spends a real launch,
@@ -749,6 +755,10 @@ MANAGER_ALLOWLIST_PROJECT = "manager-allowlist"
 MANAGER_ALLOWLIST_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 MANAGER_ALLOWLIST_ROOT = "tests/manager_allowlist"
+#: The `judge-grant` project, its one test target, and the directory it owns.
+JUDGE_GRANT_PROJECT = "judge-grant"
+JUDGE_GRANT_SCOPED = "test"
+JUDGE_GRANT_ROOT = "tests/judge_grant"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module holds one row per
@@ -997,6 +1007,7 @@ def catalogued_roots() -> dict[str, str]:
         HOST_SWEEP_PROJECT: HOST_SWEEP_ROOT,
         HOST_VIEWS_PROJECT: HOST_VIEWS_ROOT,
         MANAGER_ALLOWLIST_PROJECT: MANAGER_ALLOWLIST_ROOT,
+        JUDGE_GRANT_PROJECT: JUDGE_GRANT_ROOT,
         MERGE_POLICY_PROJECT: MERGE_POLICY_ROOT,
         PLAN_STORE_ASSETS_PROJECT: PLAN_STORE_ASSETS_ROOT,
         PLAN_STORE_DEPENDENCY_READ_PROJECT: PLAN_STORE_DEPENDENCY_READ_ROOT,

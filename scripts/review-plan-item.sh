@@ -46,6 +46,15 @@ trap 'rm -rf -- "$scratch" || echo "review-plan-item: could not remove its scrat
 # (`oneharness.dispatch.toml`'s `env_from`); outside a dispatch — a manager's `just
 # review-plan`, a planning run's command step — that is this run's own scratch.
 export ONEPIPELINE_NODE_SCRATCH_DIR="${ONEPIPELINE_NODE_SCRATCH_DIR:-$scratch}"
+# The reviewer runs `oneharness.judge.toml`, whose run-level grant names
+# `$ORCHESTRATOR_DECLINE_RULING`; oneharness refuses a run with it unset, so this sets it as
+# every launcher does. Outside a run the wrapper has no `ONEPIPELINE_RUN_ID` and refuses.
+# shellcheck source=scripts/decline-ruling-env.sh
+if ! source "$script_dir/decline-ruling-env.sh"; then
+    echo "review-plan-item: could not load $script_dir/decline-ruling-env.sh, which sets the decline variable the reviewer's judge config names; restore it from the repository, then retry" >&2
+    exit 2
+fi
+export_decline_ruling review-plan-item || exit "$?"
 
 # A node persona that is a path is written relative to the graphs directory, as every plan
 # names one (`../personas/<name>.yaml`); a bare name is a built-in role.

@@ -5,11 +5,11 @@
   "allowed_tools": {
     "value": null
   },
+  "auto_compact_tokens": {
+    "value": null
+  },
   "bypass": {
     "value": false
-  },
-  "denied_tools": {
-    "value": null
   },
   "env": {},
   "exclude": {
@@ -26,9 +26,6 @@
       "bin": {
         "value": null
       },
-      "denied_tools": {
-        "value": null
-      },
       "env": {
         "BASH_MAX_TIMEOUT_MS": {
           "value": "3600000"
@@ -37,16 +34,10 @@
           "value": "1"
         }
       },
-      "hooks": {
-        "value": null
-      },
       "model": {
         "value": null
       },
       "reasoning": {
-        "value": null
-      },
-      "settings": {
         "value": null
       },
       "variant": {
@@ -58,9 +49,6 @@
             "value": null
           },
           "bin": {
-            "value": null
-          },
-          "denied_tools": {
             "value": null
           },
           "env": {},
@@ -75,16 +63,10 @@
               "value": "ONEPIPELINE_NODE_SCRATCH_DIR"
             }
           },
-          "hooks": {
-            "value": null
-          },
           "model": {
             "value": "claude-opus-5-5"
           },
           "reasoning": {
-            "value": null
-          },
-          "settings": {
             "value": null
           },
           "unset_env": {
@@ -108,9 +90,6 @@
           "bin": {
             "value": null
           },
-          "denied_tools": {
-            "value": null
-          },
           "env": {},
           "env_file": {
             "value": null
@@ -123,16 +102,10 @@
               "value": "ONEPIPELINE_NODE_SCRATCH_DIR"
             }
           },
-          "hooks": {
-            "value": null
-          },
           "model": {
             "value": "claude-opus-5-5"
           },
           "reasoning": {
-            "value": null
-          },
-          "settings": {
             "value": null
           },
           "unset_env": {
@@ -156,9 +129,6 @@
           "bin": {
             "value": null
           },
-          "denied_tools": {
-            "value": null
-          },
           "env": {},
           "env_file": {
             "value": null
@@ -171,16 +141,10 @@
               "value": "ONEPIPELINE_NODE_SCRATCH_DIR"
             }
           },
-          "hooks": {
-            "value": null
-          },
           "model": {
             "value": "claude-opus-5-5"
           },
           "reasoning": {
-            "value": null
-          },
-          "settings": {
             "value": null
           },
           "unset_env": {
@@ -204,9 +168,6 @@
           "bin": {
             "value": null
           },
-          "denied_tools": {
-            "value": null
-          },
           "env": {},
           "env_file": {
             "value": null
@@ -219,16 +180,10 @@
               "value": "ONEPIPELINE_NODE_SCRATCH_DIR"
             }
           },
-          "hooks": {
-            "value": null
-          },
           "model": {
             "value": "claude-opus-5-5"
           },
           "reasoning": {
-            "value": null
-          },
-          "settings": {
             "value": null
           },
           "unset_env": {
@@ -252,9 +207,6 @@
           "bin": {
             "value": null
           },
-          "denied_tools": {
-            "value": null
-          },
           "env": {},
           "env_file": {
             "value": null
@@ -267,16 +219,10 @@
               "value": "ONEPIPELINE_NODE_SCRATCH_DIR"
             }
           },
-          "hooks": {
-            "value": null
-          },
           "model": {
             "value": "claude-opus-5-5"
           },
           "reasoning": {
-            "value": null
-          },
-          "settings": {
             "value": null
           },
           "unset_env": {
@@ -314,13 +260,7 @@
       "bin": {
         "value": null
       },
-      "denied_tools": {
-        "value": null
-      },
       "env": {},
-      "hooks": {
-        "value": null
-      },
       "model": {
         "value": "gpt-6.1-sol"
       },
@@ -331,9 +271,6 @@
         "value": false
       },
       "reasoning": {
-        "value": null
-      },
-      "settings": {
         "value": null
       },
       "shared_model_catalog": {
@@ -359,9 +296,6 @@
           "bin": {
             "value": null
           },
-          "denied_tools": {
-            "value": null
-          },
           "env": {},
           "env_file": {
             "value": null
@@ -374,9 +308,6 @@
               "value": "ONEPIPELINE_NODE_SCRATCH_DIR"
             }
           },
-          "hooks": {
-            "value": null
-          },
           "model": {
             "value": "gpt-6.1-sol"
           },
@@ -387,9 +318,6 @@
             "value": false
           },
           "reasoning": {
-            "value": null
-          },
-          "settings": {
             "value": null
           },
           "shared_model_catalog": {
@@ -422,9 +350,6 @@
           "bin": {
             "value": null
           },
-          "denied_tools": {
-            "value": null
-          },
           "env": {},
           "env_file": {
             "value": null
@@ -433,9 +358,6 @@
             "XDG_RUNTIME_DIR": {
               "value": "ONEPIPELINE_NODE_SCRATCH_DIR"
             }
-          },
-          "hooks": {
-            "value": null
           },
           "model": {
             "value": "gpt-6.1-sol"
@@ -447,9 +369,6 @@
             "value": false
           },
           "reasoning": {
-            "value": null
-          },
-          "settings": {
             "value": null
           },
           "shared_model_catalog": {
@@ -490,7 +409,10 @@
   "history_pointer_file": {
     "value": null
   },
-  "hooks": {
+  "load_mcp": {
+    "value": null
+  },
+  "load_skills": {
     "value": null
   },
   "max_parallel": {
@@ -523,17 +445,32 @@
   "schema_max_retries": {
     "value": null
   },
-  "schema_version": "0.12",
+  "schema_version": "0.15",
   "server_overloaded_max_retries": {
     "value": 2
   },
   "stream": {
     "value": false
   },
+  "sync": {
+    "allowed_tools": {
+      "value": null
+    },
+    "denied_tools": {
+      "value": null
+    },
+    "harness": {},
+    "hooks": {
+      "value": null
+    }
+  },
   "system": {
     "value": null
   },
   "timeout": {
+    "value": null
+  },
+  "tool_set": {
     "value": null
   }
 }

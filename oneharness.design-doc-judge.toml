@@ -19,6 +19,8 @@ extends = "oneharness.identities.toml"
 
 # mode: `read-only`, and never `plan`, for the reasons `oneharness.judge.toml` states at
 # the same key.
+# No decline grant: this judge holds a document to its template in `just plan`'s flow, where
+# any manager ruling is already in the plan's Decided part, which review and approval judge.
 mode = "read-only"
 
 # timeout: the per-turn deadline in seconds. Stated rather than inherited, for the

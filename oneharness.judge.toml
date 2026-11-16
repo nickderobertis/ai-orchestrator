@@ -15,6 +15,10 @@ extends = "oneharness.dispatch.toml"
 # "The mode a judge runs in", says why.
 mode = "read-only"
 
+# allowed_tools: the one permission beyond reading, applied by oneharness to each judge run
+# alone — the decline wrapper, so a judge can raise a `declined-ruling` surface itself.
+allowed_tools = ["Bash($ORCHESTRATOR_DECLINE_RULING:*)"]
+
 # history_labels: the counterpart to the agent config's `role = "agent"` — this is
 # the side that supervises. Stamping it makes "show me the judge's view of this
 # node" a filter rather than a guess from the session name (`JUDGE_PREFIXES`).
