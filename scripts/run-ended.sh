@@ -20,7 +20,9 @@
 #     `just follow-ups <run-id>` in this checkout, which creates the `follow-ups` plan from
 #     its template and launches it detached — the hook is awaited and a follow-up run
 #     outlives its deadline — and turns the recipe's line into the one a manager reads:
-#     the follow-up run's id and its watch command. It exits with the recipe's status.
+#     the follow-up run's id and its watch command. For a batch onefollowup reports empty
+#     the recipe launches nothing and its one line is relayed as it said it. It exits with
+#     the recipe's status.
 #   * **failure** — the run ended any other way: a failed or skipped node, an unfinished
 #     graph with nothing left to decide, or a clean stop. It discards no spike branch,
 #     because a failed run's retries and recovery may still need them. It launches nothing,

@@ -10,7 +10,9 @@ left: the hook's log under the run, `just results`, `just runs`, and the launch 
 Everything between the recipe and the model is real: `just orchestrate`,
 `scripts/orchestrate.sh`, `scripts/onepipeline.sh` and its design-approval gate, the
 installed `onepipeline` driver, `scripts/run-ended.sh`, and `just follow-ups` with the
-detached follow-up run it launches. What that follow-up run does is
+detached follow-up run it launches for a run whose worker drafted a follow-up — and, for a
+run that drafted nothing, the one line saying onefollowup reported its batch empty and no
+follow-up run was launched. What that follow-up run does is
 `tests/e2e/follow_ups/`'s journey; here it is only launched. **The paid model alone is
 doubled**: `tests/e2e/fake_backend.py` at the `oneagentgraph` seam for the main run's
 two-party worker, and `tests/e2e/fake_codex.py` at the provider binary for the follow-up
@@ -32,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -42,6 +45,7 @@ import follow_up_variables
 import plan_root_variable
 import pytest
 import short_state
+from fake_backend import RUN_ON_MARKER_ENV
 from harness_indirections import established_indirections
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
@@ -102,6 +106,19 @@ LAUNCHED = re.compile(
     r"^main work of run (?P<run>\S+) is complete; follow-ups are being verified in run "
     r"(?P<follow_up>\S+); watch it with: just watch (?P<watched>\S+)$",
     re.MULTILINE,
+)
+
+#: The line the success hook relays when onefollowup reports the run's batch empty.
+EMPTY_BATCH = "batch {run} of run {run} holds no follow-up drafts; no follow-up run was launched"
+
+#: The one follow-up a drafting run leaves, and the task text keying the worker's turn to it.
+REPORT_MARKER = "Report without changing files."
+DRAFT_TITLE = "The report command ignores its timeout"
+DRAFT_ABOUT = "github.com/nickderobertis/some-service"
+DRAFT_BODY = (
+    "## What happened\nA report hung.\n\n## Where\n`src/report.py`.\n\n"
+    "## Why it is out of scope\nThe run was about something else.\n\n"
+    "## Evidence\nSeen in the run's own log.\n"
 )
 
 #: How long a follow-up run with one stand-in turn is given to settle.
@@ -198,6 +215,46 @@ def _bench(tmp: Path, oneharness_bin: str) -> Bench:
     return Bench(environment, tmp, runs, store.drafts)
 
 
+def _drafting(bench: Bench) -> Bench:
+    """``bench`` with the node's worker drafting one follow-up, once, as its turn's command."""
+    script = bench.tmp / "drafting-commands.json"
+    script.write_text(
+        json.dumps(
+            {
+                REPORT_MARKER: [
+                    [
+                        "bash",
+                        "-c",
+                        'sentinel="$ONEPIPELINE_NODE_SCRATCH_DIR/drafted"; '
+                        '[ -e "$sentinel" ] && exit 0; '
+                        f'printf %s {shlex.quote(DRAFT_BODY)} | "$ORCHESTRATOR_FOLLOW_UP_DRAFT" '
+                        f"--title {shlex.quote(DRAFT_TITLE)} --repository {DRAFT_ABOUT} "
+                        '&& touch "$sentinel"',
+                    ]
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return bench._replace(environment=bench.environment | {RUN_ON_MARKER_ENV: str(script)})
+
+
+def _manager_draft(bench: Bench, run: str) -> None:
+    """Draft one follow-up against ``run`` as its manager, through `just follow-up`."""
+    drafted = _just(
+        bench,
+        "follow-up",
+        run,
+        "--title",
+        DRAFT_TITLE,
+        "--repository",
+        DRAFT_ABOUT,
+        seconds=120,
+        input_text=DRAFT_BODY,
+    )
+    assert drafted.returncode == 0, drafted.stdout + drafted.stderr
+
+
 def _just(
     bench: Bench,
     *arguments: str,
@@ -230,9 +287,7 @@ def _project(bench: Bench, name: str, **node: object) -> str:
                     {
                         "id": NODE,
                         "persona": "engineer",
-                        "task": (
-                            "Report without changing files.\n\n## Acceptance criteria\n- Reported."
-                        ),
+                        "task": f"{REPORT_MARKER}\n\n## Acceptance criteria\n- Reported.",
                         **node,
                     }
                 ],
@@ -296,7 +351,7 @@ def _stop(bench: Bench, *runs: str) -> None:
 def succeeded(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Succeeded:
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    bench = _bench(tmp_path_factory.mktemp("run-end-success"), oneharness_bin)
+    bench = _drafting(_bench(tmp_path_factory.mktemp("run-end-success"), oneharness_bin))
     run = f"hooks-done-{os.getpid()}"
     follow_up = ""
     try:
@@ -319,6 +374,20 @@ def succeeded(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> 
         return Succeeded(ended, follow_up, watched, mine)
     finally:
         _stop(bench, run, f"{run}-twin", *([follow_up] if follow_up else []))
+
+
+@pytest.fixture(scope="module")
+def drafted_nothing(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Ended:
+    """A run that ends with every node done and leaves no follow-up drafts and no inputs."""
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path_factory.mktemp("run-end-empty"), oneharness_bin)
+    run = f"hooks-empty-{os.getpid()}"
+    try:
+        return _ended(bench, run, "success")
+    finally:
+        launched = [path.name for path in bench.runs.glob(f"{run}{FOLLOW_UPS_SUFFIX}*")]
+        _stop(bench, run, f"{run}-twin", *launched)
 
 
 @pytest.fixture(scope="module")
@@ -352,6 +421,20 @@ def test_a_run_whose_nodes_all_end_done_launches_its_follow_up_run_detached(
     assert launched["project"] == f"follow-up-runs:{run}{FOLLOW_UPS_SUFFIX}", launched
     # Detached, so the hook returned at the launch record rather than awaiting the run.
     assert launched.get("mode", "detached") != "attached", launched
+
+
+def test_a_completed_run_that_drafted_nothing_launches_no_follow_up_run(
+    drafted_nothing: Ended,
+) -> None:
+    ended, run = drafted_nothing, drafted_nothing.hooked.run
+
+    assert _settlement(ended.hooked) == {"run_id": run, "settlement": "complete"}, (
+        ended.hooked.result.stderr
+    )
+    assert EMPTY_BATCH.format(run=run) in ended.log.splitlines(), ended.log
+    assert LAUNCHED.search(ended.log) is None, ended.log
+    assert EMPTY_BATCH.format(run=run) in ended.hooked.result.stderr
+    assert not list(ended.bench.runs.glob(f"{run}{FOLLOW_UPS_SUFFIX}*"))
 
 
 def test_the_hooks_output_reaches_the_attached_launch_and_the_results_view(
@@ -447,6 +530,8 @@ def test_a_failed_run_retried_to_completion_launches_follow_up_verification(
         failed = _launch(bench, run, persona=UNCLAIMED_PERSONA)
         assert _settlement(failed)["settlement"] != "complete", failed.result.stdout
         assert (bench.runs / run / "hooks" / "failure.log").is_file()
+        # A follow-up for the success hook's run to verify, so the later ending launches one.
+        _manager_draft(bench, run)
 
         envelope: RetryEnvelope = {
             "version": 3,
@@ -558,6 +643,8 @@ def test_a_failed_run_whose_failed_node_is_settled_done_fires_its_success_hook_o
         assert _settlement(failed)["settlement"] != "complete", failed.result.stdout
         assert (bench.runs / run / "hooks" / "failure.log").is_file()
         assert not (bench.runs / run / "hooks" / "success.log").exists()
+        # A follow-up for the success hook's run to verify, so the later ending launches one.
+        _manager_draft(bench, run)
 
         envelope: SettleEnvelope = {
             "version": 3,

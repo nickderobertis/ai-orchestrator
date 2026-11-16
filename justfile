@@ -635,9 +635,11 @@ follow-up *args:
 
 # Verify a finished run's follow-ups through onefollowup: `just follow-ups <run-id>`.
 #
-# Creates the `follow-ups` plan from `templates/follow-ups.md.j2` for the run's batch (its
-# public id) — prepare, the verifying agent, check, publish, settle — and launches it
-# detached, printing the follow-up run's id and its watch command on one line.
+# Asks `onefollowup snapshot` whether the run's batch (its public id) holds anything to
+# verify: for an empty one it prints one line saying so and launches nothing. Otherwise it
+# creates the `follow-ups` plan from `templates/follow-ups.md.j2` — prepare, the verifying
+# agent, check, publish, settle — and launches it detached, printing the follow-up run's id
+# and its watch command on one line.
 # `onefollowup.yaml` is the whole of what the loop is configured by; `scripts/run-ended.sh`
 # runs this recipe when a run ends with every node done.
 [doc("Create and launch the plan verifying a finished run's follow-ups through onefollowup.")]
@@ -650,6 +652,22 @@ follow-ups run:
     store=${ONEFOLLOWUP_STORE:-{{repo_root}}}
     [ -d "$store" ] || store=$(dirname -- "$store")
     batch=$(onepipeline status "$run" --json | jq -er '.public_id')
+    # onefollowup alone decides whether the batch holds anything to verify; a failure or
+    # refusal leaves its diagnostic on stderr and ends the recipe before anything is created.
+    # It runs as the follow-up plan's steps do: here, owned by the launching manager session.
+    if [ -z "${ONEFOLLOWUP_HOOKS__OWNER__SESSION:-}" ]; then
+        . "{{repo_root}}/scripts/launcher-session.sh"
+        export ONEFOLLOWUP_HOOKS__OWNER__SESSION="${ONEPIPELINE_LAUNCHER_SESSION:-}"
+    fi
+    snapshot=$(cd "{{repo_root}}" && onefollowup snapshot --batch "$batch")
+    if jq -e '.empty == true' <<<"$snapshot" >/dev/null; then
+        printf 'batch %s of run %s holds no follow-up drafts; no follow-up run was launched\n' "$batch" "$run"
+        exit 0
+    fi
+    jq -e '.empty == false' <<<"$snapshot" >/dev/null || {
+        echo "follow-ups: onefollowup snapshot answered no boolean 'empty' for batch $batch; adopt the release config/onefollowup.version names with 'just bootstrap', then rerun 'just follow-ups $run'" >&2
+        exit 2
+    }
     runs=${ONEPIPELINE_RUNS_DIR:-{{repo_root}}/runs}
     project="$run-follow-ups"
     attempt=1

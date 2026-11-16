@@ -39,7 +39,7 @@ dev = [
 requires-dist = [
     { name = "oneagentgraph-cli", specifier = "==0.13.0" },
     { name = "onebudgetspec-cli", specifier = "==0.2.2" },
-    { name = "onefollowup-cli", specifier = "==0.7.0" },
+    { name = "onefollowup-cli", specifier = "==0.8.0" },
     { name = "oneharness-cli", specifier = "==0.30.0" },
     { name = "onejudge", specifier = "==0.23.1" },
     { name = "onemessagebus-cli", specifier = "==0.11.1" },
@@ -363,12 +363,13 @@ wheels = [
 
 [[package]]
 name = "onefollowup-cli"
-version = "0.7.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/36/af1f01652a543d9e8f49f71dd3495e1cd03e837eb3ee71abbaaf17fc54ef/onefollowup_cli-0.7.0-py3-none-manylinux_2_39_aarch64.whl", hash = "sha256:bd33899eab0199368053413f85c0fbd7d730ec2c563efb08b5e84f9f5918dada", size = 14017562, upload-time = "2026-11-16T06:19:44.127Z" },
-    { url = "https://files.pythonhosted.org/packages/a2/56/c63cabf31387ef9e4c91bf75b8cc6b319ab6cf3effb70a53c5f5c2ab1cfd/onefollowup_cli-0.7.0-py3-none-manylinux_2_39_x86_64.whl", hash = "sha256:63e411a631cb14210c7327ce046d8a602faa7f0e4a71d0d61d952cb11ba3f910", size = 14778720, upload-time = "2026-11-16T06:20:15.659Z" },
-    { url = "https://files.pythonhosted.org/packages/4e/b2/79955b65c5d36fe3143667e1e8210ff35d6046ede4049c4e8b52e6ced85f/onefollowup_cli-0.7.0-py3-none-win_amd64.whl", hash = "sha256:c33307dd938a65ba2d213e8dc5f9fa2d353389119e5f1cd297c153c76208812b", size = 13064415, upload-time = "2026-11-16T06:24:50.198Z" },
+    { url = "https://files.pythonhosted.org/packages/28/f0/a013999ebb40bd52b93fa55d68ef2edd40182a4d29dc6e8622705cea0eae/onefollowup_cli-0.8.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:5b6886303e7b8c2663417619aed252723c899afe0fd2b68239e869fc2f343520", size = 11465610, upload-time = "2026-11-16T11:19:20.208Z" },
+    { url = "https://files.pythonhosted.org/packages/30/c2/06d481d3f8f939645a3226be4529244afe923ef44d47ccef9ecdf890e457/onefollowup_cli-0.8.0-py3-none-manylinux_2_39_aarch64.whl", hash = "sha256:3604ddc238a25db8ee71f5b427555fdce40790dd7c0739318dfb5a812cf8d63d", size = 14029213, upload-time = "2026-11-16T11:16:19.964Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/51/66dbf00234550f724f1e96efb6c4a4913e4a80374a83a19dba73d5695ba9/onefollowup_cli-0.8.0-py3-none-manylinux_2_39_x86_64.whl", hash = "sha256:6bb55f155331ad4ee995d475357b1a2128266b92d170d997a279bd8aad2f21a3", size = 14780867, upload-time = "2026-11-16T11:16:45.576Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/7f/1af4568ede670f5b4ba888d66b6bd9c84552ce4c256ef092b1f05c735cdd/onefollowup_cli-0.8.0-py3-none-win_amd64.whl", hash = "sha256:3d4d10db7e186fb408f422c13aac08b001b9cc692b978f121d67a51623abc92b", size = 13075422, upload-time = "2026-11-16T11:18:53.316Z" },
 ]
 
 [[package]]

@@ -591,7 +591,8 @@ draft never stands in for a surface or for a question the user needed answered.
 
 **When a run you launched ends with every node done**, its success hook runs `just
 follow-ups <run-id>`, which launches the run's follow-up plan through onefollowup, detached,
-and names it. Tell the user the main work is complete and only follow-ups are being
+and names it; for a batch onefollowup reports empty it launches none and prints one line
+saying so. Tell the user the main work is complete and only follow-ups are being
 verified; that run is yours and owed a watch like any other. When it settles, give the user
 the link to every follow-up issue it created or updated, the drafts it disposed of without a
 ticket and why, and anything it found that should have been surfaced during the run. Each

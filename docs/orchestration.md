@@ -1276,7 +1276,9 @@ just follow-ups-answer-comments
 ```
 
 `just follow-ups` creates the plan that verifies a finished run's follow-ups through
-onefollowup and launches it detached; a run `just orchestrate` launched whose every node
+onefollowup and launches it detached, or, for a batch `onefollowup snapshot` reports empty,
+launches none and prints `batch <batch> of run <run> holds no follow-up drafts; no follow-up
+run was launched`; a run `just orchestrate` launched whose every node
 ended `done` has it launched for it by the success hook, and a manager types it for a run
 that ended any other way. `just follow-ups-answer-comments` runs onefollowup's comment pass
 as a plan in a flow, answering each person's comment on this host's tickets once, by the
@@ -2059,8 +2061,9 @@ is the contract; this host does two things with it:
 
 - **success** (every node `done`) runs `just follow-ups <run-id>` and prints
   `main work of run <run-id> is complete; follow-ups are being verified in run
-  <follow-up-run-id>; watch it with: just watch <follow-up-run-id>`. It exits with the
-  recipe's status. The follow-up run is detached because the hook is awaited and the run
+  <follow-up-run-id>; watch it with: just watch <follow-up-run-id>`, or, for a batch
+  onefollowup reports empty, relays the recipe's one line saying no follow-up run was
+  launched. It exits with the recipe's status. The follow-up run is detached because the hook is awaited and the run
   outlives that deadline, and it belongs to the main run's owner: the engine exports that
   owner's launcher identity to the hook, and `scripts/onepipeline.sh` keeps an exported
   identity.
