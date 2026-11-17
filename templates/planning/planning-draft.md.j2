@@ -6,6 +6,10 @@ variables:
     description: The qualified id of the plan project to write, `authoring:<native id>`.
     type: text
     required: true
+  plan_title:
+    description: The plan's title, the brief's H1.
+    type: text
+    required: true
   brief:
     description: The path of the manager's brief.
     type: text
@@ -23,8 +27,9 @@ variables:
 
 ## Where the plan goes
 
-Write the plan as the project `{{ plan }}` in the `authoring` source: its description
-rendered from the `plan-description` template and each task from the `plan-task` template,
+Write the plan as the project `{{ plan }}` in the `authoring` source, titled with the
+brief's H1, `{{ plan_title }}`, since the navigation lists its runs by that title: its
+description rendered from the `plan-description` template and each task from the `plan-task` template,
 both as `onepipeline template resolve <name> --json` resolves them, piped into
 `onetaskgraph project create` and `onetaskgraph task create` with `--template-loader -`.
 Give every task the `orchestrator.unit` metadata naming the unit it changes, and its
@@ -33,8 +38,9 @@ Give every task the `orchestrator.unit` metadata naming the unit it changes, and
 
 **Spikes.** When a decision needs a measurement before it can be planned, create the spikes
 project `{{ plan }}-spikes` from this host's `templates/planning/spikes.md.j2` (answer `plan`
-with `{{ plan }}` and `native` with the part after its source, give it the title
-`<native id>-spikes` and `--metadata onepipeline.schema_version=3`), then add one lifecycle task per spike to it, with the node id
+with `{{ plan }}` and `native` with the part after its source, title it with the plan's
+title plus ` spikes`, `{{ plan_title }} spikes`, and give it
+`--metadata onepipeline.schema_version=3`), then add one lifecycle task per spike to it, with the node id
 `spike-<topic>`, `onepipeline.publish: "preserve"`, its `repo` and `execution_checkout`, and
 no dependency on any member of the spikes template: its only dependency inside the spikes
 project is a harness spike it builds on, where it has one. The planning run's `finalize` step
@@ -57,9 +63,9 @@ rules, so write them to these rules on the first draft:
 
 ## Acceptance criteria
 
-- `{{ plan }}` holds the plan the brief asks for: its description rendered from `plan-description` and every task rendered from `plan-task`, each with its `orchestrator.unit` and its budget record.
+- `{{ plan }}` is titled `{{ plan_title }}` and holds the plan the brief asks for: its description rendered from `plan-description` and every task rendered from `plan-task`, each with its `orchestrator.unit` and its budget record.
 - Every task and the description are written to the plan checklist's rules above.
-- Where the plan needs a measurement, `{{ plan }}-spikes` holds a spike task for it from the spikes template; otherwise no spikes project exists.
+- Where the plan needs a measurement, `{{ plan }}-spikes`, titled `{{ plan_title }} spikes`, holds a spike task for it from the spikes template; otherwise no spikes project exists.
 
 ## Additional info
 

@@ -86,8 +86,9 @@ PLANNING_NODES = [
 ]
 #: A phrase only the planning template's finalize task carries.
 FINALIZE_MARKER = "**First, check whether the spikes project exists**"
-#: The run a node of another project preserved its branch under.
-OTHER_RUN = "another-plan-7"
+#: The project whose run another branch is preserved under: titled as a plan's spikes project
+#: is, so its run's id is one the success hook has to read the project of before keeping it.
+OTHER_PROJECT = "authoring:another-plan-spikes"
 #: How long the plan recipe may take to return.
 SETTLE_SECONDS = 900.0
 
@@ -137,6 +138,7 @@ class Sequence(NamedTuple):
     hooked_unreadable_project: str
     hooked_unlistable_branches: str
     hooked_unreclaimable: str
+    hooked_unreadable_spikes_run: str
     remote_after_hooks: frozenset[str]
     succeeded: Launch
     success_log: str
@@ -221,8 +223,61 @@ def _unpublished(bench: Bench) -> list[dict[str, object]]:
     return rows
 
 
+def _another_spikes_run(bench: Bench) -> str:
+    """Run another plan's one-command spikes project to completion; answer its run id."""
+    body = bench.tmp / "another-spikes.md"
+    body.write_text("Measures nothing.\n", encoding="utf-8")
+    for created in (
+        store(
+            bench,
+            "project",
+            "create",
+            "authoring",
+            "--id",
+            OTHER_PROJECT.split(":")[1],
+            "--title",
+            "Another plan spikes",
+            "--metadata",
+            "onepipeline.schema_version=3",
+        ),
+        store(
+            bench,
+            "task",
+            "create",
+            "authoring",
+            "--project",
+            OTHER_PROJECT,
+            "--title",
+            "Probe",
+            "--body-file",
+            str(body),
+            "--metadata",
+            'onepipeline.id="probe"',
+            "--metadata",
+            'onepipeline.kind="command"',
+            "--metadata",
+            'onepipeline.command=["true"]',
+        ),
+    ):
+        assert created.returncode == 0, created.stdout + created.stderr
+    started = run(
+        bench,
+        "scripts/onepipeline.sh",
+        "start",
+        OTHER_PROJECT,
+        "--launch-config",
+        "config/onepipeline.workflows.yaml",
+        "--dag-graph",
+        "off",
+    )
+    assert started.returncode == 0, started.stdout + started.stderr
+    return str(json.loads(started.stdout.strip().splitlines()[-1])["run_id"])
+
+
 def _preserve_another(bench: Bench, identity: Identity) -> str:
     """Preserve a branch the way a node of another project's run leaves one; answer it."""
+    other_run = _another_spikes_run(bench)
+    assert other_run.endswith("-spikes"), other_run
     opened = onevcs_in(
         identity,
         "session",
@@ -231,7 +286,7 @@ def _preserve_another(bench: Bench, identity: Identity) -> str:
         "--branch-name",
         "another-plan/spike-other",
         "--label",
-        f"run={OTHER_RUN}",
+        f"run={other_run}",
         "--label",
         "node=spike-other",
     )
@@ -471,8 +526,9 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     # leaves the settlement write-back's keys out — and each fires the real success hook,
     # launched in an environment that fails one of its discard's reads in turn: the plan's
     # project unreadable from an empty authoring root, the preserved branches unlistable
-    # from a registry that is no directory, and the discard refused for a branch checked
-    # out with an edit. Each keeps the spike branch; the last, launched as it is, discards it.
+    # from a registry that is no directory, the discard refused for a branch checked out
+    # with an edit, and the spikes run's project unreadable with its record moved aside.
+    # Each keeps the spike branch; the last, launched as it is, discards it.
     empty_store = tmp / "empty-store"
     empty_store.mkdir()
     unreadable = _launch(
@@ -495,6 +551,18 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         (identity.execution / "unsaved.txt").unlink()
         git("checkout", "-q", "main", cwd=identity.execution)
     hooked_unreclaimable = _hook_log(bench_, unreclaimable.run, "success")
+    # llmlint: ignore-block[tests_mirror_real_usage] The engine has no verb that removes or
+    # damages one run's record, and pointing the hook at another run store would fail its
+    # read of the main run before it reached the spikes run, so the spikes run's record is
+    # moved aside for one launch and put back; the hook and every read it makes are real.
+    aside = tmp / "spikes-run-aside"
+    (bench_.runs / spikes_run).rename(aside)
+    try:
+        unreadable_spikes_run = _launch(bench_, copy)
+    finally:
+        aside.rename(bench_.runs / spikes_run)
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    hooked_unreadable_spikes_run = _hook_log(bench_, unreadable_spikes_run.run, "success")
     remote_after_hooks = _remote_branches(identity)
 
     succeeded = _launch(bench_, copy)
@@ -537,6 +605,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         hooked_unreadable_project,
         hooked_unlistable_branches,
         hooked_unreclaimable,
+        hooked_unreadable_spikes_run,
         remote_after_hooks,
         succeeded,
         success_log,
@@ -734,12 +803,26 @@ def test_a_refused_discard_keeps_the_branch_saying_how_to_discard_it(sequence: S
     assert sequence.other_branch in sequence.remote_after_hooks
 
 
+def test_a_spikes_run_whose_project_cannot_be_read_keeps_its_branch_saying_so(
+    sequence: Sequence,
+) -> None:
+    logged = sequence.hooked_unreadable_spikes_run
+    assert (
+        f"the project of run {sequence.spikes_run} could not be read from 'onepipeline status'"
+        in logged
+    ), logged
+    assert "so its preserved branches were kept" in logged and FOLLOW_UPS in logged, logged
+    assert "discarded the spike branches" not in logged, logged
+    assert sequence.spike_branch in sequence.remote_after_hooks
+
+
 def test_a_successful_run_discards_the_spike_branch_and_keeps_another_projects(
     sequence: Sequence,
 ) -> None:
     settled = json.loads(sequence.succeeded.result.stdout.strip().splitlines()[-1])
     assert settled["settlement"] == "complete", settled
     assert sequence.spike_branch in sequence.success_log, sequence.success_log
+    assert "could not be read" not in sequence.success_log, sequence.success_log
     assert sequence.spike_branch not in sequence.remote_after_success
     branches = {str(row.get("branch")) for row in sequence.unpublished_after_success}
     assert sequence.spike_branch not in branches, branches

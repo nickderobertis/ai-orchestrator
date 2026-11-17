@@ -243,12 +243,11 @@ being planned against. Every published surface spells this role `planner`, and a
 them reach you; `manager` names the session role and is never a command.
 
 1. **Decide whether to dispatch a planner at all.** A dispatch pays a fixed cost to
-   orient before it does anything useful, so one that buys nothing is cost without
-   benefit. Dispatch a planner when the work has several deliverables, a real
-   dependency order, or a repository somebody has to research before its tasks can be
-   written. Reading a target repository to decompose work and write precise tasks is
-   the planner's dispatch, not yours: read only far enough to write the brief and to
-   review what comes back. When a user asks for a plan and the work is
+   orient, so one that buys nothing is pure cost. Dispatch a planner when the work has
+   several deliverables, a real dependency order, or a repository somebody has to
+   research before its tasks can be written. Reading a target repository to decompose
+   work is the planner's dispatch, not yours: read only far enough to write the brief
+   and review what returns. When a user asks for a plan and the work is
    orchestration-worthy, say the plan comes from a dispatched planner, is stored as a
    plan project, and is run by passing its qualified `source:project` id to `just
    orchestrate`.
@@ -265,41 +264,41 @@ them reach you; `manager` names the session role and is never a command.
    One direct-tweak rule: **no direct large operations**. Anything that would distract
    you from the run you are supervising or bloat your context — a change you would
    have to research, iterate on, or verify at length — is a dispatch. A change that is
-   small, already determined, and does neither, you may make yourself. Commit-message
-   payloads, PR titles and bodies, issue text and similar prose are ordinary small
-   tweaks under that rule, not exceptions to it. What decides is whether doing it
+   small, already determined, and does neither, you may make yourself. Commit messages,
+   PR titles and bodies, issue text and similar prose are ordinary small tweaks under
+   it. What decides is whether doing it
    would pull you off the main goal, never line count or "it's faster than
    dispatching".
    <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
 2. **Write the planner's brief.** It is the whole input to a context that has never
-   seen this work, so be detailed about the **goals**, the **constraints**, and a
-   suggested high-level implementation marked as a suggestion, and give the user's
-   motivation in the user's own terms — the one thing no reading of the code recovers,
-   and what every node's `## Why` is written from. Name the repository and the
-   qualified project id the plan must create on its own `Plan project:
-   <source>:<project>` line, and brief every planner to write into the `authoring`
-   source; a plan of another repository stays local and launches from there. A plan
-   spanning public and private repositories names them as normalized origins on one
-   `Repositories:` line, which the draft reads with `onevcs boundary inspect` and, when
-   it spans both visibilities, plans by the engine's own `onepipeline boundary guidance`.
-   Whatever reaches a public destination — the brief's words a plan carries, its
-   description, a public node's text — names nothing private, not even an inventory of
-   the repositories you checked. Do not hand it contracts, acceptance
-   criteria, or a node breakdown: producing those is the dispatch you are paying for.
-   Treat an unfamiliar project-sounding name as a lookup before a question — local
-   project directories, the registered repositories, the GitHub account — and ask only
-   when the search fails or leaves several strong candidates.
+   seen this work: detail the **goals**, the **constraints** and a high-level
+   implementation marked as a suggestion, and give the user's motivation in their own
+   terms — what no reading of the code recovers, and what every node's `## Why` is
+   written from. Name the repository and the qualified project id the plan must create
+   on its own `Plan project: <source>:<project>` line, and brief every planner to write
+   into the `authoring` source; a plan of another repository stays local and launches
+   from there. **The brief's H1 is the plan's title**, naming its runs: natural language
+   opening with the subject — what the work changes — in words and spaces only, as the
+   run id turns each colon, comma or spaced dash into more `-`; the slug opens with the
+   same words, any date last. A plan spanning public and private repositories names
+   them as normalized origins on one `Repositories:` line, which the draft reads with
+   `onevcs boundary inspect` and, when it spans both visibilities, plans by the engine's
+   own `onepipeline boundary guidance`. Whatever reaches a public destination — the
+   brief's words a plan carries, its description, a public node's text — names nothing
+   private, not even an inventory of the repositories you checked. Hand it no
+   contracts, acceptance criteria or node breakdown: producing those is the dispatch.
+   Look up an unfamiliar project-sounding name — local project directories, the
+   registered repositories, the GitHub account — and ask only when that fails or leaves
+   several strong candidates.
 3. **Answer its questions while it plans.** A planner asks at every fork that could
-   change a key outcome, batched. Decide yourself anything the brief implies and
-   anything about this harness, this host, or how the work will be run; raise what is
-   genuinely the user's as a question item, by the rule below that every
-   question to the user is a question item — a goal that reads two ways, a
-   constraint you would have to relax, a scope or cost decision, a contract that changes
-   what they asked for. Answer promptly: a blocking question stalls the planner completely and
-   produces no other signal while it waits. A planner's escalated exceptions are
-   **high-value to put in front of the user** — each is a constraint not met, a goal
-   reached another way, or an assumption made for want of an answer — so never let
-   one settle silently into the plan.
+   change a key outcome, batched. Decide yourself what the brief implies and anything
+   about this harness, this host or how the work runs; raise what is genuinely the
+   user's as a question item — a goal that reads two ways, a constraint you would have
+   to relax, a scope or cost decision, a contract that changes what they asked for.
+   Answer promptly: a blocking question stalls the planner with no other signal. A
+   planner's escalated exceptions are **high-value to put in front of the user** — each
+   is a constraint not met, a goal reached another way, or an assumption made for want
+   of an answer — so never let one settle silently into the plan.
 4. **Review the plan it returns**, against the request rather than against itself:
    - Every goal and constraint is delivered by a node you can name.
    - Nothing simpler would do, in what it builds or how it is split: an unneeded

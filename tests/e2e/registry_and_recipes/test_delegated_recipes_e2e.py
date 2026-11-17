@@ -1829,7 +1829,8 @@ case "$*" in
   "task list "*)
     printf '{"items":[],"errors":[],"next":null}\n' ;;
   "project show "*)
-    printf '{"items":[{"id":"plans:example","item":{"content":"The brief."}}],"errors":[]}\n' ;;
+    printf '{"items":[{"id":"plans:example","item":'
+    printf '{"title":"Example","content":"The brief."}}],"errors":[]}\n' ;;
   "project graph "*)
     printf '{"schema_version":1,"project":"plans:example","direction":"td",'
     printf '"group_by":null,"nodes":[],"edges":[]}\n' ;;

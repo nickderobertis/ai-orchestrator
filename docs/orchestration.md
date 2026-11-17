@@ -311,9 +311,10 @@ just orchestrate plans:<project>
 **The planning road is configuration.** `just plan <brief.md> [destination]` creates a
 planning project in the plan's source from
 [`templates/planning/planning.md.j2`](../templates/planning/planning.md.j2) — the plan id read
-from the brief's `Plan project: <source>:<project>` line, the brief's text, and the plan
-checklist's rules as `llmlint rules -c config/plan-checklist.llmlint.yml` prints them — and
-launches it with `onepipeline start` inside `onepipeline flow run`, under
+from the brief's `Plan project: <source>:<project>` line, the plan's title from its H1, the
+brief's text, and the plan checklist's rules as `llmlint rules -c
+config/plan-checklist.llmlint.yml` prints them — and launches it with `onepipeline start`
+inside `onepipeline flow run`, under
 `config/onepipeline.workflows.yaml`. That launch config registers no launch check, no
 plan-edit hook and no run-end hook: a planning run launches a plan nothing has reviewed yet,
 which is the point of it. Its members, in order:
@@ -332,7 +333,10 @@ which is the point of it. Its members, in order:
 `just finish-plan <source>:<project> [destination]` launches
 [`templates/planning/finishing.md.j2`](../templates/planning/finishing.md.j2), the same road
 from `check` onward, over a plan already drafted or edited since, its design document written
-from the plan's own description. Each step's task and command are the template's; nothing in
+from the plan's own description. Each titles its project `<plan title> planning` or `<plan title>
+finishing`, so the run ids the engine mints from those titles open with the plan's subject,
+and names its flow the same with every character a flow name refuses as `-`; the project ids
+keep the slug and timestamp. Each step's task and command are the template's; nothing in
 `scripts/` or `orchestrator/` composes them. `tests/e2e/planning/` drives both recipes end to
 end.
 

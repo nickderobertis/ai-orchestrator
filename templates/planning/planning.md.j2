@@ -15,6 +15,10 @@ variables:
     description: The plan project's native id, the part of `plan` after its source.
     type: text
     required: true
+  plan_title:
+    description: The plan's title, the brief's H1, which the plan project is titled with.
+    type: text
+    required: true
   brief:
     description: The path of the manager's brief, as the recipe was given it.
     type: text
@@ -37,6 +41,7 @@ members:
     template: {file: planning-draft.md.j2}
     answers:
       plan: "{{ plan }}"
+      plan_title: "{{ plan_title }}"
       brief: "{{ brief }}"
       brief_text: "{{ brief_text }}"
       checklist: "{{ checklist }}"

@@ -26,6 +26,11 @@ STORE = ".venv/bin/onetaskgraph"
 RESOLVE = "scripts/onepipeline.sh template resolve"
 
 
+def plan_title(native: str) -> str:
+    """The title of `authoring:<native>`: its brief's H1, which the draft titles it with."""
+    return f"Health route {native}"
+
+
 def _task(plan: str, node: str, title: str, unit: str, *, after: str | None = None) -> str:
     """A bash line creating one plan-task rendering in ``plan``, echoing its id to a file."""
     depends = f' --depends-on "$(cat .plan-{after}.id)"' if after else ""
@@ -46,7 +51,7 @@ def plan_commands(native: str) -> list[str]:
     goal = json.dumps({"text": "Give the service a health route operators can poll"})
     return [
         f"{RESOLVE} plan-description --json | {STORE} project create authoring --id {native} "
-        f"--title {shlex.quote('Health route ' + native)} --template-loader - "
+        f"--title {shlex.quote(plan_title(native))} --template-loader - "
         f"--var 'overview=Add a health route and document it.' "
         f"--metadata onepipeline.schema_version=3 "
         f"--metadata {shlex.quote('onepipeline.goal=' + goal)} "
@@ -114,7 +119,8 @@ def spikes_commands(native: str, repo: str, execution: str, spikes: tuple[str, .
     """The draft's extra commands: `authoring:<native>-spikes` from its template, its spikes."""
     plan = f"authoring:{native}"
     return [
-        f"{STORE} project create authoring --id {native}-spikes --title {native}-spikes "
+        f"{STORE} project create authoring --id {native}-spikes "
+        f"--title {shlex.quote(plan_title(native) + ' spikes')} "
         f"--template templates/planning/spikes.md.j2 --var plan={plan} --var native={native} "
         f"--metadata onepipeline.schema_version=3 --no-interactive",
         *(_spike_task(f"{plan}-spikes", spike, repo, execution) for spike in spikes),
@@ -192,6 +198,7 @@ def brief(bench: Bench, native: str) -> str:
     """A manager's brief naming the plan project, written into the bench; answers its path."""
     path = bench.tmp / f"{native}.brief.md"
     path.write_text(
+        f"# {plan_title(native)}\n\n"
         "## What\n\nGive the service a health route operators can poll.\n\n"
         "## Why\n\nOperators cannot tell whether the service is up.\n\n"
         f"Plan project: authoring:{native}\n",

@@ -12,7 +12,9 @@
 #     is discarding the plan's spike branches and verifying what the run drafted. The
 #     plan's spikes ran as the run of its `<plan>-spikes` project, so every branch
 #     `onepipeline unpublished --host --format json` names as preserved by a run of that
-#     project — `<native id>-spikes`, or `-<n>` after it — is discarded with `just
+#     project — a run whose id ends `-spikes`, or `-spikes-<n>`, as one minted from the
+#     project's `<plan title> spikes` title does, and whose `onepipeline status --json`
+#     `group` is that project — is discarded with `just
 #     reclaim-branch <branch> --repo <identity> --discard`, the plan being the project the
 #     run was launched from (`onepipeline status --json`'s `group`) or the one its
 #     `onetaskgraph.origin` names when it is a copy; one line reports each outcome, and a
@@ -72,7 +74,8 @@ run=${ONEPIPELINE_RUN_ID:-}
 # use costs disk and a listing line, while a success hook that stopped here would launch no
 # follow-up run.
 discard_spike_branches() {
-    local plan origin spikes listed rows reclaimed discarded branch identity
+    local plan origin spikes listed candidates candidate group rows reclaimed discarded branch identity
+    local -a runs=()
     local -a gone=()
     # Each lookup that fails stops the discard with one line saying so, and the follow-up
     # run still launches: a spike branch kept by mistake costs disk, a wrong one discarded
@@ -86,13 +89,30 @@ discard_spike_branches() {
         echo "run-ended: project $plan could not be read from the plan store, so no spike branch was discarded; each is listed by 'just unpublished' and discarded with 'just reclaim-branch <branch> --repo <identity> --discard'"
         return 0
     fi
-    spikes="${origin:-$plan}"
-    spikes="${spikes#*:}-spikes"
+    spikes="${origin:-$plan}-spikes"
     # Its exit status says whether branches are owed, not whether it answered, so what it
     # printed is what is read: an answer without its `rows`, or one whose verdict is
     # `unanswered` because the registry could not be read, is a listing that failed.
     listed=$(cd -- "$checkout" && scripts/onepipeline.sh unpublished --host --format json) || :
-    if ! rows=$(jq -r --arg spikes "$spikes" 'if (.rows | type) != "array" or .verdict == "unanswered" then error("no answer") else .rows[] | select((.run // "") as $r | $r == $spikes or (($r | startswith($spikes + "-")) and ($r[($spikes | length) + 1:] | test("^[0-9]+$")))) | if (.branch | type) == "string" and .branch != "" and (.identity | type) == "string" and .identity != "" then [.branch, .identity] | @tsv else error("a row names no branch or identity") end end' <<<"$listed" 2>/dev/null); then
+    # The `-<n>` form is the engine's id for a repeat launch of the spikes project. No journey
+    # relaunches one: that would redispatch every spike and preserve its branches a second
+    # time, minutes of the planning journey for one alternation in this pattern, and the
+    # `group` check below decides membership for that id exactly as for the first.
+    if ! candidates=$(jq -r 'if (.rows | type) != "array" or .verdict == "unanswered" then error("no answer") else [.rows[] | .run // "" | select(test("-spikes(-[0-9]+)?$"))] | unique | .[] end' <<<"$listed" 2>/dev/null); then
+        echo "run-ended: the preserved branches could not be listed by 'onepipeline unpublished', so no spike branch of $spikes was discarded; each is listed by 'just unpublished' and discarded with 'just reclaim-branch <branch> --repo <identity> --discard'"
+        return 0
+    fi
+    # A candidate whose project cannot be read may be this plan's spikes run or another's, so
+    # its branches are kept and the line says how to look and discard by hand.
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        if ! group=$(cd -- "$checkout" && scripts/onepipeline.sh status "$candidate" --json | jq -er '.group'); then
+            echo "run-ended: the project of run $candidate could not be read from 'onepipeline status' (its diagnostic is above), so its preserved branches were kept; 'just status $candidate' names its project, and if that is $spikes, 'just reclaim-branch <branch> --repo <identity> --discard' discards each"
+        elif [ "$group" = "$spikes" ]; then
+            runs+=("$candidate")
+        fi
+    done <<<"$candidates"
+    if ! rows=$(jq -r --args 'if (.rows | type) != "array" then error("no answer") else .rows[] | select((.run // "") as $r | $ARGS.positional | index($r)) | if (.branch | type) == "string" and .branch != "" and (.identity | type) == "string" and .identity != "" then [.branch, .identity] | @tsv else error("a row names no branch or identity") end end' "${runs[@]}" <<<"$listed" 2>/dev/null); then
         echo "run-ended: the preserved branches could not be listed by 'onepipeline unpublished', so no spike branch of $spikes was discarded; each is listed by 'just unpublished' and discarded with 'just reclaim-branch <branch> --repo <identity> --discard'"
         return 0
     fi

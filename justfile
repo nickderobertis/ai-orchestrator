@@ -233,8 +233,11 @@ orchestrate *args:
 #
 # `just plan <brief.md> [destination]` creates a planning project from
 # `templates/planning/planning.md.j2` — the plan's id read from the brief's `Plan project:`
-# line, the checklist's rules as `llmlint rules` prints them — and launches it under
-# `onepipeline flow run`, so the planning run and the spikes run it starts are one flow.
+# line, its title from the brief's H1, the checklist's rules as `llmlint rules` prints them —
+# and launches it under `onepipeline flow run`, so the planning run and the spikes run it
+# starts are one flow. The project is titled `<plan title> planning`, the words the
+# navigation shows, and the flow named for it in the only characters a flow name takes,
+# every other one a `-`; the project id keeps the slug and timestamp.
 [group("planning")]
 [doc("Draft, spike, check, review, document and copy a plan from a brief, in one flow.")]
 plan brief destination="plans":
@@ -243,24 +246,27 @@ plan brief destination="plans":
     brief_text=$(cat -- {{ quote(brief) }}) || { echo "plan: the brief {{ brief }} cannot be read; name a readable brief file, then retry" >&2; exit 2; }
     plan=$(sed -n 's/^Plan project:[[:space:]]*//p' <<<"$brief_text" | head -n 1)
     [ -n "$plan" ] || { echo "plan: {{ brief }} states no 'Plan project: <source>:<project>' line; add one naming the project the planner writes, such as 'Plan project: authoring:<name>', then retry" >&2; exit 2; }
+    title=$(sed -n '/^#[[:space:]]/{s/^#[[:space:]]*//;s/[[:space:]]*$//;p;q;}' <<<"$brief_text")
+    [ -n "$title" ] || { echo "plan: {{ brief }} has no '# <title>' heading; open it with the plan's title, whose first words name what the work changes, then retry" >&2; exit 2; }
     native=${plan#*:}
     id="$native-planning-$(date +%Y%m%d%H%M%S)"
     checklist=$(llmlint rules -c config/plan-checklist.llmlint.yml --files "projects/$native.md" "tasks/$native-task.md" --format markdown) ||
         { echo "plan: llmlint could not print the plan checklist's rules (its diagnostic is above); repair config/plan-checklist.llmlint.yml or run 'just setup-llmlint', then retry" >&2; exit 2; }
-    .venv/bin/onetaskgraph project create "${plan%%:*}" --id "$id" --title "$native-planning" \
+    .venv/bin/onetaskgraph project create "${plan%%:*}" --id "$id" --title "$title planning" \
         --template templates/planning/planning.md.j2 --metadata onepipeline.schema_version=3 \
-        --var "plan=$plan" --var "native=$native" --var brief={{ quote(brief) }} \
+        --var "plan=$plan" --var "native=$native" --var "plan_title=$title" --var brief={{ quote(brief) }} \
         --var "brief_text=$brief_text" --var destination={{ quote(destination) }} \
         --var "checklist=$checklist" \
         --no-interactive >&2
-    exec scripts/onepipeline.sh flow run --name "$native-planning" -- scripts/onepipeline.sh start "${plan%%:*}:$id" \
+    exec scripts/onepipeline.sh flow run --name "${title//[^A-Za-z0-9._-]/-}-planning" -- scripts/onepipeline.sh start "${plan%%:*}:$id" \
         --launch-config config/onepipeline.workflows.yaml --dag-graph off --label kind=planning
 
 # `just finish-plan <source>:<project> [destination]` runs the planning road from `check`
 # onward over a plan already drafted, or edited since: `templates/planning/finishing.md.j2`,
 # created in `authoring` and launched in its own flow under the board credential, since the
 # plan it finishes may be a board copy; its design document is written from the plan's own
-# description.
+# description. Project and flow are named as `just plan` names them, from the plan's stored
+# title followed by `finishing`.
 [group("planning")]
 [doc("Check, review, document and copy an already drafted plan, in one flow.")]
 finish-plan plan destination="plans":
@@ -269,14 +275,16 @@ finish-plan plan destination="plans":
     plan={{ quote(plan) }}
     native=${plan#*:}
     id="$native-finishing-$(date +%Y%m%d%H%M%S)"
-    brief_text=$(scripts/plan-store.sh .venv/bin/onetaskgraph project show "$plan" --json --no-interactive | jq -er '.items[0].item.content // ""') ||
+    shown=$(scripts/plan-store.sh .venv/bin/onetaskgraph project show "$plan" --json --no-interactive) && brief_text=$(jq -er '.items[0].item.content // ""' <<<"$shown") ||
         { echo "finish-plan: $plan could not be read from the plan store (its diagnostic is above); name a plan the store holds, then retry" >&2; exit 2; }
-    scripts/plan-store.sh .venv/bin/onetaskgraph project create authoring --id "$id" --title "$native-finishing" \
+    title=$(jq -r '.items[0].item.title // ""' <<<"$shown")
+    [ -n "$title" ] || { echo "finish-plan: $plan has no title in the plan store; give it the brief's title, whose first words name what the work changes, then retry" >&2; exit 2; }
+    scripts/plan-store.sh .venv/bin/onetaskgraph project create authoring --id "$id" --title "$title finishing" \
         --template templates/planning/finishing.md.j2 --metadata onepipeline.schema_version=3 \
         --var "plan=$plan" --var "native=$native" --var destination={{ quote(destination) }} \
         --var "brief_text=$brief_text" \
         --no-interactive >&2
-    exec scripts/plan-store.sh scripts/onepipeline.sh flow run --name "$native-finishing" -- scripts/onepipeline.sh start "authoring:$id" \
+    exec scripts/plan-store.sh scripts/onepipeline.sh flow run --name "${title//[^A-Za-z0-9._-]/-}-finishing" -- scripts/onepipeline.sh start "authoring:$id" \
         --launch-config config/onepipeline.workflows.yaml --dag-graph off --label kind=planning
 
 # `just check-plan <source>:<project>` is the engine's own plan loader with this host's one
