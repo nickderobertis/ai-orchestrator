@@ -35,11 +35,12 @@ Give every task the `orchestrator.unit` metadata naming the unit it changes, and
 project `{{ plan }}-spikes` from this host's `templates/planning/spikes.md.j2` (answer `plan`
 with `{{ plan }}` and `native` with the part after its source, give it the title
 `<native id>-spikes` and `--metadata onepipeline.schema_version=3`), then add one lifecycle task per spike to it, with the node id
-`spike-<topic>`, `onepipeline.publish: "preserve"`, its `repo` and `execution_checkout`, a
-dependency on that project's `approve-spikes` task. The planning run's `finalize` step
+`spike-<topic>`, `onepipeline.publish: "preserve"`, its `repo` and `execution_checkout`, and
+no dependency on any member of the spikes template: its only dependency inside the spikes
+project is a harness spike it builds on, where it has one. The planning run's `finalize` step
 reworks the plan from their reports once the spikes run completes. Each spike writes its report as the document `<native id>-<spike id>-report` of
 `{{ plan }}` from the `spike-report` template. A plan that needs no measurement creates no
-spikes project, and the flow then runs no spikes and asks nobody to approve any.
+spikes project, and a plan with no spikes project runs no spikes.
 
 **Repositories that span visibilities.** When the brief's `Repositories:` line names
 repositories `onevcs boundary inspect` reads as both public and private, run

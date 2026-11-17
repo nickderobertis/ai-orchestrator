@@ -716,23 +716,41 @@ single design rendering rule is `templates/design-doc.md.j2`'s `budgets_guidance
 
 **A draft that cannot know a budget's number without measuring, or is unsure of an
 approach, writes spikes.** It creates `<plan project>-spikes` from
-[`templates/planning/spikes.md.j2`](../templates/planning/spikes.md.j2) — a `spike-brief`
-writer, then the `kind: human` `approve-spikes` — and adds one lifecycle node `spike-<topic>`
-per spike, depending on `approve-spikes` and keeping its branch (`onepipeline.publish:
-"preserve"`). The planning run's `spikes` step starts that run in the same flow with a branch
-template naming the plan, so each branch is `<host prefix>/<plan native id>/spike-<topic>`;
-`just approve-spikes <run>` attests `approve-spikes` once the user has approved the brief, and
-adopts the run, because a human wait pauses a run and lets its driver go. Each spike writes
-its report as the document `<plan native id>-<spike id>-report` of the **plan's** project,
-from `templates/spike-report.md.j2`, so it travels to the board with the plan. The planning
-run's `finalize` planner then reworks the plan from the reports. A draft with no spikes
-creates no spikes project, and the `spikes` step settles `done` at once.
+[`templates/planning/spikes.md.j2`](../templates/planning/spikes.md.j2) — whose one member is
+the `spike-brief` writer — and adds one lifecycle node `spike-<topic>` per spike, keeping its
+branch (`onepipeline.publish: "preserve"`) and depending on no member of the template: its
+only dependency is a harness spike it builds on, where it has one. The planning run's
+`spikes` step starts that run in the same flow with a branch template naming the plan, so
+each branch is `<host prefix>/<plan native id>/spike-<topic>`, and the spikes start at once,
+beside the brief writer, with nobody approving them. Each spike writes its report as the
+document `<plan native id>-<spike id>-report` of the **plan's** project, from
+`templates/spike-report.md.j2`, so it travels to the board with the plan. The planning run's
+`finalize` planner then reworks the plan from the reports. A draft with no spikes creates no
+spikes project, and the `spikes` step settles `done` at once.
+
+**The spike brief is information, and nothing waits on it.** The brief writer writes the
+document `<plan native id>-spike-brief` and raises one non-blocking `check-in` surface on
+the spikes run that names the brief and summarizes each spike;
+[`templates/planning/spike-brief.md.j2`](../templates/planning/spike-brief.md.j2) states its
+shape. The manager relays it to the user at once, as an update they may act on by asking
+the manager to `cancel`, `drop`, `retry` or `amend` a spike; it raises no human item, and
+the design-document approval stays the only wait the planning flow holds for a person.
+
+**A failed brief writer is the manager's, and never waits on the user.** While spikes still
+run, the manager `retry`s it, or `drop`s it with a reason, so the spikes run can still end
+`complete`. If every spike has already finished, the spikes run ended `failed` on the brief
+writer alone and the planning run's `spikes` step failed with it: the manager `drop`s the
+brief writer in the spikes run with a reason — an edit carrying a failed ending to a
+complete one starts a new epoch — then `settle`s the planning run's failed `spikes` node
+`done`, with evidence that its spikes completed. It never retries that step, which re-runs
+`onepipeline start` on the spikes project and may dispatch every spike again.
 
 The `spikes` step waits on the spikes run with `onepipeline status` and `onepipeline watch`
 after its attached `onepipeline start` returns, and fails unless the run ended `complete`.
-That wait is an interim workaround: the pinned engine's attached `start` returns at a human
-node's wait, `approve-spikes`, with its driver gone, and the drafted onepipeline follow-up
-that keeps an attached start waiting across a human wait retires it.
+That wait is an interim workaround: the spikes run holds no human node, but the pinned
+engine's attached `start` also returns when a blocking surface waits on the manager — a
+spike worker's `ORCHESTRATOR_ASK_MANAGER` question — and an onepipeline follow-up keeping an
+attached start waiting across a blocking surface retires it.
 
 **A spike may build on a shared harness spike.** Spikes needing one measurement harness
 depend on a spike that builds it, and the engine starts each one's session from the branch
@@ -3552,10 +3570,11 @@ just unfinished --session ID      # a session named
 just unfinished --json            # {"unwatched": [<lines>], "unpublished": <the engine's document>}
 ```
 
-A planning flow with spikes writes its spike brief as a node of the spikes run, which then
-waits at its `kind: human` `approve-spikes` step: its item asks the user to approve the brief,
-and `just approve-spikes <run>` attests the step once they have, and resumes the run. That
-wait is the spikes run's, so the flow's watch covers it like any other.
+A planning flow with spikes writes its spike brief as a node of the spikes run, which runs
+beside the spikes and waits on nobody: its `check-in` surface names the brief and summarizes
+each spike, and the manager relays it to the user as a non-blocking update. The spikes run
+holds no human wait, so the design-document approval is the only one the planning flow
+holds for a person, and the flow's watch covers the spikes run like any other.
 
 Standard output carries each half under a heading naming its question, the unpublished
 half one line per row the engine listed — counted with the command that lands it, in

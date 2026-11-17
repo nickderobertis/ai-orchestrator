@@ -12,16 +12,32 @@ variables:
     required: true
 ---
 Read the spike tasks of `{{ plan }}-spikes` and the draft plan `{{ plan }}`, and write the
-spike brief a person approves before any spike runs: exactly one document of `{{ plan }}`
-with the native id `{{ native }}-spike-brief`, rendered from the `spike-brief` template as
-`onepipeline template resolve spike-brief --json` resolves it, with one entry per spike task,
-by its node id.
+spike brief the manager relays while the spikes run beside you: exactly one document of
+`{{ plan }}` with the native id `{{ native }}-spike-brief`, rendered from the `spike-brief`
+template as `onepipeline template resolve spike-brief --json` resolves it, with one entry per
+spike task, by its node id.
+
+Once that document is written, raise exactly one non-blocking `check-in` surface on your own
+run, its text on standard input and never through `--message`:
+
+```sh
+scripts/onepipeline.sh surface --kind check-in "$ONEPIPELINE_RUN_ID" <<'BRIEF'
+Spike brief {{ native }}-spike-brief of {{ plan }}:
+- <spike node id>: <what it measures, in a few words>
+BRIEF
+```
+
+Its first line names the document `{{ native }}-spike-brief` and `{{ plan }}`; then one line
+per spike task of `{{ plan }}-spikes`, its node id and, in a few words, what it measures. This
+text is what the manager relays to the user, who may redirect a spike while it runs. Raise
+no human item and ask nothing blocking: nothing waits on this brief.
 
 ## Acceptance criteria
 
 - `{{ plan }}` holds the document `{{ native }}-spike-brief`, rendered from the `spike-brief` template, with one question and use for each spike task of `{{ plan }}-spikes` and no other.
+- After writing it, this dispatch raised exactly one non-blocking `check-in` surface on its own run, its text on standard input, naming `{{ native }}-spike-brief` and `{{ plan }}` and giving one line per spike task of `{{ plan }}-spikes` — its node id and what it measures — and raised no human item or blocking question.
 
 ## Additional info
 
-This dispatch writes only to the plan store, which is gitignored: it commits nothing and
-leaves the checkout on its base branch.
+This dispatch writes only to the plan store, which is gitignored, and to its own run's
+channel: it commits nothing and leaves the checkout on its base branch.

@@ -810,10 +810,14 @@ so nothing runs outside the ledger.
 ### The plan flow
 
 `just plan <brief.md>` runs `templates/planning/` as one flow and `just finish-plan
-<source>:<project>` reruns its tail over an edited plan. Two waits in it are yours to
-release, each after the user decided: `just approve-spikes <run>` and `just approve-design
-<copy> [run]`. A spike branch stays preserved until the plan's main run succeeds, so
-acknowledge it rather than land it; a plan changing what a user sees gets a `spike-visual`.
+<source>:<project>` reruns its tail over an edited plan. Its one wait for a person is the
+design approval, `just approve-design <copy> [run]`. Relay a spikes run's check-in at once:
+it names the brief and summarizes each spike (`templates/planning/spike-brief.md.j2`), waits
+on nobody, and the user may have you `cancel`, `drop`, `retry` or `amend` a spike. A failed
+brief writer is yours: `retry` or `drop` it while spikes run; once the spikes run ended
+`failed` on it alone, `drop` it and `settle` the planning `spikes` node `done`, never
+retrying that step. Acknowledge spike branches until the main run succeeds; a plan
+changing what a user sees gets a `spike-visual`.
 
 Every live correction carrying task prose is judged by the engine's `plan_edit_hook`
 (`scripts/review-plan-item.sh`); a `note`'s text is not. `templates/dispatch-appendix.md` is
@@ -830,9 +834,9 @@ library verbs it calls.
 - `scripts/budget-design-doc-summary.sh` — the root `design-doc-budget-summary-length` budget's measurement.
 - `scripts/review-plan-item.sh` — `oneagentgraph run --judge-only`, `onetaskgraph project attestation check`, `onetaskgraph task list`, `onetaskgraph project show`, `onetaskgraph task attest` and `onetaskgraph project attest`.
 - `scripts/plan-attestation-check.sh` — `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onepipeline template resolve`, `onetaskgraph project attestation check`, `onetaskgraph document list` and `onetaskgraph document attestation check`.
-- `templates/planning/planning.md.j2` — its `spikes` step's command: `onetaskgraph task list`, `onepipeline start`, `onepipeline status` and `onepipeline watch`, the status/watch wait an interim workaround for the engine's attached start returning at a human wait, retired by the drafted onepipeline follow-up.
+- `templates/planning/planning.md.j2` — its `spikes` step's command: `onetaskgraph task list`, `onepipeline start`, `onepipeline status` and `onepipeline watch`, its status/watch wait an interim workaround for an attached start returning at a blocking surface.
 - `scripts/run-ended.sh` — its spike-discard lines: `onepipeline status`, `onetaskgraph project show`, `onepipeline unpublished` and `just reclaim-branch --discard`.
-- `justfile` — the recipes `plan`, `finish-plan`, `check-plan`, `review-plan`, `copy-plan`, `approve-design` and `approve-spikes`: `onetaskgraph project create`, `onetaskgraph project show`, `llmlint rules`, `onepipeline flow run`, `onepipeline start`, `onepipeline plan check`, `onetaskgraph project copy`, `onetaskgraph document list`, `onetaskgraph document attest`, `onepipeline template resolve`, `onepipeline attest` and `onepipeline adopt`, and `scripts/review-plan-item.sh`.
+- `justfile` — the recipes `plan`, `finish-plan`, `check-plan`, `review-plan`, `copy-plan` and `approve-design`: `onetaskgraph project create`, `onetaskgraph project show`, `llmlint rules`, `onepipeline flow run`, `onepipeline start`, `onepipeline plan check`, `onetaskgraph project copy`, `onetaskgraph document list`, `onetaskgraph document attest`, `onepipeline template resolve`, `onepipeline attest` and `onepipeline adopt`, and `scripts/review-plan-item.sh`.
 
 Nothing else under `orchestrator/` or `scripts/` serves planning, and
 `tests/tree_scans/test_planning_ownership.py` holds it.

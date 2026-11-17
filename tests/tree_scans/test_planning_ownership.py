@@ -124,7 +124,6 @@ RECIPES = (
     "review-plan",
     "copy-plan",
     "approve-design",
-    "approve-spikes",
 )
 
 

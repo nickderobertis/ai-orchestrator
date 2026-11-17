@@ -52,12 +52,13 @@ members:
     depends_on: ["{{ native }}-planning-draft"]
     # The command starts the plan's spikes run attached in this flow when the draft created
     # one, and settles `done` at once when there is none. INTERIM WORKAROUND (manager ruling
-    # c6.0): the pinned engine's attached `start` returns at a human node's wait —
-    # `approve-spikes` — with its driver gone, so after it the command waits on
+    # c6.0): the spikes run holds no human node, but the pinned engine's attached `start` also
+    # returns when a blocking surface waits on the manager — a spike worker's
+    # `ORCHESTRATOR_ASK_MANAGER` question — so after it the command waits on
     # `onepipeline status --json` and `onepipeline watch --until settled --timeout none` until
-    # the run ends, and fails unless it ended `complete`. It is retired by the drafted
-    # onepipeline follow-up "Keep an attached onepipeline start waiting across a human node's
-    # wait", after which the command is the attached `start` alone.
+    # the run ends, and fails unless it ended `complete`. It is retired by an onepipeline
+    # follow-up keeping an attached `start` waiting across a blocking surface, after which the
+    # command is the attached `start` alone.
     metadata:
       onepipeline.id: spikes
       onepipeline.kind: command

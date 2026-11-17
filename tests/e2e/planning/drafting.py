@@ -11,13 +11,15 @@ from __future__ import annotations
 
 import json
 import shlex
+from pathlib import Path
+from typing import NamedTuple
 
 from planning_bench import Bench, mark
 
 #: Phrases only one planning task carries, so each doubled worker acts on its own task alone.
 DRAFT_MARKER = "## Where the plan goes"
 DESIGN_MARKER = "Write the design document a person reviews the plan"
-SPIKE_BRIEF_MARKER = "spike brief a person approves before any spike runs"
+SPIKE_BRIEF_MARKER = "spike brief the manager relays while the spikes run beside you"
 SPIKE_MARKER = "SPIKE-WORK: measure the health route"
 
 STORE = ".venv/bin/onetaskgraph"
@@ -74,56 +76,114 @@ def design_commands(native: str) -> list[str]:
     ]
 
 
-def spikes_commands(native: str, repo: str, execution: str) -> list[str]:
-    """The draft's extra commands: `authoring:<native>-spikes` from its template, one spike."""
-    plan = f"authoring:{native}"
-    spikes = f"{plan}-spikes"
+class Spike(NamedTuple):
+    """One spike a drafted plan may carry."""
+
+    #: The phrase only its task carries, so its doubled worker acts on it alone.
+    marker: str
+    #: What it measures, in the few words the brief's check-in gives it.
+    measures: str
+
+
+#: Each spike a drafted plan may carry, by node id.
+SPIKES = {
+    "spike-health": Spike(SPIKE_MARKER, "how fast the health route answers"),
+    "spike-load": Spike(
+        "SPIKE-WORK: measure the route under load", "how the route holds under load"
+    ),
+}
+
+
+def _spike_task(spikes: str, spike: str, repo: str, execution: str) -> str:
+    """A bash line creating one lifecycle spike task in ``spikes``."""
     publish = json.dumps("preserve")
+    return (
+        f"{RESOLVE} plan-task --json | {STORE} task create authoring --project {spikes} "
+        f"--title 'spike: {spike}' --template-loader - "
+        f"--var 'what={SPIKES[spike].marker}.' --var 'why=The plan needs the figure.' "
+        f"--var 'acceptance_criteria=[\"The measurement is committed.\"]' "
+        f"--metadata 'onepipeline.id=\"{spike}\"' "
+        f"--metadata 'onepipeline.persona=\"engineer\"' "
+        f"--metadata 'onepipeline.repo={json.dumps(repo)}' "
+        f"--metadata 'onepipeline.execution_checkout={json.dumps(execution)}' "
+        f"--metadata 'onepipeline.publish={publish}' --no-interactive --json >/dev/null"
+    )
+
+
+def spikes_commands(native: str, repo: str, execution: str, spikes: tuple[str, ...]) -> list[str]:
+    """The draft's extra commands: `authoring:<native>-spikes` from its template, its spikes."""
+    plan = f"authoring:{native}"
     return [
         f"{STORE} project create authoring --id {native}-spikes --title {native}-spikes "
         f"--template templates/planning/spikes.md.j2 --var plan={plan} --var native={native} "
         f"--metadata onepipeline.schema_version=3 --no-interactive",
-        f"{RESOLVE} plan-task --json | {STORE} task create authoring --project {spikes} "
-        f"--title 'spike: measure the health route' --template-loader - "
-        f"--var 'what={SPIKE_MARKER}.' --var 'why=The plan needs the figure.' "
-        f"--var 'acceptance_criteria=[\"The measurement is committed.\"]' "
-        f"--metadata 'onepipeline.id=\"spike-health\"' "
-        f"--metadata 'onepipeline.persona=\"engineer\"' "
-        f"--metadata 'onepipeline.repo={json.dumps(repo)}' "
-        f"--metadata 'onepipeline.execution_checkout={json.dumps(execution)}' "
-        f"--metadata 'onepipeline.publish={publish}' "
-        f"--depends-on authoring:{native}-spikes-approve --no-interactive --json "
-        f"| jq -r '.items[0].id' > .spike.id",
-        "rm -f .spike.id",
+        *(_spike_task(f"{plan}-spikes", spike, repo, execution) for spike in spikes),
     ]
 
 
-def spike_brief_commands(native: str) -> list[str]:
-    """The spike-brief writer's command: the brief document of `authoring:<native>`."""
-    spikes = json.dumps([{"spike": "spike-health", "question": "How fast?", "use": "Sizing."}])
+def spike_brief_check_in(native: str, spikes: tuple[str, ...]) -> str:
+    """The `check-in` text the spike-brief writer raises, in the shape its task states."""
+    lines = [f"Spike brief {native}-spike-brief of authoring:{native}:"]
+    lines += [f"- {spike}: {SPIKES[spike].measures}" for spike in spikes]
+    return "\n".join(lines) + "\n"
+
+
+def _released(hold: Path | None, name: str) -> list[str]:
+    """A command waiting for ``hold``/``name`` to exist, or none when nothing holds."""
+    if hold is None:
+        return []
+    return [f"until [ -e {shlex.quote(str(hold / name))} ]; do sleep 1; done"]
+
+
+def spike_brief_commands(native: str, spikes: tuple[str, ...], hold: Path | None) -> list[str]:
+    """The spike-brief writer's commands: the brief document, then its one check-in.
+
+    Given ``hold``, the writer does not finish until `<hold>/spike-brief` exists.
+    """
+    entries = [{"spike": spike, "question": "How fast?", "use": "Sizing."} for spike in spikes]
     return [
+        *_released(hold, "spike-brief"),
         f"{RESOLVE} spike-brief --json | {STORE} document create authoring "
         f"--project authoring:{native} --id {native}-spike-brief --title 'Spikes: {native}' "
         f"--template-loader - --var 'overview=One measurement before planning.' "
-        f"--var {shlex.quote('spikes=' + spikes)} --no-interactive",
+        f"--var {shlex.quote('spikes=' + json.dumps(entries))} --no-interactive",
+        f"printf %s {shlex.quote(spike_brief_check_in(native, spikes))} | "
+        'scripts/onepipeline.sh surface --kind check-in "$ONEPIPELINE_RUN_ID"',
     ]
 
 
-def spike_work_commands() -> list[str]:
-    """The spike worker's commands: commit one measurement in its own worktree."""
+def spike_work_commands(spike: str, hold: Path | None) -> list[str]:
+    """A spike worker's commands: commit one measurement in its own worktree.
+
+    Given ``hold``, every spike but the first does not finish until `<hold>/<spike>` exists.
+    """
     return [
-        "mkdir -p spikes && echo 'p50 2ms' > spikes/health.txt && git add spikes "
+        *([] if spike == next(iter(SPIKES)) else _released(hold, spike)),
+        f"mkdir -p spikes && echo 'p50 2ms' > spikes/{spike}.txt && git add spikes "
         "&& git -c user.email=t@example.com -c user.name=t commit -qm 'feat: measure the route'",
     ]
 
 
-def drafting(bench: Bench, native: str, *, spikes: tuple[str, str] | None = None) -> None:
-    """Script every planning worker of a run planning `authoring:<native>`."""
+def drafting(
+    bench: Bench,
+    native: str,
+    *,
+    spikes: tuple[str, str] | None = None,
+    spike_ids: tuple[str, ...] = ("spike-health",),
+    hold: Path | None = None,
+) -> None:
+    """Script every planning worker of a run planning `authoring:<native>`.
+
+    ``spikes`` names the repository and execution checkout of the spikes ``spike_ids`` the
+    draft adds; ``hold`` is a directory whose files release the held workers (see
+    `spike_brief_commands` and `spike_work_commands`).
+    """
     draft = plan_commands(native)
     if spikes is not None:
-        draft += spikes_commands(native, *spikes)
-        mark(bench, SPIKE_BRIEF_MARKER, *spike_brief_commands(native))
-        mark(bench, SPIKE_MARKER, *spike_work_commands())
+        draft += spikes_commands(native, *spikes, spike_ids)
+        mark(bench, SPIKE_BRIEF_MARKER, *spike_brief_commands(native, spike_ids, hold))
+        for spike in spike_ids:
+            mark(bench, SPIKES[spike].marker, *spike_work_commands(spike, hold))
     mark(bench, DRAFT_MARKER, *draft)
     mark(bench, DESIGN_MARKER, *design_commands(native))
 

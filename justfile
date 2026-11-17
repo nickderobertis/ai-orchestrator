@@ -297,15 +297,6 @@ check-plan plan:
 review-plan plan:
     @scripts/plan-store.sh scripts/review-plan-item.sh {{ quote(plan) }}
 
-# `just approve-spikes <run>` attests the spikes run's waiting `approve-spikes` node, once
-# the user has approved the spike brief it raised, and adopts the run: a human wait pauses
-# a run and lets its driver go, so the spikes run resumes only once something drives it.
-[group("planning")]
-[doc("Attest the user's approval of a spikes run's brief and resume the run.")]
-approve-spikes run:
-    @scripts/onepipeline.sh attest {{ quote(run) }} approve-spikes
-    @scripts/onepipeline.sh adopt {{ quote(run) }} --detach
-
 # `just approve-design <source>:<project> [run]` records the user's approval on the board
 # copy's design document — `onetaskgraph document attest --kind design-approval`, under the
 # design-doc template's digest — and, given the planning run, attests its waiting

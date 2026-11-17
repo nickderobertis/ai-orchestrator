@@ -198,23 +198,14 @@ DELEGATIONS = (
     # Adoption attaches a fresh driver to an intact ledger, which already records the
     # graphs, hooks and dispatch-env hook its launch chose, so no default is added to it.
     Delegation("orchestrate", ("--adopt", "run-1"), f"{ENGINE} adopt run-1"),
-    # The planning recipes that reach one engine verb, through the launch wrapper: the
-    # engine's own plan load with this host's install check registered, and the attest that
-    # releases a spikes run waiting on its brief's approval. `just plan`, `just
+    # The planning recipe that reaches one engine verb, through the launch wrapper: the
+    # engine's own plan load with this host's install check registered. `just plan`, `just
     # finish-plan`, `just review-plan` and `just approve-design` compose several library
     # verbs and are driven whole by `tests/e2e/planning/`.
     Delegation(
         "check-plan",
         ("authoring:probe",),
         f"{ENGINE} plan check authoring:probe --check orchestrator/host_adoption_check.py",
-    ),
-    # A human wait pauses a run and lets its driver go, so the attest is followed by the
-    # adoption that drives the spikes run on.
-    Delegation(
-        "approve-spikes",
-        ("run-1",),
-        f"{ENGINE} attest run-1 approve-spikes",
-        then=(ENGINE_VERSION, f"{ENGINE} adopt run-1 --detach"),
     ),
     Delegation("channel-next", ("run-1",), f"{ENGINE} next run-1"),
     # The read profile is the CLI's own default, so the recipes name no filter and

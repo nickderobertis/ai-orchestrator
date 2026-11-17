@@ -3,10 +3,12 @@
 One sequence on one bench (`planning_bench`), every step through the real recipe:
 
 1. `just plan <brief> board` drafts a two-task plan and, from `templates/planning/spikes.md.j2`,
-   its spikes project with one lifecycle spike against a scratch identity. The planning
-   run's `spikes` step starts the spikes run in the same flow; that run waits at
-   `approve-spikes` until `just approve-spikes` attests it, then runs the spike, which
-   preserves its branch on the identity's origin. The planning run goes on to finalize,
+   its spikes project with two lifecycle spikes against a scratch identity. The planning
+   run's `spikes` step starts the spikes run in the same flow; with nothing attested, its
+   spikes dispatch while the brief writer, held unfinished, still runs. Released, the
+   writer raises one `check-in` naming the brief, the plan and each spike, and no human
+   item, while the second spike, still held, runs. Each spike preserves its branch on the
+   identity's origin; the spikes run completes on its own, and the planning run goes on to finalize,
    check, review (attesting every task and the project), write the design document, copy
    it all to the bench's `board` source, and wait at `approve-design`.
 2. The orchestrate recipe on the board copy is refused by the registered launch check
@@ -41,13 +43,13 @@ import shlex
 import shutil
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
 from conftest import git
-from drafting import DRAFT_MARKER, SPIKE_MARKER, brief, drafting
+from drafting import DRAFT_MARKER, SPIKE_MARKER, SPIKES, brief, drafting
 from planning_bench import (
     BOARD,
     Bench,
@@ -67,8 +69,10 @@ pytestmark = [pytest.mark.usefixtures("module_tmpdir"), pytest.mark.xdist_group(
 
 #: The alias the scratch identity's execution checkout is registered under.
 EXECUTION_ALIAS = "execution"
-#: Every member the spikes template declares, with the one spike the draft adds.
-SPIKES_NODES = ["spike-brief", "approve-spikes", "spike-health"]
+#: The spikes the draft adds: the first runs unheld, the second is held until released.
+SPIKE_IDS = ("spike-health", "spike-load")
+#: Every member the spikes template declares, with the spikes the draft adds.
+SPIKES_NODES = ["spike-brief", *SPIKE_IDS]
 #: Every member the planning template declares.
 PLANNING_NODES = [
     "draft",
@@ -84,7 +88,7 @@ PLANNING_NODES = [
 FINALIZE_MARKER = "**First, check whether the spikes project exists**"
 #: The run a node of another project preserved its branch under.
 OTHER_RUN = "another-plan-7"
-#: How long the spikes run may take to reach its approval, and the plan recipe to return.
+#: How long the plan recipe may take to return.
 SETTLE_SECONDS = 900.0
 
 
@@ -105,9 +109,12 @@ class Sequence(NamedTuple):
     checklist: str
     planning_run: str
     spikes_run: str
-    spikes_waiting: dict[str, object]
+    while_briefing: dict[str, object]
+    items_while_briefing: list[dict[str, object]]
+    while_spiking: dict[str, object]
     spikes_items: list[dict[str, object]]
-    approved_spikes: subprocess.CompletedProcess[str]
+    spikes_surfaces: list[dict[str, object]]
+    planning_items: list[dict[str, object]]
     spikes: dict[str, object]
     spikes_launch: dict[str, object]
     planning: dict[str, object]
@@ -243,16 +250,28 @@ def _preserve_another(bench: Bench, identity: Identity) -> str:
     return str(session["branch"])
 
 
-def _await_approval(bench: Bench, planning: subprocess.Popen[str]) -> str:
-    """Wait for the spikes run to reach `approve-spikes`; answer its id."""
+def _surfaces(bench: Bench, run_id: str) -> list[dict[str, object]]:
+    """Every planner surface waiting on ``run_id``, read as a manager reads them: `next`."""
+    handed: list[dict[str, object]] = []
+    for _ in range(20):
+        answered = run(bench, "scripts/onepipeline.sh", "next", run_id, seconds=120)
+        assert answered.returncode == 0, answered.stdout + answered.stderr
+        if not answered.stdout.strip():
+            break
+        surface = json.loads(answered.stdout).get("surface")
+        if not isinstance(surface, dict):
+            break
+        handed.append(surface)
+    return handed
+
+
+def _until(planning: subprocess.Popen[str], what: str, found: Callable[[], bool]) -> None:
+    """Poll ``found`` until it holds, failing by ``what`` if the plan recipe returns first."""
     deadline = time.monotonic() + e2e_timeout(SETTLE_SECONDS)
-    while time.monotonic() < deadline:
-        assert planning.poll() is None, "the plan recipe returned before the spikes were approved"
-        found = [one for one in runs_of(bench) if one.endswith("-spikes")]
-        if found and _nodes(status(bench, found[0])).get("approve-spikes") == "waiting":
-            return found[0]
-        time.sleep(3)
-    raise AssertionError(f"no spikes run reached approve-spikes; runs: {runs_of(bench)}")
+    while not found():
+        assert planning.poll() is None, f"the plan recipe returned before {what}"
+        assert time.monotonic() < deadline, f"timed out waiting for {what}"
+        time.sleep(2)
 
 
 def _render(bench: Bench, template: str, verb: str, record: str, *answers: str) -> None:
@@ -288,7 +307,15 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         **identity.environment,
     )
     native = f"plan-sp-{os.getpid()}"
-    drafting(bench_, native, spikes=(str(identity.publication), EXECUTION_ALIAS))
+    hold = tmp / "hold"
+    hold.mkdir()
+    drafting(
+        bench_,
+        native,
+        spikes=(str(identity.publication), EXECUTION_ALIAS),
+        spike_ids=SPIKE_IDS,
+        hold=hold,
+    )
     checklist = run(
         bench_,
         "llmlint",
@@ -315,10 +342,31 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
             text=True,
         )
         try:
-            spikes_run = _await_approval(bench_, planning_process)
-            spikes_waiting = status(bench_, spikes_run)
-            spikes_items = _items(bench_, spikes_run)
-            approved_spikes = just(bench_, "approve-spikes", spikes_run)
+            # The brief writer and the second spike are held: every spike must dispatch
+            # while the writer still runs, with nothing attested.
+            def briefing() -> bool:
+                found = [one for one in runs_of(bench_) if one.endswith("-spikes")]
+                if not found:
+                    return False
+                nodes = _nodes(status(bench_, found[0]))
+                return nodes.get("spike-brief") == "running" and all(
+                    nodes.get(spike) in ("running", "done") for spike in SPIKE_IDS
+                )
+
+            _until(planning_process, "every spike dispatched beside the brief writer", briefing)
+            spikes_run = _only_run(bench_, "-spikes")
+            while_briefing = status(bench_, spikes_run)
+            items_while_briefing = _items(bench_, spikes_run)
+            (hold / "spike-brief").touch()
+            surfaces: list[dict[str, object]] = []
+
+            def checked_in() -> bool:
+                surfaces.extend(_surfaces(bench_, spikes_run))
+                return any(one.get("kind") == "check-in" for one in surfaces)
+
+            _until(planning_process, "the brief writer's check-in", checked_in)
+            while_spiking = status(bench_, spikes_run)
+            (hold / SPIKE_IDS[-1]).touch()
             planning_process.wait(timeout=e2e_timeout(SETTLE_SECONDS))
         finally:
             if planning_process.poll() is None:
@@ -329,6 +377,9 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     )
     planning_run = _only_run(bench_, "-planning")
     spikes = status(bench_, spikes_run)
+    spikes_items = _items(bench_, spikes_run)
+    spikes_surfaces = surfaces + _surfaces(bench_, spikes_run)
+    planning_items = _items(bench_, planning_run)
     spikes_launch = json.loads(
         (bench_.runs / spikes_run / "launch.json").read_text(encoding="utf-8")
     )
@@ -458,9 +509,12 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         checklist.stdout,
         planning_run,
         spikes_run,
-        spikes_waiting,
+        while_briefing,
+        items_while_briefing,
+        while_spiking,
         spikes_items,
-        approved_spikes,
+        spikes_surfaces,
+        planning_items,
         spikes,
         spikes_launch,
         planning,
@@ -531,17 +585,43 @@ def test_the_spikes_run_starts_in_the_planning_runs_flow(sequence: Sequence) -> 
     assert sorted(_nodes(sequence.spikes)) == sorted(SPIKES_NODES), sequence.spikes
 
 
-def test_the_spikes_run_waits_at_approve_spikes_until_the_recipe_attests_it(
+def test_the_spikes_dispatch_while_the_brief_writer_still_runs(sequence: Sequence) -> None:
+    # Nothing in the sequence attests a node: the spikes ran because nothing held them.
+    nodes = _nodes(sequence.while_briefing)
+    assert nodes["spike-brief"] == "running", nodes
+    assert all(nodes[spike] in ("running", "done") for spike in SPIKE_IDS), nodes
+    assert sequence.items_while_briefing == [], sequence.items_while_briefing
+
+
+def test_the_spikes_run_completes_with_nothing_attested_and_no_human_item(
     sequence: Sequence,
 ) -> None:
-    waiting = _nodes(sequence.spikes_waiting)
-    assert waiting["approve-spikes"] == "waiting", waiting
-    assert waiting["spike-health"] not in ("done", "running"), waiting
-    titles = [str(entry["item"]["title"]) for entry in sequence.spikes_items]
-    assert [title for title in titles if "spikes" in title.lower()], titles
-    approved = sequence.approved_spikes
-    assert approved.returncode == 0, approved.stdout + approved.stderr
     assert all(state == "done" for state in _nodes(sequence.spikes).values()), sequence.spikes
+    ending = sequence.spikes.get("ending")
+    assert isinstance(ending, dict) and ending.get("kind") == "complete", sequence.spikes
+    assert sequence.spikes_items == [], sequence.spikes_items
+
+
+def test_the_brief_writer_raises_one_check_in_naming_the_brief_and_each_spike(
+    sequence: Sequence,
+) -> None:
+    check_ins = [one for one in sequence.spikes_surfaces if one.get("kind") == "check-in"]
+    assert len(check_ins) == 1, sequence.spikes_surfaces
+    (check_in,) = check_ins
+    assert check_in.get("blocking") is not True, check_in
+    message = str(check_in.get("message"))
+    assert f"{sequence.native}-spike-brief" in message, message
+    assert f"authoring:{sequence.native}" in message, message
+    for spike in SPIKE_IDS:
+        assert f"- {spike}: {SPIKES[spike].measures}" in message, message
+    # It reached the manager while the held spike still ran.
+    assert _nodes(sequence.while_spiking)[SPIKE_IDS[-1]] == "running", sequence.while_spiking
+
+
+def test_approve_design_is_the_planning_runs_one_human_wait(sequence: Sequence) -> None:
+    waiting = [node for node, state in _nodes(sequence.planning).items() if state == "waiting"]
+    assert waiting == ["approve-design"], sequence.planning
+    assert len(sequence.planning_items) == 1, sequence.planning_items
 
 
 def test_finalize_runs_after_the_spikes_run_completes(sequence: Sequence) -> None:

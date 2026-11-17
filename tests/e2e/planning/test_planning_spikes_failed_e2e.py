@@ -1,8 +1,8 @@
 """A spikes run that ends unsuccessfully stops the planning run before it finalizes anything.
 
 `just plan` drafts a plan whose one spike names an execution checkout nothing registered, so
-the spike cannot be dispatched and the spikes run — approved through `just approve-spikes` as
-any is — ends without completing. The planning run's `spikes` step then fails, and nothing
+the spike cannot be dispatched and the spikes run — which nothing approves or attests — ends
+without completing. The planning run's `spikes` step then fails, and nothing
 after it runs: no finalize, check, review, design document or board copy.
 
 Human items, plans and follow-up drafts stay in the bench's own local sources, and every
@@ -15,7 +15,6 @@ import json
 import os
 import shutil
 import subprocess
-import time
 from collections.abc import Iterator
 from typing import NamedTuple
 
@@ -30,7 +29,7 @@ pytestmark = [
     pytest.mark.xdist_group("planning-spikes-failed"),
 ]
 
-#: How long the spikes run may take to reach its approval, and the plan recipe to return.
+#: How long the plan recipe may take to return.
 SETTLE_SECONDS = 900.0
 #: The steps after `spikes`, none of which may run once it fails.
 AFTER_SPIKES = ("finalize", "check", "review", "design", "copy", "approve-design")
@@ -76,17 +75,6 @@ def failed(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Ite
             text=True,
         )
         try:
-            deadline = time.monotonic() + e2e_timeout(SETTLE_SECONDS)
-            spikes_run = ""
-            while time.monotonic() < deadline and planning.poll() is None:
-                found = [one for one in runs_of(bench_) if one.endswith("-spikes")]
-                if found and _nodes(status(bench_, found[0])).get("approve-spikes") == "waiting":
-                    spikes_run = found[0]
-                    break
-                time.sleep(3)
-            assert spikes_run, f"no spikes run reached approve-spikes; runs: {runs_of(bench_)}"
-            approved = just(bench_, "approve-spikes", spikes_run)
-            assert approved.returncode == 0, approved.stdout + approved.stderr
             planning.wait(timeout=e2e_timeout(SETTLE_SECONDS))
         finally:
             if planning.poll() is None:
@@ -96,6 +84,7 @@ def failed(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Ite
         planning.args, planning.returncode, out.read_text(), err.read_text()
     )
     (planning_run,) = [one for one in runs_of(bench_) if one.endswith("-planning")]
+    (spikes_run,) = [one for one in runs_of(bench_) if one.endswith("-spikes")]
     yield Failed(bench_, native, planned, status(bench_, spikes_run), status(bench_, planning_run))
     for one in runs_of(bench_):
         if not one.startswith("."):
@@ -106,6 +95,8 @@ def test_the_spikes_run_ends_without_completing(failed: Failed) -> None:
     ending = failed.spikes.get("ending")
     assert isinstance(ending, dict) and ending.get("kind") != "complete", failed.spikes
     assert _nodes(failed.spikes)["spike-health"] != "done", failed.spikes
+    # No approval step held the spike: the template's one member is the brief writer.
+    assert sorted(_nodes(failed.spikes)) == ["spike-brief", "spike-health"], failed.spikes
 
 
 def test_the_spikes_step_fails_and_nothing_after_it_runs(failed: Failed) -> None:
