@@ -1416,6 +1416,120 @@ def test_a_plan_review_stays_valid_on_the_board_copy_of_a_task_with_a_dependency
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
+#: The plan the withdrawn-task launch-check journey authors: a task the launch runs, and one
+#: withdrawn after its review, which the launch omits.
+WITHDRAWN_PROJECT = _ProjectId("withdrawn")
+LIVE_TITLE = "test: still planned"
+WITHDRAWN_TITLE = "test: closed as not planned"
+#: What the review voids both tasks with: an edit to each after it was reviewed.
+EDITED_BODY = "## What\nReply with done.\n\n## Why\nEdited after review.\n\n"
+EDITED_BODY += "## Acceptance criteria\n- The task settles.\n"
+
+
+@dataclass(frozen=True)
+class _PlanCheckAnswer:
+    """`onepipeline plan check --json`: each refusal's reason, each check that failed to run."""
+
+    reasons: tuple[str, ...]
+    unrunnable: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, stdout: str) -> _PlanCheckAnswer:
+        """Read the engine's answer, refusing one whose refusals or checks are misshapen."""
+        answer = json.loads(stdout)
+        refusals, unrunnable = answer["refusals"], answer["unrunnable"]
+        assert isinstance(refusals, list) and isinstance(unrunnable, list), answer
+        reasons = tuple(refusal["reason"] for refusal in refusals)
+        checks = tuple(entry["check"] for entry in unrunnable)
+        assert all(isinstance(text, str) for text in reasons + checks), answer
+        return cls(reasons=reasons, unrunnable=checks)
+
+
+def _plan_review_states(environment: dict[str, str], project: str) -> dict[str, str]:
+    """Each task of ``project`` mapped to its `plan-review` state under the launch's real bar."""
+    checked = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            *("project", "attestation", "check", project),
+            *("--kind", REVIEW_KIND, "--bar", review_bar(), "--tasks", "--json"),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert checked.returncode in (0, 3), checked.stdout + checked.stderr
+    report = ProjectAttestationCheck.model_validate_json(checked.stdout)
+    return {entry.id.root: entry.state.value for entry in report.tasks}
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey drives the launch gate through the engine's `plan check` over the pinned store and the planner's real review bar, the same inputs as the launch journeys around it in `launch-monitor-observer`; no narrower project holds the engine, the store and the planner graph together, so a project of its own would carry the same inputs and dependencies as this one.  # noqa: E501
+def test_the_launch_check_skips_a_withdrawn_tasks_void_review_and_refuses_a_live_ones(
+    tmp_path: Path,
+) -> None:
+    """Only a task the launch loads is held to its `plan-review`.
+
+    A launch omits a withdrawn task (closed as not planned), so a void review on one asks
+    for a re-review of work that will never run. Driven through the engine's own `plan
+    check` with the check `config/onepipeline.launch.yaml` registers, which is what a launch
+    runs before dispatching: both tasks are reviewed, edited so both reviews are void, and
+    one withdrawn; the live task is still refused and the withdrawn one is not named.
+    """
+    # llmlint: ignore-block[modern_domain_modeling] The plan's shape has one source, the
+    # engine's loader, which the store and the launch validate it against. A typed
+    # restatement here would be a second copy of that contract.
+    write_plan_project(
+        tmp_path,
+        {
+            "schema_version": 3,
+            "name": WITHDRAWN_PROJECT,
+            "tasks": [
+                {"id": node, "persona": "engineer", "title": title, "task": "## What\nWork.\n"}
+                for node, title in (("live", LIVE_TITLE), ("withdrawn", WITHDRAWN_TITLE))
+            ],
+        },
+    )
+    # llmlint: ignore-end[modern_domain_modeling]
+    project = f"{AUTHORING_SOURCE}:{WITHDRAWN_PROJECT}"
+    environment = _plan_environment(tmp_path)
+    titled = {
+        task.item.title: task.id.root
+        for task in QueryResponseOfQualifiedTask.model_validate_json(
+            _store(environment, "task", "list", "--project", project)
+        ).items
+    }
+    live, withdrawn = titled[LIVE_TITLE], titled[WITHDRAWN_TITLE]
+    attested_reviewed(project, environment)
+    edited = tmp_path / "edited.md"
+    edited.write_text(EDITED_BODY, encoding="utf-8")
+    for task in (live, withdrawn):
+        _store(environment, "task", "update", task, "--body-file", str(edited))
+    _store(environment, "task", "update", withdrawn, "--status", _Terminal.WITHDRAWN)
+    assert _plan_review_states(environment, project) == {live: "void", withdrawn: "void"}
+
+    registered = yaml.safe_load(
+        (REPO_ROOT / "config" / "onepipeline.launch.yaml").read_text(encoding="utf-8")
+    )["checks"]
+    checked = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "onepipeline.sh"), "plan", "check", project, "--json"]
+        + [word for (check,) in registered for word in ("--check", check)],
+        cwd=REPO_ROOT,
+        env={**environment, "ORCHESTRATOR_PLAN": project},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    answer = _PlanCheckAnswer.parse(checked.stdout)
+    assert answer.unrunnable == (), checked.stdout + checked.stderr
+    assert f"{live}: plan-review is void" in "\n".join(answer.reasons), answer.reasons
+    assert not [reason for reason in answer.reasons if withdrawn in reason], answer.reasons
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split]
+
+
 #: The project, task and metadata value the native-query journey files, named once so the
 #: task it creates and every query asking for it agree on one spelling.
 FILED_PROJECT = _ProjectId("filed")

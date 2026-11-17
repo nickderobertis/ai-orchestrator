@@ -129,7 +129,7 @@ def _budget(budget_id: str, name: str, file_change: str, **moved: object) -> dic
         "name": name,
         "basis": "measured",
         "repository": "github.com/example/service",
-        "file": "budgets.yaml",
+        "file": "service-budgets.yaml",
         "file_change": file_change,
         "measure": "Seconds a person waits for a preview",
         "inner_measure_reason": "",

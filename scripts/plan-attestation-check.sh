@@ -4,9 +4,12 @@
 # contract (the loaded plan on stdin, `{"refusals": [...]}` on stdout, exit 0 when it ran)
 # with one refusal per record whose attestation does not check `valid`:
 #
-#   * every task and the project, for `plan-review`, under the planner member's current bar —
-#     `oneagentgraph run graphs/planner.yaml --judge-only --member worker --bar-fingerprint`,
-#     the bar `scripts/review-plan-item.sh` attests under;
+#   * every task the engine loaded and the project, for `plan-review`, under the planner
+#     member's current bar — `oneagentgraph run graphs/planner.yaml --judge-only --member
+#     worker --bar-fingerprint`, the bar `scripts/review-plan-item.sh` attests under. A
+#     withdrawn task (closed as not planned) is skipped, because the launch omits it and it
+#     will never run; a task is matched to its loaded node by the node's `task_record`, whose
+#     `source` only a member project's task carries;
 #   * the plan's design document — the document of the project rendered from
 #     `onepipeline:design-doc` — for `design-approval`, under the design-doc template's digest
 #     as `onepipeline template resolve design-doc --json` states it, the bar `just
@@ -24,7 +27,32 @@ if ! script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) ||
     exit 2
 fi
 store="$root/.venv/bin/onetaskgraph"
-cat >/dev/null
+if ! input=$(cat) || ! jq -e '.tasks | arrays' >/dev/null <<<"$input"; then
+    echo "plan-attestation-check: the engine handed this check no loaded plan it could read on stdin; run it as a check the engine registers ('onepipeline plan check --check' or a launch config's 'checks'), then retry" >&2
+    exit 2
+fi
+# Every loaded node is a task of the store, so each names its record by a non-empty id and,
+# for a member project's task only, a non-empty source; one that does not could not be
+# matched to its attestation and would pass unchecked, so it is refused here instead.
+# Each node is judged by its position, whatever it holds, so a node with no usable id of its
+# own is still named.
+if ! malformed=$(jq -c '[.tasks | to_entries[]
+    | select(if (.value | type) != "object" then true
+        else (.value.task_record) as $record
+        | if ($record | type) != "object" then true
+          else (($record.id | type) != "string" or $record.id == ""
+              or ($record.source != null
+                  and (($record.source | type) != "string" or $record.source == "")))
+          end
+        end)
+    | {position: .key, node: (if (.value | type) == "object" then .value.id else null end)}]' <<<"$input"); then
+    echo "plan-attestation-check: the loaded plan on stdin could not be read as a list of nodes; run this as a check the engine registers ('onepipeline plan check --check' or a launch config's 'checks'), which hands it the plan it loaded, then retry" >&2
+    exit 2
+fi
+[ "$malformed" = "[]" ] || {
+    echo "plan-attestation-check: the loaded plan's nodes at $malformed carry no task record of a non-empty string id (and a source only as a non-empty string), so their plan-review cannot be checked; launch the plan from its store so every node carries its task_record, then retry" >&2
+    exit 2
+}
 
 plan=${ORCHESTRATOR_PLAN:?ORCHESTRATOR_PLAN names no plan: launch it with just orchestrate <source>:<project>}
 bar=$("$root/.venv/bin/oneagentgraph" run graphs/planner.yaml --judge-only --member worker --bar-fingerprint) &&
@@ -58,15 +86,27 @@ record() {
 }
 
 answer=$(relay "$store" project attestation check "$plan" --kind plan-review --tasks --bar "$bar")
-# Every task of the plan is answered for, or one left out would pass unchecked: the check's
-# tasks are held to the plan's own whole listing.
-tasks=$("$store" task list --source "${plan%%:*}" --project "$plan" --all --json --no-interactive)
-# Through a file descriptor rather than an argument, which a large plan's listing outgrows.
-jq -e --slurpfile listed <(printf '%s\n' "$tasks") '$listed[0] as $tasks | (($tasks.errors // []) == []) and $tasks.next == null and (([.tasks[].id] | sort) == ([$tasks.items[].id] | sort))' >/dev/null <<<"$answer" || {
-    echo "plan-attestation-check: the plan store's attestation check for $plan does not answer for exactly the tasks the plan holds; repair what the store names, then retry" >&2
+# The tasks held to their review are the plan's own tasks the engine loaded, qualified as the
+# store names them. A member project's task (its record carries a `source`) is filed under
+# that member project, which this `--tasks` answer does not cover, so it is outside this
+# check. Every task of the plan is answered for, or one left out would pass
+# unchecked: the answer is held to the plan's own whole listing, and every loaded own task
+# must be in it, so a loaded task whose record names no task of the plan fails closed.
+loaded=$(jq -c --arg source "${plan%%:*}" '[.tasks[].task_record | select(.source == null) | "\($source):\(.id)"]' <<<"$input") || {
+    echo "plan-attestation-check: the loaded plan's task records could not be qualified under ${plan%%:*}; run this as a check the engine registers, which hands it the plan it loaded, then retry" >&2
     exit 2
 }
-lines=$(jq -c '.tasks[] | {item: .id, kind, state, reason}' <<<"$answer")
+tasks=$("$store" task list --source "${plan%%:*}" --project "$plan" --all --json --no-interactive) || {
+    echo "plan-attestation-check: the plan store could not list the tasks of $plan (its diagnostic is above); repair what it names until 'onetaskgraph task list --project $plan --all' answers, then retry" >&2
+    exit 2
+}
+# Through a file descriptor rather than an argument, which a large plan's listing outgrows.
+jq -e --slurpfile listed <(printf '%s\n' "$tasks") --slurpfile loaded <(printf '%s\n' "$loaded") '$listed[0] as $tasks | (($tasks.errors // []) == []) and $tasks.next == null and (([.tasks[].id] | sort) == ([$tasks.items[].id] | sort)) and ($loaded[0] - [.tasks[].id] == [])' >/dev/null <<<"$answer" || {
+    echo "plan-attestation-check: the plan store's attestation check for $plan does not answer for exactly the tasks the plan holds, the tasks the engine loaded among them; repair what the store names, then retry" >&2
+    exit 2
+}
+lines=$(jq -c --slurpfile loaded <(printf '%s\n' "$loaded") '
+    .tasks[] | select(.id | IN($loaded[0][])) | {item: .id, kind, state, reason}' <<<"$answer")
 record "$lines"
 answer=$(relay "$store" project attestation check "$plan" --kind plan-review --bar "$bar")
 lines=$(jq -c --arg plan "$plan" '{item: $plan, kind, state, reason}' <<<"$answer")
