@@ -57,12 +57,16 @@ harnesses = [
 [harness.codex]
 # The second pair switches the ChatGPT-app connector tools off, for the reason
 # `oneharness.judge.toml` states at the same table; it is appended, so the sandbox grant
-# above it stands.
+# above it stands. `--skip-git-repo-check`, appended after both, lets codex run where git
+# places no work tree: the planner's `plan-checklist` judge runs this config in
+# `scripts/review-plan-item.sh`'s `mktemp -d` scratch directory, which codex otherwise
+# refuses as untrusted, sending every review's checklist to Claude.
 args = [
     "-c",
     'sandbox_permissions=["disk-full-read-access","network-full-access"]',
     "-c",
     "features.apps=false",
+    "--skip-git-repo-check",
 ]
 
 # The plan store's credentials — the board token and the Linear key — are the store's,

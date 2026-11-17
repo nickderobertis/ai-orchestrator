@@ -238,7 +238,8 @@
           "-c",
           "sandbox_permissions=[\"disk-full-read-access\",\"network-full-access\"]",
           "-c",
-          "features.apps=false"
+          "features.apps=false",
+          "--skip-git-repo-check"
         ]
       },
       "bin": {

@@ -13,6 +13,16 @@ rule holds. Any other turn is handed to `tests/e2e/fake_codex.py`, which answers
 (`FAKE_CODEX_ANSWERS`). Nothing above the provider is doubled: oneharness, llmlint,
 onejudge and oneagentgraph all run for real.
 
+**Before any of that it refuses a directory the way the real codex does**, and the decision
+is `tests/e2e/fake_codex_untrusted_directory.py`'s own `refused`, its stderr and exit status
+that module's `main`: no trust argument in argv and a working directory git places in no work
+tree. A review lays its plan out in a `mktemp -d` scratch directory, which is no repository,
+so a judge config missing `--skip-git-repo-check` is refused here as the real provider
+refuses it, and oneharness falls through to the next identity. Each record says where the
+turn ran (`cwd`), whether git placed that directory in a work tree (`repository`) — read
+while it exists, since a review removes its scratch directory when it ends — and whether
+the turn was refused (`refused`).
+
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """
 
@@ -22,15 +32,39 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 HERE = Path(__file__).resolve().parent
 FAKE_CODEX = HERE.parent / "fake_codex.py"
 sys.path.insert(0, str(HERE.parent))
 
 import fake_codex  # noqa: E402 - this file runs as the provider binary, so its sibling is on the path only once inserted above
+import fake_codex_untrusted_directory as untrusted  # noqa: E402 - the same sibling path as above
 
-#: Where every input this provider receives is appended.
+#: Where every input this provider receives is appended, one `JudgeInput` per line.
 LOG_ENV = "FAKE_PLANNING_JUDGE_LOG"
+
+
+class JudgeInput(TypedDict):
+    """One launch this provider recorded to `LOG_ENV`.
+
+    Declared beside the only thing that writes it, so a reader imports this rather than
+    restating the shape.
+    """
+
+    #: Whether the launch was an llmlint batch rather than a reviewer turn.
+    llmlint: bool
+    prompt: str | None
+    argv: list[str]
+    #: Each target file of an llmlint batch, as the turn's directory held it.
+    read: dict[str, str]
+    #: The directory the turn ran in: codex's `--cd`/`-C`, else this process's.
+    cwd: str
+    #: Whether git placed that directory in a work tree when the launch was made.
+    repository: bool
+    #: Whether this provider refused the launch as an untrusted directory.
+    refused: bool
+
 
 #: `{rule name: text}`: refuse that rule wherever the batch's targets carry that text; a value
 #: `{"absent": text}` refuses it wherever they do not.
@@ -110,11 +144,23 @@ def main() -> int:
         return 1
     prompt = fake_codex.read_prompt(argv)
     batch = fake_codex.llmlint_batch(prompt)
-    read = _read(batch, argv) if batch is not None else {}
+    refused = untrusted.refused(argv)
+    read = _read(batch, argv) if batch is not None and not refused else {}
     if log := os.environ.get(LOG_ENV):
         with open(log, "a", encoding="utf-8") as stream:
-            record = {"llmlint": batch is not None, "prompt": prompt, "argv": argv, "read": read}
+            where = untrusted.working_directory(argv)
+            record = JudgeInput(
+                llmlint=batch is not None,
+                prompt=prompt,
+                argv=argv,
+                read=read,
+                cwd=str(where),
+                repository=untrusted.inside_a_repository(where),
+                refused=refused,
+            )
             stream.write(json.dumps(record) + "\n")
+    if refused:
+        return untrusted.main()
     if batch is None or prompt is None:
         os.execv(sys.executable, [sys.executable, str(FAKE_CODEX), *argv])
     for event in fake_codex.turn_events(_verdict(prompt, batch, read), billed=True):
