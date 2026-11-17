@@ -33,7 +33,7 @@ from typing import NamedTuple
 import pytest
 import yaml
 from conftest import git
-from planning_bench import Bench, bench, judge_inputs, just, run
+from planning_bench import Bench, bench, judge_inputs, judge_only_turns, just, run
 from scratch_identity import GIT_IDENTITY, PLANNING_FLOW_ORIGIN, rules_for_hosted, seeded
 from waits import timeout as e2e_timeout
 
@@ -285,15 +285,20 @@ def _release_plan(bench_: Bench, native: str, **consumer: object) -> str:
 
 
 class Review(NamedTuple):
-    """One `just review-plan`, and every input the doubled judge received during it."""
+    """One `just review-plan`, every input the doubled judge received during it, and every
+    judge-only reviewer turn it ran."""
 
     ran: subprocess.CompletedProcess[str]
     inputs: list[dict[str, object]]
+    reviewer: list[str]
 
 
 class Sequence(NamedTuple):
     bench: Bench
     rules: dict[str, str]
+    #: The valid plan's two tasks, `docs` depending on `route`, by their qualified ids.
+    route: str
+    docs: str
     valid: Review
     procedure: Review
     ungranted: Review
@@ -311,9 +316,10 @@ class Sequence(NamedTuple):
 
 
 def _reviewed(bench_: Bench, plan: str) -> Review:
-    before = len(judge_inputs(bench_))
+    before, turns = len(judge_inputs(bench_)), len(judge_only_turns(bench_))
     ran = just(bench_, "review-plan", plan)
-    return Review(ran, judge_inputs(bench_)[before:])
+    reviewer = [str(turn.get("prompt")) for turn in judge_only_turns(bench_)[turns:]]
+    return Review(ran, judge_inputs(bench_)[before:], reviewer)
 
 
 def _rules(checkout: Path) -> dict[str, str]:
@@ -349,7 +355,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
 
     valid = _project(bench_, f"valid-{tag}", budgets=_plan_budgets(str(BUDGET["id"])))
     route = _id(_task(bench_, valid, "route", [PROPERTY], budgets=[BUDGET]))
-    _id(_task(bench_, valid, "docs", [PROPERTY], unit="Docs", budgets=[], depends_on=route))
+    docs = _id(_task(bench_, valid, "docs", [PROPERTY], unit="Docs", budgets=[], depends_on=route))
 
     procedure = _project(bench_, f"procedure-{tag}")
     _id(_task(bench_, procedure, "route", [PROPERTY, PROCEDURE]))
@@ -406,6 +412,8 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     yield Sequence(
         bench_,
         rules,
+        route,
+        docs,
         reviews[valid],
         reviews[procedure],
         reviews[ungranted],
@@ -479,6 +487,51 @@ def test_a_valid_plan_with_budgets_and_units_passes_the_review(sequence: Sequenc
         if path.startswith("tasks/")
     ]
     assert len(tasks) == 2 and all(UNIT_KEY in text for text in tasks), tasks
+
+
+def _front(text: str) -> dict[str, object]:
+    """The JSON front matter the review wrote over a judged record."""
+    head, _, rest = text.partition("\n")
+    assert head == "---", text[:200]
+    matter = json.loads(rest.partition("\n---\n")[0])
+    assert isinstance(matter, dict), matter
+    return matter
+
+
+def test_the_review_shows_each_task_its_dependency_edges(sequence: Sequence) -> None:
+    """The store's graph reaches both judges: the description lists every task's
+    `depends_on`, and each task's own judged file carries its own."""
+    valid, route, docs = sequence.valid, sequence.route, sequence.docs
+    assert valid.ran.returncode == 0, valid.ran.stdout + valid.ran.stderr
+    expected = {route: [], docs: [route]}
+    files = [item for one in valid.inputs if one.get("llmlint") for item in _read(one).items()]
+    descriptions = [_front(text) for path, text in files if path.startswith("projects/")]
+    assert descriptions, "no description reached the plan-checklist judge"
+    for matter in descriptions:
+        tasks = matter["tasks"]
+        assert isinstance(tasks, list), matter
+        assert {str(task["id"]): task["depends_on"] for task in tasks} == expected, tasks
+    judged_tasks = {
+        str(_front(text)["title"]): _front(text)["depends_on"]
+        for path, text in files
+        if path.startswith("tasks/")
+    }
+    assert judged_tasks == {"feat: route": [], "feat: docs": [route]}, judged_tasks
+
+    # The reviewer judge reads the same material, as the compact JSON the review wrote: each
+    # task's own front matter, and the description's entry for every task.
+    def shown(task: str) -> str:
+        return '"depends_on":' + json.dumps(expected[task], separators=(",", ":"))
+
+    title = {route: "feat: route", docs: "feat: docs"}
+    for task in (route, docs):
+        own = f'"title":"{title[task]}",{shown(task)}'
+        listed = f'"id":"{task}",{own}'
+        for needle in (own, listed):
+            assert any(needle in turn for turn in valid.reviewer), (
+                needle,
+                [turn[-400:] for turn in valid.reviewer],
+            )
 
 
 def test_a_criterion_naming_a_procedure_is_refused_by_the_rule_stating_it(

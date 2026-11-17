@@ -357,7 +357,12 @@ plan-review`; then the project's description is judged by the same panel with no
 named, with every task beside it, and attested with `onetaskgraph project attest`. The judge panel is
 `graphs/planner.yaml`'s: the planner's `reviewer` and the `plan-checklist` llmlint judge
 under `config/plan-checklist.llmlint.yml`, whose rules read each record's metadata — budget
-records, the unit — as well as its body. Whether an attestation is `valid`, `void` with its
+records, the unit — as well as its body. Each judged record's front matter carries its title,
+`depends_on` and metadata, and the description's `tasks` list each task's: `depends_on` is the
+ids of the tasks it depends on, `[]` for none, read once from the store's own graph of the plan
+(`onetaskgraph project graph --format json --complete`), so a judge's ordering verdict rests on
+the plan's real edges; a graph the store cannot answer whole stops the review at exit 2 with
+nothing judged or attested. Whether an attestation is `valid`, `void` with its
 reason, or `absent` is the store's answer: editing a task voids its attestation, and moving
 the bar — the planner graph's judge configuration — voids every one, so an
 edited plan is re-reviewed by running the recipe again, which judges only what changed. Exit
@@ -2300,8 +2305,8 @@ Before any of it is applied, every edit that introduces or changes a node's task
 the engine's **plan-edit hook**, `scripts/review-plan-item.sh`, which
 `config/onepipeline.launch.yaml` names as `plan_edit_hook`. The engine hands it the node and
 the whole task the edit leaves; the script lays the task out as the plan checklist's globs
-read it and judges it with `oneagentgraph run graphs/planner.yaml --judge-only --member
-worker` under the node's persona — the same judged review `just review-plan` gives a plan's
+read it, its front matter's `depends_on` the dependencies the node names, and judges it
+with `oneagentgraph run graphs/planner.yaml --judge-only --member worker` under the node's persona — the same judged review `just review-plan` gives a plan's
 authoring, so a correction to a node a review already cleared is judged again rather than
 waved through — and records nothing. Exit 0 passes, 1 refuses with the judges' findings on
 stderr, anything else is *could not be judged*; a refusal or an unjudged edit applies nothing

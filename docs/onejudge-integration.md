@@ -316,7 +316,7 @@ so the planner writes against them on its first draft. A draft's checkout holds 
 for the checklist's globs, so there it judges nothing; `scripts/review-plan-item.sh` runs
 `oneagentgraph run graphs/planner.yaml --judge-only --member worker` over each task and the
 project's description laid out as `tasks/<id>.md` and `projects/<id>.md`, which is where the
-checklist holds the plan. The spikes and the design-document node keep their own graphs, and every other dispatch keeps its single simulated user,
+checklist holds the plan, each task's front matter carrying its `depends_on` edges. The spikes and the design-document node keep their own graphs, and every other dispatch keeps its single simulated user,
 `config/onejudge.base.yaml`'s `provider:` naming the one `oneharness.judge.toml`. **The panel
 starts without the writable escape hatch**: onejudge refuses a panel of two or more judges
 holding one whose mode is writable (`refuse_writable_panels` in its `cli/config.rs`), and

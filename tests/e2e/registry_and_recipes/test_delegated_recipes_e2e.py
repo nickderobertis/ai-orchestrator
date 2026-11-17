@@ -1817,7 +1817,8 @@ PLANTED_CREDENTIAL = "not-a-real-token-planted-by-this-journey"
 #: Records whether the board credential reached the delegated command, which the shared
 #: trace cannot say: it records argv, and a credential is not on one. As the plan store it
 #: answers a document listing with one design document, which `just approve-design` reads
-#: before it attests.
+#: before it attests, and an empty graph of the plan, which `just review-plan` reads its
+#: tasks' dependency edges from before it judges.
 CREDENTIAL_RECORDING_UV = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "${GH_PROJECTS_TOKEN-<unset>}" >>"$TRACE_FILE"
@@ -1829,6 +1830,9 @@ case "$*" in
     printf '{"items":[],"errors":[],"next":null}\n' ;;
   "project show "*)
     printf '{"items":[{"id":"plans:example","item":{"content":"The brief."}}],"errors":[]}\n' ;;
+  "project graph "*)
+    printf '{"schema_version":1,"project":"plans:example","direction":"td",'
+    printf '"group_by":null,"nodes":[],"edges":[]}\n' ;;
   "project attestation check "*)
     printf '{"kind":"plan-review","state":"valid","tasks":[]}\n' ;;
   *"--bar-fingerprint"*)

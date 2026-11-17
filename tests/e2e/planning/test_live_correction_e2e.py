@@ -31,7 +31,16 @@ from typing import Any, NamedTuple
 
 import pytest
 from drafting import design_commands, plan_commands
-from planning_bench import Bench, bench, judge_inputs, judge_only_turns, just, run, runs_of
+from planning_bench import (
+    Bench,
+    bench,
+    judge_inputs,
+    judge_only_turns,
+    just,
+    local_source,
+    run,
+    runs_of,
+)
 
 pytestmark = [pytest.mark.usefixtures("module_tmpdir"), pytest.mark.xdist_group("live-correction")]
 
@@ -88,6 +97,15 @@ class Sequence(NamedTuple):
     partial_review: subprocess.CompletedProcess[str]
     states_before_partial: dict[str, str]
     states_after_partial: dict[str, str]
+    #: `just review-plan` over the plan while its graph names an edge from a private source
+    #: that cannot answer; each task's review state and the project's attestation-check exit
+    #: before and after it; and how many judge inputs and reviewer turns it added.
+    unanswered_review: subprocess.CompletedProcess[str]
+    states_before_unanswered: dict[str, str]
+    states_after_unanswered: dict[str, str]
+    project_before_unanswered: int
+    project_after_unanswered: int
+    judged_during_unanswered: int
 
 
 def _task(what: str, criterion: str = "A request-level test drives the route.") -> str:
@@ -173,6 +191,37 @@ def _states(bench: Bench, plan: str) -> dict[str, str]:
     )
     assert checked.returncode in (0, 3), checked.stdout + checked.stderr
     return {str(one["id"]): str(one["state"]) for one in json.loads(checked.stdout)["tasks"]}
+
+
+def _project_state(bench: Bench, plan: str) -> int:
+    """The exit of the project's own `plan-review` attestation check: 0 valid, 3 not."""
+    bar = run(
+        bench,
+        ".venv/bin/oneagentgraph",
+        "run",
+        "graphs/planner.yaml",
+        "--judge-only",
+        "--member",
+        "worker",
+        "--bar-fingerprint",
+    )
+    assert bar.returncode == 0, bar.stdout + bar.stderr
+    checked = run(
+        bench,
+        STORE,
+        "project",
+        "attestation",
+        "check",
+        plan,
+        "--kind",
+        "plan-review",
+        "--bar",
+        bar.stdout.strip(),
+        "--json",
+        "--no-interactive",
+    )
+    assert checked.returncode in (0, 3), checked.stdout + checked.stderr
+    return checked.returncode
 
 
 def _committed(bench: Bench, run_id: str) -> int:
@@ -295,7 +344,12 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         return [{"op": "retry", "id": FLAKY, "node": replacement}]
 
     def add(text: str, suffix: str) -> list[dict[str, object]]:
-        node = {"id": f"probe-{suffix}", "persona": "engineer", "task": _task(text)}
+        node = {
+            "id": f"probe-{suffix}",
+            "persona": "engineer",
+            "task": _task(text),
+            "deps": [ROUTE],
+        }
         return [{"op": "add", "node": node}]
 
     ops = {"amend": _correct(bench_, run_id, "amend", amend)}
@@ -357,6 +411,44 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     finally:
         broken.unlink()
     states_after_partial = _states(bench_, plan)
+
+    # The route task also depends on a task of another private source, which then cannot
+    # answer: the listing of the plan's own source is whole, its graph is not.
+    elsewhere_root = tmp / "elsewhere"
+    elsewhere_root.mkdir()
+    elsewhere = bench_._replace(
+        environment={**bench_.environment, **local_source("elsewhere", elsewhere_root)}
+    )
+    _sh(
+        elsewhere,
+        f"{STORE} project create elsewhere --id outside --title outside --no-interactive "
+        f">/dev/null; {STORE} task create elsewhere --project elsewhere:outside "
+        "--title 'feat: outside' --no-interactive --json | jq -r '.items[0].id' > .outside.id",
+    )
+    flaky = next(
+        str(one["id"])
+        for one in _listed(bench_, plan)
+        if one["item"]["metadata"].get("onepipeline.id") == FLAKY
+    )
+    _sh(
+        elsewhere,
+        f'{STORE} task update {task} --depends-on {flaky} --depends-on "$(cat .outside.id)" '
+        "--no-interactive >/dev/null; rm -f .outside.id",
+    )
+    states_before_unanswered = _states(bench_, plan)
+    project_before_unanswered = _project_state(bench_, plan)
+    inputs_before = len(judge_inputs(bench_)) + len(judge_only_turns(bench_))
+    gone = elsewhere_root.with_name("elsewhere-gone")
+    elsewhere_root.rename(gone)
+    try:
+        unanswered_review = just(elsewhere, "review-plan", plan)
+    finally:
+        gone.rename(elsewhere_root)
+    judged_during_unanswered = (
+        len(judge_inputs(bench_)) + len(judge_only_turns(bench_)) - inputs_before
+    )
+    states_after_unanswered = _states(bench_, plan)
+    project_after_unanswered = _project_state(bench_, plan)
     yield Sequence(
         bench_,
         run_id,
@@ -376,6 +468,12 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         partial_review,
         states_before_partial,
         states_after_partial,
+        unanswered_review,
+        states_before_unanswered,
+        states_after_unanswered,
+        project_before_unanswered,
+        project_after_unanswered,
+        judged_during_unanswered,
     )
     for one in runs_of(bench_):
         if not one.startswith("."):
@@ -463,3 +561,58 @@ def test_a_listing_reporting_errors_is_refused_and_attests_nothing(sequence: Seq
     )
     assert "void" in sequence.states_before_partial.values(), sequence.states_before_partial
     assert sequence.states_after_partial == sequence.states_before_partial
+
+
+def _front_matter_ending(depends_on: list[str]) -> str:
+    """How the hook's judged task file ends its front matter: `depends_on` last."""
+    return '"depends_on":' + json.dumps(depends_on, separators=(",", ":")) + "}\n---\n"
+
+
+def test_the_hook_shows_the_judge_the_dependencies_an_edited_node_names(
+    sequence: Sequence,
+) -> None:
+    """An added node naming `route` is judged with it as `depends_on`; a retry's replacement
+    naming none is judged with `depends_on: []`."""
+    for name, deps in (("add", [ROUTE]), ("retry", [])):
+        op = sequence.ops[name]
+        assert op.passed.returncode == 0, op.passed.stdout + op.passed.stderr
+        ending = _front_matter_ending(deps)
+        assert any(op.passing_text in text and ending in text for text in op.judged_after_pass), (
+            name,
+            ending,
+            [text[-600:] for text in op.judged_after_pass],
+        )
+
+
+def test_a_graph_the_store_cannot_answer_whole_stops_the_review_unjudged(
+    sequence: Sequence,
+) -> None:
+    review = sequence.unanswered_review
+    assert review.returncode == 2, review.stdout + review.stderr
+    assert "graph of" in review.stderr and "was not answered whole" in review.stderr, review.stderr
+    # What the store reported, naming the source that could not answer.
+    assert "source elsewhere could not" in review.stderr, review.stderr
+    assert sequence.judged_during_unanswered == 0
+    assert "void" in sequence.states_before_unanswered.values(), sequence.states_before_unanswered
+    assert sequence.states_after_unanswered == sequence.states_before_unanswered
+    assert sequence.project_before_unanswered == 3
+    assert sequence.project_after_unanswered == 3
+
+
+@pytest.mark.parametrize("deps", ["route", [3], [""], False])
+def test_a_hook_document_naming_dependencies_that_are_not_ids_is_not_judged(
+    sequence: Sequence, deps: object
+) -> None:
+    """The hook's own trust boundary: dependencies that are not a list of ids stop it."""
+    document = {"node": {"id": "probe-x", "deps": deps}, "task": {"title": "t", "body": "b"}}
+    before = len(judge_inputs(sequence.bench)) + len(judge_only_turns(sequence.bench))
+    hooked = run(
+        sequence.bench,
+        "scripts/review-plan-item.sh",
+        input_text=json.dumps(document),
+        seconds=120,
+    )
+    assert hooked.returncode == REFUSED, hooked.stdout + hooked.stderr
+    assert "something other than a list of ids, so nothing was judged" in hooked.stderr
+    after = len(judge_inputs(sequence.bench)) + len(judge_only_turns(sequence.bench))
+    assert after == before

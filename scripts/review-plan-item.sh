@@ -25,8 +25,12 @@
 #
 # The judged material is written under a scratch directory laid out as the checklist's
 # globs read it — `tasks/<id>.md` for a task, `projects/<id>.md` for a description — each a
-# front matter of the record's title and metadata (the JSON the store printed) over its
-# body, because the checklist's rules read the budget records and the unit there.
+# front matter of the record's title, `depends_on` and metadata (the JSON the store printed)
+# over its body, because the checklist's rules read the budget records and the unit there,
+# and a judge reads a plan's ordering from `depends_on`: the ids of the tasks it depends on,
+# `[]` for none. A project's edges come from the store's graph of it (`onetaskgraph project
+# graph --format json --complete`), read whole or not judged at all; a hook document's from
+# the dependencies its node names (`.node.deps`).
 set -euo pipefail
 
 if ! script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) ||
@@ -112,13 +116,13 @@ native_file() {
 
 if [ "$#" -eq 0 ]; then
     hook=$(cat)
-    jq -e '(.node.id | type) == "string" and .node.id != "" and (.task.title | type) == "string" and (.task.body | type) == "string"' >/dev/null <<<"$hook" 2>/dev/null || {
-        echo "review-plan-item: the plan-edit hook's document names no node id, task title and task body, so nothing was judged; report it to the engine" >&2
+    jq -e '(.node.id | type) == "string" and .node.id != "" and (.task.title | type) == "string" and (.task.body | type) == "string" and (.node.deps | if . == null then [] else . end | type == "array" and all(type == "string" and . != ""))' >/dev/null <<<"$hook" 2>/dev/null || {
+        echo "review-plan-item: the plan-edit hook's document names no node id, task title and task body, or names its node's dependencies as something other than a list of ids, so nothing was judged; report it to the engine" >&2
         exit 2
     }
     id=$(jq -r '.node.id' <<<"$hook")
     file=$(native_file "$id" "$scratch/tasks") || exit 2
-    composed=$(jq -r '"---\n" + ({title: .task.title} | tojson) + "\n---\n" + .task.body' <<<"$hook") || exit 2
+    composed=$(jq -r '"---\n" + ({title: .task.title, depends_on: (.node.deps | if . == null then [] else . end)} | tojson) + "\n---\n" + .task.body' <<<"$hook") || exit 2
     printf '%s\n' "$composed" >"$file" || scratch_failed "$file"
     status=0
     judged "$file" "$plan_reviewer" || status=$?
@@ -143,6 +147,19 @@ refused=0
 listed=$("$store" task list --source "${plan%%:*}" --project "$plan" --all --json --no-interactive) || :
 whole_listing "listing of $plan's tasks" "$listed"
 printf '%s\n' "$listed" >"$scratch/tasks.json" || scratch_failed "$scratch/tasks.json"
+# Each task's dependency edges, read once from the store's own graph of the plan: a read the
+# store cannot answer whole — a failure, a private source unanswered, or a document that is
+# not this plan's graph — stops the review rather than judging a plan with edges missing.
+graphed=0
+"$store" project graph "$plan" --format json --complete --no-interactive >"$scratch/graph.json" 2>"$scratch/graph.err" ||
+    graphed=$?
+if [ "$graphed" -ne 0 ] ||
+    # llmlint: ignore[changed_behavior_has_e2e] This document check guards an exit-0 answer that is not this plan's graph, which the pinned store never prints: reaching it would mean doubling the plan store in the planning journeys, a second fake of a published CLI to maintain for a branch that shares this refusal's one message and exit with the non-zero read `test_a_graph_the_store_cannot_answer_whole_stops_the_review_unjudged` drives for real.
+    ! jq -e --arg plan "$plan" '.project == $plan and (.nodes | type) == "array" and (.edges | type) == "array" and all(.edges[]; (.from | type) == "string" and (.to | type) == "string") and (.unanswered // []) == []' "$scratch/graph.json" >/dev/null 2>&1; then
+    reported=$({ cat "$scratch/graph.err" "$scratch/graph.json"; } 2>/dev/null | tr '\n' ' ') || reported=""
+    echo "review-plan-item: the plan store's graph of $plan was not answered whole (exit $graphed), so nothing was judged: ${reported:-it printed nothing}; repair what it names, then retry" >&2
+    exit 2
+fi
 # Read whole before it is split, so a listing jq cannot read stops the review rather than
 # leaving it judging fewer tasks than the plan holds.
 listing=$(jq -c '.items[]' "$scratch/tasks.json") || exit 2
@@ -150,7 +167,7 @@ tasks=()
 [ -z "$listing" ] || mapfile -t tasks <<<"$listing"
 for task in ${tasks[@]+"${tasks[@]}"}; do
     file=$(native_file "$(jq -r '.id' <<<"$task")" "$scratch/tasks") || exit 2
-    composed=$(jq -r '"---\n" + ({title: .item.title, metadata: .item.metadata} | tojson) + "\n---\n" + (.item.content // "")' <<<"$task") ||
+    composed=$(jq -r --slurpfile graph "$scratch/graph.json" '.id as $id | "---\n" + ({title: .item.title, depends_on: [$graph[0].edges[] | select(.to == $id) | .from], metadata: .item.metadata} | tojson) + "\n---\n" + (.item.content // "")' <<<"$task") ||
         exit 2
     printf '%s\n' "$composed" >"$file" || scratch_failed "$file"
 done
@@ -195,7 +212,7 @@ case "$project_status" in
             echo "review-plan-item: the plan store's answer for $plan reported errors or not one project, so it was not judged: $(jq -c '{errors, items: (.items | length)}' <<<"$shown" 2>/dev/null || printf '%s' "$shown"); repair what it names, then retry" >&2
             exit 2
         }
-        composed=$(jq -r --slurpfile tasks "$scratch/tasks.json" '.items[0] | "---\n" + ({id: .id, title: .item.title, metadata: .item.metadata, tasks: [$tasks[0].items[] | {id, title: .item.title, metadata: .item.metadata}]} | tojson) + "\n---\n" + (.item.content // "")' <<<"$shown") ||
+        composed=$(jq -r --slurpfile tasks "$scratch/tasks.json" --slurpfile graph "$scratch/graph.json" '.items[0] | "---\n" + ({id: .id, title: .item.title, metadata: .item.metadata, tasks: [$tasks[0].items[] | .id as $id | {id, title: .item.title, depends_on: [$graph[0].edges[] | select(.to == $id) | .from], metadata: .item.metadata}]} | tojson) + "\n---\n" + (.item.content // "")' <<<"$shown") ||
             exit 2
         printf '%s\n' "$composed" >"$described" || scratch_failed "$described"
         status=0
