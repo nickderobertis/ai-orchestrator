@@ -37,7 +37,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "oneagentgraph-cli", specifier = "==0.13.0" },
+    { name = "oneagentgraph-cli", specifier = "==0.13.1" },
     { name = "onebudgetspec-cli", specifier = "==0.2.2" },
     { name = "onefollowup-cli", specifier = "==0.8.0" },
     { name = "oneharness-cli", specifier = "==0.30.0" },
@@ -326,13 +326,13 @@ wheels = [
 
 [[package]]
 name = "oneagentgraph-cli"
-version = "0.13.0"
+version = "0.13.1"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4c/6e/3f018d010c04e835dd61208c98aa136f9826824a9a01401d168f467f3915/oneagentgraph_cli-0.13.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3a545d28ca6dfaa4258f1e3c385cf6b4234c3379c7a2532f5ddb09b99999a241", size = 11330181, upload-time = "2026-11-11T09:38:46.721Z" },
-    { url = "https://files.pythonhosted.org/packages/7d/76/6add7c090f93e1b474a1abf693d6dcc5016bd12439dda7a8d82c9e50afc9/oneagentgraph_cli-0.13.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:fbe43f38865dba4be19e7f164613830bc8083f0388a70976b595fc557693de00", size = 5705846, upload-time = "2026-11-11T09:38:49.345Z" },
-    { url = "https://files.pythonhosted.org/packages/f3/5e/b558a8ec606d1e152ec85d9818f8eb6ca0356da031f549074343f2a68fea/oneagentgraph_cli-0.13.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4583efc7cecbbee6a9b265ec5258cbf24bd5a9b3e4045db5900765d3eec8bcd5", size = 6106967, upload-time = "2026-11-11T09:38:51.324Z" },
-    { url = "https://files.pythonhosted.org/packages/21/ad/470e4017c723169f998f2c1b56e80bbd8957292c20c11c79f34d8fb96e89/oneagentgraph_cli-0.13.0-py3-none-win_amd64.whl", hash = "sha256:137b37c5ef2a63ab565fdc0d6091497ad584470ba7c249fc542b07291355a4af", size = 6307646, upload-time = "2026-11-11T09:38:53.132Z" },
+    { url = "https://files.pythonhosted.org/packages/38/93/ada01e4f3e8f804d3d97fed42336df254649d96fdc5c1e20fbb313608d96/oneagentgraph_cli-0.13.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2b77600cdede65aeefefb5a8b5ce86c57a37922f16a538cbe2430d00e1b3bd2f", size = 11330197, upload-time = "2026-11-16T21:59:22.066Z" },
+    { url = "https://files.pythonhosted.org/packages/99/5e/35d18afce0309370964624c90f7f0bdd8b7b8c4b7462b62a5d76f477510a/oneagentgraph_cli-0.13.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:0ba54900aa22fc35a3541bd9e0d1e02dcf70d61fec150871b9ddc1234af96d75", size = 5706663, upload-time = "2026-11-16T21:59:24.817Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/74/55f55e6a21a3b203c6e119f108c54d0427fdb26b34ac5c328dba76c29c4f/oneagentgraph_cli-0.13.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c04916d2de777b373c3883527708d33298cfe722ffe1725a92509cd65f9c9c9a", size = 6106715, upload-time = "2026-11-16T21:59:26.47Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/1e/730226ff69b0eda99b0f62d8aafc9c2890b28bf6ee5d70d65ee156f9b041/oneagentgraph_cli-0.13.1-py3-none-win_amd64.whl", hash = "sha256:d430e2c583f9014726ac6e7d79cf8b17f2fd21d93f5d75c4e6e40d39e6dd0c44", size = 6308432, upload-time = "2026-11-16T21:59:27.874Z" },
 ]
 
 [[package]]
