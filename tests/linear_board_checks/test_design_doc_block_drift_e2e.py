@@ -1,7 +1,8 @@
 """The design-doc template's expandable blocks are the form the installed plan store translates.
 
-The design document collapses each reversible decision, a decision's examples and the
-Planned tasks table into expandable blocks, and it is read on whichever tracker its plan lands
+The design document collapses each reversible decision, a decision's examples, the Budgets
+section's budgets changed for other reasons and its existing coverage, and the Planned tasks
+table into expandable blocks, and it is read on whichever tracker its plan lands
 on: a GitHub Projects board keeps the authored block, and Linear shows it only as its own
 collapsible section, which the plan store writes from the authored form onetaskgraph's README
 states under *Expandable blocks*. The template writes the block and the store recognises it,
@@ -17,6 +18,12 @@ over the Linear copy. A block copied back out of Linear is held to its own lines
 and to its body as Linear stores that content anywhere (`MEASURED_REWRITES`), because a table's
 delimiter row Linear rewrites is Linear's normalization rather than a block drifting. The same
 journey over a template whose blocks drop the blank line after `</summary>` is shown to fail.
+
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] The approved acceptance
+criteria of the task that added the Budgets section's blocks name this journey, in its
+tracker project, as the check that their Linear translation holds, and it reads the
+design-doc template that project's inputs cover. Both cases measured about 4.7 s of wall
+time on this host, so a template change rerunning it costs the gate little.
 """
 
 from __future__ import annotations
@@ -113,9 +120,66 @@ ANSWERS: Mapping[str, object] = {
     ],
 }
 
-#: How many blocks the answers render: two reversible decisions, one examples block and the
-#: planned-tasks table.
-BLOCKS = 4
+
+def _budget(budget_id: str, name: str, file_change: str, **moved: object) -> dict[str, object]:
+    """A version-3 budget record as the design-doc writer copies it, linked to its task."""
+    record: dict[str, object] = {
+        "schema_version": 3,
+        "id": budget_id,
+        "name": name,
+        "basis": "measured",
+        "repository": "github.com/example/service",
+        "file": "budgets.yaml",
+        "file_change": file_change,
+        "measure": "Seconds a person waits for a preview",
+        "inner_measure_reason": "",
+        "unit": "seconds",
+        "direction": "max",
+        "threshold": 5,
+        "workload": "A plan of 12 tasks",
+        "evidence": "Measured once.",
+        "command": "scripts/measure-preview.sh",
+        "source": "direct",
+        "check_runtime_seconds": 2,
+        "node": "preview",
+        "location": "the store's own location",
+        "anchor": f"budget-{budget_id}",
+        "link": f"https://example.invalid/preview#budget-{budget_id}",
+    }
+    if file_change == "change":
+        record["previous"] = {
+            key: record[key]
+            for key in ("name", "measure", "inner_measure_reason", "unit", "direction")
+            + ("threshold", "workload", "source", "command", "check_runtime_seconds")
+        } | moved
+    return record
+
+
+#: Budget answers that make the Budgets section write both of its blocks: a budget changed
+#: only in its measure and command, collapsed among those changed for other reasons, and an
+#: unchanged budget, collapsed as existing coverage.
+BUDGET_ANSWERS: Mapping[str, object] = {
+    "plan_budgets": {
+        "schema_version": 2,
+        "sizing": "A plan of up to 12 tasks.",
+        "ten_x_summary": "A preview of 120 tasks waits longest.",
+        "checklist": [],
+        "check_runtime_summary": "No check is expensive.",
+    },
+    "budgets": [
+        _budget("preview-seconds", "Preview time", "add"),
+        _budget("copy-seconds", "Copy time", "change", measure="Copy time", command="x.sh"),
+        _budget("plan-read-seconds", "Plan read time", "none"),
+    ],
+}
+
+#: How many blocks the answers render: two reversible decisions, one examples block, the
+#: planned-tasks table, and the Budgets section's other-changes and existing-coverage blocks.
+BLOCKS = 6
+#: The blocks whose body Linear stores in its own form (`MEASURED_REWRITES`): the planned
+#: tasks' and the existing coverage's tables, with Linear's delimiter row, and the other
+#: changes' list, with Linear's list marker.
+REWRITTEN_BLOCKS = 3
 
 #: An authored block whole: `<details>` to `</details>`, each alone on its line.
 AUTHORED_BLOCK = re.compile(r"^<details>\n.*?^</details>$", re.MULTILINE | re.DOTALL)
@@ -162,7 +226,7 @@ def _rendered(tmp_path: Path, environment: Mapping[str, str], template_root: Pat
     )
     assert resolved.returncode == 0, resolved.stderr
     answers = tmp_path / "answers.json"
-    answers.write_text(json.dumps(ANSWERS), encoding="utf-8")
+    answers.write_text(json.dumps({**ANSWERS, **BUDGET_ANSWERS}), encoding="utf-8")
     _cli(
         environment,
         *("project", "create", AUTHORING_SOURCE, "--id", PROJECT, "--title", PROJECT_TITLE),
@@ -309,9 +373,9 @@ def _drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template_root: Path)
                     f"the copy back from Linear does not hold this block:\n{block}\n---\n{back}"
                 )
         unchanged = [block for block in authored if _returned_form(block) == block]
-        if len(unchanged) != BLOCKS - 1:
+        if len(unchanged) != BLOCKS - REWRITTEN_BLOCKS:
             found.append(
-                f"only the table's body is one Linear rewrites, yet {unchanged} "
+                f"only the tables' and the list's bodies are ones Linear rewrites, yet {unchanged} "
                 "come back as authored"
             )
     return found

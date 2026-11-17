@@ -3,7 +3,7 @@ title: 'Design: scheduler-research'
 project: scheduler-research
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:511628c22c97dd8b34beb643fd9f28514f5fb04c6aed6e0bbd4c9267edd81f53
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:69f4d29cf681ce24ef8ed77bd8db8d5d71430b16517f2573f3b95902e005701f","answers_digest":"sha256:b723efea4bd5818404994f9734da4c47aec27f4591465f48dd2f000c6c1041e6"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:69f4d29cf681ce24ef8ed77bd8db8d5d71430b16517f2573f3b95902e005701f","answers_digest":"sha256:b723efea4bd5818404994f9734da4c47aec27f4591465f48dd2f000c6c1041e6"}
 ---
 ## What
 

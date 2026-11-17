@@ -3,7 +3,7 @@ title: 'Design: tracked-release'
 project: tracked-release
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:f9a181fad4a495bf5f9042f736a807665321e8f64d5e8eb0eceae56c9c56a6a8
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:e08d5eeda54543870c508592120fab854db332c447346a1397a8fcb34a488c16","answers_digest":"sha256:7cb6361b21a24692beb57d04edeac145abe27a44f9d23e92a417fba2bf1d4dcc"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:e08d5eeda54543870c508592120fab854db332c447346a1397a8fcb34a488c16","answers_digest":"sha256:7cb6361b21a24692beb57d04edeac145abe27a44f9d23e92a417fba2bf1d4dcc"}
 ---
 ## What
 

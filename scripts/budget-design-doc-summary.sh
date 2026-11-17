@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
-# How long a design document's budget summary runs, in characters, for #1568's real answers.
+# How much of a design document's budget summary a person reads before opening anything, in
+# characters, for #1568's real answers.
 #
 # The `design-doc-budget-summary-length` budget the root `budgets.yaml` registers. It
 # renders the design document from the committed fixture `tests/fixtures/budgets/issue-
 # 1568.json` — #1568's budget answers, the plan's `orchestrator.plan-budgets` record and
-# every task's budgets with where each task lives: 9 budgets, 6 concerns answered n/a, 4 changed repositories (one actual named root effect), 1 realistic-data choice and no spike finding — through the design-doc template
-# as the pinned engine resolves it from this checkout's `templates/`, rendered by the pinned
-# plan store, after holding each fixture record to the fields that section reads, and counts the characters (Unicode code points) of its `## Budgets` section,
-# heading included, up to the next section's heading. The other answers the template
+# every task's budgets with where each task lives: 9 budgets (5 added, and 4 changed as
+# version-3 records carrying `previous`), 6 concerns answered n/a, 4 changed repositories
+# (one actual named root effect), 1 realistic-data choice and no spike finding — through the
+# design-doc template as the pinned engine resolves it from this checkout's `templates/`,
+# rendered by the pinned plan store, after holding each fixture record to the fields that
+# section reads. It takes the `## Budgets` section, heading included, up to the next
+# section's heading, and counts its characters (Unicode code points) with the body of every
+# collapsed `<details>` block excluded and the block's `<summary>` line kept: what a person
+# reads before opening any block. The reporter's `detail` gives the full section's length
+# and each collapsed block's length, as the breakdown. The other answers the template
 # requires are one word each and sit outside that section, so they never reach the count.
 # The result goes to the file onebudgetspec names in ONEBUDGETSPEC_RESULT, in its result
 # format.
@@ -90,15 +97,27 @@ PY
 # belong to, which the store refuses before it renders anything.
 body=$(cd -- "$root" && "$root/.venv/bin/onetaskgraph" template render --template-loader "$loader" --answers "$answers" --no-interactive) ||
   fail "the pinned plan store did not render the design document from the fixture (its diagnostic is above); repair the fixture's answers or the template it names until the store renders them, then retry"
-section=$(BUDGET_DESIGN_DOC_BODY="$body" "$python" - <<'PY'
-import os, sys
+measured=$(BUDGET_DESIGN_DOC_BODY="$body" "$python" - <<'PY'
+import json, os, re, sys
 
 body = os.environ["BUDGET_DESIGN_DOC_BODY"]
 if "## Budgets\n" not in body:
     sys.exit(1)
-print(len("## Budgets\n" + body.split("## Budgets\n", 1)[1].split("\n## ", 1)[0] + "\n"))
+section = "## Budgets\n" + body.split("## Budgets\n", 1)[1].split("\n## ", 1)[0] + "\n"
+# A collapsed block as the template writes it: `<details>`, its `<summary>` line, then the
+# body a reader sees only on opening it, up to `</details>`.
+blocks = list(
+    re.finditer(r"^<details>\n<summary>[^\n]*</summary>\n(.*?)^</details>$", section, re.M | re.S)
+)
+hidden = sum(len(block.group(1)) for block in blocks)
+lengths = ", ".join(str(len(block.group(0))) for block in blocks) or "none"
+detail = (
+    f"read before opening any block, of the ## Budgets section the design-doc template renders "
+    f"for the #1568 answers in tests/fixtures/budgets/issue-1568.json; full section "
+    f"{len(section)} characters; collapsed blocks {lengths} characters"
+)
+print(json.dumps({"value": len(section) - hidden, "detail": detail}))
 PY
-) || fail "the rendering carries no '## Budgets' section to measure, so the fixture adds or changes no budget or the template no longer renders the summary; restore the fixture, or the template's budgets block, until 'tests/test_design_doc_template.py' passes, then retry"
-printf '{"value": %s, "detail": "the ## Budgets section the design-doc template renders for the #1568 answers in tests/fixtures/budgets/issue-1568.json"}\n' \
-  "$section" >"$result" ||
+) || fail "the rendering carries no '## Budgets' section to measure, so the fixture adds or changes no budget or the template no longer renders the summary; restore the fixture, or the template's budgets block, until 'tests/test_budgets_files.py' passes, then retry"
+printf '%s\n' "$measured" >"$result" ||
   fail "the result could not be written to $result, the file onebudgetspec named; check that its directory is writable and has free space, then retry"

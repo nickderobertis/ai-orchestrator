@@ -33,7 +33,8 @@ each.
   `dag_image` with the image's file name and store it with `--asset <image.png>`.
 - **Budgets.** Answer `plan_budgets` with the project's `orchestrator.plan-budgets` metadata
   and `budgets` with every task's `orchestrator.budgets` records, as the store holds them,
-  each budget with its `node` and `location`; invent none.
+  each budget with its `node` and `location`, a version-3 changed budget's `previous` and
+  the plan's `check_runtime_summary` kept inside them; invent none.
 {# llmlint: ignore-end[changed_behavior_has_e2e] #}
 - **Accepted opaque content.** Answer `accepted_opaque` from the project's
   `onepipeline.export_edges` metadata, verbatim, or `[]`.

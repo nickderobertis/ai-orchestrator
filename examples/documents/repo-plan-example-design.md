@@ -3,7 +3,7 @@ title: 'Design: repo-plan-example'
 project: repo-plan-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:102de0e7ec9d17f43c286db96673ed970aa1e0b2d444f9ee5085351344f8eee5
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:763bb11c19b455f09ca3ace8d770fcbab2602aa0270227d94586cd07fc2574ca","answers_digest":"sha256:4a1ada9a2207fbe04d715d6c1fe6e66e8ad8636705ba87a57643a0bce996095a"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:e22ecb360280150f10dcb65b35a5d646929cba5d6b5efc807288dc380ae62fcd","answers_digest":"sha256:4a1ada9a2207fbe04d715d6c1fe6e66e8ad8636705ba87a57643a0bce996095a"}
 ---
 ## What
 
@@ -72,11 +72,15 @@ The published documentation describes the endpoint that actually exists.
 
 **At 10×.** Probes see slower health answers once 40 pollers compete with ordinary traffic, covered by health-endpoint-p95-latency.
 
-| Budget | Target | Basis | How it is measured | Check runtime |
-| --- | --- | --- | --- | --- |
-| [Health endpoint p95 latency][1] | ≤50 ms | estimate | telemetry | ≈3 s |
+**Added budgets:**
+
+| Budget | Target |
+| --- | --- |
+| [Health endpoint p95 latency][1] | ≤50 ms |
 
 [1]: examples/tasks/repo-plan-example/api.md
+
+**Check runtime added:** not estimated for Health endpoint p95 latency.
 
 ## Acceptance criteria
 

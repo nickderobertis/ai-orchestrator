@@ -145,14 +145,25 @@ and the `schema:` declarations of `templates/plan-task-budgets.md.j2` and
   `inner_measure_reason` when the measure is taken further inward;
   the `unit`, the `direction` (`max` or `min`) and the `threshold`; the `workload` it holds
   at; the `evidence` the number rests on; and the `command`, which analyses the recorded
-  telemetry, as it will be registered. Modern records also state
-  `schema_version` (integer literal 2), `source` (`direct` or `telemetry`) and
+  telemetry, as it will be registered. Newly authored records also state
+  `schema_version` (integer literal 3), `source` (`direct` or `telemetry`) and
   `check_runtime_seconds` (finite number >= 0, excluding booleans). Direct executes the
   work/check whose result it measures; a command executing work and recording results is
   direct. Telemetry reads existing timing/history records without executing measured work.
-  Runtime estimates elapsed seconds of the entire command at the stated workload, including
-  setup/reads, distinct from the target, unit and basis; evidence states its source.
-  Never infer mode or runtime from basis or command text. A command analysing recorded
+  `check_runtime_seconds` is the seconds checking the budget adds to the repository's
+  checks at its workload: the telemetry collection it adds to tests the work needs anyway
+  plus the budget command's own run, or, where a test exists only to feed this budget,
+  that whole test's runtime plus the command. It never counts tests that would exist
+  without the budget, so a cheap telemetry budget does not look expensive and a test
+  written only to feed one does not look free. It is distinct from the target, unit and
+  basis; evidence states its source. Never infer mode or runtime from basis or command
+  text. A version-3 budget whose `file_change` is `change` also carries `previous`, the
+  entry as it stood before the task, with exactly `name`, `measure`,
+  `inner_measure_reason`, `unit`, `direction`, `threshold`, `workload`, `source`,
+  `command` and `check_runtime_seconds` (what checking it cost before the change), each
+  held to the record's own key's type; one whose `file_change` is `add` or `none` carries
+  none. The design document shows a changed budget's name and target as previous → new
+  and names its other changed fields, so a loosened target cannot pass approval unseen. A command analysing recorded
   telemetry is `telemetry`; `direct` is left for a standalone measurement under the
   exception `budgets_reuse_gate_telemetry` admits.
 - **The plan-level answers live in the plan's own description.** The project's
@@ -167,7 +178,11 @@ and the `schema:` declarations of `templates/plan-task-budgets.md.j2` and
   every realistic-data choice and every spike finding carries a one-line `summary`
   of at most 160 characters. Realistic-data detail stays in the description; owning task
   implementation/data notes identify fixtures or generators, never the design summary.
-  Modern plan records have `schema_version` (integer literal 2). Each checklist entry has
+  Modern plan records have `schema_version` (integer literal 2); one adding or changing a
+  task budget also answers `check_runtime_summary`, naming by `name` each budget whose
+  check is expensive and why (such as a test that exists only to feed it), or saying none
+  is, on one line of at most 240 characters, which the design document shows after the
+  total check runtime the plan's budgets add. Each checklist entry has
   `in_scope` (boolean), beside `concern`, `budget`, `not_applicable` and `summary` (strings).
   Exactly one of budget/not_applicable is nonempty; covered concerns are in_scope=true and
   reference an owned budget. N/a keeps the full reason and capped summary. False means
@@ -219,8 +234,9 @@ and the `schema:` declarations of `templates/plan-task-budgets.md.j2` and
 
 No list exempts a plan from budgets: a plan written before this requirement is reviewed
 like any other the next time `just review-plan` judges it. Exact current key sets
-are the implicit legacy format, which the template schemas still read; version 2 selects
-modern records, and an unknown version, an extra key, a partial field or a malformed type is
+are the implicit legacy format, which the template schemas still read; version 2 and
+version 3 select modern records, a version-2 one readable with no `previous`, and an
+unknown version, an extra key, a partial field or a malformed type is
 refused. Legacy metadata, rendered task and project bodies and copied records stay
 unchanged, without invented source or runtime facts. The `schema:` declarations of
 `templates/plan-task-budgets.md.j2` and `templates/plan-description.md.j2` are the schema

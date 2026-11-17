@@ -3,7 +3,7 @@ title: 'Design: planner-brief-example'
 project: planner-brief-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:d9fc7226a615c542a1db86abed3a13c8e513ea11e9a287dac35edcbf8a94fa54
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:3c3a8049cddfdb99f0afd880b14193ab285fd1eb34211d7455b37540bf6a1340","answers_digest":"sha256:de6beb00d302772a9e020c7ec0d96b3f73d65a6cfb82c7facb1bf86377e9f0b3"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:3c3a8049cddfdb99f0afd880b14193ab285fd1eb34211d7455b37540bf6a1340","answers_digest":"sha256:de6beb00d302772a9e020c7ec0d96b3f73d65a6cfb82c7facb1bf86377e9f0b3"}
 ---
 ## What
 

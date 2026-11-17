@@ -3,7 +3,7 @@ title: 'Design: plan-example'
 project: plan-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:7543864a301acea3a06b63a9cda7d47b585511926f55b6d379566db4530ee0a8
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:edf138252993822cf098b693624ff3030b31a3ce069c60308bb43030f4b67769","answers_digest":"sha256:9efa3635ebbc6f3ee56bf080c358f91af3c6f1a99bdbcc26ce07ad22d2c36bb1"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:edf138252993822cf098b693624ff3030b31a3ce069c60308bb43030f4b67769","answers_digest":"sha256:9efa3635ebbc6f3ee56bf080c358f91af3c6f1a99bdbcc26ce07ad22d2c36bb1"}
 ---
 ## What
 

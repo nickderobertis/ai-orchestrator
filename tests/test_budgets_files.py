@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 import yaml
@@ -151,7 +152,39 @@ def test_the_root_file_registers_the_design_documents_budget_summary_length() ->
         "unit": "characters",
         "direction": "max",
     }
-    assert "#1568" in description and "`## Budgets` section" in description
+    flat = " ".join(description.split())
+    assert "#1568" in flat and "`## Budgets` section" in flat, flat
+    assert "body of every `<details>` block excluded and its `<summary>` line kept" in flat, flat
+
+
+#: The full `## Budgets` section the design-doc template renders for the committed fixture.
+SUMMARY_RENDERING = REPO_ROOT / "tests" / "fixtures" / "budgets" / "issue-1568-summary.txt"
+
+
+def _unfolded(section: str) -> tuple[int, list[int]]:
+    """What a reader sees of ``section`` before opening a block, and each block's length.
+
+    Read line by line rather than by the script's own pattern: from each `<details>` line,
+    the `<summary>` line after it is kept and every line after that up to `</details>` is
+    the collapsed body, which is not counted.
+    """
+    lines = section.split("\n")
+    seen = 0
+    blocks: list[int] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line == "<details>" and lines[index + 1].startswith("<summary>"):
+            end = lines.index("</details>", index)
+            blocks.append(len("\n".join(lines[index : end + 1])))
+            seen += len(line) + len(lines[index + 1]) + len("</details>") + 2
+            index = end + 1
+            if index < len(lines):
+                seen += 1
+            continue
+        seen += len(line) + (1 if index < len(lines) - 1 else 0)
+        index += 1
+    return seen, blocks
 
 
 @pytest.mark.parametrize(
@@ -220,32 +253,34 @@ def test_the_library_measures_the_summary_of_the_committed_fixture(
     # verdict, never this test's.
     assert ran.returncode in (MEASURED_WITHIN, MEASURED_OVER), ran.stdout + ran.stderr
     (result,) = json.loads(ran.stdout[ran.stdout.index("{") :])["results"]
-    rendered = REPO_ROOT / "tests" / "fixtures" / "budgets" / "issue-1568-summary.txt"
-    assert result["actual"] == len(rendered.read_text(encoding="utf-8")), result
+    section = SUMMARY_RENDERING.read_text(encoding="utf-8")
+    seen, blocks = _unfolded(section)
+    assert blocks, "the fixture's section collapses no block, so nothing here is excluded"
+    assert result["actual"] == seen < len(section), result
+    assert f"full section {len(section)} characters" in result["detail"], result
+    lengths = ", ".join(str(length) for length in blocks)
+    assert f"collapsed blocks {lengths} characters" in result["detail"], result
     if where == "checkout":
         assert result["host"]["conditions"]["dispatches"] == "0", result["host"]
 
 
-@pytest.mark.parametrize(
-    ("fault", "diagnostic"),
-    [
-        ("no-result", "ONEBUDGETSPEC_RESULT names no result file"),
-        ("no-fixture", "cannot be read, so there are no answers to render"),
-        ("no-python", "is not this checkout's locked interpreter"),
-        ("no-scratch", "a scratch directory for the template's loader"),
-        ("no-template", "the pinned engine did not resolve"),
-        ("malformed-fixture", "fixture does not hold the design document's"),
-        ("malformed-record", "the fixture's budget 0 lacks numeric threshold"),
-        ("malformed-checklist", "the fixture's plan-level `checklist` is not a list"),
-        ("missing-answer", "the pinned plan store did not render"),
-        ("no-section", "the rendering carries no '## Budgets' section"),
-        ("unwritable-result", "the result could not be written"),
-    ],
-)
-def test_the_summary_command_reports_failure_without_leaving_scratch(
-    tmp_path: Path, fault: str, diagnostic: str
-) -> None:
-    """Run the real command and tools against a damaged, isolated input checkout."""
+class Checkout(NamedTuple):
+    """A checkout holding only what the summary command reads, over the real tools."""
+
+    #: The checkout's root, and the fixture it renders.
+    root: Path
+    fixture: Path
+    #: Its `.venv/bin`, holding links to the locked interpreter and plan store.
+    binaries: Path
+    #: The scratch root the command is pointed at, and the result file onebudgetspec names.
+    scratch: Path
+    result: Path
+    #: The command's environment.
+    environment: dict[str, str]
+
+
+def _isolated_checkout(tmp_path: Path) -> Checkout:
+    """A :class:`Checkout` under ``tmp_path``."""
     root = tmp_path / "checkout"
     script = root / "scripts" / "budget-design-doc-summary.sh"
     script.parent.mkdir(parents=True)
@@ -271,6 +306,103 @@ def test_the_summary_command_reports_failure_without_leaving_scratch(
     scratch.mkdir()
     result = tmp_path / "result.json"
     environment = {**os.environ, "ONEBUDGETSPEC_RESULT": str(result), "TMPDIR": str(scratch)}
+    return Checkout(root, fixture, binaries, scratch, result, environment)
+
+
+def _measured(root: Path, result: Path, environment: dict[str, str]) -> dict[str, object]:
+    """Run the checkout's real summary command and answer the result it wrote."""
+    ran = subprocess.run(
+        [str(root / "scripts" / "budget-design-doc-summary.sh")],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    measured = json.loads(result.read_text(encoding="utf-8"))
+    assert isinstance(measured, dict), measured
+    return measured
+
+
+def test_the_summary_counts_no_collapsed_body_and_every_line_outside_one(tmp_path: Path) -> None:
+    """A longer collapsed block leaves the figure as it was; longer text outside raises it.
+
+    The fixture as committed, then with one more budget changed only in its measure and
+    command at no change in check runtime, under a long name — a line in the collapsed
+    block and nothing outside it, the block's count staying one digit — then with a longer
+    sizing answer, which is read before any block opens.
+    """
+    checkout = _isolated_checkout(tmp_path)
+    root, fixture, result, environment = (
+        checkout.root,
+        checkout.fixture,
+        checkout.result,
+        checkout.environment,
+    )
+    committed = _measured(root, result, environment)
+    answers = json.loads(fixture.read_text(encoding="utf-8"))
+
+    (changed, *_) = [one for one in answers["budgets"] if one["file_change"] == "change"]
+    another = json.loads(json.dumps(changed))
+    another["id"] = "linear-asset-requests-per-unchanged-issue-image"
+    another["name"] = another["previous"]["name"] = (
+        "Linear requests per unchanged image on an issue re-copy"
+    )
+    another["link"] = f"{another['location']}#budget-{another['id']}"
+    # Its check costs what it did, so the total read outside the block stays as it was.
+    another["previous"]["check_runtime_seconds"] = another["check_runtime_seconds"]
+    answers["budgets"].append(another)
+    fixture.write_text(json.dumps(answers), encoding="utf-8")
+    folded = _measured(root, result, environment)
+
+    added = " It holds at the busiest hour of the week."
+    answers["plan_budgets"]["sizing"] += added
+    fixture.write_text(json.dumps(answers), encoding="utf-8")
+    outside = _measured(root, result, environment)
+
+    assert folded["value"] == committed["value"], (committed, folded)
+    assert folded["detail"] != committed["detail"], "the longer block's length is not reported"
+    assert outside["value"] == committed["value"] + len(added), (committed, outside)
+
+
+def test_a_section_collapsing_no_block_is_counted_whole(tmp_path: Path) -> None:
+    """With only added budgets nothing is collapsed: the figure is the whole section."""
+    checkout = _isolated_checkout(tmp_path)
+    answers = json.loads(checkout.fixture.read_text(encoding="utf-8"))
+    answers["budgets"] = [one for one in answers["budgets"] if one["file_change"] == "add"]
+    checkout.fixture.write_text(json.dumps(answers), encoding="utf-8")
+
+    measured = _measured(checkout.root, checkout.result, checkout.environment)
+
+    detail = str(measured["detail"])
+    assert f"full section {measured['value']} characters" in detail, measured
+    assert "collapsed blocks none" in detail, measured
+
+
+@pytest.mark.parametrize(
+    ("fault", "diagnostic"),
+    [
+        ("no-result", "ONEBUDGETSPEC_RESULT names no result file"),
+        ("no-fixture", "cannot be read, so there are no answers to render"),
+        ("no-python", "is not this checkout's locked interpreter"),
+        ("no-scratch", "a scratch directory for the template's loader"),
+        ("no-template", "the pinned engine did not resolve"),
+        ("malformed-fixture", "fixture does not hold the design document's"),
+        ("malformed-record", "the fixture's budget 0 lacks numeric threshold"),
+        ("malformed-checklist", "the fixture's plan-level `checklist` is not a list"),
+        ("missing-answer", "the pinned plan store did not render"),
+        ("no-section", "the rendering carries no '## Budgets' section"),
+        ("unwritable-result", "the result could not be written"),
+    ],
+)
+def test_the_summary_command_reports_failure_without_leaving_scratch(
+    tmp_path: Path, fault: str, diagnostic: str
+) -> None:
+    """Run the real command and tools against a damaged, isolated input checkout."""
+    checkout = _isolated_checkout(tmp_path)
+    root, fixture, binaries = checkout.root, checkout.fixture, checkout.binaries
+    scratch, result, environment = checkout.scratch, checkout.result, checkout.environment
     match fault:
         case "no-result":
             environment.pop("ONEBUDGETSPEC_RESULT")
@@ -310,7 +442,12 @@ def test_the_summary_command_reports_failure_without_leaving_scratch(
                     answers["plan_budgets"]["repo_wide_effects"] = []
             fixture.write_text(json.dumps(answers), encoding="utf-8")
     ran = subprocess.run(
-        [str(script)], cwd=root, env=environment, capture_output=True, text=True, timeout=120
+        [str(root / "scripts" / "budget-design-doc-summary.sh")],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     assert ran.returncode == 1, ran.stdout + ran.stderr
     assert diagnostic in ran.stderr

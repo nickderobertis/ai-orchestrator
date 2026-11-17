@@ -73,6 +73,16 @@ variables:
           not_applicable: {type: string}
           summary: {type: string, maxLength: 160}
           in_scope: {type: boolean}
+  check_runtime_summary:
+    description: >-
+      Each budget whose check is expensive, named by its `name` rather than its `id`, and
+      why (for example, a test that exists only to feed it), or a statement that none is,
+      on one line of at most 240 characters. A check's cost is its `check_runtime_seconds`,
+      the seconds checking the budget adds to the repository's checks. Optional, so a record
+      saved before it existed still validates; a newly authored plan answers it whenever
+      any task budget is added or changed.
+    type: string
+    required: false
   repo_wide_effects:
     description: >-
       Only actual expected effects on existing root budgets of changed repositories,
@@ -185,6 +195,10 @@ variables:
 - **{{ entry.concern }}:** not budgeted. {{ entry.not_applicable }}
 {% endif %}
 {% endfor %}
+{% if check_runtime_summary %}
+
+**Check runtime.** {{ check_runtime_summary }}
+{% endif %}
 
 ### Repo-wide effects
 

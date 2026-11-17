@@ -3,7 +3,7 @@ title: 'Design: health-endpoint'
 project: health-endpoint
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:5697e51426246121fbc2486ca79881d3fbc11590f7b984c7514a0c1b5100a474
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:a1d0d6c5e9fdb37cd08db25d03e27c5aebb5303e155374d4545c831c838200b3","body_digest":"sha256:b780bb10838c4f5d4a075d8a6ed37b7ba8e1a785dc3594be370c026ac978207f","answers_digest":"sha256:069948f1db58c046372b96dcda781d068d6adbea57c571208ed670e83041627e"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:ae7907fb71ccde8aa1e0431c85a5d43b0d40a900b39eb523a7d6c0a802da39f3","answers_digest":"sha256:069948f1db58c046372b96dcda781d068d6adbea57c571208ed670e83041627e"}
 ---
 ## What
 
@@ -49,11 +49,15 @@ The route is served by the service itself, with no new process or store.
 
 **At 10×.** Probes see slower health answers once 40 pollers compete with ordinary traffic, covered by health-endpoint-p95-latency.
 
-| Budget | Target | Basis | How it is measured | Check runtime |
-| --- | --- | --- | --- | --- |
-| [Health endpoint p95 latency][1] | ≤50 ms | estimate | telemetry | ≈3 s |
+**Added budgets:**
+
+| Budget | Target |
+| --- | --- |
+| [Health endpoint p95 latency][1] | ≤50 ms |
 
 [1]: examples/tasks/health-endpoint/health.md
+
+**Check runtime added:** not estimated for Health endpoint p95 latency.
 
 ## Acceptance criteria
 

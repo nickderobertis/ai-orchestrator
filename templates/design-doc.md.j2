@@ -411,55 +411,154 @@ variables:
 {% endblock %}
 {% block budgets_guidance %}
 {#
-  BUDGETS. A summary a person approving the plan reads in a minute: what the plan is sized
-  for, what breaks first at 10x, and one row per budget with its target and how solid the
-  number is. Every detail of a budget — its workload, evidence, command and budgets file —
-  lives in the `## Budgets` section of the task that owns it, which each row links to, and
-  every plan-level answer in full lives in the plan's own description. So this section
-  carries none of that detail. Each row's reference link is the budget's `link` answer as
-  it stands: a standard `<path>#<slug>` link to the owning task's `### Budget <id>` heading,
-  relative to this document's file when the task is a local file, never a `#user-content-`
-  fragment and never anchor markup; a tracker's own form is the plan copy's to write. A
-  budget answer saved before `link` existed is linked at its `location`, with `#` and its
-  `anchor` when it carries one, so a document saved then still renders its own body.
+  BUDGETS. A summary a person approving the plan reads in a minute, often on a phone: what
+  the plan is sized for, what breaks first at 10x, which budgets it adds, which it changes
+  and from what, how much longer every change's checks take because of it, and which
+  existing budgets already cover the work. Every detail of a budget — its workload,
+  evidence, command and budgets file, and for a changed one its full before and after —
+  lives in the `## Budgets` section of the task that owns it, which each row and line links
+  to, and every plan-level answer in full lives in the plan's own description. So this
+  section carries none of that detail. Each link is the budget's `link` answer as it
+  stands: a standard `<path>#<slug>` link to the owning task's `### Budget <id>` heading,
+  relative to this document's file when the task is a local file, never a
+  `#user-content-` fragment and never anchor markup; a tracker's own form is the plan
+  copy's to write. A budget answer saved before `link` existed is linked at its
+  `location`, with `#` and its `anchor` when it carries one, so a document saved then
+  still renders its own body.
 
   The answers `plan_budgets` and `budgets` are exactly the plan's records: the project's
   `orchestrator.plan-budgets` metadata and every task's `orchestrator.budgets`, each budget
-  with its task and where the store reports it. Copy them, and invent none. A plan
-  with no added or changed task budget renders no Budgets section, even when it has
-  unchanged budgets, effects, omissions, spike findings or a migration reason. Only budgets
-  whose `file_change` is exactly `add` or `change` appear in the table and numbered links.
-  When that list is nonempty, keep Sizing, At 10×, in-scope Not budgeted and Spike findings.
-  Repo-wide effects never appear here. Filtering is presentation only: copy all three
-  answers in full, including unchanged budgets and effects.
+  with its task and where the store reports it, a version-3 changed budget's `previous`
+  inside it. Copy them, and invent none. A plan with no added or changed task budget (no
+  `file_change` exactly `add` or `change`) renders no Budgets section, even when it has
+  unchanged budgets, effects, omissions, spike findings or a migration reason. Otherwise
+  the section shows, in order, each part only when it has entries: Sizing; At 10×; the
+  added budgets; the changed budgets whose `name`, `unit`, `direction` or `threshold`
+  differs from `previous`, plus every changed budget with no `previous`, each showing
+  previous → new for a moved name or target and saying when its previous value is not
+  recorded; one collapsed block counting the version-3 changed budgets that differ in
+  another field, one line each naming, without values, which of measure, inner measure
+  reason, workload, command and measurement source (`source`) differ, or check runtime
+  when that is its only other difference; the total check runtime the budgets add,
+  followed by `check_runtime_summary`; the relevant unchanged (`file_change: none`)
+  budgets, collapsed as existing coverage of the work; then in-scope Not budgeted and
+  Spike findings. Every table has two columns, budget and target. The total sums each
+  added version-3 budget's `check_runtime_seconds` and each changed version-3 budget's
+  `check_runtime_seconds` minus its `previous` one, adds nothing for an unchanged budget,
+  names a displayed budget with no version-3 figure as not estimated (showing no figure
+  when none has one), and shows a negative total as a saving. Repo-wide effects never appear here. Filtering is presentation only:
+  copy all three answers in full, including unchanged budgets and effects.
 #}
 {% endblock %}
 {% block budgets %}
-{% set displayed = namespace(items=[]) %}
-{% for budget in budgets if budget.file_change in ["add", "change"] %}
-{% set displayed.items = displayed.items + [budget] %}
+{#- A budget's target as one cell, ≤ or ≥ before its threshold and unit. -#}
+{% macro target(one) %}{% if one.direction == "min" %}≥{% else %}≤{% endif %}{{ one.threshold }} {{ cell(one.unit) }}{% endmacro %}
+{#- Where a budget's name links: its owning task's budget heading. -#}
+{% macro href(one) %}{% if one.link is defined %}{{ one.link }}{% else %}{{ one.location }}{% if one.anchor | default("") %}#{{ one.anchor }}{% endif %}{% endif %}{% endmacro %}
+{#- Seconds as a person reads them: whole when whole, else to one decimal place. -#}
+{% macro seconds(value) %}{% if value == (value | int) %}{{ value | int }}{% else %}{{ value | round(1) }}{% endif %}{% endmacro %}
+{% set groups = namespace(added=[], rows=[], others=[], covering=[], unestimated=[], total=0, estimated=false) %}
+{% for budget in budgets %}
+{% set versioned = (budget.schema_version | default(0)) == 3 %}
+{% if budget.file_change == "add" %}
+{% set groups.added = groups.added + [budget] %}
+{% if versioned %}
+{% set groups.estimated = true %}
+{% set groups.total = groups.total + budget.check_runtime_seconds %}
+{% else %}
+{% set groups.unestimated = groups.unestimated + [budget.name] %}
+{% endif %}
+{% elif budget.file_change == "change" %}
+{% if versioned and budget.previous is defined %}
+{% set was = budget.previous %}
+{% set groups.estimated = true %}
+{% set groups.total = groups.total + budget.check_runtime_seconds - was.check_runtime_seconds %}
+{% if was.name != budget.name or was.unit != budget.unit or was.direction != budget.direction or was.threshold != budget.threshold %}
+{% set groups.rows = groups.rows + [budget] %}
+{% endif %}
+{% set fields = namespace(names=[]) %}
+{% for key, label in [["measure", "measure"], ["inner_measure_reason", "inner measure reason"], ["workload", "workload"], ["command", "command"], ["source", "measurement source"]] if was[key] != budget[key] %}
+{% set fields.names = fields.names + [label] %}
+{% endfor %}
+{% if not fields.names and was.check_runtime_seconds != budget.check_runtime_seconds %}
+{% set fields.names = ["check runtime"] %}
+{% endif %}
+{% if fields.names %}
+{% set groups.others = groups.others + [{"budget": budget, "fields": fields.names}] %}
+{% endif %}
+{% else %}
+{% set groups.rows = groups.rows + [budget] %}
+{% set groups.unestimated = groups.unestimated + [budget.name] %}
+{% endif %}
+{% elif budget.file_change == "none" %}
+{% set groups.covering = groups.covering + [budget] %}
+{% endif %}
 {% endfor %}
 {% set omissions = namespace(items=[]) %}
 {% for entry in (plan_budgets.checklist | default([])) if entry.not_applicable and (entry.in_scope | default(false)) == true %}
 {% set omissions.items = omissions.items + [entry] %}
 {% endfor %}
-{% if displayed.items %}
+{% if groups.added or (budgets | selectattr("file_change", "equalto", "change") | list) %}
 ## Budgets
 
 **Sizing.** {{ plan_budgets.sizing }}
 
 **At 10×.** {{ plan_budgets.ten_x_summary }}
 
-{% if displayed.items %}
-| Budget | Target | Basis | How it is measured | Check runtime |
-| --- | --- | --- | --- | --- |
-{% for budget in displayed.items %}
-| [{{ cell(budget.name) }}][{{ loop.index }}] | {% if budget.direction == "min" %}≥{% else %}≤{% endif %}{{ budget.threshold }} {{ cell(budget.unit) }} | {{ cell(budget.basis) }} | {{ (budget.source | default("not recorded")) }} | {% if (budget.schema_version | default(0)) == 2 %}≈{{ budget.check_runtime_seconds }} s{% else %}not recorded{% endif %} |
+{% if groups.added %}
+**Added budgets:**
+
+| Budget | Target |
+| --- | --- |
+{% for budget in groups.added %}
+| [{{ cell(budget.name) }}][{{ loop.index }}] | {{ target(budget) }} |
 {% endfor %}
 
-{% for budget in displayed.items %}
-[{{ loop.index }}]: {% if budget.link is defined %}{{ budget.link }}{% else %}{{ budget.location }}{% if budget.anchor | default("") %}#{{ budget.anchor }}{% endif %}{% endif %}{{ "\n" -}}
+{% for budget in groups.added %}
+[{{ loop.index }}]: {{ href(budget) }}{{ "\n" -}}
 {% endfor %}
+
+{% endif %}
+{% if groups.rows %}
+**Changed budgets:**
+
+| Budget | Target |
+| --- | --- |
+{% for budget in groups.rows %}
+{% set was = budget.previous if ((budget.schema_version | default(0)) == 3 and budget.previous is defined) else none %}
+| [{% if was and was.name != budget.name %}{{ cell(was.name) }} → {% endif %}{{ cell(budget.name) }}][{{ groups.added | length + loop.index }}] | {% if not was %}{{ target(budget) }}, previous not recorded{% elif was.unit != budget.unit or was.direction != budget.direction or was.threshold != budget.threshold %}{{ target(was) }} → {{ target(budget) }}{% else %}{{ target(budget) }}{% endif %} |
+{% endfor %}
+
+{% for budget in groups.rows %}
+[{{ groups.added | length + loop.index }}]: {{ href(budget) }}{{ "\n" -}}
+{% endfor %}
+
+{% endif %}
+{% if groups.others %}
+<details>
+<summary>{{ groups.others | length }} {% if groups.others | length == 1 %}budget{% else %}budgets{% endif %} changed for other reasons</summary>
+
+{% for other in groups.others %}
+- [{{ other.budget.name }}]({{ href(other.budget) }}): {{ other.fields | join(", ") }}
+{% endfor %}
+
+</details>
+
+{% endif %}
+**Check runtime added:** {% if not groups.estimated %}not estimated for {{ groups.unestimated | join("; ") }}{% else %}{% if groups.total < 0 %}saves ≈{{ seconds(0 - groups.total) }} s{% else %}≈{{ seconds(groups.total) }} s{% endif %}{% if groups.unestimated %}, not estimated for {{ groups.unestimated | join("; ") }}{% endif %}{% endif %}.{% if plan_budgets.check_runtime_summary | default("") %} {{ plan_budgets.check_runtime_summary }}{% endif %}
+
+
+{% if groups.covering %}
+<details>
+<summary>{{ groups.covering | length }} existing {% if groups.covering | length == 1 %}budget already covers{% else %}budgets already cover{% endif %} this work</summary>
+
+| Budget | Target |
+| --- | --- |
+{% for budget in groups.covering %}
+| [{{ cell(budget.name) }}]({{ href(budget) }}) | {{ target(budget) }} |
+{% endfor %}
+
+</details>
 
 {% endif %}
 {% if omissions.items %}

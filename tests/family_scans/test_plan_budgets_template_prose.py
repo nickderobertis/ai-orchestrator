@@ -151,6 +151,54 @@ def test_modern_budget_contract_guidance_is_held_to_the_authority() -> None:
         assert rule in declared["repo_wide_effects"], rule
 
 
+def _previous_keys() -> list[str]:
+    """The keys a version-3 changed budget's `previous` holds, as the schema requires them."""
+    previous = _budget_properties()["previous"]
+    assert isinstance(previous, dict), previous
+    required = previous["required"]
+    assert isinstance(required, list) and set(required) == set(previous["properties"])
+    return [str(key) for key in required]
+
+
+#: Every file restating the budget records, or the design document's reading of them.
+RESTATEMENTS = (
+    "docs/budgets.md",
+    "personas/planner.yaml",
+    "personas/design-doc.yaml",
+    "templates/planning/design.md.j2",
+)
+
+
+def test_the_version_3_contract_is_restated_wherever_the_records_are() -> None:
+    """Version 3, `previous` and its keys, and `check_runtime_summary`, held to the schemas.
+
+    The planner and `docs/budgets.md` restate every key of `previous` and the added-cost
+    meaning of `check_runtime_seconds`; the design-doc writer's two statements say both new
+    answers travel inside the records it copies. None of them, nor either template, still
+    describes the runtime as the whole command with its setup.
+    """
+    keys = _previous_keys()
+    assert "`previous`" in _descriptions(PARTIAL)["budgets"]
+    for key in keys:
+        assert f"`{key}`" in _descriptions(PARTIAL)["budgets"], key
+    assert "check_runtime_summary" in _descriptions(DESCRIPTION)
+    assert "at most 240 characters" in _descriptions(DESCRIPTION)["check_runtime_summary"]
+    stale = re.compile(r"entire command|whole command|setup/reads", re.IGNORECASE)
+    for path in (*RESTATEMENTS, "templates/plan-task-budgets.md.j2"):
+        text = " ".join((REPO_ROOT / path).read_text(encoding="utf-8").split())
+        assert stale.search(text) is None, (path, stale.search(text))
+    for path in RESTATEMENTS:
+        text = " ".join((REPO_ROOT / path).read_text(encoding="utf-8").split())
+        for named in ("`previous`", "`check_runtime_summary`"):
+            assert named in text, (path, named)
+    for path in ("docs/budgets.md", "personas/planner.yaml"):
+        text = " ".join((REPO_ROOT / path).read_text(encoding="utf-8").split())
+        assert "integer literal 3" in text, path
+        assert "adds to the repository's checks" in text, path
+        assert "exists only to feed" in text, path
+        assert ", ".join(f"`{key}`" for key in keys[:-1]) in text, path
+
+
 def test_the_breakdown_field_the_guidance_names_is_the_installed_libraries_own() -> None:
     """The reporter's `detail` the budget-level rule names is a field onebudgetspec reports.
 

@@ -32,13 +32,23 @@ variables:
       will be registered; it runs no scenario of its own only to measure, save under the
       standalone-measurement exception, which is `direct`). The same list is the task's
       `orchestrator.budgets` metadata. Newly authored records also have `schema_version`
-      (integer literal 2), `source` (string, `direct` or `telemetry`) and
-      `check_runtime_seconds` (finite number >= 0, excluding booleans). Direct executes
+      (integer literal 3; `2` stays readable), `source` (string, `direct` or `telemetry`)
+      and `check_runtime_seconds` (finite number >= 0, excluding booleans). Direct executes
       the work/check it measures, including commands recording their result; telemetry
-      reads existing timing/history records without executing measured work. Runtime
-      estimates elapsed seconds of the entire command at the stated workload, including
-      setup/reads, distinct from target, unit and basis. Evidence states the estimate's
-      source. Never infer either field from basis or command. Exact legacy keys remain readable.
+      reads existing timing/history records without executing measured work.
+      `check_runtime_seconds` is the seconds checking this budget adds to the repository's
+      checks at its workload: the telemetry collection it adds to tests the work needs
+      anyway plus the budget command's own run, or, where a test exists only to feed this
+      budget, that whole test's runtime plus the command. It never counts tests that would
+      exist without the budget, and it is distinct from target, unit and basis. Evidence
+      states the estimate's source. Never infer either field from basis or command. A
+      version-3 record whose `file_change` is `change` also has `previous` (object), the
+      budget as it stood before this task, with exactly the keys `name`, `measure`,
+      `inner_measure_reason`, `unit`, `direction`, `threshold`, `workload`, `source`,
+      `command` and `check_runtime_seconds`, each typed and constrained as the record's own
+      key of that name, its `check_runtime_seconds` what checking the entry cost before the
+      change; one whose `file_change` is `add` or `none` has no `previous`. Version-2
+      records and exact legacy keys remain readable, with no `previous`.
     type: list
     items: object
     default: []
@@ -50,60 +60,100 @@ variables:
         required: [id, name, basis, repository, file, file_change, measure, inner_measure_reason, unit, direction, threshold, workload, evidence, command]
         dependentRequired:
           schema_version: [source, check_runtime_seconds]
+        # A version-3 change carries `previous`; nothing else may.
+        if: {required: [schema_version], properties: {schema_version: {const: 3}}}
+        then:
+          if: {properties: {file_change: {const: change}}}
+          then: {required: [previous]}
+          else: {properties: {previous: false}}
+        else: {properties: {previous: false}}
         properties:
-          schema_version: {const: 2}
+          schema_version: {enum: [2, 3]}
           id: {type: string, pattern: "^[a-z][a-z0-9-]*$"}
-          name: {type: string, minLength: 1, maxLength: 60, pattern: "^[^\\n]*$"}
+          name: &name {type: string, minLength: 1, maxLength: 60, pattern: "^[^\\n]*$"}
           basis: {enum: [measured, arithmetic, design, published docs, estimate]}
           repository: {type: string, minLength: 1}
           file: {type: string, pattern: "(^|/)budgets\\.yaml$"}
           file_change: {enum: [add, change, none]}
-          measure: {type: string, minLength: 1}
-          inner_measure_reason: {type: string}
-          unit: {type: string, minLength: 1}
-          direction: {enum: [max, min]}
-          threshold: {type: number}
-          workload: {type: string, minLength: 1}
+          measure: &measure {type: string, minLength: 1}
+          inner_measure_reason: &inner_measure_reason {type: string}
+          unit: &unit {type: string, minLength: 1}
+          direction: &direction {enum: [max, min]}
+          threshold: &threshold {type: number}
+          workload: &workload {type: string, minLength: 1}
           evidence: {type: string, minLength: 1}
-          command: {type: string, minLength: 1}
-          source: {enum: [direct, telemetry]}
-          check_runtime_seconds: {type: number, minimum: 0}
+          command: &command {type: string, minLength: 1}
+          source: &source {enum: [direct, telemetry]}
+          check_runtime_seconds: &check_runtime_seconds {type: number, minimum: 0}
+          previous:
+            type: object
+            additionalProperties: false
+            required: [name, measure, inner_measure_reason, unit, direction, threshold, workload, source, command, check_runtime_seconds]
+            properties:
+              name: *name
+              measure: *measure
+              inner_measure_reason: *inner_measure_reason
+              unit: *unit
+              direction: *direction
+              threshold: *threshold
+              workload: *workload
+              source: *source
+              command: *command
+              check_runtime_seconds: *check_runtime_seconds
   # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 ---
 {#-
   THE READERS. The worker this task dispatches, its judge, and a person following a design
   document's link to this section. The heading is exactly `## Budgets`, so the section's
-  anchor is `budgets`. A schema-2 budget's own heading is `Budget <id>`, plain Markdown and no
-  raw HTML, which a public copy of the task may carry: its slug is the anchor
-  GitHub's heading slug of `Budget <id>`, because this template's schema holds the id to
-  onebudgetspec's id pattern. A legacy budget's heading is its name.
+  anchor is `budgets`. A versioned (schema 2 or 3) budget's own heading is `Budget <id>`,
+  plain Markdown and no raw HTML, which a public copy of the task may carry: its slug is the
+  anchor GitHub's heading slug of `Budget <id>`, because this template's schema holds the id
+  to onebudgetspec's id pattern. A legacy budget's heading is its name. A version-3 changed
+  budget shows each `previous` value beside the new one, which is where a design document's
+  changed-budget line sends its reader for the full before and after.
 -#}
+{% macro target(one) %}{% if one.direction == "max" %}at most{% elif one.direction == "min" %}at least{% else %}{{ one.direction }}{% endif %} {{ one.threshold }} {{ one.unit }}{% endmacro %}
+{% macro command(text) %}{% if "`" in text %}{{ text }}{% else %}`{{ text }}`{% endif %}{% endmacro %}
+{% macro before(value) %}{{ "\n" }}  - **Before this task:** {{ value }}{% endmacro %}
 {% if budgets %}
 ## Budgets
 
 {% for budget in budgets %}
-{% if (budget.schema_version | default(0)) == 2 %}
+{% set version = budget.schema_version | default(0) %}
+{% set was = budget.previous if (version == 3 and budget.previous is defined) else none %}
+{% if version in [2, 3] %}
 ### Budget {{ budget.id }}
 
-- **Name:** {{ budget.name }}
+- **Name:** {{ budget.name }}{% if was %}{{ before(was.name) }}{% endif %}
+
 {% else %}
 ### {{ budget.name }}
 
 {% endif %}
 - **Id:** `{{ budget.id }}`
-- **Measure:** {{ budget.measure }}
-{% if budget.inner_measure_reason %}
-- **Inner measure, because:** {{ budget.inner_measure_reason }}
+- **Measure:** {{ budget.measure }}{% if was %}{{ before(was.measure) }}{% endif %}
+
+{% if budget.inner_measure_reason or (was and was.inner_measure_reason) %}
+- **Inner measure, because:** {{ budget.inner_measure_reason or "none" }}{% if was %}{{ before(was.inner_measure_reason or "none") }}{% endif %}
+
 {% endif %}
-- **Target:** {% if budget.direction == "max" %}at most{% elif budget.direction == "min" %}at least{% else %}{{ budget.direction }}{% endif %} {{ budget.threshold }} {{ budget.unit }}
+- **Target:** {{ target(budget) }}{% if was %}{{ before(target(was)) }}{% endif %}
+
 - **Basis:** {{ budget.basis }}
-{% if (budget.schema_version | default(0)) == 2 %}
-- **Measurement source:** {{ budget.source }}
+{% if version in [2, 3] %}
+- **Measurement source:** {{ budget.source }}{% if was %}{{ before(was.source) }}{% endif %}
+
+{% endif %}
+{% if version == 3 %}
+- **Check runtime added:** approximately {{ budget.check_runtime_seconds }} seconds{% if was %}{{ before("approximately " ~ was.check_runtime_seconds ~ " seconds") }}{% endif %}
+
+{% elif version == 2 %}
 - **Check runtime:** approximately {{ budget.check_runtime_seconds }} seconds
 {% endif %}
-- **Workload:** {{ budget.workload }}
+- **Workload:** {{ budget.workload }}{% if was %}{{ before(was.workload) }}{% endif %}
+
 - **Evidence:** {{ budget.evidence }}
-- **Command:** {% if "`" in budget.command %}{{ budget.command }}{% else %}`{{ budget.command }}`{% endif %}
+- **Command:** {{ command(budget.command) }}{% if was %}{{ before(command(was.command)) }}{% endif %}
 
 - **Registered in:** `{{ budget.file }}` of `{{ budget.repository }}`, {% if budget.file_change == "add" %}an entry this task adds{% elif budget.file_change == "change" %}an entry this task changes{% elif budget.file_change == "none" %}an entry this task leaves as it is{% else %}{{ budget.file_change }}{% endif %}
 

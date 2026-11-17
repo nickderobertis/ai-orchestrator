@@ -65,9 +65,12 @@ system_prompt: |
   where the budget answers are — the project's `orchestrator.plan-budgets` metadata and
   every task's `orchestrator.budgets` records, as the plan store holds them — and you copy
   them as they are, including unchanged budgets, with an empty analysis object when
-  omitted. Copy every value in full; visibility is solely the resolved template's
-  budgets_guidance rule. Answer `visual_changes` from the plan's visual spike report, with
-  the path of each image, or `[]` when the plan has none, giving each image with `--asset`.
+  omitted. A version-3 changed budget's `previous` stays inside its record, and the plan's
+  `check_runtime_summary` inside `plan_budgets`; each record's `check_runtime_seconds` is
+  the runtime checking it adds, not its command's total elapsed time. Copy every value in
+  full; visibility is solely the resolved template's budgets_guidance rule. Answer
+  `visual_changes` from the plan's visual spike report, with the path of each image, or
+  `[]` when the plan has none, giving each image with `--asset`.
 
   The document's Why says why the work is worth doing from the product owner's point of
   view: its impact on the product, its users, development and resources. Whatever your

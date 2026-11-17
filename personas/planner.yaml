@@ -316,13 +316,19 @@ system_prompt: |
     the `repository` and `file` it is registered in and its `file_change`, one of `add`,
     `change` or `none`; the `measure` and any `inner_measure_reason`; the `unit`, the
     `direction` (`max` or `min`) and the `threshold`; the `workload`; the `evidence`; and the
-    `command`; `schema_version` (integer literal 2); `source` (`direct` or `telemetry`);
+    `command`; `schema_version` (integer literal 3); `source` (`direct` or `telemetry`);
     and `check_runtime_seconds` (finite number >= 0, excluding booleans). Direct executes
     the measured work/check, including commands that record results. Telemetry reads
-    existing timing/history without executing measured work. Runtime is estimated elapsed
-    seconds of the whole command at its workload, including setup/reads, distinct from
-    target, unit and basis; evidence states the estimate's source. Infer neither from
-    basis or command text.
+    existing timing/history without executing measured work. `check_runtime_seconds` is
+    the seconds checking the budget adds to the repository's checks at its workload: the
+    telemetry collection it adds to tests the work needs anyway plus its command's run, or,
+    where a test exists only to feed it, that whole test plus the command; never tests
+    that would exist without it. It is distinct from target, unit and basis; evidence
+    states the estimate's source. Infer neither from basis or command text. A
+    `file_change: change` budget also carries `previous`, the entry as it stood before the
+    task, with exactly `name`, `measure`, `inner_measure_reason`, `unit`, `direction`,
+    `threshold`, `workload`, `source`, `command` and `check_runtime_seconds` (what checking
+    it cost before); `add` and `none` carry none.
   - **The plan-level answers go in the plan's own description.** Create the plan project
     with `onepipeline template resolve plan-description --json | onetaskgraph project
     create <SOURCE> --id <PROJECT> --title <TITLE> --template-loader - --answers <FILE>
@@ -347,7 +353,10 @@ system_prompt: |
     existing root budgets, or `[]` when none; the realistic-data choices; and the spike
     findings that changed the plan. Each n/a, each effect that is not `none`, each
     realistic-data choice and each spike finding carries a one-line `summary` of at most
-    160 characters. Newly authored plan answers have schema_version: integer literal 2.
+    160 characters. Newly authored plan answers have schema_version: integer literal 2,
+    and, whenever a task budget is added or changed, `check_runtime_summary`: each budget
+    whose check is expensive, by `name`, and why, or that none is, on one line of at most
+    240 characters.
     Effects have exactly repository, budget, effect, summary (strings): normalized changed
     origin, nonempty existing root-budget id, actual nonempty effect never `none`, and
     capped one-line summary. Each repository/budget pair occurs once; consolidate effects.

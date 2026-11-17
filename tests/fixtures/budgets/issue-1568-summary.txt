@@ -4,27 +4,33 @@
 
 **At 10×.** At 10 concurrent first copies, GitHub's secondary rate limiter refuses copies; accepted past 3 at once, which is budgeted.
 
-| Budget | Target | Basis | How it is measured | Check runtime |
-| --- | --- | --- | --- | --- |
-| [GitHub requests per new image][1] | ≤2 requests | measured | telemetry | ≈1 s |
-| [GitHub requests per unchanged image][2] | ≤0 requests | design | telemetry | ≈1 s |
-| [Linear requests per new image][3] | ≤3 requests | published docs | telemetry | ≈1 s |
-| [Linear requests per unchanged image][4] | ≤0 requests | design | telemetry | ≈1 s |
-| [GitHub copy time for a 24-image plan][5] | ≤60 seconds | arithmetic | telemetry | ≈1 s |
-| [GitHub copies refused, 3 at once][6] | ≤0 copies | arithmetic | telemetry | ≈1 s |
-| [Slowest of 3 concurrent GitHub copies][7] | ≤240 seconds | arithmetic | telemetry | ≈1 s |
-| [Linear copy time for a 24-image plan][8] | ≤90 seconds | arithmetic | direct | ≈20 s |
-| [Linear copies refused, 3 at once][9] | ≤0 copies | design | not recorded | not recorded |
+**Added budgets:**
+
+| Budget | Target |
+| --- | --- |
+| [GitHub requests per new image][1] | ≤2 requests |
+| [GitHub requests per unchanged image][2] | ≤0 requests |
+| [GitHub copy time for a 24-image plan][3] | ≤60 seconds |
+| [GitHub copies refused, 3 at once][4] | ≤0 copies |
+| [Slowest of 3 concurrent GitHub copies][5] | ≤240 seconds |
 
 [1]: https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-asset-requests-per-new-asset
 [2]: https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-asset-requests-per-unchanged-asset
-[3]: https://github.com/nickderobertis/onetaskgraph/issues/3305#budget-linear-asset-requests-per-new-asset
-[4]: https://github.com/nickderobertis/onetaskgraph/issues/3305#budget-linear-asset-requests-per-unchanged-asset
-[5]: https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-asset-copy-seconds
-[6]: https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-concurrent-copies-refused
-[7]: https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-concurrent-copy-seconds
-[8]: https://github.com/nickderobertis/onetaskgraph/issues/3305#budget-linear-asset-copy-seconds
-[9]: https://github.com/nickderobertis/onetaskgraph/issues/3305
+[3]: https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-asset-copy-seconds
+[4]: https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-concurrent-copies-refused
+[5]: https://github.com/nickderobertis/onetaskgraph/issues/3304#budget-github-concurrent-copy-seconds
+
+<details>
+<summary>4 budgets changed for other reasons</summary>
+
+- [Linear requests per new image](https://github.com/nickderobertis/onetaskgraph/issues/3305#budget-linear-asset-requests-per-new-asset): measure, command
+- [Linear requests per unchanged image](https://github.com/nickderobertis/onetaskgraph/issues/3305#budget-linear-asset-requests-per-unchanged-asset): measure, command
+- [Linear copy time for a 24-image plan](https://github.com/nickderobertis/onetaskgraph/issues/3305#budget-linear-asset-copy-seconds): measure, command
+- [Linear copies refused, 3 at once](https://github.com/nickderobertis/onetaskgraph/issues/3305#budget-linear-concurrent-copies-refused): measure, command
+
+</details>
+
+**Check runtime added:** ≈10 s, not estimated for GitHub requests per new image; GitHub requests per unchanged image; GitHub copy time for a 24-image plan; GitHub copies refused, 3 at once; Slowest of 3 concurrent GitHub copies.
 
 **Not budgeted:**
 
