@@ -580,6 +580,21 @@ TURN_GATE_CEILING_SECONDS = 600
 #: under `--control` whose socket address the harness refuses is asked again without
 #: it, and a marker written by the refused invocation would make the retry accept.
 JUDGE_SEND_BACK_ENV = "FAKE_BACKEND_JUDGE_SENDS_BACK_ONCE"
+#: Set to anything non-empty, a dispatch supervisor's turn — a member's `oneharness.judge.toml`
+#: side — is answered one layer lower: by the real CLI over that config with its Codex identity
+#: pinned and no harness mocked, so oneharness spawns the Codex binary `ONEHARNESS_BIN_CODEX`
+#: names with the argv the shipped config builds, and that binary gives this file's answer
+#: (`FAKE_CODEX_ANSWERS`) over `codex app-server`, which `FAKE_CODEX_SERVES_APP_SERVER` asks it
+#: to serve. It exists because `--mock-harness` never checks argv, so a flag the real
+#: `codex app-server` rejects passed here while it killed every supervisor turn on the host.
+#: A turn here with no `ONEHARNESS_BIN_CODEX` fails rather than reaching a real provider.
+SUPERVISOR_AT_PROVIDER_ENV = "FAKE_BACKEND_SUPERVISOR_AT_PROVIDER"
+#: The variable naming the Codex provider binary that supervisor's turn is answered by.
+CODEX_BINARY_ENV = "ONEHARNESS_BIN_CODEX"
+#: What has that binary serve `codex app-server` rather than answer it as an `exec` turn.
+CODEX_SERVES_APP_SERVER_ENV = "FAKE_CODEX_SERVES_APP_SERVER"
+#: What a turn answered by that binary answers, one entry per launch, the last repeating.
+CODEX_ANSWERS_ENV = "FAKE_CODEX_ANSWERS"
 #: What the stand-in worker says on every turn, and what the supervisor counts.
 WORKER_REPLY = "the stand-in worker reported without changing anything"
 
@@ -896,6 +911,16 @@ def _run_on_marker(config: str | None, prompt: str, cwd: str | None) -> None:
                 )
 
 
+def _answered_at_provider(argv: list[str]) -> bool:
+    """Whether this is a dispatch supervisor's turn `SUPERVISOR_AT_PROVIDER_ENV` sends lower."""
+    config = _last_flag(argv, CONFIG_FLAG)
+    return (
+        bool(os.environ.get(SUPERVISOR_AT_PROVIDER_ENV))
+        and config is not None
+        and Path(config).name == JUDGE_CONFIG_NAME
+    )
+
+
 def _answer(
     argv: list[str],
     text: str,
@@ -921,6 +946,13 @@ def _answer(
     environment[MOCK_STDOUT_ENV] = json.dumps({"result": text})
     harness = _pinned_identity(real, argv)
     mocked = MOCK_HARNESS
+    at_provider = _answered_at_provider(argv) and not (lost or activity or controlled)
+    if at_provider:
+        if not environment.get(CODEX_BINARY_ENV):
+            print(f"fake_backend: {CODEX_BINARY_ENV} is not set", file=sys.stderr)
+            return 2
+        environment[CODEX_ANSWERS_ENV] = json.dumps([text])
+        environment[CODEX_SERVES_APP_SERVER_ENV] = "1"
     if controlled is not None:
         harness = mocked = CONTROLLED_MOCK_HARNESS
         # Nothing ahead of the turn's own frames: the mock writes this before the turn,
@@ -982,9 +1014,12 @@ def _answer(
     # the real ones. It is the seam `tests/e2e/mock_oneharness.py` and
     # `tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py` already fake at.
     try:
+        # Pinned to the one identity either way, so a refused turn ends the turn rather than
+        # moving the chain on to an identity this file does not stand in for.
+        mocking = [] if at_provider else ["--mock-harness", mocked]
         # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
         completed = subprocess.run(
-            [real, argv[0], "--harness", harness, "--mock-harness", mocked, *argv[1:]],
+            [real, argv[0], "--harness", harness, *mocking, *argv[1:]],
             env=environment,
             stdin=subprocess.DEVNULL,
             check=False,

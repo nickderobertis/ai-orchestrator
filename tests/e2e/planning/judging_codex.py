@@ -10,8 +10,10 @@ refused when its name heads a section of the batch's `## Rules to evaluate` carr
 description, and the text `FAKE_PLANNING_JUDGE_REFUSES` maps that rule to appears in the batch's
 target files — the fixture's own words, as the real review handed them over. Every other
 rule holds. Any other turn is handed to `tests/e2e/fake_codex.py`, which answers the reviewer
-(`FAKE_CODEX_ANSWERS`). Nothing above the provider is doubled: oneharness, llmlint,
-onejudge and oneagentgraph all run for real.
+(`FAKE_CODEX_ANSWERS`), and so is every `app-server` launch, before it is read or recorded,
+because that file is where what `codex app-server` accepts is stated: it refuses any other
+argument as codex does. Nothing above the provider is doubled: oneharness, llmlint, onejudge and
+oneagentgraph all run for real.
 
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """
@@ -108,6 +110,9 @@ def main() -> int:
     if (down := os.environ.get(DOWN_ENV)) and Path(down).exists():
         print("judging_codex: the provider is down for this journey", file=sys.stderr)
         return 1
+    if argv[:1] == ["app-server"]:
+        # Refused or served by the stand-in that states what `codex app-server` accepts.
+        os.execv(sys.executable, [sys.executable, str(FAKE_CODEX), *argv])
     prompt = fake_codex.read_prompt(argv)
     batch = fake_codex.llmlint_batch(prompt)
     read = _read(batch, argv) if batch is not None else {}

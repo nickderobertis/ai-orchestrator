@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """`tests/e2e/fake_codex.py`, in front of the one refusal codex makes before it does anything.
 
-Run outside every git repository, the real codex exits 1 and says, on stderr,
+Run outside every git repository, the real codex refuses an `exec` turn — `exec resume`
+among them — exiting 1 and saying, on stderr,
 ``Not inside a trusted directory and --skip-git-repo-check was not specified.`` — unless its
 argv carries ``--dangerously-bypass-approvals-and-sandbox``, which is what `oneharness` builds
-for a `bypass` turn, or ``--skip-git-repo-check``. `oneharness` classifies that stderr as
+for a `bypass` turn, or ``--skip-git-repo-check``. `codex app-server` makes no such check: it
+starts there with neither, and refuses `--skip-git-repo-check` as an unexpected argument, which
+`fake_codex.py` decides for every launch this hands it. `oneharness` classifies that stderr as
 `untrusted-directory` and moves the chain on. This is how the first real dispatch of
 `graphs/follow-up.yaml`'s member failed: its working directory is the agent graph's scratch
 directory, no repository, and its turn ran in `default` mode. `fake_codex.py` never refuses a
@@ -39,6 +42,9 @@ TRUST_ARGUMENTS = frozenset({"--dangerously-bypass-approvals-and-sandbox", "--sk
 
 FAKE_CODEX = Path(__file__).resolve().with_name("fake_codex.py")
 
+#: The one subcommand whose turns codex refuses an untrusted directory for.
+EXEC = "exec"
+
 
 def working_directory(argv: list[str]) -> Path:
     """Where codex would run: the `-C`/`--cd` it is told, or where it was started."""
@@ -65,8 +71,13 @@ def inside_a_repository(directory: Path) -> bool:
 
 
 def refused(argv: list[str]) -> bool:
-    """Whether codex refuses this launch before it starts a turn."""
-    if {"--version", "-v"}.intersection(argv):
+    """Whether codex refuses this launch before it starts a turn.
+
+    Only an `exec` turn, `exec resume` among them, is refused: `codex app-server` starts
+    from a directory no repository holds with no trust argument at all, which is how
+    oneharness's own capability probe starts it, and it accepts no `--skip-git-repo-check`.
+    """
+    if argv[:1] != [EXEC]:
         return False
     if TRUST_ARGUMENTS.intersection(argv):
         return False

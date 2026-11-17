@@ -247,6 +247,18 @@ in `scripts/review-plan-item.sh`'s `mktemp -d` scratch directory, which Codex ot
 refuses as untrusted. The judge role cannot: a dispatch's supervisor runs `codex app-server`,
 which rejects that flag, so the planner's reviewer still falls through to Claude there. The worker roles and the shared parents carry none of these
 settings.
+
+The Codex stand-in, `tests/e2e/fake_codex.py`, mirrors both of those refusals. An `app-server`
+launch carrying an argument real `codex app-server` does not accept exits 2 with clap's
+`error: unexpected argument '<arg>' found` and starts nothing; the accepted options are stated
+once there, beside the codex release they were read from. The untrusted-directory refusal,
+in `tests/e2e/fake_codex_untrusted_directory.py`, applies to `exec` and `exec resume` turns
+alone, so `app-server` starts outside every repository as real Codex does.
+`tests/e2e/launch_monitor_observer/test_codex_supervised_dispatch_e2e.py` runs a dispatch whose
+supervisor is answered on Codex under the shipped `oneharness.judge.toml`, through the real
+`oneharness` CLI with the stand-in as its binary rather than `--mock-harness`, which checks no
+argv: a judge config carrying a flag `codex app-server` rejects fails it at the supervisor's
+first turn.
 `tests/e2e/launch_monitor_observer/test_supervisory_codex_posture_e2e.py` holds them to what the real CLI
 resolves and to the argv a dry run builds per identity, and fails on a mode other than
 `read-only`, a sandbox pinned by hand or missing from Codex's argv, a Claude Code tool

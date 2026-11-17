@@ -7,8 +7,21 @@ The real oneharness still selects it, spawns it, parses its stream, times and
 prices the turn, and writes the history record the launch contract is read back
 out of — which is what a smoke journey has to keep real to mean anything.
 
-Nine environment variables steer it, and each exists because a journey has to
+**`codex app-server` is refused as codex refuses it.** A launch carrying an argument
+`codex app-server` does not accept — `--skip-git-repo-check`, which only `exec` takes, among
+them — exits 2 with clap's ``error: unexpected argument '<arg>' found`` and starts nothing,
+whatever any variable below says; `APP_SERVER_RELEASE` names the codex release the accepted
+options were read from. It makes no directory check, as codex makes none for `app-server`.
+
+Ten environment variables steer it, and each exists because a journey has to
 tell one outcome from another deterministically:
+
+* ``FAKE_CODEX_SERVES_APP_SERVER`` — an accepted `app-server` launch is served as codex
+  serves a per-dispatch one: JSON-RPC on stdio until the client closes it, each turn answered
+  from ``FAKE_CODEX_ANSWERS`` and recorded as an `exec` turn is. It is how a journey runs a
+  controlled turn — a dispatch's supervisor — on this provider through the real `oneharness`.
+  ``FAKE_CODEX_REFUSAL_LOG`` beside it names a file each refused `app-server` launch appends
+  its argv and refusal to, since that stderr reaches no record a journey can read.
 
 * ``FAKE_CODEX_ATTEMPT_LOG`` names a file this appends one line to per launch,
   which is how a journey counts the turns a chain actually spent.
@@ -97,6 +110,7 @@ Keep this deterministic and stdlib-only — this file *is* the provider binary.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
@@ -104,7 +118,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Literal, NamedTuple, NotRequired, TypedDict
+from typing import Literal, NamedTuple, NewType, NotRequired, TypedDict
 
 
 class AgentMessage(TypedDict):
@@ -169,6 +183,466 @@ DEFAULT_ANSWER = "smoke-ok"
 #: The options codex reads a configuration override from, each taking the next word;
 #: `tests/test_command_ceiling_providers.py` holds both to the installed codex's parser.
 CONFIG_OPTIONS = ("-c", "--config")
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] By the manager's ruling (c3.0) this list is pinned to the codex release `APP_SERVER_RELEASE` names and re-taken by hand, with clap's refusal wording, on the codex bump that moves it: a suite gate on the installed binary would make this repository's tests depend on whichever codex a host happens to have, and the task makes the comparison with `codex app-server --help` a one-off quoted in its report.  # noqa: E501 - a directive is one line
+# What `codex app-server` accepts, and the one place this repository states it: every
+# option and subcommand `codex app-server --help` lists at `APP_SERVER_RELEASE`. Anything
+# else is refused before a server starts, as clap refuses it, so a role file carrying a flag
+# only `codex exec` takes fails a journey here instead of every supervisor turn on the host.
+
+#: The codex release the lists below were read from, by `codex app-server --help`, and re-read
+#: by hand, with its refusals, on the codex bump that moves this.
+APP_SERVER_RELEASE = "codex-cli 0.159.2"
+#: Its options that take a value, as the next word or after `=`, each to the value name clap
+#: prints for it.
+APP_SERVER_VALUED_OPTIONS = {
+    "--config": "key=value",
+    "--enable": "FEATURE",
+    "--disable": "FEATURE",
+    "--code-mode-host": "URL",
+    "--listen": "URL",
+    "--ws-auth": "MODE",
+    "--ws-token-file": "PATH",
+    "--ws-token-sha256": "HEX",
+    "--ws-shared-secret-file": "PATH",
+    "--ws-issuer": "ISSUER",
+    "--ws-audience": "AUDIENCE",
+    "--ws-max-clock-skew-seconds": "SECONDS",
+}
+#: Its short options, each to the long one it spells.
+APP_SERVER_SHORT_OPTIONS = {"-c": "--config", "-h": "--help"}
+#: Its options that take none.
+APP_SERVER_FLAGS = frozenset(
+    ("--strict-config", "--stdio", "--analytics-default-enabled", "--help")
+)
+#: Its subcommands, which this stand-in accepts as codex does and does not serve.
+APP_SERVER_COMMANDS = frozenset(("daemon", "proxy", "generate-ts", "generate-json-schema", "help"))
+#: The usage block clap prints under an `app-server` refusal.
+APP_SERVER_USAGE = (
+    "\nUsage: codex app-server [OPTIONS] [COMMAND]\n\nFor more information, try '--help'."
+)
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+#: Set to anything non-empty, an accepted `app-server` launch is served as Codex serves one:
+#: JSON-RPC on stdio, each turn answered from `FAKE_CODEX_ANSWERS` and recorded in
+#: `FAKE_CODEX_ATTEMPT_LOG` and `FAKE_CODEX_PROMPT_LOG` as an `exec` turn is. Unset, an
+#: accepted launch is answered as any other launch is, which is what every journey written
+#: before this existed relies on. Opt-in rather than always, because a served `app-server`
+#: lives until its caller closes stdin, as Codex's does, which an older journey never does.
+APP_SERVER_ENV = "FAKE_CODEX_SERVES_APP_SERVER"
+#: Names a file each refused `app-server` launch appends one `RefusedLaunch` line to: the
+#: refusal's stderr reaches only the caller, and a journey reads why its turn never started.
+APP_SERVER_REFUSAL_LOG_ENV = "FAKE_CODEX_REFUSAL_LOG"
+
+
+class RefusedLaunch(TypedDict):
+    """One `app-server` launch refused before it started, as the refusal log holds it."""
+
+    argv: list[str]
+    stderr: str
+
+
+#: The transport this stand-in serves: stdio, a per-dispatch server. A shared server listens
+#: on a socket, which it does not stand in for, and says so rather than never listening.
+APP_SERVER_STDIO = ("stdio://",)
+#: What this stand-in answers `--version` with; a served launch writes its release into the
+#: model cache as Codex does, which is how oneharness's catalog refresh accepts the cache.
+VERSION = "codex-cli 0.0.0 (fake_codex)"
+#: The file Codex writes the model catalog it fetched on start into, in its home.
+MODELS_CACHE = "models_cache.json"
+
+
+#: What names a JSON-RPC request, and its response: a client sends a number or a string.
+type RequestId = int | str
+#: A thread the server holds, a turn on it, and an item of that turn.
+ThreadId = NewType("ThreadId", str)
+TurnId = NewType("TurnId", str)
+ItemId = NewType("ItemId", str)
+#: The thread every served launch opens: one per process, as one dispatch's server holds.
+APP_SERVER_THREAD = ThreadId("fake-codex-thread")
+
+
+class ModelEntry(TypedDict):
+    """One model of the catalog Codex caches."""
+
+    slug: str
+
+
+class ModelsCache(TypedDict):
+    """Codex's `models_cache.json`, in the three fields oneharness's catalog refresh reads."""
+
+    fetched_at: str
+    client_version: str
+    models: list[ModelEntry]
+
+
+class InputItem(TypedDict):
+    """One item of a `turn/start`'s input: the prompt's text."""
+
+    type: str
+    text: str
+
+
+class Request(TypedDict):
+    """One JSON-RPC request a client sends, in the fields this stand-in reads."""
+
+    id: RequestId
+    method: str
+    #: `threadId`, `model` and `input` are the only members read; `input` holds `InputItem`s.
+    params: dict[str, object]
+
+
+class ThreadRef(TypedDict):
+    id: ThreadId
+
+
+class TurnRef(TypedDict):
+    id: TurnId
+    status: NotRequired[Literal["inProgress", "completed"]]
+
+
+class InitializeResult(TypedDict):
+    userAgent: str
+
+
+class OpenedThread(TypedDict):
+    """`thread/start`'s and `thread/resume`'s result."""
+
+    thread: ThreadRef
+    model: str
+
+
+class StartedTurn(TypedDict):
+    """`turn/start`'s result."""
+
+    turn: TurnRef
+
+
+class ThreadPage(TypedDict):
+    """`thread/list`'s and `thread/loaded/list`'s result: no thread to page through."""
+
+    data: list[str]
+    nextCursor: None
+
+
+class ReadThread(TypedDict):
+    """`thread/read`'s result."""
+
+    thread: ThreadRef
+
+
+class Acknowledged(TypedDict):
+    """The empty result of `turn/interrupt` and `thread/unsubscribe`."""
+
+
+Result = InitializeResult | OpenedThread | StartedTurn | ThreadPage | ReadThread | Acknowledged
+
+
+class RpcError(TypedDict):
+    code: int
+    message: str
+
+
+class Response(TypedDict):
+    """The answer to one `Request`: its result, or the error refusing it."""
+
+    id: RequestId
+    result: NotRequired[Result]
+    error: NotRequired[RpcError]
+
+
+class ServedMessage(TypedDict):
+    type: Literal["agentMessage"]
+    id: ItemId
+    text: str
+
+
+class TokenBreakdown(TypedDict):
+    totalTokens: int
+    inputTokens: int
+    cachedInputTokens: int
+    outputTokens: int
+    reasoningOutputTokens: int
+
+
+class TokenUsage(TypedDict):
+    total: TokenBreakdown
+    last: TokenBreakdown
+    modelContextWindow: None
+
+
+class TurnParams(TypedDict):
+    """`turn/started`'s and `turn/completed`'s params."""
+
+    threadId: ThreadId
+    turn: TurnRef
+
+
+class DeltaParams(TypedDict):
+    threadId: ThreadId
+    turnId: TurnId
+    itemId: ItemId
+    delta: str
+
+
+class ItemParams(TypedDict):
+    threadId: ThreadId
+    turnId: TurnId
+    item: ServedMessage
+
+
+class UsageParams(TypedDict):
+    threadId: ThreadId
+    turnId: TurnId
+    tokenUsage: TokenUsage
+
+
+class Notification(TypedDict):
+    """One notification of an answered turn, which names no request."""
+
+    method: Literal[
+        "turn/started",
+        "item/agentMessage/delta",
+        "item/completed",
+        "thread/tokenUsage/updated",
+        "turn/completed",
+    ]
+    params: TurnParams | DeltaParams | ItemParams | UsageParams
+
+
+def read_request(line: str) -> Request | None:
+    """The request one line carries, or None for a notification or a line that is none."""
+    try:
+        frame = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(frame, dict):
+        return None
+    ask, method, params = frame.get("id"), frame.get("method"), frame.get("params")
+    if not isinstance(ask, int | str) or not isinstance(method, str):
+        return None  # A notification, such as `initialized`, which nothing answers.
+    return Request(id=ask, method=method, params=params if isinstance(params, dict) else {})
+
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] clap's refusal wording, read off the same pinned release as the option list above and re-taken by hand with it on a codex bump, by the manager's ruling (c3.0) that no suite gate runs the host's installed codex; the task makes the comparison a one-off quoted in its report.  # noqa: E501 - a directive is one line
+def app_server_shown(option: str) -> str:
+    """How clap names an option in a refusal: its long spelling, and its value name if any."""
+    value = APP_SERVER_VALUED_OPTIONS.get(option)
+    return f"{option} <{value}>" if value else option
+
+
+def app_server_usage(used: list[str]) -> str:
+    """The usage block under an unexpected-argument refusal, naming the options used before it.
+
+    clap lists each option the launch had already used, in the order first used, in place of
+    the bare `[OPTIONS] [COMMAND]`.
+    """
+    if not used:
+        return APP_SERVER_USAGE
+    shown = " ".join(app_server_shown(option) for option in dict.fromkeys(used))
+    return f"\nUsage: codex app-server {shown}\n\nFor more information, try '--help'."
+
+
+def app_server_refusal(arguments: list[str]) -> str | None:
+    """What codex prints refusing ``codex app-server <arguments>``, or None when it accepts.
+
+    clap's own wording for each refusal codex makes, read off `APP_SERVER_RELEASE`: an
+    unknown option, an unknown subcommand, and an option missing its value. Parsing stops at
+    a subcommand, whose own arguments are its parser's. What codex checks of a value — a
+    `--listen` URL, a repeated flag — is not restated: no launch this repository builds
+    carries one it refuses.
+    """
+    used: list[str] = []
+    words = iter(arguments)
+    for word in words:
+        if word == "--" or word in APP_SERVER_COMMANDS:
+            return None
+        if not word.startswith("-") or word == "-":
+            return f"error: unrecognized subcommand '{word}'\n{APP_SERVER_USAGE}"
+        if word.startswith("-c") and len(word) > 2:
+            used.append("--config")  # `-ckey=value`: the short option with its value attached.
+            continue
+        name, attached, _ = word.partition("=")
+        spelled = APP_SERVER_SHORT_OPTIONS.get(name, name)
+        if spelled in APP_SERVER_VALUED_OPTIONS:
+            if not attached and next(words, None) is None:
+                return (
+                    f"error: a value is required for '{app_server_shown(spelled)}' but none was "
+                    "supplied\n\nFor more information, try '--help'."
+                )
+            used.append(spelled)
+            continue
+        if spelled in APP_SERVER_FLAGS and not attached:
+            used.append(spelled)
+            continue
+        return f"error: unexpected argument '{name}' found\n{app_server_usage(used)}"
+    return None
+
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+
+def app_server_listens_elsewhere(arguments: list[str]) -> str | None:
+    """The transport a launch asks for when it is not stdio, or None when it is stdio."""
+    for at, word in enumerate(arguments):
+        if word == "--listen" and at + 1 < len(arguments):
+            target = arguments[at + 1]
+        elif word.startswith("--listen="):
+            target = word.removeprefix("--listen=")
+        else:
+            continue
+        if target not in APP_SERVER_STDIO:
+            return target
+    return None
+
+
+def write_models_cache(arguments: list[str]) -> None:
+    """Write the catalog Codex fetches on start into its home, unless handed a catalog file.
+
+    oneharness refreshes its shared catalog by starting one short `app-server` and waiting
+    for this file, so a server that never wrote it would hold every refresh to its deadline.
+    """
+    home = os.environ.get("CODEX_HOME")
+    if not home or any("model_catalog_json=" in word for word in arguments):
+        return
+    fetched = datetime.datetime.now(datetime.UTC).isoformat(timespec="milliseconds")
+    cache = ModelsCache(
+        fetched_at=fetched.replace("+00:00", "Z"),
+        client_version=VERSION.split()[1],
+        models=[ModelEntry(slug="fake-codex-model")],
+    )
+    (Path(home) / MODELS_CACHE).write_text(json.dumps(cache), encoding="utf-8")
+
+
+def send(frame: Response | Notification) -> None:
+    """Write one JSON-RPC frame to the client, a line apiece as Codex's stdio transport does."""
+    print(json.dumps({"jsonrpc": "2.0", **frame}), flush=True)
+
+
+def turn_frames(thread: ThreadId, turn: TurnId, text: str) -> list[Notification]:
+    """The notifications one answered turn emits, in the order Codex emits them."""
+    item = ItemId(f"{turn}-message")
+    tokens = TokenBreakdown(
+        totalTokens=TURN_USAGE["input_tokens"] + TURN_USAGE["output_tokens"],
+        inputTokens=TURN_USAGE["input_tokens"],
+        cachedInputTokens=TURN_USAGE["cached_input_tokens"],
+        outputTokens=TURN_USAGE["output_tokens"],
+        reasoningOutputTokens=0,
+    )
+    usage = TokenUsage(total=tokens, last=tokens, modelContextWindow=None)
+    message = ServedMessage(type="agentMessage", id=item, text=text)
+    return [
+        Notification(method="turn/started", params=TurnParams(threadId=thread, turn={"id": turn})),
+        Notification(
+            method="item/agentMessage/delta",
+            params=DeltaParams(threadId=thread, turnId=turn, itemId=item, delta=text),
+        ),
+        Notification(
+            method="item/completed",
+            params=ItemParams(threadId=thread, turnId=turn, item=message),
+        ),
+        Notification(
+            method="thread/tokenUsage/updated",
+            params=UsageParams(threadId=thread, turnId=turn, tokenUsage=usage),
+        ),
+        Notification(
+            method="turn/completed",
+            params=TurnParams(threadId=thread, turn={"id": turn, "status": "completed"}),
+        ),
+    ]
+
+
+def turn_input(params: dict[str, object]) -> str:
+    """The text of a `turn/start`'s `InputItem`s, which is the prompt the turn was given."""
+    items = params.get("input")
+    if not isinstance(items, list):
+        return ""
+    return "\n".join(
+        str(item["text"]) for item in items if isinstance(item, dict) and "text" in item
+    )
+
+
+def respond(request: Request, thread: ThreadId) -> tuple[Response, ThreadId]:
+    """The response to one request, and the thread the server holds after it.
+
+    `turn/start` is answered by `serve_stdio`, which emits the turn's notifications after it.
+    """
+    ask, params = request["id"], request["params"]
+    match request["method"]:
+        case "initialize":
+            return Response(id=ask, result=InitializeResult(userAgent="fake_codex")), thread
+        case "thread/start" | "thread/resume" as opening:
+            if opening == "thread/resume":
+                named = params.get("threadId")
+                if not isinstance(named, str) or not named:
+                    refused = RpcError(code=-32602, message="threadId is required")
+                    return Response(id=ask, error=refused), thread
+                thread = ThreadId(named)
+            model = str(params.get("model") or "fake-codex-model")
+            return Response(id=ask, result=OpenedThread(thread={"id": thread}, model=model)), thread
+        case "turn/interrupt" | "thread/unsubscribe":
+            return Response(id=ask, result=Acknowledged()), thread
+        case "thread/list" | "thread/loaded/list":
+            return Response(id=ask, result=ThreadPage(data=[], nextCursor=None)), thread
+        case "thread/read":
+            read = ReadThread(thread={"id": ThreadId(str(params.get("threadId") or thread))})
+            return Response(id=ask, result=read), thread
+        case method:
+            unknown = RpcError(code=-32601, message=f"unknown method {method}")
+            return Response(id=ask, error=unknown), thread
+
+
+def serve_stdio(argv: list[str]) -> int:
+    """Answer JSON-RPC requests on stdio until the client closes it, as `codex app-server` does."""
+    thread = APP_SERVER_THREAD
+    turns = 0
+    for line in sys.stdin:
+        request = read_request(line)
+        if request is None:
+            continue
+        if request["method"] != "turn/start":
+            response, thread = respond(request, thread)
+            send(response)
+            continue
+        turns += 1
+        turn = TurnId(f"{thread}-turn-{turns}")
+        record_prompt(turn_input(request["params"]), argv, [])
+        text = answer(record_launch())
+        send(
+            Response(
+                id=request["id"], result=StartedTurn(turn={"id": turn, "status": "inProgress"})
+            )
+        )
+        for notification in turn_frames(thread, turn, text):
+            send(notification)
+    return 0
+
+
+def serve_app_server(arguments: list[str]) -> int | None:
+    """Refuse ``codex app-server <arguments>`` as codex does, or serve it when asked to.
+
+    None when the launch is accepted and no journey asked for a served one, for the caller
+    to answer it as any other launch.
+    """
+    refusal = app_server_refusal(arguments)
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        if log := os.environ.get(APP_SERVER_REFUSAL_LOG_ENV):
+            refused = RefusedLaunch(argv=["app-server", *arguments], stderr=refusal)
+            with Path(log).open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(refused) + "\n")
+        return 2
+    if not os.environ.get(APP_SERVER_ENV):
+        return None
+    if command := APP_SERVER_COMMANDS.intersection(arguments):
+        print(f"fake_codex: stands in for no `app-server {min(command)}`", file=sys.stderr)
+        return 1
+    elsewhere = app_server_listens_elsewhere(arguments)
+    if elsewhere is not None:
+        print(f"fake_codex: serves app-server on stdio only, not {elsewhere}", file=sys.stderr)
+        return 1
+    write_models_cache(arguments)
+    return serve_stdio(["app-server", *arguments])
 
 
 def answer(launches: int | None) -> str:
@@ -502,8 +976,12 @@ def main() -> int:
         # The oneharness-core the 0.5.14 oneagentgraph links probes the binary's version
         # before a turn. A probe is not a launch: counting it would shift every scripted
         # answer and `FAKE_CODEX_UNAVAILABLE_ATTEMPTS` onto the wrong turn.
-        print("codex-cli 0.0.0 (fake_codex)")
+        print(VERSION)
         return 0
+    if sys.argv[1:2] == ["app-server"]:
+        served = serve_app_server(sys.argv[2:])
+        if served is not None:
+            return served
     prompt = read_prompt(sys.argv[1:])
     batch = llmlint_batch(prompt)
     if batch is not None:
