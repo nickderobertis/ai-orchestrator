@@ -55,13 +55,12 @@ harnesses = [
 # setting: the `read-only` mode passes `--sandbox read-only` on a fresh turn and re-asserts
 # it on a resumed one.
 #
-# `--skip-git-repo-check` lets codex run where git places no work tree. The planner's
-# `reviewer` judge runs this config in `scripts/review-plan-item.sh`'s `mktemp -d` scratch
-# directory, which codex otherwise refuses ("Not inside a trusted directory"), oneharness
-# classifies `untrusted-directory`, and the chain falls through to Claude on every review.
-# Inside a git worktree, where every dispatch's judge runs, it changes nothing.
+# No `--skip-git-repo-check` here: a dispatch's supervisor runs `codex app-server`, which
+# rejects that flag in every release (0.159.2 through 0.169.0), so carrying it killed every
+# Codex-supervised dispatch. A plan review run in a non-repository scratch directory may
+# fall through to Claude until that path gets the flag on its own.
 [harness.codex]
-args = ["-c", "features.apps=false", "--skip-git-repo-check"]
+args = ["-c", "features.apps=false"]
 
 # The one remaining fill. The `read-only` mode hands Claude Code its own reading tool set
 # under `bypassPermissions` and still loads every MCP server the worktree or identity

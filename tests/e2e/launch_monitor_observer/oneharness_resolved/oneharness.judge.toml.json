@@ -255,8 +255,7 @@
       "args": {
         "value": [
           "-c",
-          "features.apps=false",
-          "--skip-git-repo-check"
+          "features.apps=false"
         ]
       },
       "bin": {
