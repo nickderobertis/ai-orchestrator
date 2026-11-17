@@ -241,11 +241,11 @@ worker's.
 
 Every supervisory Codex role — both judges, the monitor, the plan reviewer, the drafter and the judged lint tier — also passes `-c features.apps=false` in
 its `[harness.codex]` args, which removes the ChatGPT-app connector tools
-(`mcp__codex_apps__…`, some 260 of a judge turn's 275) and leaves the shell. The judge
-and judged-lint roles also pass `--skip-git-repo-check`, because the planner's reviewer and
-plan checklist run them in `scripts/review-plan-item.sh`'s `mktemp -d` scratch directory,
-which Codex otherwise refuses as untrusted, sending every plan review to Claude. Inside a git
-worktree it changes nothing. The worker roles and the shared parents carry none of these
+(`mcp__codex_apps__…`, some 260 of a judge turn's 275) and leaves the shell. The judged-lint
+role also passes `--skip-git-repo-check`, because the plan checklist runs it as `codex exec`
+in `scripts/review-plan-item.sh`'s `mktemp -d` scratch directory, which Codex otherwise
+refuses as untrusted. The judge role cannot: a dispatch's supervisor runs `codex app-server`,
+which rejects that flag, so the planner's reviewer still falls through to Claude there. The worker roles and the shared parents carry none of these
 settings.
 `tests/e2e/launch_monitor_observer/test_supervisory_codex_posture_e2e.py` holds them to what the real CLI
 resolves and to the argv a dry run builds per identity, and fails on a mode other than

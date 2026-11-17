@@ -13,10 +13,7 @@ real: the `just` recipes, `templates/planning/`, `scripts/review-plan-item.sh`,
 worker and its supervisor (and running the commands a worker whose task carries a marker
 runs: the real store and engine verbs, in the dispatch's own directory), and
 `tests/e2e/planning/judging_codex.py` as codex's provider binary, answering every judge a
-review reaches and recording every input it is handed. The planner's `reviewer` is answered at
-that second seam rather than the first (`FAKE_BACKEND_PANEL_JUDGE_AT_PROVIDER`): its turn runs
-the real chain down to the Codex binary, which refuses a directory git places in no work tree
-as the real provider does.
+review reaches and recording every input it is handed.
 
 Every store a journey writes is its own: the runs root, the harness history, the authoring
 root (the checkout copy's `.plans`), a private `board` local Markdown source standing in for
@@ -35,9 +32,8 @@ from typing import NamedTuple
 
 import follow_up_variables
 import short_state
-from fake_backend import PANEL_JUDGE_AT_PROVIDER_ENV, PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
+from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from harness_indirections import established_indirections
-from judging_codex import JudgeInput
 from nx_workspace import (
     answering_this_checkouts_origin,
     copy_working_tree,
@@ -139,9 +135,6 @@ def bench(tmp: Path, oneharness_bin: str, session: str, **extra: str) -> Bench:
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([ACCEPTS])
-    # The planner's `reviewer` runs the real chain down to the Codex binary above, so a
-    # review directory that binary refuses is refused here as the real provider refuses it.
-    environment[PANEL_JUDGE_AT_PROVIDER_ENV] = "1"
     environment["FAKE_PLANNING_JUDGE_LOG"] = str(tmp / "judge.jsonl")
     environment[PROMPT_LOG_ENV] = str(tmp / "turns.jsonl")
     environment[RUN_ON_MARKER_ENV] = str(tmp / "markers.json")
@@ -233,13 +226,11 @@ def mark(bench: Bench, marker: str, *commands: str) -> None:
     bench.markers.write_text(json.dumps(held), encoding="utf-8")
 
 
-def judge_inputs(bench: Bench) -> list[JudgeInput]:
+def judge_inputs(bench: Bench) -> list[dict[str, object]]:
     """Every input the doubled judge provider was handed, in order."""
     if not bench.judge_log.is_file():
         return []
-    lines = bench.judge_log.read_text(encoding="utf-8").splitlines()
-    inputs: list[JudgeInput] = [json.loads(line) for line in lines]
-    return inputs
+    return [json.loads(line) for line in bench.judge_log.read_text(encoding="utf-8").splitlines()]
 
 
 #: What onejudge hands a judge as the worker's turn in a judge-only run, and in no other.
@@ -252,42 +243,6 @@ def judge_only_turns(bench: Bench) -> list[dict[str, object]]:
         return []
     turns = [json.loads(line) for line in bench.turn_log.read_text(encoding="utf-8").splitlines()]
     return [turn for turn in turns if JUDGE_ONLY_TURN in str(turn.get("prompt"))]
-
-
-def reviewer_codex_turns(inputs: list[JudgeInput]) -> list[JudgeInput]:
-    """Each launch of a judge-only reviewer turn the Codex double was handed, refused or not:
-    an `exec` carrying the reviewer's prompt, never an llmlint batch."""
-    return [
-        entry
-        for entry in inputs
-        if not entry["llmlint"]
-        and entry["argv"][:1] == ["exec"]
-        and JUDGE_ONLY_TURN in str(entry["prompt"])
-    ]
-
-
-def assert_reviewed_on_codex(
-    inputs: list[JudgeInput], review: subprocess.CompletedProcess[str]
-) -> None:
-    """The review's `reviewer` ran on Codex in its non-repository scratch directory.
-
-    Every reviewer launch the Codex double saw ran in a `review-plan-item.*` directory git
-    placed in no work tree, and none was refused as untrusted — a refusal is what sends the
-    chain to Claude, whose binary the paid-provider guard refuses in turn — and the review's
-    own output names no `untrusted-directory` fallback.
-    """
-    turns = reviewer_codex_turns(inputs)
-    assert turns, "no reviewer turn reached the Codex provider binary"
-    where = [turn["cwd"] for turn in turns]
-    assert all(Path(one).name.startswith("review-plan-item.") for one in where), where
-    assert not [turn for turn in turns if turn["repository"]], where
-    refused = [turn["cwd"] for turn in turns if turn["refused"]]
-    assert not refused, (
-        "the Codex double refused the reviewer as an untrusted directory, as the real "
-        f"provider would, in {refused}: oneharness.judge.toml's [harness.codex] args must "
-        "carry --skip-git-repo-check"
-    )
-    assert "untrusted-directory" not in review.stdout + review.stderr, review.stderr
 
 
 def status(bench: Bench, run_id: str) -> dict[str, object]:

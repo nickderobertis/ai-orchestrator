@@ -24,13 +24,10 @@ from typing import NamedTuple
 
 import pytest
 from drafting import DESIGN_MARKER, brief, drafting
-from judging_codex import JudgeInput
 from planning_bench import (
     BOARD,
     Bench,
-    assert_reviewed_on_codex,
     bench,
-    judge_inputs,
     judge_only_turns,
     just,
     run,
@@ -76,7 +73,6 @@ class Sequence(NamedTuple):
     refused_after_edit: subprocess.CompletedProcess[str]
     reviewed: subprocess.CompletedProcess[str]
     judged: list[dict[str, object]]
-    reviewer_codex: list[JudgeInput]
     edited_task: str
     launched: subprocess.CompletedProcess[str]
 
@@ -132,9 +128,6 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     drafting(bench_, native)
 
     planned = just(bench_, "plan", brief(bench_, native), BOARD)
-    # The planning flow's own review step is project mode too, and the first a refused
-    # reviewer breaks: named here rather than as the missing design document it leads to.
-    assert_reviewed_on_codex(judge_inputs(bench_), planned)
     planning_run = _only_run(bench_, "-planning")
     planning = status(bench_, planning_run)
     items = _items(bench_, planning_run)
@@ -178,10 +171,8 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     assert rendered.returncode == 0, rendered.stdout + rendered.stderr
     refused = just(bench_, "orchestrate", f"{BOARD}:{native}", "--dag-graph", "off")
     judged_before = len(judge_only_turns(bench_))
-    codex_before = len(judge_inputs(bench_))
     reviewed = just(bench_, "review-plan", f"{BOARD}:{native}")
     judged = judge_only_turns(bench_)[judged_before:]
-    reviewer_codex = judge_inputs(bench_)[codex_before:]
     launched = just(bench_, "orchestrate", f"{BOARD}:{native}", "--dag-graph", "off")
     yield Sequence(
         bench_,
@@ -199,7 +190,6 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         refused,
         reviewed,
         judged,
-        reviewer_codex,
         edited_task,
         launched,
     )
@@ -295,14 +285,6 @@ def test_review_plan_judges_only_the_edited_task(sequence: Sequence) -> None:
     assert sequence.reviewed.returncode == 0, sequence.reviewed.stdout + sequence.reviewed.stderr
     assert len(sequence.judged) == 1, [str(turn.get("prompt"))[-400:] for turn in sequence.judged]
     assert NEW_CRITERION in str(sequence.judged[0]["prompt"])
-
-
-def test_review_plan_runs_its_reviewer_on_codex_in_its_non_repository_scratch(
-    sequence: Sequence,
-) -> None:
-    """Project mode: the reviewer's Codex turn runs where the review laid the plan out,
-    which is no repository, and the Codex double answers it rather than refusing it."""
-    assert_reviewed_on_codex(sequence.reviewer_codex, sequence.reviewed)
 
 
 def test_the_re_reviewed_plan_launches(sequence: Sequence) -> None:

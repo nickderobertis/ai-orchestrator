@@ -11,7 +11,6 @@
     "support-conftest",
     "support-fake-backend",
     "support-fake-codex",
-    "support-fake-codex-untrusted-directory",
     "support-follow-up-variables",
     "support-harness-indirections",
     "support-no-paid-provider",
