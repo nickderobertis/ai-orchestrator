@@ -611,7 +611,8 @@ The export may carry files these patterns match although their contents cannot b
 {% block planned_tasks_guidance %}
 {#
   PLANNED TASKS. A table with the columns Task, Unit, What it delivers, Depends on, Where it
-  lives, collapsed in one expandable block under the graph image when there is one: one row
+  lives, collapsed in one expandable block under the graph image when there is one, and
+  shown without one for a plan of one task, whose lone row a block would only hide: one row
   per task, every cell one line, and "What it delivers" a short phrase. The
   Unit column names the unit the task changes. Where it lives is the location the plan store
   reports for the task, never one composed by hand.
@@ -633,10 +634,13 @@ The export may carry files these patterns match although their contents cannot b
 ![Dependency graph of the plan's tasks](./{{ dag_image }})
 
 {% endif %}
-{% if graph.nodes is defined %}
+{% set task_count = (graph.nodes | rejectattr("external") | list | length) if graph.nodes is defined else (planned_tasks | length) %}
+{% if task_count > 1 %}
 <details>
-<summary>All {{ graph.nodes | rejectattr("external") | list | length }} planned tasks</summary>
+<summary>All {{ task_count }} planned tasks</summary>
 
+{% endif %}
+{% if graph.nodes is defined %}
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 {% for node in graph.nodes if not node.external %}
@@ -650,9 +654,6 @@ The export may carry files these patterns match although their contents cannot b
 {% endfor %}
 
 {% else %}
-<details>
-<summary>All {{ planned_tasks | length }} planned tasks</summary>
-
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 {% for row in planned_tasks %}
@@ -660,5 +661,7 @@ The export may carry files these patterns match although their contents cannot b
 {% endfor %}
 
 {% endif %}
+{% if task_count > 1 %}
 </details>
+{% endif %}
 {% endblock %}
