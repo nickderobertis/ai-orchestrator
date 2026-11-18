@@ -381,7 +381,17 @@ under it (`onetaskgraph project attestation check --tasks`) is judged by that ju
 under the planner persona's plan-review bar (`personas/planner.yaml`), never its own worker
 persona's completion bar, and on a pass attested with `onetaskgraph task attest --kind
 plan-review`; then the project's description is judged by the same panel with no persona
-named, with every task beside it, and attested with `onetaskgraph project attest`. The judge panel is
+named, with every task beside it, and attested with `onetaskgraph project attest`. A task its
+run settled `done` — its `onepipeline.settlement` status where the run wrote it, its board copy
+when the plan has one — is delivered work: it is never judged, whatever its text and whatever
+the store answers for its record, and the launch gate never refuses it; the description's judge
+reads it under `delivered/` rather than `tasks/`, as context the description is never refused
+for. A task its run amended carries the amendment verbatim after its body, in a section
+presenting it as the run's applied record — criteria the run added by a live edit, part of the
+task's bar, and not a ruling the plan records, so no ruling reference is expected of it — and
+every judge is told that a task's own text is not expected to restate its amendment, which
+binds where the two differ, and that a task is judged alone, the plan's other files context, so
+a sibling's defect is refused in the sibling's own judgment. The judge panel is
 `graphs/planner.yaml`'s: the planner's `reviewer` and the `plan-checklist` llmlint judge
 under `config/plan-checklist.llmlint.yml`, whose rules read each record's metadata — budget
 records, the unit — as well as its body. Each judged record's front matter carries its title,
@@ -476,8 +486,8 @@ changing the template; whether it is still `valid` is the store's answer.
 *What the launch refuses, and how it says which.* `config/onepipeline.launch.yaml` registers
 [`scripts/plan-attestation-check.sh`](../scripts/plan-attestation-check.sh) under `checks`,
 reading the plan from `ORCHESTRATOR_PLAN`, which `scripts/orchestrate.sh` exports. It refuses
-the plan once for every record not `valid`: each task and the project for `plan-review`
-under the planner's current bar, and the design document for `design-approval` under the
+the plan once for every record not `valid`: each task not settled `done` and the project for
+`plan-review` under the planner's current bar, and the design document for `design-approval` under the
 template's digest — `absent` when the plan holds no design document. Each refusal names the
 record, its kind, the store's state and reason, and the repair: `just review-plan` or `just
 approve-design`. A planning or follow-up run launches under

@@ -18,12 +18,12 @@
 #       (`--bar-fingerprint`); every task whose `plan-review` attestation does not check
 #       `valid` under it (`onetaskgraph project attestation check --tasks`) is judged and,
 #       on a pass, attested with `onetaskgraph task attest`, excluding the whole run-written
-#       list. A task its run settled `done` keeps a pass whose record excludes that whole
-#       list while its authored content is unmoved, whatever the bar: it is neither judged
-#       nor refused. One whose record predates the list is judged once and attested with
-#       it. Then, when no task was refused and the project's own attestation is not valid,
-#       the project's description is judged, every task beside it for the judge to read, and
-#       attested on a pass.
+#       list — except a task its run settled `done`, which is delivered work and is never
+#       judged, whatever its text and whatever the store answers for its record. Then, when
+#       no task was refused and the project's own attestation is not valid, the project's
+#       description is judged, every task beside it for the judge to read — a task settled
+#       `done` under `delivered/` rather than `tasks/`, as context the description is never
+#       refused for — and attested on a pass.
 #       Exit 0 when everything is reviewed, 1 when a judge refused something (nothing is
 #       recorded for it), 2 when something could not be read or judged.
 #
@@ -37,10 +37,13 @@
 # its `onetaskgraph.copies` entry names under the destination the project's own
 # `onetaskgraph.copies` names — when it has one, and the task itself otherwise, which is a
 # plan launched from its own authoring copy. A task's settlement says whether it is settled
-# `done`, and its amendment is rendered into its judged file as a labelled section after its
-# body, so the reviewer reads the run's binding ruling as part of the task. The judged
-# material is written under a scratch directory laid out as the checklist's globs read it —
-# `tasks/<id>.md` for a task, `projects/<id>.md` for a description — each a front matter of
+# `done`, and its amendment is rendered verbatim into its judged file as a section after its
+# body, presented as the run's applied record: criteria the run added to the task by a live
+# edit, part of its bar, and not a ruling the plan records, so no ruling reference is
+# expected of it. The task's own text is never expected to restate it. The judged material
+# is written under a scratch directory laid out as the checklist's globs read it —
+# `tasks/<id>.md` for a task, `projects/<id>.md` for a description, and `delivered/<id>.md`,
+# which no glob reads, for a task settled `done` — each a front matter of
 # the record's title, `depends_on` and its metadata less the run-written keys, over its
 # body, because the checklist's rules read the budget records and the unit there, and a
 # judge reads a plan's ordering from `depends_on`: the ids of the tasks it depends on, `[]`
@@ -62,9 +65,13 @@ judge=("$graph" run graphs/planner.yaml --judge-only --member worker)
 # a worker persona's bar is a completion check, and a task description is never finished
 # work, so judging under it refuses tasks as "no commits, no tests" regardless of content.
 plan_reviewer=../personas/planner.yaml
-# What every judge is told it reads: the three things the plan-review bar needs said of a
-# plan partway through its delivery, so a node not yet landed is never read as work missing.
-framing="This is a plan document — a project's description or one of its tasks, or a live edit to one — reviewed under the plan-review bar before or during its delivery. It is not finished work. Its acceptance criteria state what its nodes will deliver, not work this review requires to be done. Its delivery state — task statuses, settlements, landings, change requests, open issues — is not judged."
+# What every judge is told it reads: the things the plan-review bar needs said of a plan
+# partway through its delivery, so a node not yet landed is never read as work missing and a
+# task its run amended is never refused for not restating the amendment, and one task is
+# never refused for a sibling's defect, which the sibling's own judgment refuses.
+framing="This is a plan document — a project's description or one of its tasks, or a live edit to one — reviewed under the plan-review bar before or during its delivery. It is not finished work. Its acceptance criteria state what its nodes will deliver, not work this review requires to be done. Its delivery state — task statuses, settlements, landings, change requests, open issues — is not judged. A task's own text is not expected to restate its amendment, the criteria its run added by a live edit, or to be rewritten to match it; where the two differ, the amendment binds. When the material under review is one task, judge that task alone: the plan's other files are context, and a defect in one of them is not this task's."
+# What the description's judge is told besides: which tasks beside it are delivered work.
+delivered_framing="The tasks under delivered/ beside this description were settled done by their run: they are delivered work, shown as context only. Never refuse the description for the content of one of them."
 
 keys_file="$root/config/run-written-keys.txt"
 if ! listed_keys=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' -e '/^$/d' "$keys_file") || [ -z "$listed_keys" ] ||
@@ -81,7 +88,7 @@ for key in "${keys[@]}"; do
 done
 
 if ! scratch=$(mktemp -d "${TMPDIR:-/tmp}/review-plan-item.XXXXXX") ||
-    ! mkdir -p "$scratch/tasks" "$scratch/projects"; then
+    ! mkdir -p "$scratch/tasks" "$scratch/delivered" "$scratch/projects"; then
     echo "review-plan-item: could not make a scratch directory under ${TMPDIR:-/tmp} to lay the judged records out in; free space there or point TMPDIR at a writable directory, then retry" >&2
     exit 2
 fi
@@ -111,11 +118,11 @@ persona_flags() {
 }
 
 judged() {
-    local input=$1 persona=$2
-    shift 2
+    local input=$1 persona=$2 task=$3
+    shift 3
     local -a flags=()
     mapfile -t flags < <(persona_flags "$persona")
-    "${judge[@]}" ${flags[@]+"${flags[@]}"} --task "$framing" --dir "$scratch" --input "$input" "$@" --output text >&2
+    "${judge[@]}" ${flags[@]+"${flags[@]}"} --task "$task" --dir "$scratch" --input "$input" "$@" --output text >&2
 }
 
 # A jq read of the store's own answers, saved under the scratch directory, that fails means
@@ -166,7 +173,7 @@ if [ "$#" -eq 0 ]; then
     composed=$(jq -r '"---\n" + ({title: .task.title, depends_on: (.node.deps | if . == null then [] else . end)} | tojson) + "\n---\n" + .task.body' <<<"$hook") || exit 2
     printf '%s\n' "$composed" >"$file" || scratch_failed "$file"
     status=0
-    judged "$file" "$plan_reviewer" || status=$?
+    judged "$file" "$plan_reviewer" "$framing" || status=$?
     exit "$status"
 fi
 
@@ -269,14 +276,25 @@ fi
 listing=$(jq -c '.items[]' "$scratch/tasks.json") || read_failed "split the listing of $plan's tasks"
 tasks=()
 [ -z "$listing" ] || mapfile -t tasks <<<"$listing"
+# A task settled `done` is delivered work, laid out under `delivered/` and never judged on
+# its own; every other under `tasks/`.
+delivered=()
 for task in ${tasks[@]+"${tasks[@]}"}; do
     native=$(jq -r '.id' <<<"$task") || read_failed "read a listed task's id of $plan"
-    file=$(native_file "$native" "$scratch/tasks") || exit 2
+    done_state=$(jq -r --slurpfile board "$scratch/board.json" --arg destination "$destination" "$run_state"'
+        run_written($board[0]; $destination) | settled_done' <<<"$task") ||
+        read_failed "read whether $native is settled done"
+    if [ "$done_state" = true ]; then
+        delivered+=("$native")
+        file=$(native_file "$native" "$scratch/delivered") || exit 2
+    else
+        file=$(native_file "$native" "$scratch/tasks") || exit 2
+    fi
     composed=$(jq -r --slurpfile graph "$scratch/graph.json" --slurpfile board "$scratch/board.json" --arg destination "$destination" --argjson keys "$run_written" "$run_state"'
         .id as $id | (run_written($board[0]; $destination)["onepipeline.amendment"]) as $amendment
         | "---\n" + ({title: .item.title, depends_on: [$graph[0].edges[] | select(.to == $id) | .from], metadata: (.item.metadata | authored($keys))} | tojson) + "\n---\n" + (.item.content // "")
         + (if ($amendment | type) == "string" and $amendment != ""
-           then "\n\n## Amendment: the run'"'"'s binding live ruling on this task\n\nThe run applied this ruling to the task above by a live edit, and it binds the node as written:\n\n" + $amendment + "\n"
+           then "\n\n## Amendment: criteria the run added to this task by a live edit\n\nThis is the run'"'"'s applied record, not a ruling this plan records: the run added these criteria to the task above by a live edit, and they are part of its bar as written. No ruling reference is expected of them, and their having none is no ground to refuse the task. The task'"'"'s own text is not expected to restate them:\n\n" + $amendment + "\n"
            else "" end)' <<<"$task") ||
         read_failed "compose $native's judged file"
     printf '%s\n' "$composed" >"$file" || scratch_failed "$file"
@@ -292,18 +310,11 @@ if ! jq -e --slurpfile listed "$scratch/tasks.json" '([.tasks[].id] | sort) == (
     echo "review-plan-item: the plan store's attestation check for $plan does not answer for exactly the tasks its listing holds, so nothing was judged; re-run once the store answers both alike" >&2
     exit 2
 fi
-# A task settled `done` keeps a record excluding the whole run-written list while only the
-# bar moved: the store answers `content-moved` before `bar-moved`, so `bar-moved` says its
-# authored content is unmoved. A settled-done task whose record excludes less predates the
-# list, so it is judged once whatever the store answers — the launch gate refuses it until
-# then — and every other task is judged when its record is not valid.
-listing=$(jq -r --slurpfile tasks "$scratch/tasks.json" --slurpfile board "$scratch/board.json" --arg destination "$destination" --argjson keys "$run_written" "$run_state"'
-    ($tasks[0].items | map({key: .id, value: (run_written($board[0]; $destination) | settled_done)}) | from_entries) as $done
-    | .tasks[] | ($keys - (.record.excludes // []) != []) as $predates
-    | select(if $done[.id] == true
-        then $predates or (.state != "valid" and .reason != "bar-moved")
-        else .state != "valid" end)
-    | .id' <<<"$answer") || read_failed "select which of $plan's tasks to judge from the attestation check"
+# A task settled `done` is never judged, whatever the store answers for its record; every
+# other task is judged when its record is not valid.
+listing=$(jq -r --argjson delivered "$(printf '%s\n' ${delivered[@]+"${delivered[@]}"} | jq -Rsc 'split("\n") | map(select(. != ""))')" '
+    .tasks[] | select(.state != "valid" and (.id | IN($delivered[]) | not)) | .id' <<<"$answer") ||
+    read_failed "select which of $plan's tasks to judge from the attestation check"
 stale=()
 [ -z "$listing" ] || mapfile -t stale <<<"$listing"
 for id in ${stale[@]+"${stale[@]}"}; do
@@ -315,7 +326,7 @@ for id in ${stale[@]+"${stale[@]}"}; do
     fi
     file=$(native_file "$id" "$scratch/tasks") || exit 2
     status=0
-    judged "$file" "$plan_reviewer" || status=$?
+    judged "$file" "$plan_reviewer" "$framing" || status=$?
     case "$status" in
         0)
             "$store" task attest "$id" --kind plan-review --by review-plan --bar "$bar" "${excludes[@]}" --no-interactive >/dev/null || {
@@ -344,7 +355,7 @@ case "$project_status" in
             read_failed "compose $plan's judged description"
         printf '%s\n' "$composed" >"$described" || scratch_failed "$described"
         status=0
-        judged "$described" "$plan_reviewer" --artifact "$scratch/tasks" || status=$?
+        judged "$described" "$plan_reviewer" "$framing $delivered_framing" --artifact "$scratch/tasks" --artifact "$scratch/delivered" || status=$?
         case "$status" in
             0)
                 "$store" project attest "$plan" --kind plan-review --by review-plan --bar "$bar" "${excludes[@]}" --no-interactive >/dev/null || {

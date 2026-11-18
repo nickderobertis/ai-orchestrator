@@ -1,26 +1,34 @@
-"""A plan partway through delivery is reviewed as a plan, and what its run settled keeps its pass.
+"""A plan partway through delivery is reviewed as a plan, and what its run settled is not reviewed.
 
 One sequence on one bench (`planning_bench`), through the real `just review-plan`, `just
 copy-plan` and the launch gate `scripts/plan-attestation-check.sh` as the engine's `plan
 check` runs it, over plans the store renders from this host's own templates. Only the paid
 model is doubled: `fake_backend.py` answers the planner's `reviewer` and records every turn
-it is handed, refusing only a turn carrying the defect text below together with the planner
-persona's plan-review bar and the review's task framing; `judging_codex.py` answers every
+it is handed, refusing a turn carrying the defect text below together with the planner
+persona's plan-review bar and the review's task framing, and a turn carrying an amendment
+without the words presenting it as the run's applied record; `judging_codex.py` answers every
 `plan-checklist` batch and records the files each read.
 
 * **Reviewed as a plan.** Two plans whose descriptions state a delivery criterion their
   nodes have not met: one with no board copy whose own tasks and project carry what a run
   writes, and one whose clean authoring copy has a board copy holding an amendment. Each
-  passes, every judge reads the bar and the framing, none reads a run-written key, the
-  amendment reaches the reviewer as a labelled section of its task, and the run's keys on the
-  first plan are left as they were. New run-written values after the pass re-open nothing.
-* **Settled tasks keep their pass.** A board-copied plan whose settlements live on its board
-  copy, and a plan with no board copy whose settlements sit on its own tasks, each with a
-  settled task under a whole-list record, one under a record predating the list, one edited
-  since its record, and unsettled ones. After the bar moves the launch gate refuses, and the
-  review judges, every one but the first; a second bar move re-opens only the unsettled.
+  passes, every judge reads the bar and the framing — that a task's text need not restate its
+  amendment, which binds where they differ — none reads a run-written key, each amendment
+  reaches the reviewer verbatim after its task's body in a section presenting it as the run's
+  applied record rather than a ruling of the plan, and the run's keys on the first plan are
+  left as they were. New run-written values after a pass re-open nothing.
+* **Settled tasks are not reviewed.** A board-copied plan whose settlements live on its board
+  copy, and a plan with no board copy whose settlements sit on its own tasks. After the bar
+  moves, a task settled `done` is neither judged nor refused, whether its record covers the
+  whole run-written list, predates the list, its body was edited since, it was re-rendered
+  under a changed `plan-task` template, it has no record, or it carries the defect. Every
+  task not settled `done` is refused by the gate and judged — one whose authoring copy alone
+  says `done`, and one settled `done` and since reopened, among them — and the one carrying
+  the defect is refused, its project with it, until it is repaired; then the description is
+  attested with the settled defect beside it.
 * **A defect is still refused.** A task whose criterion does not prove its goal is refused,
-  its project with it, while its sibling is attested.
+  its project with it, while its sibling is attested, and a description carrying the defect
+  is refused.
 """
 
 from __future__ import annotations
@@ -36,7 +44,13 @@ from typing import Any, NamedTuple
 import pytest
 import run_written_keys
 import yaml
-from fake_backend import JUDGE_REFUSAL, JUDGE_REFUSES_ENV
+from fake_backend import (
+    JUDGE_REFUSAL,
+    JUDGE_REFUSES_ENV,
+    JUDGE_REFUSES_UNLESS_ENV,
+    JUDGE_UNLESS_REFUSAL,
+    RefusalCondition,
+)
 from planning_bench import (
     BOARD,
     Bench,
@@ -58,18 +72,32 @@ RESOLVE = "scripts/onepipeline.sh template resolve"
 
 #: The planner persona's plan-review bar, as its first line states it.
 BAR = "You are a principal engineer reviewing a plan before anyone builds from it."
-#: The review's task framing, one phrase of each of its three parts.
+#: The review's task framing, one phrase of each of its parts: what the plan document is, that
+#: a task's text need not restate its amendment, which binds where the two differ, and that a
+#: task is judged alone, its siblings context.
 FRAMING = (
     "reviewed under the plan-review bar before or during its delivery",
     "Its acceptance criteria state what its nodes will deliver",
     "Its delivery state",
+    "A task's own text is not expected to restate its amendment",
+    "or to be rewritten to match it; where the two differ, the amendment binds.",
+    "When the material under review is one task, judge that task alone",
 )
-#: A criterion that does not prove its goal: the defect the doubled reviewer refuses.
+#: What the description's judge is told besides: which tasks beside it are delivered work.
+DELIVERED_FRAMING = "The tasks under delivered/ beside this description were settled done"
+#: A criterion that does not prove its goal: the defect the doubled judges refuse.
 DEFECT = "DEFECT-CRITERION: the docs mention that a health route exists."
 #: A delivery criterion every plan's description states and none of its nodes has met.
 UNMET = "The plan is done once every node has landed on main and the route answers in production."
-#: Where the review renders an amendment into its task's judged file.
-AMENDMENT_HEADING = "## Amendment: the run's binding live ruling on this task"
+#: Where the review renders an amendment into its task's judged file, and how it opens.
+AMENDMENT_HEADING = "## Amendment: criteria the run added to this task by a live edit"
+AMENDMENT_RECORD = (
+    "This is the run's applied record, not a ruling this plan records: the run added these "
+    "criteria to the task above by a live edit, and they are part of its bar as written. No "
+    "ruling reference is expected of them, and their having none is no ground to refuse the task."
+)
+#: A line the changed `plan-task` template adds to every task it renders.
+TEMPLATE_REVISION = "TEMPLATE-REVISION: the host's task template changed."
 
 
 def _sh(bench_: Bench, script: str) -> str:
@@ -78,14 +106,14 @@ def _sh(bench_: Bench, script: str) -> str:
     return done.stdout
 
 
-def _project(bench_: Bench, native: str) -> str:
+def _project(bench_: Bench, native: str, overview: str | None = None) -> str:
     """A plan project in `authoring`, its description rendered from `plan-description`."""
     goal = json.dumps({"text": "Give the service a health route operators can poll"})
     _sh(
         bench_,
         f"{RESOLVE} plan-description --json | {STORE} project create authoring --id {native} "
         f"--title {shlex.quote('Health route ' + native)} --template-loader - "
-        f"--var {shlex.quote('overview=Add a health route. ' + UNMET)} "
+        f"--var {shlex.quote('overview=' + (overview or 'Add a health route. ' + UNMET))} "
         "--metadata onepipeline.schema_version=3 "
         f"--metadata {shlex.quote('onepipeline.goal=' + goal)} "
         "--classification private --no-interactive >/dev/null",
@@ -93,20 +121,34 @@ def _project(bench_: Bench, native: str) -> str:
     return f"authoring:{native}"
 
 
+def _criteria(node: str, criterion: str | None = None) -> str:
+    return json.dumps([criterion or f"A request-level test drives {node} end to end."])
+
+
 def _task(bench_: Bench, plan: str, node: str, criterion: str | None = None) -> str:
     """One task of ``plan``, rendered from `plan-task`; answers its qualified id."""
-    criteria = json.dumps([criterion or f"A request-level test drives {node} end to end."])
     created = _sh(
         bench_,
         f"{RESOLVE} plan-task --json | {STORE} task create authoring --project {plan} "
         f"--title {shlex.quote('feat: ' + node)} --template-loader - "
         f"--var {shlex.quote(f'what={_what(node)}')} --var 'why=Operators need it.' "
-        f"--var {shlex.quote('acceptance_criteria=' + criteria)} "
+        f"--var {shlex.quote('acceptance_criteria=' + _criteria(node, criterion))} "
         f"--metadata 'onepipeline.id={json.dumps(node)}' "
         "--metadata 'onepipeline.persona=\"engineer\"' "
         "--metadata 'orchestrator.unit=\"API\"' --no-interactive --json",
     )
     return str(json.loads(created)["items"][0]["id"])
+
+
+def _render(bench_: Bench, task: str, *variables: str) -> None:
+    """Regenerate ``task`` from the `plan-task` template the bench resolves now, its stored
+    answers laid under ``variables``."""
+    words = " ".join(f"--var {shlex.quote(one)}" for one in variables)
+    _sh(
+        bench_,
+        f"{RESOLVE} plan-task --json | {STORE} task render {task} --template-loader - "
+        f"{words} --no-interactive >/dev/null",
+    )
 
 
 def _what(node: str) -> str:
@@ -118,6 +160,11 @@ def _set(bench_: Bench, kind: str, item: str, values: Mapping[str, object]) -> N
     for key, value in values.items():
         answered = store(bench_, kind, "metadata", "set", item, key, json.dumps(value))
         assert answered.returncode == 0, answered.stdout + answered.stderr
+
+
+def _unset(bench_: Bench, task: str, key: str) -> None:
+    removed = store(bench_, "task", "update", task, "--remove-metadata", key)
+    assert removed.returncode == 0, removed.stdout + removed.stderr
 
 
 def _metadata(bench_: Bench, kind: str, item: str) -> dict[str, Any]:
@@ -200,8 +247,15 @@ class Review(NamedTuple):
     batches: list[dict[str, Any]]
 
     def judged(self, node: str) -> bool:
-        """Whether a reviewer turn of this review judged ``node``'s own content."""
-        return any(f"WHAT-{node})" in str(turn.get("prompt")) for turn in self.turns)
+        """Whether a judge of this review read ``node``'s own content as the material it
+        judges: a reviewer turn naming it, or a checklist batch reading it under `tasks/`."""
+        marker = f"WHAT-{node})"
+        return any(marker in str(turn.get("prompt")) for turn in self.turns) or any(
+            marker in str(text)
+            for batch in self.batches
+            for name, text in dict(batch["read"]).items()
+            if "tasks/" in str(name)
+        )
 
     def texts(self) -> list[str]:
         """Every text a judge of this review was handed: each reviewer turn's prompt and
@@ -240,14 +294,17 @@ def _gate(bench_: Bench, plan: str) -> list[str]:
     return [str(refusal["reason"]) for refusal in answer["refusals"]]
 
 
-def _refused_tasks(reasons: list[str], tasks: dict[str, str]) -> set[str]:
-    """The nodes of ``tasks`` (node -> id) whose plan review the gate refused."""
-    return {
+def _refused_tasks(reasons: list[str], tasks: dict[str, str]) -> list[str]:
+    """The nodes of ``tasks`` (node -> id) whose plan review the gate refused, sorted."""
+    return sorted(
         node
         for node, task in tasks.items()
-        for reason in reasons
-        if reason.startswith(f"{task}: plan-review")
-    }
+        if any(reason.startswith(f"{task}: plan-review") for reason in reasons)
+    )
+
+
+def _refused_project(reasons: list[str], plan: str) -> bool:
+    return any(reason.startswith(f"{plan}: plan-review") for reason in reasons)
 
 
 #: The run-written values the first plan's own records carry, as a run would have written them.
@@ -264,65 +321,34 @@ OWN_TASK_KEYS: dict[str, dict[str, object]] = {
 }
 OWN_PROJECT_KEYS: dict[str, object] = {"onepipeline.driver": {"session": "a-manager", "pid": 1}}
 BOARD_AMENDMENT = "- BOARD-AMENDMENT: the route reports its build commit."
+AMENDMENTS = (str(OWN_TASK_KEYS["amended"]["onepipeline.amendment"]), BOARD_AMENDMENT)
 DONE: dict[str, object] = {"status": "done", "branch": "me/x", "landing": "landed"}
 TWO_KEY = ("--exclude", "onepipeline.projected_status", "--exclude", "onepipeline.settlement")
-#: The settled-task plans' nodes: settled under a whole-list record, under a record predating
-#: the list, edited since its record, unsettled, and unsettled with a stale authoring settlement.
-SETTLED_NODES = ("kept", "predates", "edited", "open", "stale")
+#: The settled-task plans' nodes settled `done`: under a whole-list record, under a record
+#: predating the list, edited since its record, re-rendered from unchanged answers under a
+#: changed template, with no record, and carrying the defect.
+SETTLED = ("kept", "predates", "edited", "rerendered", "unrecorded", "flawed")
+#: Those not settled `done`: never settled, settled only on its authoring copy (on the board-
+#: copied plan; the other plan holds no such copy), and settled `done` once and since reopened.
+UNSETTLED = ("open", "stale", "reopened")
 
 
 class Settled(NamedTuple):
-    """One settled-task plan: its ids, the gate's refusals and the reviews around the bar moves."""
+    """One settled-task plan, the gate's refusals and the reviews after the bar moved: the
+    first with `open` carrying the defect, the second with it repaired."""
 
     plan: str
     board: str | None
     tasks: dict[str, str]
     gate_before: list[str]
-    review: Review
-    predates_record: dict[str, Any]
+    gate_before_project: bool
+    refused: Review
+    gate_refused: list[str]
+    gate_refused_project: bool
+    repaired: Review
+    project_state: str
     gate_after: list[str]
-    again: Review
-
-
-class Legacy(NamedTuple):
-    """A settled-done task whose two-key record stays valid under the current bar: the gate's
-    refusals and the review's turns around the one review that upgrades its exclusions."""
-
-    tasks: dict[str, str]
-    record_state: str
-    gate_before: list[str]
-    review: Review
-    excludes_after: list[str]
-    gate_after: list[str]
-
-
-def _legacy(bench_: Bench, native: str, *, boarded: bool) -> Legacy:
-    """A reviewed plan of two tasks, `legacy` settled done under a record of the two keys the
-    review once excluded, its authored content unmoved and the bar unchanged since."""
-    plan = _project(bench_, native)
-    tasks = {node: _task(bench_, plan, node) for node in ("legacy", "plain")}
-    reviewed = just(bench_, "review-plan", plan)
-    assert reviewed.returncode == 0, reviewed.stdout + reviewed.stderr
-    attested = store(
-        bench_,
-        *("task", "attest", tasks["legacy"], "--kind", "plan-review", "--by", "review-plan"),
-        *("--bar", _bar(bench_), *TWO_KEY),
-    )
-    assert attested.returncode == 0, attested.stdout + attested.stderr
-    gated, gated_tasks = plan, tasks
-    if boarded:
-        gated = _copied(bench_, plan)
-        gated_tasks = {node: _board_task(bench_, task) for node, task in tasks.items()}
-    # The run's settlement, written where the run writes and excluded by the two-key record.
-    _set(bench_, "task", gated_tasks["legacy"], {"onepipeline.settlement": DONE})
-    record_state = str(_records(bench_, gated)[gated_tasks["legacy"]]["state"])
-    gate_before = sorted(_refused_tasks(_gate(bench_, gated), gated_tasks))
-    review = _reviewed(bench_, plan)
-    excludes_after = list(_records(bench_, plan)[tasks["legacy"]]["record"]["excludes"])
-    if boarded:
-        _copied(bench_, plan)
-    gate_after = sorted(_refused_tasks(_gate(bench_, gated), gated_tasks))
-    return Legacy(tasks, record_state, gate_before, review, excludes_after, gate_after)
+    gate_after_project: bool
 
 
 class Sequence(NamedTuple):
@@ -343,8 +369,9 @@ class Sequence(NamedTuple):
     defect_tasks: dict[str, str]
     defect_records: dict[str, dict[str, Any]]
     defect_project: str
-    boarded_legacy: Legacy
-    own_legacy: Legacy
+    described: Review
+    described_records: dict[str, dict[str, Any]]
+    described_project: str
 
 
 class SettledPlan(NamedTuple):
@@ -358,7 +385,7 @@ class SettledPlan(NamedTuple):
 def _settled_plan(bench_: Bench, native: str, *, boarded: bool) -> SettledPlan:
     """A reviewed plan holding the settled-task cases, its board copy written as a run would."""
     plan = _project(bench_, native)
-    tasks = {node: _task(bench_, plan, node) for node in SETTLED_NODES}
+    tasks = {node: _task(bench_, plan, node) for node in (*SETTLED, *UNSETTLED) if node not in LATE}
     reviewed = just(bench_, "review-plan", plan)
     assert reviewed.returncode == 0, reviewed.stdout + reviewed.stderr
     # A record of the two keys the review once excluded, voided since by landing keys a hand
@@ -375,55 +402,83 @@ def _settled_plan(bench_: Bench, native: str, *, boarded: bool) -> SettledPlan:
         tasks["predates"],
         {"onepipeline.landing": "landed", "onepipeline.landing_commit": "abc123"},
     )
-    criteria = json.dumps(["A request-level test drives edited end to end, edited since."])
-    _sh(
+    _render(
         bench_,
-        f"{RESOLVE} plan-task --json | {STORE} task render {tasks['edited']} --template-loader - "
-        f"--var {shlex.quote('what=' + _what('edited'))} --var 'why=Operators need it.' "
-        f"--var {shlex.quote('acceptance_criteria=' + criteria)} --no-interactive >/dev/null",
+        tasks["edited"],
+        "acceptance_criteria="
+        + _criteria("edited", "A request-level test drives edited end to end, edited since."),
     )
-    settled = ("kept", "predates", "edited")
+    # The host's shared task template changes, and the task is re-rendered from the answers
+    # it already holds; the template is put back for every task rendered after.
+    template = bench_.checkout / "templates" / "plan-task.md.j2"
+    original = template.read_text(encoding="utf-8")
+    include = '{% include "dispatch-appendix.md" %}'
+    assert original.count(include) == 1, "templates/plan-task.md.j2 includes no appendix once"
+    template.write_text(original.replace(include, f"{TEMPLATE_REVISION}\n\n{include}"), "utf-8")
+    try:
+        _render(bench_, tasks["rerendered"])
+    finally:
+        template.write_text(original, encoding="utf-8")
+    # Tasks added after the review, so they hold no record at all.
+    tasks["unrecorded"] = _task(bench_, plan, "unrecorded")
+    tasks["flawed"] = _task(bench_, plan, "flawed", DEFECT)
     if not boarded:
-        for node in settled:
+        for node in (*SETTLED, "reopened"):
             _set(bench_, "task", tasks[node], {"onepipeline.settlement": DONE})
+        # Reopened for more work: its settlement is no longer `done`.
+        _set(bench_, "task", tasks["reopened"], {"onepipeline.settlement": {"status": "failed"}})
         return SettledPlan(plan, None, tasks)
     board = _copied(bench_, plan)
-    for node in settled:
+    for node in (*SETTLED, "reopened"):
         _set(bench_, "task", _board_task(bench_, tasks[node]), {"onepipeline.settlement": DONE})
+    # Reopened for more work: its board copy, where the run writes, holds no settlement now.
+    _unset(bench_, _board_task(bench_, tasks["reopened"]), "onepipeline.settlement")
     # A stale settlement on the authoring copy, which the board copy, where the run writes,
     # does not hold.
     _set(bench_, "task", tasks["stale"], {"onepipeline.settlement": DONE})
     return SettledPlan(plan, board, tasks)
 
 
+#: The settled-task nodes created after the plan's first review.
+LATE = ("unrecorded", "flawed")
+
+
 def _settled_journey(bench_: Bench, settled: SettledPlan) -> Settled:
-    """After the bar moved: gate, review, copy, gate again; the second review comes later."""
+    """After the bar moved: gate; plant the defect on `open` and review; copy, gate; repair it
+    and review; copy, gate again."""
     plan, board, tasks = settled
     gated = board or plan
     gated_tasks = (
         {node: _board_task(bench_, task) for node, task in tasks.items()} if board else tasks
     )
     gate_before = _gate(bench_, gated)
-    review = _reviewed(bench_, plan)
-    predates = _records(bench_, plan)[tasks["predates"]]["record"]
+    _render(bench_, tasks["open"], "acceptance_criteria=" + _criteria("open", DEFECT))
+    refused = _reviewed(bench_, plan)
     if board:
         # As the refresh starting a replan does, so the copy writes no stale settlement over
         # the board copy, where the run writes.
-        stripped = store(
-            bench_, "task", "update", tasks["stale"], "--remove-metadata", "onepipeline.settlement"
-        )
-        assert stripped.returncode == 0, stripped.stdout + stripped.stderr
+        _unset(bench_, tasks["stale"], "onepipeline.settlement")
+        _copied(bench_, plan)
+    gate_refused = _gate(bench_, gated)
+    _render(bench_, tasks["open"], "acceptance_criteria=" + _criteria("open"))
+    repaired = _reviewed(bench_, plan)
+    project_state = _project_state(bench_, plan)
+    if board:
         _copied(bench_, plan)
     gate_after = _gate(bench_, gated)
     return Settled(
         plan,
         board,
         tasks,
-        sorted(_refused_tasks(gate_before, gated_tasks)),
-        review,
-        predates,
-        sorted(_refused_tasks(gate_after, gated_tasks)),
-        Review(subprocess.CompletedProcess([], 0), [], []),
+        _refused_tasks(gate_before, gated_tasks),
+        _refused_project(gate_before, gated),
+        refused,
+        _refused_tasks(gate_refused, gated_tasks),
+        _refused_project(gate_refused, gated),
+        repaired,
+        project_state,
+        _refused_tasks(gate_after, gated_tasks),
+        _refused_project(gate_after, gated),
     )
 
 
@@ -432,12 +487,24 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     tmp = tmp_path_factory.mktemp("replan-review")
+    unless = [
+        RefusalCondition(when=[text], unless=[AMENDMENT_HEADING, AMENDMENT_RECORD, *FRAMING])
+        for text in AMENDMENTS
+    ]
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey copies
+    # the checkout and runs the review, copy and launch-gate scripts in the copy, which read
+    # config/, graphs/, personas/, templates/ and scripts/ whole; planning:test keys on those
+    # trees for that reason, which its project.json states beside the same rule.
     bench_ = bench(
         tmp,
         oneharness_bin,
         "e2e-replan-review",
-        **{JUDGE_REFUSES_ENV: json.dumps([DEFECT, BAR, *FRAMING])},
+        **{
+            JUDGE_REFUSES_ENV: json.dumps([DEFECT, BAR, *FRAMING]),
+            JUDGE_REFUSES_UNLESS_ENV: json.dumps(unless),
+        },
     )
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     tag = os.getpid()
 
     own = _project(bench_, f"own-{tag}")
@@ -482,9 +549,6 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     _move_bar(bench_, "plan-checklist", "checklist")
     first = _settled_journey(bench_, boarded_settled)
     second = _settled_journey(bench_, own_settled)
-    _move_bar(bench_, "checklist", "plan-checklist")
-    first = first._replace(again=_reviewed(bench_, first.plan))
-    second = second._replace(again=_reviewed(bench_, second.plan))
 
     defect_plan = _project(bench_, f"defect-{tag}")
     defect_tasks = {
@@ -492,8 +556,16 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         "sound": _task(bench_, defect_plan, "sound"),
     }
     defect = _reviewed(bench_, defect_plan)
-    boarded_legacy = _legacy(bench_, f"legacy-board-{tag}", boarded=True)
-    own_legacy = _legacy(bench_, f"legacy-own-{tag}", boarded=False)
+    described_plan = _project(bench_, f"described-{tag}", f"Add a health route. {DEFECT}")
+    described_tasks = {"sound": _task(bench_, described_plan, "sound")}
+    described = _reviewed(bench_, described_plan)
+    defect_records, defect_project = (
+        _records(bench_, defect_plan),
+        _project_state(bench_, defect_plan),
+    )
+    described_records = _records(bench_, described_plan)
+    described_project = _project_state(bench_, described_plan)
+    _move_bar(bench_, "checklist", "plan-checklist")
     yield Sequence(
         bench_,
         own,
@@ -510,10 +582,11 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         second,
         defect,
         defect_tasks,
-        _records(bench_, defect_plan),
-        _project_state(bench_, defect_plan),
-        boarded_legacy,
-        own_legacy,
+        defect_records,
+        defect_project,
+        described,
+        {described_tasks["sound"]: described_records[described_tasks["sound"]]},
+        described_project,
     )
 
 
@@ -538,29 +611,41 @@ def _project_turn(review: Review, plan: str) -> dict[str, Any]:
     return turns[0]
 
 
+def _composed(turn: dict[str, Any]) -> str:
+    return f"{turn.get('system')}\n{turn.get('prompt')}"
+
+
 def _framed(turn: dict[str, Any]) -> bool:
-    composed = f"{turn.get('system')}\n{turn.get('prompt')}"
+    composed = _composed(turn)
     return BAR in composed and all(phrase in composed for phrase in FRAMING)
 
 
 def test_a_plan_carrying_run_state_and_unmet_delivery_criteria_passes_review(
     sequence: Sequence,
 ) -> None:
+    """Both plans pass, the amended task and its project attested with them."""
     for plan in (sequence.own, sequence.boarded):
         review = sequence.reviews[plan]
         assert review.ran.returncode == 0, review.ran.stdout + review.ran.stderr
-        assert {one["state"] for one in sequence.records[plan].values()} == {"valid"}, (
-            sequence.records[plan]
-        )
+        assert JUDGE_UNLESS_REFUSAL not in review.ran.stderr, review.ran.stderr
+        # The first plan's `landed` is settled `done` on its own record, so it is never judged.
+        landed = {sequence.own_tasks["landed"]} if plan == sequence.own else set()
+        states = {task: one["state"] for task, one in sequence.records[plan].items()}
+        assert {
+            task: state for task, state in states.items() if task not in landed
+        } == dict.fromkeys(set(states) - landed, "valid"), states
+        assert all(states[task] == "absent" for task in landed), states
+        assert not review.judged("landed")
         assert sequence.project_states[plan] == "valid", sequence.project_states
         assert UNMET in str(_project_turn(review, plan).get("prompt"))
 
 
 def test_every_judge_reads_the_plan_review_bar_and_the_framing(sequence: Sequence) -> None:
-    for plan, node in ((sequence.own, "landed"), (sequence.boarded, "first")):
+    for plan, node in ((sequence.own, "broke"), (sequence.boarded, "first")):
         review = sequence.reviews[plan]
         assert _framed(_project_turn(review, plan)), "the project was not judged as a plan"
         assert _framed(_turn_of(review, node)), f"{node} was not judged as a plan"
+        assert _framed(_turn_of(review, "amended")), "the amended task was not judged as a plan"
 
 
 def test_no_judge_reads_a_run_written_key(sequence: Sequence) -> None:
@@ -570,14 +655,18 @@ def test_no_judge_reads_a_run_written_key(sequence: Sequence) -> None:
         assert review.batches, "no checklist batch read the judged files"
 
 
-def test_each_amendment_reaches_the_reviewer_in_its_labelled_section(sequence: Sequence) -> None:
-    for plan, text in (
-        (sequence.own, str(OWN_TASK_KEYS["amended"]["onepipeline.amendment"])),
-        (sequence.boarded, BOARD_AMENDMENT),
-    ):
+def test_each_amendment_reaches_the_reviewer_verbatim_as_the_runs_applied_record(
+    sequence: Sequence,
+) -> None:
+    """After the task's body, under a heading and opening presenting it as criteria the run
+    added by a live edit, part of the task's bar and not a ruling the plan records."""
+    for plan, text in zip((sequence.own, sequence.boarded), AMENDMENTS, strict=True):
         prompt = str(_turn_of(sequence.reviews[plan], "amended").get("prompt"))
-        assert AMENDMENT_HEADING in prompt, prompt[-600:]
-        assert text in prompt.split(AMENDMENT_HEADING, 1)[1], prompt[-600:]
+        assert prompt.count(AMENDMENT_HEADING) == 1, prompt[-900:]
+        body, section = prompt.split(AMENDMENT_HEADING, 1)
+        assert "WHAT-amended)" in body, prompt[-900:]
+        assert section.lstrip().startswith(AMENDMENT_RECORD), section[:600]
+        assert f"\n\n{text}\n" in section, section[:600]
 
 
 def test_the_review_leaves_the_runs_own_keys_where_it_found_them(sequence: Sequence) -> None:
@@ -593,40 +682,56 @@ def test_new_run_written_values_after_a_pass_re_open_nothing(sequence: Sequence)
     ]
 
 
-@pytest.mark.parametrize("which", ["boarded_settled", "own_settled"])
-def test_a_settled_tasks_pass_survives_a_bar_change_in_the_gate_and_the_review(
+SETTLED_PLANS = ["boarded_settled", "own_settled"]
+
+
+@pytest.mark.parametrize("which", SETTLED_PLANS)
+def test_after_the_bar_moves_the_gate_refuses_every_unsettled_task_and_no_settled_one(
     sequence: Sequence, which: str
 ) -> None:
-    """Every task but the one settled under a whole-list record is refused and judged; on the
-    board-copied plan `stale` is among them, its authoring copy's settlement being stale."""
+    """On the board-copied plan `stale` is among them, its authoring copy's settlement being
+    stale, and on both `reopened`, settled `done` once and no longer."""
     settled: Settled = getattr(sequence, which)
-    reopened = ["predates", "edited", "open", "stale"]
-    assert settled.gate_before == sorted(reopened), settled.gate_before
-    review = settled.review
-    assert review.ran.returncode == 0, review.ran.stdout + review.ran.stderr
-    assert [node for node in SETTLED_NODES if review.judged(node)] == reopened
+    assert settled.gate_before == sorted(UNSETTLED), settled.gate_before
+    assert settled.gate_before_project
 
 
-def test_a_record_predating_the_list_is_judged_without_run_keys_and_reattested_whole(
-    sequence: Sequence,
+@pytest.mark.parametrize("which", SETTLED_PLANS)
+def test_the_review_judges_every_unsettled_task_and_refuses_the_defect_with_its_project(
+    sequence: Sequence, which: str
 ) -> None:
-    for settled in (sequence.boarded_settled, sequence.own_settled):
-        prompt = str(_turn_of(settled.review, "predates").get("prompt"))
-        carried = _carries_run_written_key(prompt)
-        assert not carried, [prompt[max(0, prompt.index(key) - 400) :][:600] for key in carried]
-        assert set(settled.predates_record["excludes"]) == set(run_written_keys.RUN_WRITTEN_KEYS)
+    settled: Settled = getattr(sequence, which)
+    review = settled.refused
+    assert review.ran.returncode == 1, review.ran.stdout + review.ran.stderr
+    assert JUDGE_REFUSAL in review.ran.stderr, review.ran.stderr
+    assert [node for node in (*SETTLED, *UNSETTLED) if review.judged(node)] == list(UNSETTLED)
+    assert settled.gate_refused == ["open"], settled.gate_refused
+    assert settled.gate_refused_project
 
 
-def test_after_the_review_and_a_copy_the_gate_refuses_none(sequence: Sequence) -> None:
-    for settled in (sequence.boarded_settled, sequence.own_settled):
-        assert settled.gate_after == [], settled.gate_after
+@pytest.mark.parametrize("which", SETTLED_PLANS)
+def test_no_task_settled_done_is_judged_whatever_its_record_and_text(
+    sequence: Sequence, which: str
+) -> None:
+    settled: Settled = getattr(sequence, which)
+    for review in (settled.refused, settled.repaired):
+        assert not [node for node in SETTLED if review.judged(node)], [
+            str(turn.get("prompt"))[:300] for turn in review.turns
+        ]
 
 
-def test_a_further_bar_change_re_opens_only_the_unsettled(sequence: Sequence) -> None:
-    for settled in (sequence.boarded_settled, sequence.own_settled):
-        again = settled.again
-        assert again.ran.returncode == 0, again.ran.stdout + again.ran.stderr
-        assert [node for node in SETTLED_NODES if again.judged(node)] == ["open", "stale"]
+@pytest.mark.parametrize("which", SETTLED_PLANS)
+def test_a_description_is_attested_beside_a_settled_task_carrying_the_defect(
+    sequence: Sequence, which: str
+) -> None:
+    settled: Settled = getattr(sequence, which)
+    review = settled.repaired
+    assert review.ran.returncode == 0, review.ran.stdout + review.ran.stderr
+    assert [node for node in (*SETTLED, *UNSETTLED) if review.judged(node)] == ["open"]
+    turn = _project_turn(review, settled.plan)
+    assert _framed(turn) and DELIVERED_FRAMING in _composed(turn)
+    assert settled.project_state == "valid"
+    assert settled.gate_after == [] and not settled.gate_after_project, settled.gate_after
 
 
 def test_a_plan_quality_defect_is_still_refused(sequence: Sequence) -> None:
@@ -640,17 +745,8 @@ def test_a_plan_quality_defect_is_still_refused(sequence: Sequence) -> None:
     assert _framed(_turn_of(defect, "flawed"))
 
 
-@pytest.mark.parametrize("which", ["boarded_legacy", "own_legacy"])
-def test_a_settled_tasks_valid_record_predating_the_list_is_refused_until_reviewed(
-    sequence: Sequence, which: str
-) -> None:
-    """The store answers the two-key record valid, yet the gate refuses the task until the one
-    review judges it and attests it with the whole list; its sibling is never touched."""
-    legacy: Legacy = getattr(sequence, which)
-    assert legacy.record_state == "valid"
-    assert legacy.gate_before == ["legacy"], legacy.gate_before
-    review = legacy.review
-    assert review.ran.returncode == 0, review.ran.stdout + review.ran.stderr
-    assert review.judged("legacy") and not review.judged("plain")
-    assert set(legacy.excludes_after) == set(run_written_keys.RUN_WRITTEN_KEYS)
-    assert legacy.gate_after == [], legacy.gate_after
+def test_a_description_carrying_the_defect_is_still_refused(sequence: Sequence) -> None:
+    described = sequence.described
+    assert described.ran.returncode == 1, described.ran.stdout + described.ran.stderr
+    assert {one["state"] for one in sequence.described_records.values()} == {"valid"}
+    assert sequence.described_project != "valid"

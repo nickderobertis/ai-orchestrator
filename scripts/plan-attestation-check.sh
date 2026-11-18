@@ -9,13 +9,12 @@
 #     worker --bar-fingerprint`, the bar `scripts/review-plan-item.sh` attests under. A
 #     withdrawn task (closed as not planned) is skipped, because the launch omits it and it
 #     will never run; a task is matched to its loaded node by the node's `task_record`, whose
-#     `source` only a member project's task carries. A task its run settled `done` whose
-#     record excludes every key of `config/run-written-keys.txt` is not refused while its
-#     authored content is unmoved, whatever the bar, exactly as `scripts/review-plan-item.sh`
-#     keeps its pass; its settlement is read from its board copy — the item its
-#     `onetaskgraph.copies` entry names under the destination the project's own copies name —
-#     when it has one, and from the task itself otherwise, which is the board copy when the
-#     launch runs over it;
+#     `source` only a member project's task carries. A task its run settled `done` is never
+#     refused, whatever its text and whatever the store answers for its record, exactly as
+#     `scripts/review-plan-item.sh` never judges it; its settlement is read from its board
+#     copy — the item its `onetaskgraph.copies` entry names under the destination the
+#     project's own copies name — when it has one, and from the task itself otherwise, which
+#     is the board copy when the launch runs over it;
 #   * the plan's design document — the document of the project rendered from
 #     `onepipeline:design-doc` — for `design-approval`, under the design-doc template's digest
 #     as `onepipeline template resolve design-doc --json` states it, the bar `just
@@ -61,12 +60,6 @@ fi
 }
 
 plan=${ORCHESTRATOR_PLAN:?ORCHESTRATOR_PLAN names no plan: launch it with just orchestrate <source>:<project>}
-keys_file="$root/config/run-written-keys.txt"
-if ! listed_keys=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' -e '/^$/d' "$keys_file") || [ -z "$listed_keys" ] ||
-    ! run_written=$(jq -Rsc 'split("\n") | map(select(. != ""))' <<<"$listed_keys"); then
-    echo "plan-attestation-check: could not read the run-written keys from $keys_file; restore it from the repository, then retry" >&2
-    exit 2
-fi
 bar=$("$root/.venv/bin/oneagentgraph" run graphs/planner.yaml --judge-only --member worker --bar-fingerprint) &&
     [ -n "$bar" ] || {
     echo "plan-attestation-check: could not read the planner graph's review bar (its diagnostic is above); repair graphs/planner.yaml until 'oneagentgraph run graphs/planner.yaml --judge-only --member worker --bar-fingerprint' answers, then retry" >&2
@@ -173,26 +166,20 @@ problems=$(jq -r --slurpfile board <(printf '%s\n' "$board") --arg destination "
     echo "plan-attestation-check: where $plan's run wrote cannot be read: $problems; repair it with the plan store, then retry" >&2
     exit 2
 }
-# A task settled `done` keeps a record excluding the whole run-written list while only the
-# bar moved (the store answers `content-moved` before `bar-moved`), as the review keeps it.
-# One whose record excludes less predates the list and is refused even when the store
-# answers it valid, until the review has judged it once and attested it with the list.
+# A task settled `done` is delivered work, never refused whatever the store answers for its
+# record, as the review never judges it; every other loaded task is relayed as the store
+# answers it.
 # shellcheck disable=SC2016 # jq's own variables, expanded by jq rather than the shell.
 lines=$(jq -c --slurpfile loaded <(printf '%s\n' "$loaded") --slurpfile listed <(printf '%s\n' "$tasks") \
-    --slurpfile board <(printf '%s\n' "$board") --arg destination "$destination" --argjson keys "$run_written" '
+    --slurpfile board <(printf '%s\n' "$board") --arg destination "$destination" '
     ($listed[0].items | map({key: .id, value: (
         ((.item.metadata | if has("onetaskgraph.copies") then .["onetaskgraph.copies"] else {} end) | if type == "object" then .[$destination] else null end) as $copy
         | (if $destination != "" and $copy != null
            then ([$board[0].items[] | select(.id == $copy) | .item.metadata][0] // {})
            else .item.metadata end)
         | .["onepipeline.settlement"].status == "done")}) | from_entries) as $done
-    | .tasks[] | select(.id | IN($loaded[0][]))
-    | ($keys - (.record.excludes // []) != []) as $predates
-    | if $done[.id] == true and $predates
-      then {item: .id, kind, state: "void", reason: "its record predates the run-written list"}
-      elif $done[.id] == true and .state == "void" and .reason == "bar-moved"
-      then empty
-      else {item: .id, kind, state, reason} end' <<<"$answer") ||
+    | .tasks[] | select((.id | IN($loaded[0][])) and $done[.id] != true)
+    | {item: .id, kind, state, reason}' <<<"$answer") ||
     read_failed "read which of $plan's tasks hold a valid review from the attestation check"
 record "$lines"
 answer=$(relay "$store" project attestation check "$plan" --kind plan-review --bar "$bar")

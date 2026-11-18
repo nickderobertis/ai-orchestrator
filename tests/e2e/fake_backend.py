@@ -589,6 +589,38 @@ JUDGE_SEND_BACK_ENV = "FAKE_BACKEND_JUDGE_SENDS_BACK_ONCE"
 JUDGE_REFUSES_ENV = "FAKE_BACKEND_JUDGE_REFUSES"
 #: What the refusing judge says, so a journey can tell its refusal from any other.
 JUDGE_REFUSAL = "the stand-in reviewer read the authored defect under the plan-review bar"
+#: A JSON list of `RefusalCondition`s: the stand-in's judge side also refuses a turn whose
+#: prompt and composed system prompt carry every `when` text but not every `unless` text. A
+#: reviewer double that refuses material reaching it without the words it must arrive under —
+#: an amendment presented as anything but the run's applied record.
+JUDGE_REFUSES_UNLESS_ENV = "FAKE_BACKEND_JUDGE_REFUSES_UNLESS"
+#: What that judge says, so a journey can tell its refusal from any other.
+JUDGE_UNLESS_REFUSAL = "the stand-in reviewer read the material without the words it arrives under"
+
+
+class RefusalCondition(TypedDict):
+    """One entry of `JUDGE_REFUSES_UNLESS_ENV`: the texts that make a turn refusable, and the
+    texts whose all being present spares it."""
+
+    when: list[str]
+    unless: list[str]
+
+
+def _refusal_conditions() -> list[RefusalCondition]:
+    """`JUDGE_REFUSES_UNLESS_ENV` decoded, each entry held to `RefusalCondition`'s shape."""
+    decoded = json.loads(os.environ.get(JUDGE_REFUSES_UNLESS_ENV) or "[]")
+    conditions: list[RefusalCondition] = []
+    for entry in decoded:
+        texts = {key: entry.get(key) for key in ("when", "unless")}
+        if not all(
+            isinstance(value, list) and all(isinstance(one, str) for one in value)
+            for value in texts.values()
+        ):
+            raise SystemExit(f"{JUDGE_REFUSES_UNLESS_ENV} holds an entry not of when/unless texts")
+        conditions.append(RefusalCondition(when=texts["when"], unless=texts["unless"]))
+    return conditions
+
+
 #: Set to anything non-empty, a dispatch supervisor's turn — a member's `oneharness.judge.toml`
 #: side — is answered one layer lower: by the real CLI over that config with its Codex identity
 #: pinned and no harness mocked, so oneharness spawns the Codex binary `ONEHARNESS_BIN_CODEX`
@@ -1222,8 +1254,23 @@ def _turn(original: list[str], argv: list[str], prompt: str) -> int:
         _decline_ruling(config, prompt, argv)
         if EVALUATION_MARKER in prompt:
             return _answer(argv, json.dumps({"value": True, "reason": "the stand-in accepts"}))
+        composed = f"{system}\n{prompt}"
+        for rule in _refusal_conditions():
+            if all(text in composed for text in rule["when"]) and not all(
+                text in composed for text in rule["unless"]
+            ):
+                return _answer(
+                    argv,
+                    json.dumps(
+                        {
+                            "completion": False,
+                            "message": "Present the material under the words it arrives under.",
+                            "reason": JUDGE_UNLESS_REFUSAL,
+                        }
+                    ),
+                )
         refuses = json.loads(os.environ.get(JUDGE_REFUSES_ENV) or "[]")
-        if refuses and all(text in f"{system}\n{prompt}" for text in refuses):
+        if refuses and all(text in composed for text in refuses):
             return _answer(
                 argv,
                 json.dumps(
