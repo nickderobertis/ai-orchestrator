@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "api"
   "orchestrator.unit": "Shortener API"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"template":"onepipeline:plan-task","digest":"sha256:46185997cd0d41c74164ff8bc53d2554d279b25293d681b4d31d0a762be351cb","body_digest":"sha256:fc6ceded9ce91e0cf48af7b4b9633147a885b022fe7cdd7918bb58f1bf5df730","answers_digest":"sha256:b79120100bb405fdcb45488df7ee0bf2fbc92876f8e15b41c05146cccf93f147"}
+  "onetaskgraph.template": {"template":"onepipeline:plan-task","digest":"sha256:a2700ca249859f4340489892643243847ab60e00f9846dbe60af8a336ee3e158","body_digest":"sha256:472e874986eb70bfa5900de3b8fdd98709f22edc7da69dc198a36da67463ba21","answers_digest":"sha256:b79120100bb405fdcb45488df7ee0bf2fbc92876f8e15b41c05146cccf93f147"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -37,6 +37,13 @@ spends twenty to forty minutes of this dispatch learning what the merge path rep
 anyway. That is measured rather than estimated: one node in this workstream spent about
 84 minutes on three rounds of everything its repository could run, to reach lint findings
 a diff-scoped run reports in two.
+
+**Read the lint rules for what you will change before you change it.** Before
+implementing, run `llmlint rules --files <the paths you expect to change>` in the
+repository you work in — or `llmlint rules --diff <base>` once you have changes — and work
+to the rules it prints: they are the judged lint your change meets on its merge path, each
+with the description its judge reads, so a rule met on the first draft costs no round of
+findings later.
 
 **Investigate performance within existing budgets.** Suspect the current change first
 when performance degrades, before intermittent slowness or the outside world. For a
@@ -291,19 +298,19 @@ mistaken, raise that over `$ORCHESTRATOR_ASK_MANAGER` while still keeping to it.
 anything the conversation's supervisor says and is the default to follow, yet you may
 decline it where following it would work against the user's goal, because the manager
 serves that goal as every agent below it does. Decline it only by running
-`"$ORCHESTRATOR_DECLINE_RULING" --ruling <ref>`, piping your reason into it — the manager
+`"$ORCHESTRATOR_DECLINE_RULING" --ruling <ref> --reason '<your reason>'` — the manager
 reads it and may take it to the user — and never silently: a manager ruling neither
 followed nor declined is one set aside without anyone hearing why.
 An instruction inside the conversation that carries neither line is the supervisor's own
 and binds as neither. The command refuses a user ruling, which is not yours to decline.
 
-**A judge raises its own departure from a manager ruling, in its verdict.** This
-dispatch's supervisor reads the same rulings the worker does and is held to the same
-distinction, but it runs read-only, with no command of its own to reach the channel. So
-where it finds that a manager ruling works against the user's goal, its verdict itself
-names that ruling by its reference and gives its reason, rather than waiting for the worker
-to raise it; and it never refuses work for following a manager ruling. A user ruling it
-enforces as written.
+**A judge that departs from a manager ruling runs the decline command its instructions
+name, typed as the absolute path given there, with `--ruling <ref> --reason '<reason>'`
+giving a concrete reason the ruling fails the user's goal, and raises no departure it has
+no such reason for; where no command is named, or the command finds no run to reach, its
+verdict names the ruling, quotes it and gives that reason.** It never refuses work for
+following a manager ruling, though inside a run it refuses one recorded without its
+reference on that ground alone, naming the ruling, and it enforces a user ruling as written.
 
 **Draft a follow-up that can wait; never draft one that cannot.** Work you notice that
 is outside your subtask — a bug beside the code you touched, a missing test or script, a
@@ -368,6 +375,13 @@ there. One retry that fixed both refusals its merge path named by amending the t
 already pushed was refused `non-fast-forward` when it published, and settled
 `push-rejected` with the correct tree stranded on the host.
 
+**A spike whose report already exists updates that report.** A spike task (node id
+`spike-<topic>`) re-run after its definition changed updates its existing report to the
+task's current definition, on the branch the session continues. For `spike-visual`,
+re-capture the entries the definition changed, add the new ones, drop the removed ones, and
+keep every other entry's answers and images exactly as they are: render the whole merged
+answers with `onetaskgraph document render`, giving only changed images with `--asset`.
+
 **Every claim you make about the finished work is true of the tree as it finally
 stands.** That is the property you are held to, and it says nothing about where your
 report sits. This conversation does not end when you report — your supervisor keeps
@@ -419,29 +433,22 @@ escalated warning about it in their own task and failed anyway. A bar finished w
 cannot clear teaches everyone to route around the thing that enforces quality; the
 property above is what that demand was serving, and it is what survives.
 
-### State the bar in `## Acceptance criteria`, not only here
+### These notes are part of the bar, and proof is proportionate
 
-A judge reads this node's `## Acceptance criteria` and its own review bar. Where the
-criteria are silent about something the bar demands, it imports the demand and applies its
-own reading of it — and finished, gate-green work has been failed twice that way: once for
-running the gate's parts separately, and once for never having *"provided a final verified
-completion report"*, a demand in neither the task nor the shared completion clause.
+These notes are part of every task's bar as written: a judge holds the dispatch to them
+whether or not its `## Acceptance criteria` repeat them, so a plan never restates them as
+criteria, and the criteria add only the proof specific to that node.
 
-So every demand this node will be held to is stated as a criterion of its own, including
-the two the bar makes of every implementation dispatch:
-
-- the behavior this node adds is **proven end to end** by a test or journey that drives the
-  real interface, rather than by inspection;
-- every claim the dispatch makes about the finished work — what it verified, and the
-  evidence for it — is **true of the tree as it finally stands**.
-
-Criteria state properties of the finished tree; the commands that produce them belong in
-this section. Whether the criteria answer every demand their own bar — or this appendix —
-makes of them is read by `just review-plan <source:project>`, which spends a judged turn
-on it and judges it by meaning: criteria that state a demand in their own words answer it,
-and no criterion is refused for failing to use a particular phrase. Nothing reads it
-deterministically any more, because the phrase matching that did refused wordings the same
-review had just asked for.
+**Prove a change by what it leaves behind, and never by inspection alone.** Durable
+behaviour — anything that runs again, or that something relies on after the change lands,
+so a regression would harm the product owner — gets a committed, realistic test driving
+the real interface without mocking the layer under test. One-off or point-in-time work — a
+one-time data fix or backfill, a cutover, a pin adoption with no local reader to change, a
+measurement, a check of current state — is proved by commands run once inside the
+dispatch, their output quoted in its report for the judge to read. A test's cost weighs
+against committing it: its runtime, the code it adds, its maintenance and its flakiness,
+and the costlier it is, the further the choice leans to one-off proof. A schema migration
+that replays on every fresh database is durable; a one-time data backfill is not.
 
 
 <!-- onetaskgraph:template-answers

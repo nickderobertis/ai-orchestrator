@@ -743,3 +743,91 @@ def test_each_task_shows_its_changed_budgets_previous_values_beside_the_new_ones
     assert "Before this task" not in added and "**Check runtime added:**" in added
     assert VERSION_2_SECTION.split("\n", 2)[2].rstrip("\n") in plan.tasks["web"]
     assert "Before this task" not in _part(plan.tasks["web"], "### Budget login-latency", "## ")
+
+
+#: The repository's complete gate, registered as a root budget's own command.
+COMPLETE_GATE = "just gate"
+#: Phrases that make a derived criterion name an act for the dispatch to perform.
+ACTS = ("has run", "run over", "run it", "is run", "runs over", "inside this dispatch")
+
+
+@pytest.fixture(scope="module")
+def criteria(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
+    """Each budget's derived criterion, as the store renders the task owning it.
+
+    One task each owns a root budget added to `budgets.yaml`, a project's own budget, and a
+    root budget whose command is the repository's complete gate; every task is rendered
+    through the pinned engine's `plan-task` by the store's `task render`.
+    """
+    root = tmp_path_factory.mktemp("budget-criteria")
+    environment = _environment(root)
+    native = f"criteria-{os.getpid()}"
+    owned = {
+        "root": _budget("ci-check-time", "CI check time", "add", runtime=5)
+        | {"file": "budgets.yaml", "workload": "one push of\nthe whole tree"},
+        "project": _budget("api-latency", "API p95 latency", "add", runtime=5),
+        "gate": _budget("gate-time", "Gate time", "change", runtime=5)
+        | {"file": "budgets.yaml", "command": COMPLETE_GATE},
+    }
+    owned["gate"]["previous"] = {key: owned["gate"][key] for key in PREVIOUS_KEYS} | {
+        "threshold": 200
+    }
+    plan = {
+        "name": native,
+        "tasks": [
+            {"id": node, "persona": "engineer", "title": f"feat: {node} budget", "unit": node}
+            for node in owned
+        ],
+    }
+    write_plan_project(root, plan, native_id=native, source=SOURCE)
+    rendered: dict[str, str] = {}
+    for node, record in owned.items():
+        task = owning(SOURCE, native, node, [record], environment, TASK_ANSWERS)
+        content = str(_item(environment, "task", task)["content"])
+        accepted = content.split("## Acceptance criteria\n", 1)[1].split("\n## ", 1)[0]
+        (line,) = [
+            held for held in accepted.splitlines() if held.startswith(f"- Budget `{record['id']}`")
+        ]
+        rendered[node] = line
+    return rendered
+
+
+def test_a_root_budget_criterion_states_its_registration_and_the_reported_figure(
+    criteria: dict[str, str],
+) -> None:
+    line = criteria["root"]
+    assert not [act for act in ACTS if act in line], line
+    assert line.startswith(
+        "- Budget `ci-check-time` is registered in `budgets.yaml` as `## Budgets` states it,"
+        " with its command, and the dispatch's report states the figure that command measured"
+        " over the finished tree at the workload `## Budgets` states for it"
+        " (one push of the whole tree), the threshold and onebudgetspec's verdict."
+    ), line
+    assert "no within-target result is demanded" in line, line
+    assert "within its target" not in line, line
+
+
+def test_a_root_budget_measured_only_by_the_complete_gate_asks_only_its_registration(
+    criteria: dict[str, str],
+) -> None:
+    line = criteria["gate"]
+    assert not [act for act in ACTS if act in line], line
+    assert line.startswith("- Budget `gate-time` is registered in `budgets.yaml`"), line
+    assert (
+        "Where its registered command is the repository's complete gate, or its figure is"
+        " taken only by running that gate, only its registration with its command is"
+        " required and no figure is demanded"
+    ) in line, line
+
+
+def test_a_project_budget_criterion_is_held_to_onebudgetspecs_verdict_within_its_target(
+    criteria: dict[str, str],
+) -> None:
+    line = criteria["project"]
+    assert line.startswith(
+        "- Budget `api-latency` is registered in `services/api/budgets.yaml` as `## Budgets`"
+        " states it, and its command, run over the finished tree inside this dispatch at the"
+        " workload `## Budgets` states for it (200 operators at the busiest hour, 40 requests"
+        " a second), gets onebudgetspec's own verdict for that budget within its target, by"
+        " the same rule the gate applies and no stricter or looser."
+    ), line
