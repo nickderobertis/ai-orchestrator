@@ -1495,12 +1495,11 @@ def test_the_words_the_prose_declares_absent_are_absent(
         )
 
 
-#: The planning flow's template, whose `spikes` step launches a plan's spikes.
-PLANNING_TEMPLATE = REPO_ROOT / "templates" / "planning" / "planning.md.j2"
-#: The spikes' branch template that step hands `onepipeline start`: the plan's native id,
-#: then the node rendered by the expression this reads off the engine. The template file
-#: escapes it from its own rendering as a quoted Jinja string.
-SPIKES_TEMPLATE = re.compile(r"--branch-template \"\$\{1#\*:\}/\{\{ '(\{\{[^']*\}\})' \}\}\"")
+#: The script the planning flows' `spikes` step runs, which launches a plan's spikes.
+SPIKES_LAUNCHER = REPO_ROOT / "scripts" / "spike-records.sh"
+#: The spikes' branch template that script hands `onepipeline start`: the plan's native id,
+#: then the node rendered by the expression this reads off the engine.
+SPIKES_TEMPLATE = re.compile(r"--branch-template \"\$\{plan#\*:\}/(\{\{[^\"]*\}\})\"")
 #: The engine's shipped default branch template, whose node expression is the one it renders.
 SHIPPED_TEMPLATE = re.compile(r'"(\{%[^"]*/(\{\{ node\.id \}\}))";')
 
@@ -1513,7 +1512,7 @@ def test_the_spikes_branch_template_names_the_node_as_the_engine_renders_it() ->
     """The `spikes` step names every spike branch `<plan>/<node>`; the node is the engine's.
 
     The template is the engine's to render, so the one expression
-    `templates/planning/planning.md.j2` hands it for the node is held to the one the pinned
+    `scripts/spike-records.sh` hands it for the node is held to the one the pinned
     engine's own shipped default renders the node by: a release that renamed it would cut
     spike branches no listing finds as the plan's.
     """
@@ -1522,9 +1521,9 @@ def test_the_spikes_branch_template_names_the_node_as_the_engine_renders_it() ->
         f"onepipeline {ONEPIPELINE.ref}'s src/branchname.rs no longer ships a default branch "
         "template ending in the node's id, which the spikes' template is held to"
     )
-    named = SPIKES_TEMPLATE.search(PLANNING_TEMPLATE.read_text("utf-8"))
+    named = SPIKES_TEMPLATE.search(SPIKES_LAUNCHER.read_text("utf-8"))
     assert named is not None, (
-        f"{PLANNING_TEMPLATE.relative_to(REPO_ROOT)} no longer launches the spikes with a "
+        f"{SPIKES_LAUNCHER.relative_to(REPO_ROOT)} no longer launches the spikes with a "
         "branch template"
     )
     assert named.group(1) == shipped.group(2), (named.group(1), shipped.group(1))

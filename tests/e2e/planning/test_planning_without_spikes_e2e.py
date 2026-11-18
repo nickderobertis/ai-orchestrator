@@ -44,6 +44,7 @@ PLANNING_NODES = [
     "draft",
     "spikes",
     "finalize",
+    "spike-evidence",
     "check",
     "review",
     "design",
@@ -51,7 +52,15 @@ PLANNING_NODES = [
     "approve-design",
 ]
 #: Every member the finishing template declares.
-FINISHING_NODES = ["check", "review", "design", "copy", "approve-design"]
+FINISHING_NODES = [
+    "spikes",
+    "spike-evidence",
+    "check",
+    "review",
+    "design",
+    "copy",
+    "approve-design",
+]
 
 NEW_CRITERION = "A request-level test drives the route and reads its JSON body."
 

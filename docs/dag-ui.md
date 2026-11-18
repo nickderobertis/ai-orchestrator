@@ -96,12 +96,13 @@ apart. A run with no group sits under **Other runs**. Opening a project selects 
 newest run; there is no separate project page.
 
 **The post-launch verbs a person acts through are routes, and the view offers them.**
-A run has three tabs — **Graph**, **Overall** and **Channel** — under a header carrying
+A run has two tabs — **Graph** and **Overall** — under a header carrying
 its status and liveness, its **Run details**, and a per-run **Stop**, which is `stop`
-as the acting session behind a confirm. **Channel** carries the channel's queue, its
-reply composer, which sends the envelope byte for byte, and `attest` on each ready
-human action, beside **Next**, which claims the queue's next surface, and a form that
-raises a surface of its own. The rendered reads (`status`, `results`, `goals`,
+as the acting session behind a confirm. The read API still serves the channel — its
+queue, a reply composer's byte-for-byte envelope, `attest` on each ready human action,
+**Next** and a raised surface — but the view has offered none of them since
+onepipeline-ui 0.83.5 removed its **Channel** tab, so a channel is answered from a
+terminal with `just channel-next` and `just channel-reply`. The rendered reads (`status`, `results`, `goals`,
 `transcript`, `telemetry`, `host`) are routes whose information the view shows across
 **Run details**, **Overall**, a node's **Task** and **Remote** tabs, the conversation
 and **Host**, rather than in a tab of their own. **Host** is a page of its own: the
@@ -146,17 +147,18 @@ nothing can act on.
 **Those controls are the whole of what the view acts through.** A run is acted on by
 its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, a human
 item by its raise, answer, batch of answers, completion and dismissal, its reopen and its note, and the host by its one host-wide
-shutdown; every other route the view calls reads. Every read lives in the project
-sidebar, the run's three tabs, **Run details**, **Host** and **Action items**.
+shutdown; every other route the view calls reads. Of a run's controls the view itself
+calls only **Stop** since 0.83.5, the channel's four being the read API's alone. Every
+read lives in the project sidebar, the run's two tabs, **Run details**, **Host** and
+**Action items**.
 **Watching, adopting and shutting down one run or one session's runs are not the
 browser's**: onepipeline-ui 0.45.0 removed them, because a person at a tab cannot tell how
 they would affect another manager already watching or driving the run, and each removed
 route answers `404 removed_route`.
 What the browser never does is launch: a plan is authored and launched from a terminal, and
-everything here is *post*-launch. Which is also why **a planning run's channel is
-answerable from the browser like any other** — a planning run and its spikes run are
-ordinary runs with ordinary channels, and a reply is the same post-launch route
-whatever the run is planning.
+everything here is *post*-launch. A planning run and its spikes run are ordinary runs
+with ordinary channels, so a reply to one is the same post-launch route whatever the
+run is planning.
 
 **Who it acts as is one session, and this host names it.**
 `scripts/telemetry-server.sh` loads this checkout's `.env` through
@@ -295,10 +297,10 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.83.4**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.83.6**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
-effective group with its kind filter, the run's **Channel** tab with its byte-for-byte
-reply composer and `attest`, the per-run **Stop** with the owner-naming refusal, and the
+effective group with its kind filter, question cards answered by choice or in a
+person's own words, the per-run **Stop** with the owner-naming refusal, and the
 **Host** page with the one host-wide shutdown. It reads every turn whole from the
 oneharness history file its record points at, through the engine's transcript
 resolver, and a reference whose file this host no longer holds reads as **transcript

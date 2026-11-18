@@ -63,14 +63,24 @@ def plan_commands(native: str) -> list[str]:
 
 
 def design_commands(native: str) -> list[str]:
-    """The design writer's commands: render the design document of `authoring:<native>`."""
+    """The design writer's commands: render the design document of `authoring:<native>`.
+
+    When the plan holds a `spike-visual` report, the document restates its visual changes,
+    answer for answer, with the report's own images, as the design-doc template asks.
+    """
     plan = f"authoring:{native}"
+    report = f"authoring:{native}-spike-visual-report"
     return [
         f"{STORE} project graph {plan} --format json --group-by orchestrator.unit "
         f"--no-interactive > .design-graph.json",
         f"answers=(--var what=W --var why=Y --var architecture=A --var 'units=[]' "
         f"--var 'acceptance_criteria=[\"Operators can poll the route.\"]' "
         f'--var "graph=$(cat .design-graph.json)"); '
+        f"if {STORE} document show {report} --no-interactive >/dev/null 2>&1; then "
+        f'answers+=(--var "visual_changes=$({STORE} document answers {report} --json '
+        f'--no-interactive | jq -c .visual_changes)"); '
+        f'while IFS= read -r image; do answers+=(--asset "$image"); done < <({STORE} document '
+        f"show {report} --json --no-interactive | jq -r '.assets[].path'); fi; "
         f"if {STORE} document show authoring:{native}-design --no-interactive >/dev/null 2>&1; "
         f"then {RESOLVE} design-doc --json | {STORE} document render authoring:{native}-design "
         f'--template-loader - "${{answers[@]}}" --no-interactive; '
@@ -96,17 +106,31 @@ SPIKES = {
     "spike-load": Spike(
         "SPIKE-WORK: measure the route under load", "how the route holds under load"
     ),
+    "spike-visual": Spike(
+        "SPIKE-WORK: capture the route's status page", "what the route's status page shows"
+    ),
 }
 
 
-def _spike_task(spikes: str, spike: str, repo: str, execution: str) -> str:
+def spike_what(spike: str, definition: str = "") -> str:
+    """A spike task's `what` answer: its marker, then what else its definition asks."""
+    return f"{SPIKES[spike].marker}.{f' {definition}' if definition else ''}"
+
+
+#: A spike task's `why` and `acceptance_criteria` answers, which say nothing about reports.
+SPIKE_WHY = "The plan needs the figure."
+SPIKE_CRITERIA = '["The measurement is committed."]'
+
+
+def _spike_task(spikes: str, spike: str, repo: str, execution: str, definition: str = "") -> str:
     """A bash line creating one lifecycle spike task in ``spikes``."""
     publish = json.dumps("preserve")
+    what = shlex.quote(f"what={spike_what(spike, definition)}")
     return (
         f"{RESOLVE} plan-task --json | {STORE} task create authoring --project {spikes} "
         f"--title 'spike: {spike}' --template-loader - "
-        f"--var 'what={SPIKES[spike].marker}.' --var 'why=The plan needs the figure.' "
-        f"--var 'acceptance_criteria=[\"The measurement is committed.\"]' "
+        f"--var {what} --var 'why={SPIKE_WHY}' "
+        f"--var 'acceptance_criteria={SPIKE_CRITERIA}' "
         f"--metadata 'onepipeline.id=\"{spike}\"' "
         f"--metadata 'onepipeline.persona=\"engineer\"' "
         f"--metadata 'onepipeline.repo={json.dumps(repo)}' "
@@ -115,15 +139,28 @@ def _spike_task(spikes: str, spike: str, repo: str, execution: str) -> str:
     )
 
 
-def spikes_commands(native: str, repo: str, execution: str, spikes: tuple[str, ...]) -> list[str]:
-    """The draft's extra commands: `authoring:<native>-spikes` from its template, its spikes."""
+def spikes_commands(
+    native: str,
+    repo: str,
+    execution: str,
+    spikes: tuple[str, ...],
+    definitions: dict[str, str] | None = None,
+) -> list[str]:
+    """The draft's extra commands: `authoring:<native>-spikes` from its template, its spikes.
+
+    ``definitions`` adds to a spike's `what` what else its definition asks, by spike id.
+    """
     plan = f"authoring:{native}"
+    more = definitions or {}
     return [
         f"{STORE} project create authoring --id {native}-spikes "
         f"--title {shlex.quote(plan_title(native) + ' spikes')} "
         f"--template templates/planning/spikes.md.j2 --var plan={plan} --var native={native} "
         f"--metadata onepipeline.schema_version=3 --no-interactive",
-        *(_spike_task(f"{plan}-spikes", spike, repo, execution) for spike in spikes),
+        *(
+            _spike_task(f"{plan}-spikes", spike, repo, execution, more.get(spike, ""))
+            for spike in spikes
+        ),
     ]
 
 
@@ -177,16 +214,18 @@ def drafting(
     spikes: tuple[str, str] | None = None,
     spike_ids: tuple[str, ...] = ("spike-health",),
     hold: Path | None = None,
+    definitions: dict[str, str] | None = None,
 ) -> None:
     """Script every planning worker of a run planning `authoring:<native>`.
 
     ``spikes`` names the repository and execution checkout of the spikes ``spike_ids`` the
-    draft adds; ``hold`` is a directory whose files release the held workers (see
-    `spike_brief_commands` and `spike_work_commands`).
+    draft adds, ``definitions`` what else each one's definition asks; ``hold`` is a directory
+    whose files release the held workers (see `spike_brief_commands` and
+    `spike_work_commands`).
     """
     draft = plan_commands(native)
     if spikes is not None:
-        draft += spikes_commands(native, *spikes, spike_ids)
+        draft += spikes_commands(native, *spikes, spike_ids, definitions)
         mark(bench, SPIKE_BRIEF_MARKER, *spike_brief_commands(native, spike_ids, hold))
         for spike in spike_ids:
             mark(bench, SPIKES[spike].marker, *spike_work_commands(spike, hold))

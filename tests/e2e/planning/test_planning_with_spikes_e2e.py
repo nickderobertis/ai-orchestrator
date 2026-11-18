@@ -79,6 +79,7 @@ PLANNING_NODES = [
     "draft",
     "spikes",
     "finalize",
+    "spike-evidence",
     "check",
     "review",
     "design",

@@ -405,7 +405,11 @@ refresh-plan plan destination="plans":
 # created in `authoring` and launched in its own flow under the board credential, since the
 # plan it finishes may be a board copy; its design document is written from the plan's own
 # description. Project and flow are named as `just plan` names them, from the plan's stored
-# title followed by `finishing`.
+# title followed by `finishing`. When `scripts/spike-records.sh stale` names a spike, the flow
+# first re-runs the stale spikes, then runs a one-task `<native>-refinalize-<timestamp>`
+# project rendered from `templates/planning/finalize.md.j2`, before the finishing project runs.
+# A planning project's own `finalize` cannot be redone instead: it is a direct node, settled on
+# no branch, which `onepipeline start --redo` refuses.
 [group("planning")]
 [doc("Check, review, document and copy an already drafted plan, in one flow.")]
 finish-plan plan destination="plans":
@@ -418,13 +422,32 @@ finish-plan plan destination="plans":
         { echo "finish-plan: $plan could not be read from the plan store (its diagnostic is above); name a plan the store holds, then retry" >&2; exit 2; }
     title=$(jq -r '.items[0].item.title // ""' <<<"$shown")
     [ -n "$title" ] || { echo "finish-plan: $plan has no title in the plan store; give it the brief's title, whose first words name what the work changes, then retry" >&2; exit 2; }
+    stale=$(scripts/plan-store.sh scripts/spike-records.sh stale "$plan") ||
+        { echo "finish-plan: could not read which spikes of $plan are stale (the diagnostic is above); repair what it names, then retry" >&2; exit 2; }
+    refinalize=""
+    if [ -n "$stale" ]; then
+        refinalize="authoring:$native-refinalize-${id##*-}"
+        scripts/plan-store.sh .venv/bin/onetaskgraph project create authoring --id "${refinalize#*:}" --title "$title finalize" \
+            --metadata onepipeline.schema_version=3 --no-interactive >&2
+        scripts/plan-store.sh .venv/bin/onetaskgraph task create authoring --project "$refinalize" --title "Finalize $plan from its re-run spikes" \
+            --template templates/planning/finalize.md.j2 --var "plan=$plan" --var "native=$native" \
+            --metadata 'onepipeline.id="finalize"' --metadata 'onepipeline.persona="../personas/planner.yaml"' \
+            --metadata 'onepipeline.agent_graph="graphs/planner.yaml"' --no-interactive >&2
+    fi
     scripts/plan-store.sh .venv/bin/onetaskgraph project create authoring --id "$id" --title "$title finishing" \
         --template templates/planning/finishing.md.j2 --metadata onepipeline.schema_version=3 \
         --var "plan=$plan" --var "native=$native" --var destination={{ quote(destination) }} \
         --var "brief_text=$brief_text" \
         --no-interactive >&2
-    exec scripts/plan-store.sh scripts/onepipeline.sh flow run --name "${title//[^A-Za-z0-9._-]/-}-finishing" -- scripts/onepipeline.sh start "authoring:$id" \
-        --launch-config config/onepipeline.workflows.yaml --dag-graph off --label kind=planning
+    exec scripts/plan-store.sh scripts/onepipeline.sh flow run --name "${title//[^A-Za-z0-9._-]/-}-finishing" -- bash -c '
+        set -euo pipefail
+        if [ -n "$3" ]; then
+            scripts/spike-records.sh run "$1"
+            scripts/onepipeline.sh start "$3" --launch-config config/onepipeline.workflows.yaml \
+                --dag-graph off --label kind=planning
+        fi
+        exec scripts/onepipeline.sh start "$2" --launch-config config/onepipeline.workflows.yaml \
+            --dag-graph off --label kind=planning' finish-plan "$plan" "authoring:$id" "$refinalize"
 
 # `just check-plan <source>:<project>` is the engine's own plan loader with this host's one
 # registered check, the planning road's `check` step exactly: `onepipeline plan check`, whose
@@ -443,6 +466,16 @@ check-plan plan:
 [doc("Judge every unreviewed task and the project of a plan, attesting each pass.")]
 review-plan plan:
     @scripts/plan-store.sh scripts/review-plan-item.sh {{ quote(plan) }}
+
+# `just spike-unaffected <task> --reason TEXT` records that an edit to an authoring task built
+# on spikes leaves their evidence true, so the spike-evidence check stops refusing it:
+# `scripts/spike-records.sh unaffected`, attesting the task's `spike-evidence` at its spikes'
+# current fingerprint with the reason as its note. Exit 1 refuses an empty reason or a task
+# naming no spike.
+[group("planning")]
+[doc("Record that an edit to a task built on spikes leaves their evidence true, with the reason.")]
+spike-unaffected task *args:
+    @scripts/plan-store.sh scripts/spike-records.sh unaffected "$@"
 
 # `just approve-design <source>:<project> [run]` records the user's approval on the board
 # copy's design document — `onetaskgraph document attest --kind design-approval`, under the

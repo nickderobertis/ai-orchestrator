@@ -18,8 +18,12 @@ variables:
 once that there is nothing to finalize, reading nothing else and changing nothing.
 
 {# llmlint: ignore-block[changed_behavior_has_e2e] A planner or design writer carries this out by its own reading of the store, which the suite never scripts a verdict for: it doubles the model's turn, so a journey could only assert what its own script chose. What the host decides around it is driven: the planning journeys hold that this step runs with this task, at its place in the flow, over the records the store holds. #}
-Otherwise every spike of `{{ plan }}-spikes` has settled. Read each spike's report — the document
-`{{ native }}-<spike id>-report` of `{{ plan }}` — and rework `{{ plan }}` from what they
+Otherwise every spike of `{{ plan }}-spikes` has settled. **Which tasks to rework**: when no
+task of `{{ plan }}` names a spike in its `spikes` answer yet, this is the plan's first
+finalize, and every task a report bears on is reworked. Otherwise rework exactly the tasks
+`scripts/spike-records.sh rework {{ plan }}` lists, from the refreshed reports of the spikes
+it names for each. Read each such spike's report — the document
+`{{ native }}-<spike id>-report` of `{{ plan }}` — and rework those tasks from what it
 measured: regenerate each task a report changes from its template (`onetaskgraph task
 answers` prints what it was answered, `onetaskgraph task render` regenerates it), keep every
 budget on the task that owns it and the plan-level answers in the description current with
@@ -30,7 +34,7 @@ it). Spike branches stay until the plan's own run succeeds.
 
 ## Acceptance criteria
 
-- Where `{{ plan }}-spikes` exists, every task of `{{ plan }}` a spike report bears on states what the report measured, and names that spike in its `spikes` answer.
+- Where `{{ plan }}-spikes` exists, every task this finalize reworks — on a first finalize every task a spike report bears on; on the finalize `just finish-plan` runs after re-running stale spikes, each task `scripts/spike-records.sh rework {{ plan }}` listed — states what the report measured, and names that spike in its `spikes` answer.
 - Every task is the rendering of its template its provenance records.
 
 ## Additional info

@@ -21,7 +21,8 @@
     "support-published-tools",
     "support-registered-checkouts",
     "support-short-state",
-    "support-waits"
+    "support-waits",
+    "support-watch-rule"
   ],
   "targets": {
     "test-docs": {

@@ -73,6 +73,8 @@
       "{workspaceRoot}/graphs/planner.yaml",
       "{workspaceRoot}/config/plan-checklist.llmlint.yml",
       "{workspaceRoot}/scripts/plan-attestation-check.sh",
+      "{workspaceRoot}/scripts/spike-evidence-check.sh",
+      "{workspaceRoot}/scripts/spike-records.sh",
       "{workspaceRoot}/scripts/review-plan-item.sh",
       "{workspaceRoot}/oneharness.llmlint.toml",
       "{workspaceRoot}/oneharness.identities.toml",

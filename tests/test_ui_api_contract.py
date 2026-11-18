@@ -100,7 +100,7 @@ SUBSCRIPTION_ROUTES = {
 }
 
 #: The run view's tabs, as the page names them, against the view's own declaration.
-RUN_TABS = {"graph": "**Graph**", "overall": "**Overall**", "channel": "**Channel**"}
+RUN_TABS = {"graph": "**Graph**", "overall": "**Overall**"}
 
 
 def _routes() -> str:
@@ -193,7 +193,7 @@ def test_the_controls_the_page_lists_are_every_write_route_and_tab_the_release_d
     state through, is compared with the set the page lists as controls, in both
     directions; a removed route answers `404 removed_route`; and the run view's own
     tabs, read off the view's application shell at the pinned tag, are exactly the
-    three the page names.
+    ones the page names.
     """
     page = _page()
     assert WHOLE in page, f"docs/dag-ui.md no longer says {WHOLE!r}"

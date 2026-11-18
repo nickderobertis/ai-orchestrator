@@ -65,35 +65,12 @@ members:
     title: "Run the spikes of {{ plan }}, if it has any"
     template: {file: step.md.j2}
     answers:
-      description: "Runs `{{ plan }}-spikes` attached in this flow when the draft created it, and settles done at once when it holds no task."
+      description: "`scripts/spike-records.sh run` runs the spikes of `{{ plan }}-spikes` whose definitions changed since they last ran, attached in this flow, and settles done at once when there are none."
     depends_on: ["{{ native }}-planning-draft"]
-    # The command starts the plan's spikes run attached in this flow when the draft created
-    # one, and settles `done` at once when there is none. INTERIM WORKAROUND (manager ruling
-    # c6.0): the spikes run holds no human node, but the pinned engine's attached `start` also
-    # returns when a blocking surface waits on the manager — a spike worker's
-    # `ORCHESTRATOR_ASK_MANAGER` question — so after it the command waits on
-    # `onepipeline status --json` and `onepipeline watch --until settled --timeout none` until
-    # the run ends, and fails unless it ended `complete`. It is retired by an onepipeline
-    # follow-up keeping an attached `start` waiting across a blocking surface, after which the
-    # command is the attached `start` alone.
     metadata:
       onepipeline.id: spikes
       onepipeline.kind: command
-      onepipeline.command:
-        - bash
-        - -c
-        - >-
-          set -euo pipefail;
-          spikes="$1-spikes";
-          held=$(.venv/bin/onetaskgraph task list --source "${1%%:*}" --project "$spikes" --json --no-interactive | jq '.items | length');
-          [ "$held" -gt 0 ] || exit 0;
-          run=$(scripts/onepipeline.sh start "$spikes" --launch-config config/onepipeline.workflows.yaml
-          --dag-graph off --label kind=spikes --branch-template "${1#*:}/{{ '{{ node.id }}' }}" | tail -n 1 | jq -r '.run_id');
-          until ending=$(scripts/onepipeline.sh status "$run" --json | jq -c '.ending // empty') && [ -n "$ending" ]; do
-          scripts/onepipeline.sh watch "$run" --until settled --timeout none || true; done;
-          [ "$(jq -r '.kind' <<<"$ending")" = complete ]
-        - spikes
-        - "{{ plan }}"
+      onepipeline.command: [scripts/spike-records.sh, run, "{{ plan }}"]
   - id: "{{ native }}-planning-finalize"
     title: "Finalize {{ plan }} from its spikes, if it has any"
     template: {file: finalize.md.j2}
@@ -105,16 +82,26 @@ members:
       onepipeline.id: finalize
       onepipeline.persona: ../personas/planner.yaml
       onepipeline.agent_graph: graphs/planner.yaml
+  - id: "{{ native }}-planning-spike-evidence"
+    title: "Record the spike evidence of {{ plan }}"
+    template: {file: step.md.j2}
+    answers:
+      description: "`scripts/spike-records.sh record` records, on each task built on spikes, the spike definitions its evidence now reflects."
+    depends_on: ["{{ native }}-planning-finalize"]
+    metadata:
+      onepipeline.id: spike-evidence
+      onepipeline.kind: command
+      onepipeline.command: [scripts/spike-records.sh, record, "{{ plan }}"]
   - id: "{{ native }}-planning-check"
     title: "Check {{ plan }} as its launch will load it"
     template: {file: step.md.j2}
     answers:
-      description: "`onepipeline plan check` over the plan, with this host's install check registered."
-    depends_on: ["{{ native }}-planning-finalize"]
+      description: "`onepipeline plan check` over the plan, with this host's install check and spike-evidence check registered."
+    depends_on: ["{{ native }}-planning-spike-evidence"]
     metadata:
       onepipeline.id: check
       onepipeline.kind: command
-      onepipeline.command: [scripts/onepipeline.sh, plan, check, "{{ plan }}", --check, orchestrator/host_adoption_check.py]
+      onepipeline.command: [env, "ORCHESTRATOR_PLAN={{ plan }}", scripts/onepipeline.sh, plan, check, "{{ plan }}", --check, orchestrator/host_adoption_check.py, --check, scripts/spike-evidence-check.sh]
   - id: "{{ native }}-planning-review"
     title: "Review {{ plan }}"
     template: {file: step.md.j2}
@@ -166,5 +153,5 @@ members:
           names). Once the user approves it, run `just approve-design <that copy>
           <this run's id>`.
 ---
-The planning run of `{{ plan }}`, from the brief `{{ brief }}`: refresh, draft, spikes, finalize, check, review,
+The planning run of `{{ plan }}`, from the brief `{{ brief }}`: refresh, draft, spikes, finalize, spike evidence, check, review,
 design document, copy to `{{ destination }}`, and the user's approval.

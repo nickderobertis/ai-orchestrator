@@ -32,7 +32,7 @@ pytestmark = [
 #: How long the plan recipe may take to return.
 SETTLE_SECONDS = 900.0
 #: The steps after `spikes`, none of which may run once it fails.
-AFTER_SPIKES = ("finalize", "check", "review", "design", "copy", "approve-design")
+AFTER_SPIKES = ("finalize", "spike-evidence", "check", "review", "design", "copy", "approve-design")
 
 
 class Failed(NamedTuple):

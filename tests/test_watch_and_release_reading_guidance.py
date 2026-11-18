@@ -56,7 +56,7 @@ PLANNING_OBSERVER_CLAIM = "`just plan` and `just finish-plan` name `off` instead
 #: The launchers that claim is about: the two recipes, and the planning flow's step that
 #: launches a plan's spikes.
 PLANNING_RECIPES = ("plan", "finish-plan")
-SPIKES_LAUNCHER = "templates/planning/planning.md.j2"
+SPIKES_LAUNCHER = "scripts/spike-records.sh"
 #: The flag each names its observer by, quoted with its value so another `off` elsewhere in
 #: the file cannot satisfy it.
 PLANNING_OBSERVER = "--dag-graph off"

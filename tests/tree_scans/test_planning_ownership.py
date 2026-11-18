@@ -112,7 +112,8 @@ RESIDUE = (
 WRAPPERS = (
     "scripts/review-plan-item.sh",
     "scripts/plan-attestation-check.sh",
-    "templates/planning/planning.md.j2",
+    "scripts/spike-records.sh",
+    "scripts/spike-evidence-check.sh",
     "scripts/run-ended.sh",
     "justfile",
 )
@@ -125,6 +126,7 @@ RECIPES = (
     "review-plan",
     "copy-plan",
     "approve-design",
+    "spike-unaffected",
 )
 
 
@@ -367,12 +369,6 @@ def _recipe(name: str) -> str:
     return "\n".join(body)
 
 
-def _spikes_command() -> str:
-    text = _text("templates/planning/planning.md.j2")
-    start = text.index("onepipeline.id: spikes")
-    return text[start : text.index("  - id:", start)]
-
-
 def _discard_lines() -> str:
     text = _text("scripts/run-ended.sh")
     start = text.index("discard_spike_branches() {")
@@ -380,9 +376,13 @@ def _discard_lines() -> str:
 
 
 def _wrapper_bodies() -> Iterator[tuple[str, str]]:
-    for path in ("scripts/review-plan-item.sh", "scripts/plan-attestation-check.sh"):
+    for path in (
+        "scripts/review-plan-item.sh",
+        "scripts/plan-attestation-check.sh",
+        "scripts/spike-records.sh",
+        "scripts/spike-evidence-check.sh",
+    ):
         yield path, _text(path)
-    yield "templates/planning/planning.md.j2 (spikes)", _spikes_command()
     yield "scripts/run-ended.sh (spike discard)", _discard_lines()
     for recipe in RECIPES:
         yield f"justfile ({recipe})", _recipe(recipe)

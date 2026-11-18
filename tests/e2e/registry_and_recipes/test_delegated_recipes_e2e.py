@@ -1818,11 +1818,32 @@ PLANTED_CREDENTIAL = "not-a-real-token-planted-by-this-journey"
 #: trace cannot say: it records argv, and a credential is not on one. As the plan store it
 #: answers a document listing with one design document, which `just approve-design` reads
 #: before it attests, and an empty graph of the plan, which `just review-plan` reads its
-#: tasks' dependency edges from before it judges.
+#: tasks' dependency edges from before it judges; and the spike `just spike-unaffected` reads
+#: a task's evidence against, the spike the task's answers name.
 CREDENTIAL_RECORDING_UV = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "${GH_PROJECTS_TOKEN-<unset>}" >>"$TRACE_FILE"
 case "$*" in
+  "task show authoring:unaffected-task "*)
+    printf '{"items":[{"id":"authoring:unaffected-task",'
+    printf '"item":{"project":"unaffected-plan"}}]}\n' ;;
+  "task list "*"--project authoring:unaffected-plan "*)
+    printf '{"items":[{"id":"authoring:unaffected-task","item":'
+    printf '{"metadata":{"onepipeline.id":"docs"}}}],"errors":[],"next":null}\n' ;;
+  "task list "*"--project authoring:unaffected-plan-spikes "*)
+    printf '{"items":[{"id":"authoring:unaffected-spike","item":{"metadata":'
+    printf '{"onepipeline.id":"spike-visual"},"status":{"category":"done"}}}],'
+    printf '"errors":[],"next":null}\n' ;;
+  "project attestation check authoring:unaffected-plan-spikes "*)
+    printf '{"kind":"spike-definition","tasks":[{"id":"authoring:unaffected-spike",'
+    printf '"kind":"spike-definition","state":"absent","reason":null,"record":null}]}\n' ;;
+  "project attestation check authoring:unaffected-plan "*)
+    printf '{"kind":"spike-evidence","tasks":[{"id":"authoring:unaffected-task",'
+    printf '"kind":"spike-evidence","state":"absent","reason":null,"record":null}]}\n' ;;
+  "task answers "*)
+    printf '{"spikes":[{"spike":"spike-visual"}]}\n' ;;
+  "plan writeback-keys "*)
+    printf '{"task":["onepipeline.settlement"],"project":[]}\n' ;;
   "document list "*)
     printf '{"items":[{"id":"plans:example-design","item":{"metadata":'
     printf '{"onetaskgraph.template":{"template":"onepipeline:design-doc"}}}}]}\n' ;;
@@ -1852,7 +1873,7 @@ class BoardRecipe(NamedTuple):
 
 
 #: Which board recipes read the plan store, and the argument each takes. `just plans` is
-#: the reader, the other six are the planning road's recipes over the same store.
+#: the reader, the others are the planning road's recipes over the same store.
 BOARD_RECIPES = (
     BoardRecipe("plans", ("project", "list")),
     BoardRecipe("check-plan", ("plans:example",)),
@@ -1861,6 +1882,7 @@ BOARD_RECIPES = (
     BoardRecipe("copy-plan", ("authoring:example",)),
     BoardRecipe("approve-design", ("plans:example",)),
     BoardRecipe("finish-plan", ("plans:example",)),
+    BoardRecipe("spike-unaffected", ("authoring:unaffected-task", "--reason", "A copy edit.")),
 )
 
 

@@ -217,7 +217,9 @@ def mark(bench: Bench, marker: str, *commands: str) -> None:
     the worker was dispatched in, before they run.
     """
     held = json.loads(bench.markers.read_text(encoding="utf-8"))
-    claim = bench.tmp / "claims" / str(len(held))
+    # A marker scripted again keeps its own claim slot, so it never shares another's in a run.
+    slot = list(held).index(marker) if marker in held else len(held)
+    claim = bench.tmp / "claims" / str(slot)
     claim.parent.mkdir(exist_ok=True)
     script = f'mkdir "{claim}-$ONEPIPELINE_RUN_ID" 2>/dev/null || exit 0; set -e; ' + "; ".join(
         commands

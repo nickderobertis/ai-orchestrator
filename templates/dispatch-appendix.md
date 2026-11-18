@@ -349,6 +349,13 @@ there. One retry that fixed both refusals its merge path named by amending the t
 already pushed was refused `non-fast-forward` when it published, and settled
 `push-rejected` with the correct tree stranded on the host.
 
+**A spike whose report already exists updates that report.** A spike task (node id
+`spike-<topic>`) re-run after its definition changed updates its existing report to the
+task's current definition, on the branch the session continues. For `spike-visual`,
+re-capture the entries the definition changed, add the new ones, drop the removed ones, and
+keep every other entry's answers and images exactly as they are: render the whole merged
+answers with `onetaskgraph document render`, giving only changed images with `--asset`.
+
 **Every claim you make about the finished work is true of the tree as it finally
 stands.** That is the property you are held to, and it says nothing about where your
 report sits. This conversation does not end when you report — your supervisor keeps
