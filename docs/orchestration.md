@@ -386,7 +386,10 @@ run settled `done` — its `onepipeline.settlement` status where the run wrote i
 when the plan has one — is delivered work: it is never judged, whatever its text and whatever
 the store answers for its record, and the launch gate never refuses it; the description's judge
 reads it under `delivered/` rather than `tasks/`, as context the description is never refused
-for. A task its run amended carries the amendment verbatim after its body, in a section
+for. A task withdrawn where its run reads it — the store's `cancelled` status, which it answers
+for a board issue closed as not planned — is never judged or attested and is left out of
+everything the description's judge reads, because the launch omits it by that same status and
+so the launch gate never holds it to a review. A task its run amended carries the amendment verbatim after its body, in a section
 presenting it as the run's applied record — criteria the run added by a live edit, part of the
 task's bar, and not a ruling the plan records, so no ruling reference is expected of it — and
 every judge is told that a task's own text is not expected to restate its amendment, which

@@ -26,6 +26,11 @@ without the words presenting it as the run's applied record; `judging_codex.py` 
   says `done`, and one settled `done` and since reopened, among them — and the one carrying
   the defect is refused, its project with it, until it is repaired; then the description is
   attested with the settled defect beside it.
+* **Withdrawn tasks are not reviewed.** The same two plans each hold a task carrying the
+  defect, withdrawn (`cancelled`, the status the store answers for a board issue closed as not
+  planned) where its run reads it: on the board copy alone when it is first reviewed, and on
+  the task itself. No judge reads it, nothing attests it, the launch gate never names it, and
+  the description is judged and attested beside it, as the launch omits it.
 * **A defect is still refused.** A task whose criterion does not prove its goal is refused,
   its project with it, while its sibling is attested, and a description carrying the defect
   is refused.
@@ -160,6 +165,12 @@ def _set(bench_: Bench, kind: str, item: str, values: Mapping[str, object]) -> N
     for key, value in values.items():
         answered = store(bench_, kind, "metadata", "set", item, key, json.dumps(value))
         assert answered.returncode == 0, answered.stdout + answered.stderr
+
+
+def _withdraw(bench_: Bench, task: str) -> None:
+    """Withdraw ``task`` as the store records a board issue closed as not planned."""
+    withdrawn = store(bench_, "task", "update", task, "--status", "cancelled")
+    assert withdrawn.returncode == 0, withdrawn.stdout + withdrawn.stderr
 
 
 def _unset(bench_: Bench, task: str, key: str) -> None:
@@ -347,6 +358,7 @@ class Settled(NamedTuple):
     gate_refused_project: bool
     repaired: Review
     project_state: str
+    records: dict[str, dict[str, Any]]
     gate_after: list[str]
     gate_after_project: bool
 
@@ -422,13 +434,17 @@ def _settled_plan(bench_: Bench, native: str, *, boarded: bool) -> SettledPlan:
     # Tasks added after the review, so they hold no record at all.
     tasks["unrecorded"] = _task(bench_, plan, "unrecorded")
     tasks["flawed"] = _task(bench_, plan, "flawed", DEFECT)
+    tasks[WITHDRAWN] = _task(bench_, plan, WITHDRAWN, DEFECT)
     if not boarded:
+        _withdraw(bench_, tasks[WITHDRAWN])
         for node in (*SETTLED, "reopened"):
             _set(bench_, "task", tasks[node], {"onepipeline.settlement": DONE})
         # Reopened for more work: its settlement is no longer `done`.
         _set(bench_, "task", tasks["reopened"], {"onepipeline.settlement": {"status": "failed"}})
         return SettledPlan(plan, None, tasks)
     board = _copied(bench_, plan)
+    # Withdrawn on its board copy alone, where the run reads it.
+    _withdraw(bench_, _board_task(bench_, tasks[WITHDRAWN]))
     for node in (*SETTLED, "reopened"):
         _set(bench_, "task", _board_task(bench_, tasks[node]), {"onepipeline.settlement": DONE})
     # Reopened for more work: its board copy, where the run writes, holds no settlement now.
@@ -439,8 +455,10 @@ def _settled_plan(bench_: Bench, native: str, *, boarded: bool) -> SettledPlan:
     return SettledPlan(plan, board, tasks)
 
 
+#: The node carrying the defect that the settled-task plans withdraw where their run reads it.
+WITHDRAWN = "withdrawn"
 #: The settled-task nodes created after the plan's first review.
-LATE = ("unrecorded", "flawed")
+LATE = ("unrecorded", "flawed", WITHDRAWN)
 
 
 def _settled_journey(bench_: Bench, settled: SettledPlan) -> Settled:
@@ -458,11 +476,15 @@ def _settled_journey(bench_: Bench, settled: SettledPlan) -> Settled:
         # As the refresh starting a replan does, so the copy writes no stale settlement over
         # the board copy, where the run writes.
         _unset(bench_, tasks["stale"], "onepipeline.settlement")
+        # The withdrawal mirrored onto the authoring copy as that refresh does, so the copy
+        # keeps the board copy withdrawn.
+        _withdraw(bench_, tasks[WITHDRAWN])
         _copied(bench_, plan)
     gate_refused = _gate(bench_, gated)
     _render(bench_, tasks["open"], "acceptance_criteria=" + _criteria("open"))
     repaired = _reviewed(bench_, plan)
     project_state = _project_state(bench_, plan)
+    records = _records(bench_, plan)
     if board:
         _copied(bench_, plan)
     gate_after = _gate(bench_, gated)
@@ -477,6 +499,7 @@ def _settled_journey(bench_: Bench, settled: SettledPlan) -> Settled:
         _refused_project(gate_refused, gated),
         repaired,
         project_state,
+        records,
         _refused_tasks(gate_after, gated_tasks),
         _refused_project(gate_after, gated),
     )
@@ -750,3 +773,31 @@ def test_a_description_carrying_the_defect_is_still_refused(sequence: Sequence) 
     assert described.ran.returncode == 1, described.ran.stdout + described.ran.stderr
     assert {one["state"] for one in sequence.described_records.values()} == {"valid"}
     assert sequence.described_project != "valid"
+
+
+@pytest.mark.parametrize("which", SETTLED_PLANS)
+def test_a_withdrawn_task_is_never_judged_or_attested_and_the_gate_never_names_it(
+    sequence: Sequence, which: str
+) -> None:
+    """Carrying the defect, it is read by no judge, in its own file or in the description's
+    `tasks`, while `open`, which carries it too and is not withdrawn, is refused with the
+    description unjudged; once `open` is repaired the description is judged and attested."""
+    settled: Settled = getattr(sequence, which)
+    listed = f'"title":"feat: {WITHDRAWN}"'
+    for review in (settled.refused, settled.repaired):
+        assert not review.judged(WITHDRAWN), [
+            str(turn.get("prompt"))[:300] for turn in review.turns
+        ]
+        assert not [text[:300] for text in review.texts() if listed in text]
+    native = settled.plan.split(":", 1)[1]
+    assert not [
+        turn
+        for turn in settled.refused.turns
+        if f'"title":"Health route {native}"' in str(turn.get("prompt"))
+    ], "the description was judged beside a refused task"
+    assert settled.refused.judged("open")
+    assert settled.repaired.ran.returncode == 0, settled.repaired.ran.stderr
+    assert _framed(_project_turn(settled.repaired, settled.plan))
+    assert settled.project_state == "valid"
+    assert settled.records[settled.tasks[WITHDRAWN]]["state"] == "absent", settled.records
+    assert WITHDRAWN not in settled.gate_before + settled.gate_refused + settled.gate_after

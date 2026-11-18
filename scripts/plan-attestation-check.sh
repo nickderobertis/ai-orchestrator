@@ -7,8 +7,9 @@
 #   * every task the engine loaded and the project, for `plan-review`, under the planner
 #     member's current bar — `oneagentgraph run graphs/planner.yaml --judge-only --member
 #     worker --bar-fingerprint`, the bar `scripts/review-plan-item.sh` attests under. A
-#     withdrawn task (closed as not planned) is skipped, because the launch omits it and it
-#     will never run; a task is matched to its loaded node by the node's `task_record`, whose
+#     withdrawn task (closed as not planned, the store's `cancelled`) is skipped, because the
+#     launch omits it and it will never run, and the review skips it by that same status, so
+#     the two never disagree about which tasks are held to a review; a task is matched to its loaded node by the node's `task_record`, whose
 #     `source` only a member project's task carries. A task its run settled `done` is never
 #     refused, whatever its text and whatever the store answers for its record, exactly as
 #     `scripts/review-plan-item.sh` never judges it; its settlement is read from its board
