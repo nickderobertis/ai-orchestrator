@@ -22,6 +22,10 @@ variables:
     description: The plan checklist's rules as `llmlint rules --format markdown` prints them.
     type: text
     required: true
+  destination:
+    description: The configured source the plan is copied into, where its board copy and its run's record live.
+    type: text
+    default: plans
 ---
 {{ brief_text }}
 
@@ -47,6 +51,17 @@ project is a harness spike it builds on, where it has one. The planning run's `f
 reworks the plan from their reports once the spikes run completes. Each spike writes its report as the document `<native id>-<spike id>-report` of
 `{{ plan }}` from the `spike-report` template. A plan that needs no measurement creates no
 spikes project, and a plan with no spikes project runs no spikes.
+
+**Replanning a plan its run has started.** When `{{ plan }}` already holds a copy in
+`{{ destination }}`, the `refresh` step before this draft brought it to the run's current
+state: each task holds its board task's status, and a task a live `add` created is in the
+plan. Read each task's `onepipeline.amendment` from that board copy, the item its
+`onetaskgraph.copies` entry for `{{ destination }}` names: `onetaskgraph task show <that item>
+--json | jq '.items[0].item.metadata["onepipeline.amendment"]'`. An amendment is the run's
+binding ruling on its task, which stays as it is: never restate it in the task's text, which
+the relaunch would then apply twice. The keys a run writes, those
+`config/run-written-keys.txt` lists — settlements, landings, dispatches, amendments among
+them — are the run's record, never written into the plan.
 
 **Repositories that span visibilities.** When the brief's `Repositories:` line names
 repositories `onevcs boundary inspect` reads as both public and private, run

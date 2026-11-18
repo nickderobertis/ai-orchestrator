@@ -40,6 +40,7 @@ pytestmark = [pytest.mark.usefixtures("module_tmpdir"), pytest.mark.xdist_group(
 
 #: Every member the planning template declares, by node id.
 PLANNING_NODES = [
+    "refresh",
     "draft",
     "spikes",
     "finalize",

@@ -119,6 +119,7 @@ WRAPPERS = (
 #: The planning recipes.
 RECIPES = (
     "plan",
+    "refresh-plan",
     "finish-plan",
     "check-plan",
     "review-plan",

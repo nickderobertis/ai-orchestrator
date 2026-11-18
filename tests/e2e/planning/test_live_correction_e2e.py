@@ -30,7 +30,9 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
+import run_written_keys
 from drafting import design_commands, plan_commands
+from fake_backend import JUDGE_REFUSAL, JUDGE_REFUSES_ENV
 from planning_bench import (
     Bench,
     bench,
@@ -48,6 +50,15 @@ pytestmark = [pytest.mark.usefixtures("module_tmpdir"), pytest.mark.xdist_group(
 #: refuses it under: a criterion naming a procedure.
 REFUSED_TEXT = "Run the exact command `just gate` before reporting."
 REFUSED_RULE = "plan_criteria_state_properties"
+#: A criterion that does not prove its goal, which the doubled reviewer refuses only when it
+#: reads it under the planner persona's plan-review bar and the review's task framing.
+DEFECT = "DEFECT-CRITERION: the docs mention that a health route exists."
+BAR = "You are a principal engineer reviewing a plan before anyone builds from it."
+FRAMING = (
+    "reviewed under the plan-review bar before or during its delivery",
+    "Its acceptance criteria state what its nodes will deliver",
+    "Its delivery state",
+)
 #: The node whose every turn is lost, and the two behind it.
 FLAKY, ROUTE, DOCS = "flaky", "route", "docs"
 #: What `just channel-reply` exits with for every refusal.
@@ -81,6 +92,9 @@ class Sequence(NamedTuple):
     retemplated: subprocess.CompletedProcess[str]
     launched: subprocess.CompletedProcess[str]
     ops: dict[str, Op]
+    #: An amend carrying a plan-quality defect, refused by the reviewer, then the same amend
+    #: without it, applied; the commits around each, and the reviewer turns each reached.
+    defect: Op
     note: subprocess.CompletedProcess[str]
     note_text: str
     judged_after_note: list[str]
@@ -283,6 +297,30 @@ def _correct(bench: Bench, run_id: str, name: str, build: object) -> Op:
     )
 
 
+def _defect(bench: Bench, run_id: str) -> Op:
+    """An amend whose criterion does not prove its goal, then the same amend without it."""
+    judged, reviewer = len(_judged(bench)), len(_reviewer(bench))
+    before = _committed(bench, run_id)
+    refused = _reply(bench, run_id, {"op": "amend", "id": DOCS, "text": f"- {DEFECT}"})
+    after_refusal = _committed(bench, run_id)
+    refused_turns = _reviewer(bench)[reviewer:]
+    judged, reviewer = len(_judged(bench)), len(_reviewer(bench))
+    passing = "DEFECT-FIXED: a request-level test reads the route's JSON body."
+    passed = _reply(bench, run_id, {"op": "amend", "id": DOCS, "text": f"- {passing}"})
+    return Op(
+        "defect",
+        passing,
+        before,
+        refused,
+        after_refusal,
+        passed,
+        _committed(bench, run_id),
+        refused_turns,
+        _judged(bench)[judged:],
+        _reviewer(bench)[reviewer:],
+    )
+
+
 @pytest.fixture(scope="module")
 def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Sequence]:
     if shutil.which("just") is None:
@@ -294,6 +332,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         "e2e-live-correction",
         FAKE_PLANNING_JUDGE_REFUSES=json.dumps({REFUSED_RULE: REFUSED_TEXT}),
         FAKE_PLANNING_JUDGE_DOWN=str(tmp / "judge-down"),
+        **{JUDGE_REFUSES_ENV: json.dumps([DEFECT, BAR, *FRAMING])},
     )
     native = f"plan-lc-{os.getpid()}"
     plan = _plan(bench_, native)
@@ -358,6 +397,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     ops["requeue"] = _correct(bench_, run_id, "requeue", requeue)
     ops["retry"] = _correct(bench_, run_id, "retry", retry)
     ops["add"] = _correct(bench_, run_id, "add", add)
+    defect = _defect(bench_, run_id)
 
     note_text = f"NOTE-{os.getpid()}: {REFUSED_TEXT}"
     judged = len(_judged(bench_))
@@ -456,6 +496,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         retemplated,
         launched,
         ops,
+        defect,
         note,
         note_text,
         judged_after_note,
@@ -530,6 +571,38 @@ def test_a_passing_correction_is_judged_on_its_own_task_and_applied(
     ]
 
 
+def test_the_hook_judges_a_live_edit_as_a_plan_and_reads_no_run_written_key(
+    sequence: Sequence,
+) -> None:
+    """Each passing edit's reviewer turn carries the plan-review bar and the task framing, and
+    no file a judge of an edit received holds a run-written key."""
+    for op in sequence.ops.values():
+        framed = [
+            prompt
+            for prompt in op.reviewer_after_pass
+            if op.passing_text in prompt and BAR in prompt and all(one in prompt for one in FRAMING)
+        ]
+        assert framed, [prompt[:400] for prompt in op.reviewer_after_pass]
+        read = [*op.judged_after_refusal, *op.judged_after_pass, *op.reviewer_after_pass]
+        carried = [key for text in read for key in run_written_keys.RUN_WRITTEN_KEYS if key in text]
+        assert not carried, carried
+
+
+def test_a_live_edit_carrying_a_plan_quality_defect_is_refused_and_applied_without_it(
+    sequence: Sequence,
+) -> None:
+    defect = sequence.defect
+    assert defect.refused.returncode == REFUSED, defect.refused.stdout + defect.refused.stderr
+    assert "the plan-edit hook `scripts/review-plan-item.sh` refused node" in defect.refused.stderr
+    assert defect.committed_after_refusal == defect.committed_before
+    # Refused by the reviewer, which read the defect under the bar and the framing.
+    refusing = [prompt for prompt in defect.judged_after_refusal if DEFECT in prompt]
+    assert refusing and all(BAR in prompt for prompt in refusing), refusing
+    assert defect.passed.returncode == 0, defect.passed.stdout + defect.passed.stderr
+    assert defect.committed_after_pass > defect.committed_after_refusal
+    assert JUDGE_REFUSAL not in defect.passed.stderr
+
+
 def test_nothing_of_a_refused_reply_is_committed(sequence: Sequence) -> None:
     for op in sequence.ops.values():
         assert op.committed_after_refusal == op.committed_before, op
@@ -595,8 +668,10 @@ def test_a_graph_the_store_cannot_answer_whole_stops_the_review_unjudged(
     assert sequence.judged_during_unanswered == 0
     assert "void" in sequence.states_before_unanswered.values(), sequence.states_before_unanswered
     assert sequence.states_after_unanswered == sequence.states_before_unanswered
-    assert sequence.project_before_unanswered == 3
-    assert sequence.project_after_unanswered == 3
+    # The project's pass excludes every run-written key, so the run's own writes to the
+    # project since its review leave it valid; the unanswered review leaves it as it was.
+    assert sequence.project_before_unanswered == 0
+    assert sequence.project_after_unanswered == 0
 
 
 @pytest.mark.parametrize("deps", ["route", [3], [""], False])

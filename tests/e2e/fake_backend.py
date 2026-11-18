@@ -580,6 +580,15 @@ TURN_GATE_CEILING_SECONDS = 600
 #: under `--control` whose socket address the harness refuses is asked again without
 #: it, and a marker written by the refused invocation would make the retry accept.
 JUDGE_SEND_BACK_ENV = "FAKE_BACKEND_JUDGE_SENDS_BACK_ONCE"
+
+#: A JSON list of texts: the stand-in's judge side refuses a turn whose prompt and composed
+#: system prompt carry **every** one, and accepts every other turn. A reviewer double that
+#: refuses by what it read rather than by turn order: a journey names an authored defect
+#: together with the bar and framing it must arrive under, so a refusal shows all of them
+#: reached the judge in one turn.
+JUDGE_REFUSES_ENV = "FAKE_BACKEND_JUDGE_REFUSES"
+#: What the refusing judge says, so a journey can tell its refusal from any other.
+JUDGE_REFUSAL = "the stand-in reviewer read the authored defect under the plan-review bar"
 #: Set to anything non-empty, a dispatch supervisor's turn — a member's `oneharness.judge.toml`
 #: side — is answered one layer lower: by the real CLI over that config with its Codex identity
 #: pinned and no harness mocked, so oneharness spawns the Codex binary `ONEHARNESS_BIN_CODEX`
@@ -1213,6 +1222,18 @@ def _turn(original: list[str], argv: list[str], prompt: str) -> int:
         _decline_ruling(config, prompt, argv)
         if EVALUATION_MARKER in prompt:
             return _answer(argv, json.dumps({"value": True, "reason": "the stand-in accepts"}))
+        refuses = json.loads(os.environ.get(JUDGE_REFUSES_ENV) or "[]")
+        if refuses and all(text in f"{system}\n{prompt}" for text in refuses):
+            return _answer(
+                argv,
+                json.dumps(
+                    {
+                        "completion": False,
+                        "message": "Rewrite the criterion so that meeting it proves the goal.",
+                        "reason": JUDGE_REFUSAL,
+                    }
+                ),
+            )
         if os.environ.get(JUDGE_SEND_BACK_ENV) and prompt.count(WORKER_REPLY) < 2:
             return _answer(
                 argv,

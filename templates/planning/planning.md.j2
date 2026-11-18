@@ -1,7 +1,8 @@
 ---
 onetaskgraph_template: 1
 description: >-
-  The planning workflow for one brief, as a plan graph: the planner drafts the plan, any
+  The planning workflow for one brief, as a plan graph: a plan its run has started is first
+  refreshed from the run's current state, the planner drafts the plan, any
   spikes it needs run and a planner finalizes the plan from their reports, the plan is
   checked and reviewed, its design document is written,
   plan and document are copied onto the board, and the run waits for the user's approval.
@@ -36,6 +37,15 @@ variables:
     type: text
     default: plans
 members:
+  - id: "{{ native }}-planning-refresh"
+    title: "Refresh {{ plan }} from its run's current state"
+    template: {file: step.md.j2}
+    answers:
+      description: "`just refresh-plan` brings a plan copied to `{{ destination }}` to its run's current state: board statuses and live-added tasks in, run-written keys out. A plan with no copy there is left as it is."
+    metadata:
+      onepipeline.id: refresh
+      onepipeline.kind: command
+      onepipeline.command: [just, refresh-plan, "{{ plan }}", "{{ destination }}"]
   - id: "{{ native }}-planning-draft"
     title: "Draft the plan {{ plan }}"
     template: {file: planning-draft.md.j2}
@@ -45,6 +55,8 @@ members:
       brief: "{{ brief }}"
       brief_text: "{{ brief_text }}"
       checklist: "{{ checklist }}"
+      destination: "{{ destination }}"
+    depends_on: ["{{ native }}-planning-refresh"]
     metadata:
       onepipeline.id: draft
       onepipeline.persona: ../personas/planner.yaml
@@ -154,5 +166,5 @@ members:
           names). Once the user approves it, run `just approve-design <that copy>
           <this run's id>`.
 ---
-The planning run of `{{ plan }}`, from the brief `{{ brief }}`: draft, spikes, finalize, check, review,
+The planning run of `{{ plan }}`, from the brief `{{ brief }}`: refresh, draft, spikes, finalize, check, review,
 design document, copy to `{{ destination }}`, and the user's approval.

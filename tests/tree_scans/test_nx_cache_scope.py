@@ -398,7 +398,8 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
         ):
             if target in declared:
                 assert f"-m {marker} " in declared[target]["command"], (journey.project, target)
-        assert set(declared) <= {CODE_SCOPED, DOCS_SCOPED, CHECKOUT_SCOPED}, journey.project
+        tiers = _test_tiers(journey.root)
+        assert set(tiers) <= {CODE_SCOPED, DOCS_SCOPED, CHECKOUT_SCOPED}, journey.project
         # A family collects its own directory; the root project, whose directory holds the
         # families too, names each of its own modules instead.
         collects = (
@@ -406,7 +407,8 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
             if journey.root == E2E_ROOT
             else [f"pytest {journey.root} "]
         )
-        for target, spec in declared.items():
+        for target in tiers:
+            spec = declared[target]
             assert all(part in spec["command"] for part in collects), (journey.project, target)
 
     # The same marker routes inside each subject project that has a whole-workspace
@@ -465,11 +467,11 @@ def _collects_under(command: str, root: str) -> bool:
 
 
 def _test_tiers(root: str) -> list[str]:
-    """The targets of the subject project at ``root`` that run pytest.
+    """The targets of the subject or journey project at ``root`` that run pytest.
 
-    A subject project holding a `budgets.yaml` declares the two budget targets beside its
-    tiers; they run onebudgetspec over what a tier recorded, collect no test, and are held
-    with their file by `tests/test_budgets_files.py`.
+    A project holding a `budgets.yaml` declares the two budget targets beside its tiers;
+    they run onebudgetspec over what a tier recorded, collect no test, and are held with
+    their file by `tests/test_budgets_files.py`.
     """
     return [
         target
@@ -496,7 +498,7 @@ PARALLEL_SITES = (
     *(
         (f"{journey.root}/project.json", target)
         for journey in E2E_JOURNEYS
-        for target in project_declarations()[journey.root]["targets"]
+        for target in _test_tiers(journey.root)
     ),
     ("justfile", "test-e2e"),
 )
@@ -888,7 +890,7 @@ SUITE_TIERS = (
     *(
         (f"{journey.root}/project.json", target)
         for journey in E2E_JOURNEYS
-        for target in project_declarations()[journey.root]["targets"]
+        for target in _test_tiers(journey.root)
     ),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 )

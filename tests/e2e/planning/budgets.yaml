@@ -1,0 +1,21 @@
+# The planning project's budgets, checked by its cached `budgets` Nx target, which reads
+# what this project's `test` target recorded during its normal run (`tests/budget_telemetry.py`).
+# Unlabelled, so over a threshold fails the check: the loopback board's requests are
+# deterministic for a given plan, so a cache replay is the same figure.
+schema_version: 1
+budgets:
+  # Basis: measured. Workload: one replan of a plan shaped like this host's print-stack plan,
+  # 27 tasks with 4 newer board statuses, 5 board amendments and 3 tasks edited, with the
+  # plans source's cache enabled as this host runs it; importing a task a live add created is
+  # not measured until the store can copy one back from a GitHub board. Evidence: refresh 1,
+  # review 1, review again 1, copy 3, launch gate 7, for 13 points. A step reading the board
+  # once per task adds at least 27, so 35 refuses it (manager ruling a2).
+  - id: replan-github-points
+    description: >-
+      GitHub GraphQL points one replan of a typical board-copied plan spends on the plans
+      board. It protects the shared hourly limit every manager on this host draws from.
+    measure: reported
+    command: ["uv", "run", "--directory", "../../..", "python", "-m", "tests.budget_telemetry"]
+    unit: points
+    direction: max
+    threshold: 35

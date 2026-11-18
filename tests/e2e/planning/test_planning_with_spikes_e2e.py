@@ -75,6 +75,7 @@ SPIKE_IDS = ("spike-health", "spike-load")
 SPIKES_NODES = ["spike-brief", *SPIKE_IDS]
 #: Every member the planning template declares.
 PLANNING_NODES = [
+    "refresh",
     "draft",
     "spikes",
     "finalize",

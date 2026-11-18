@@ -233,8 +233,11 @@ def judge_inputs(bench: Bench) -> list[dict[str, object]]:
     return [json.loads(line) for line in bench.judge_log.read_text(encoding="utf-8").splitlines()]
 
 
-#: What onejudge hands a judge as the worker's turn in a judge-only run, and in no other.
+#: What onejudge hands a judge as the worker's turn in a judge-only run given no `--task`.
 JUDGE_ONLY_TURN = "Produce the material under review."
+#: The task `scripts/review-plan-item.sh` hands every judge-only run it makes, which onejudge
+#: puts in that turn's place: a phrase of its framing, which no other task carries.
+REVIEW_FRAMING = "reviewed under the plan-review bar before or during its delivery"
 
 
 def judge_only_turns(bench: Bench) -> list[dict[str, object]]:
@@ -242,7 +245,11 @@ def judge_only_turns(bench: Bench) -> list[dict[str, object]]:
     if not bench.turn_log.is_file():
         return []
     turns = [json.loads(line) for line in bench.turn_log.read_text(encoding="utf-8").splitlines()]
-    return [turn for turn in turns if JUDGE_ONLY_TURN in str(turn.get("prompt"))]
+    return [
+        turn
+        for turn in turns
+        if JUDGE_ONLY_TURN in str(turn.get("prompt")) or REVIEW_FRAMING in str(turn.get("prompt"))
+    ]
 
 
 def status(bench: Bench, run_id: str) -> dict[str, object]:

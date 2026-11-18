@@ -832,10 +832,10 @@ library verbs it calls.
 - `orchestrator/host_adoption_check.py` — the `plan check --check` executable holding the two host-install rules, `uninstalled` (a node of this repository consuming an artifact nothing here installs) and `default-taken` (a node elsewhere taking the default target of a producer this host installs), against `orchestrator/host_installs.py`.
 - `scripts/budget-design-doc-summary.sh` — the root `design-doc-budget-summary-length` budget's measurement.
 - `scripts/review-plan-item.sh` — `oneagentgraph run --judge-only`, `onetaskgraph project attestation check`, `onetaskgraph task list`, `onetaskgraph project show`, `onetaskgraph task attest` and `onetaskgraph project attest`.
-- `scripts/plan-attestation-check.sh` — `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onepipeline template resolve`, `onetaskgraph project attestation check`, `onetaskgraph document list` and `onetaskgraph document attestation check`.
+- `scripts/plan-attestation-check.sh` — `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onepipeline template resolve`, `onetaskgraph project attestation check`, `onetaskgraph project show`, `onetaskgraph task list`, `onetaskgraph document list` and `onetaskgraph document attestation check`.
 - `templates/planning/planning.md.j2` — its `spikes` step's command: `onetaskgraph task list`, `onepipeline start`, `onepipeline status` and `onepipeline watch`, its status/watch wait an interim workaround for an attached start returning at a blocking surface.
 - `scripts/run-ended.sh` — its spike-discard lines: `onepipeline status`, `onetaskgraph project show`, `onepipeline unpublished` and `just reclaim-branch --discard`.
-- `justfile` — the recipes `plan`, `finish-plan`, `check-plan`, `review-plan`, `copy-plan` and `approve-design`: `onetaskgraph project create`, `onetaskgraph project show`, `llmlint rules`, `onepipeline flow run`, `onepipeline start`, `onepipeline plan check`, `onetaskgraph project copy`, `onetaskgraph document list`, `onetaskgraph document attest`, `onepipeline template resolve`, `onepipeline attest` and `onepipeline adopt`, and `scripts/review-plan-item.sh`.
+- `justfile` — the recipes `plan`, `refresh-plan`, `finish-plan`, `check-plan`, `review-plan`, `copy-plan` and `approve-design`: `onetaskgraph project create`, `onetaskgraph project show`, `onetaskgraph task list`, `onetaskgraph task update-many`, `onetaskgraph task deps`, `onetaskgraph task update`, `llmlint rules`, `onepipeline flow run`, `onepipeline start`, `onepipeline plan check`, `onetaskgraph project copy`, `onetaskgraph document list`, `onetaskgraph document attest`, `onepipeline template resolve`, `onepipeline attest` and `onepipeline adopt`, and `scripts/review-plan-item.sh`.
 
 Nothing else under `orchestrator/` or `scripts/` serves planning, and
 `tests/tree_scans/test_planning_ownership.py` holds it.
@@ -944,14 +944,11 @@ configs. The engine, the lifecycle, and the browser view are not built here.
 
 **CI and branch protection are deliberately deferred**: this is a local
 proof-of-concept, and `just gate` at pre-push is the enforcement point — add
-`.github/workflows/` mirroring it when this graduates. Nothing versioned is published,
-so there is no release tooling, and the committed Bun and uv lockfiles make the
-workspace reproducible without asdf or direnv. `.github/CODEOWNERS` is not one of the
-deferrals: it declares who owns what rather than enforcing anything — GitHub turns it
-into required review only under the branch protection that *is* deferred — so it
-enables nothing today and becomes enforceable on its own the day that deferral ends.
-The `llmlint` judged tier is composed beside the deterministic gate and enforced at
-pre-push because there is no CI.
+`.github/workflows/` mirroring it when this graduates. The committed Bun and uv lockfiles
+make the workspace reproducible without asdf or direnv. `.github/CODEOWNERS` is not
+deferred: it only declares ownership, which GitHub enforces as required review under the
+deferred branch protection, so it becomes enforceable the day that deferral ends. The
+`llmlint` judged tier runs beside the deterministic gate at pre-push, there being no CI.
 
 ## Invariants (non-negotiable)
 

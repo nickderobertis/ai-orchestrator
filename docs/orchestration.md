@@ -321,6 +321,7 @@ which is the point of it. Its members, in order:
 
 | Step | Kind | What it does |
 | --- | --- | --- |
+| `refresh` | command | `just refresh-plan <plan> <destination>`: a replan starts from its run's current state |
 | `draft` | planner, `graphs/planner.yaml` | writes the plan into `authoring`, and `<plan>-spikes` when it needs a measurement |
 | `spikes` | command | starts the spikes run in the same flow when the draft created one; `done` at once otherwise |
 | `finalize` | planner | reworks the plan from the spike reports |
@@ -329,6 +330,28 @@ which is the point of it. Its members, in order:
 | `design` | design-doc writer, `graphs/design-doc.yaml` | renders the design document as a document of the plan |
 | `copy` | command | `onetaskgraph project copy <plan> --to <destination> --documents` |
 | `approve-design` | `kind: human` | raises the item asking the user to approve the board copy |
+
+**A replan starts from what its run wrote, and the plan it edits holds none of it.** `just
+refresh-plan <source>:<project> [destination]` acts only on a plan that records a copy in
+`destination` in its `onetaskgraph.copies`, whose run is then the board's. Each authoring task
+takes its board task's status by a targeted `task update`, and every key
+`config/run-written-keys.txt` lists — what the engine's write-back writes and no plan authors —
+is removed from it; its title, content, other metadata and template answers stay, so the
+planner can still regenerate it. A board task with no authoring counterpart, a node a live
+`add` created, is brought into the plan holding no run-written key, and the next copy updates
+that same board item. A counterpart is found from the authoring side alone: the authoring
+task's own copy link, or the `onetaskgraph.origin` the store stamped on an authoring task an
+earlier refresh brought in, never a board item's origin, which a public board withholds. The
+draft reads each amendment from the board copy and never restates it. Because the authoring
+copy then holds no run-written key, a later `just copy-plan` has none to write over what the
+run wrote meanwhile. A plan with no copy there is its run's own record and is left
+byte-identical. Exit 1 refuses, before anything is written, an authoring project holding a
+run-written key — no plan-store verb removes a project key, so the error names the project's
+file and each key for a person to delete by hand — and a board-only task the store cannot
+bring in, which a person adds by hand or drops from the run; it also refuses an imported
+task's dependency it cannot map onto the plan. Exit 2 is a read that failed, and re-running
+repeats only what is still owed. `just
+finish-plan` does not refresh, because it finishes a replan already drafted.
 
 `just finish-plan <source>:<project> [destination]` launches
 [`templates/planning/finishing.md.j2`](../templates/planning/finishing.md.j2), the same road

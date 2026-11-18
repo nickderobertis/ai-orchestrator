@@ -10,7 +10,8 @@
     "support-fake-codex",
     "support-no-paid-provider",
     "support-plan-fixture-source",
-    "support-published-tools"
+    "support-published-tools",
+    "support-run-written-keys"
   ],
   "namedInputs": {
     "testSupport": [

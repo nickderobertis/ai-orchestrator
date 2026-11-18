@@ -211,6 +211,9 @@ def delegation_checkout(tmp_path: Path) -> tuple[Path, Path]:
     shutil.copy2(
         ROOT / "config/plan-checklist.llmlint.yml", checkout / "config/plan-checklist.llmlint.yml"
     )
+    # The run-written keys `just refresh-plan` and the review strip from a plan: both
+    # refuse a checkout without the list rather than judge or rewrite a plan without it.
+    shutil.copy2(ROOT / "config/run-written-keys.txt", checkout / "config/run-written-keys.txt")
     # The host root's registration, which the launch wrapper refuses a checkout without.
     # Written rather than copied: which names it registers is
     # `tests/test_task_templates.py`'s, and these journeys are about where a recipe lands

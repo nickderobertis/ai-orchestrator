@@ -15,6 +15,7 @@
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/config/read-api.address",
       "{workspaceRoot}/config/plan-checklist.llmlint.yml",
+      "{workspaceRoot}/config/run-written-keys.txt",
       "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/planner-surface.sh",
       "{workspaceRoot}/scripts/new-persona.sh",

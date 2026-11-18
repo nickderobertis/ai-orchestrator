@@ -261,6 +261,145 @@ plan brief destination="plans":
     exec scripts/onepipeline.sh flow run --name "${title//[^A-Za-z0-9._-]/-}-planning" -- scripts/onepipeline.sh start "${plan%%:*}:$id" \
         --launch-config config/onepipeline.workflows.yaml --dag-graph off --label kind=planning
 
+# `just refresh-plan <source>:<project> [destination]` starts a replan from the run's current
+# state, the planning road's first step. It acts only when the plan records a copy in
+# `destination`: the run is then the board's, and the authoring copy holds the plan alone.
+# Each authoring task takes its board task's status and loses every key of
+# `config/run-written-keys.txt` it holds; its title, content, other metadata and template
+# answers are left as they are. A board task with no authoring counterpart, a node a live
+# `add` created, is copied into the authoring project, its run-written keys removed in the
+# same step and its dependency edges remapped onto their authoring counterparts, so the next
+# copy updates that same board item. A plan with no copy there is its run's own record and is
+# left as it is, and a plan not yet drafted has nothing to refresh. Exit 1 refuses, before
+# anything is written, an authoring project holding a run-written key, which no plan-store
+# verb removes, naming its file; or a board-only task the store cannot bring into the plan,
+# which a person adds by hand or drops from the run. It also refuses a dependency edge of a
+# board-only task it cannot map. Exit 2 is a read that failed.
+[group("planning")]
+[doc("Start a replan from the run's current state: board statuses and tasks in, run-written keys out.")]
+refresh-plan plan destination="plans":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plan={{ quote(plan) }} destination={{ quote(destination) }}
+    source=${plan%%:*}
+    store=(scripts/plan-store.sh .venv/bin/onetaskgraph)
+    if ! listed_keys=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' -e '/^$/d' config/run-written-keys.txt) || [ -z "$listed_keys" ] ||
+        ! keys=$(jq -Rsc 'split("\n") | map(select(. != ""))' <<<"$listed_keys"); then
+        echo "refresh-plan: could not read the run-written keys from config/run-written-keys.txt; restore it from the repository, then retry" >&2; exit 2
+    fi
+    whole() {
+        jq -e '(.errors // []) == [] and .next == null and (.items | type) == "array"' >/dev/null <<<"$2" 2>/dev/null && return 0
+        echo "refresh-plan: the plan store's $1 reported errors or a further page, ${written:-before anything was written}: $(jq -c '{errors, next}' <<<"$2" 2>/dev/null || printf '%s' "$2"); repair what it names, then run just refresh-plan again, which repeats only what is still owed" >&2; exit 2
+    }
+    # A jq read of the store's own answers that fails means jq is missing or broken, or the
+    # store answered something other than the JSON its --json documents.
+    read_failed() {
+        echo "refresh-plan: jq could not $1 (its diagnostic is above), ${written:-before anything was written}; check that 'jq --version' answers and that the plan store's answer is the JSON its --json documents, then run just refresh-plan again, which repeats only what is still owed" >&2; exit 2
+    }
+    diagnostic=$(mktemp) || { echo "refresh-plan: could not make a scratch file under ${TMPDIR:-/tmp}; free space there or point TMPDIR at a writable directory, then retry" >&2; exit 2; }
+    trap 'rm -f -- "$diagnostic" || echo "refresh-plan: the scratch file $diagnostic could not be removed; remove it by hand with rm -f" >&2' EXIT
+    shown=$("${store[@]}" project show "$plan" --json --no-interactive 2>"$diagnostic") || :
+    # A plan not yet drafted has nothing to refresh: the draft writes it.
+    ! jq -e '.failure.kind == "no-such-item"' >/dev/null <<<"$shown" 2>/dev/null || exit 0
+    jq -e '(.errors // []) == [] and (.items | length) == 1' >/dev/null <<<"$shown" 2>/dev/null ||
+        { echo "refresh-plan: the plan store could not show $plan as one project: $(cat -- "$diagnostic")$(jq -c '{failure, errors} | with_entries(select(.value != null))' <<<"$shown" 2>/dev/null || printf '%s' "$shown"); name a plan the store holds, then retry" >&2; exit 2; }
+    board=$(jq -r --arg destination "$destination" '(.items[0].item.metadata | if has("onetaskgraph.copies") then .["onetaskgraph.copies"] else {} end) | if type != "object" then error("not an object") elif has($destination) then .[$destination] else "" end | if type == "string" then . else error("not an id") end' <<<"$shown") ||
+        { echo "refresh-plan: $plan's onetaskgraph.copies is not an object naming its copy in $destination by an id; repair it with the plan store, then retry" >&2; exit 2; }
+    [ -n "$board" ] || exit 0
+    held=$(jq -r --argjson keys "$keys" '[.items[0].item.metadata | keys[] | select(IN($keys[]))] | join(", ")' <<<"$shown") ||
+        read_failed "read which run-written keys $plan's project holds"
+    if [ -n "$held" ]; then
+        file=$(jq -r --arg plan "$plan" '.items[0].item.location.path // $plan' <<<"$shown") || file=$plan
+        echo "refresh-plan: $plan's project, $file, holds the run-written keys $held, and no plan-store verb removes a project key; delete them from that file by hand, then retry" >&2; exit 1
+    fi
+    authored=$("${store[@]}" task list --source "$source" --project "$plan" --all --json --no-interactive) || :
+    whole "listing of $plan's tasks" "$authored"
+    boarded=$("${store[@]}" task list --source "$destination" --project "$board" --all --json --no-interactive) || :
+    whole "listing of $plan's board copy $board" "$boarded"
+    # A board task's authoring counterpart is found from the authoring side alone (manager
+    # ruling c1.0): the authoring task's own copy link, or, for a task an earlier refresh
+    # brought in from the board, the `onetaskgraph.origin` the store stamped on that
+    # AUTHORING task. Such a task has no copy link to the board, so that origin is its only
+    # link, and reading it is what keeps a second refresh from importing the same board task
+    # again. A BOARD item's own origin is never read, because a copy onto a public board
+    # withholds it.
+    pairs='def pairs($authored; $destination):
+        [$authored.items[] | .id as $id | .item.metadata as $m
+         | (($m | if has("onetaskgraph.copies") then .["onetaskgraph.copies"] else {} end) | if type == "object" then .[$destination] else null end), $m["onetaskgraph.origin"]
+         | select(type == "string") | {authoring: $id, board: .}];'
+    orphans=$(jq -r --slurpfile listed <(printf '%s\n' "$authored") --arg destination "$destination" "$pairs"'
+        $listed[0] as $authored | (pairs($authored; $destination) | map(.board)) as $paired
+        | .items[] | select(.id | IN($paired[]) | not) | .id' <<<"$boarded") ||
+        read_failed "find the board tasks of $board with no counterpart in $plan"
+    if [ -n "$orphans" ]; then
+        mapfile -t orphaned <<<"$orphans"
+        members=()
+        for one in "${orphaned[@]}"; do members+=(--member "$one"); done
+        # Into the authoring project the board project's own link or origin names, which is
+        # left as it is; a task copy files a board task under no project.
+        if ! copied=$("${store[@]}" project copy "$board" --to "$source" "${members[@]}" --members-only --json --no-interactive 2>"$diagnostic"); then
+            named=$(jq -r --argjson ids "$(printf '%s\n' "${orphaned[@]}" | jq -Rsc 'split("\n") | map(select(. != ""))')" \
+                '[.items[] | select(.id | IN($ids[])) | "\(.id) (\(.item.title))"] | join(", ")' <<<"$boarded") ||
+                named=${orphaned[*]}
+            reason=$(jq -er '.failure.message | split("\n")[0]' <<<"$copied" 2>/dev/null || head -c 2000 -- "$diagnostic")
+            echo "refresh-plan: the plan store cannot bring the board-only tasks $named into $plan: $reason. Nothing was written; add each to $plan by hand, or drop it from the run, then run just refresh-plan again" >&2
+            exit 1
+        fi
+        landed=$(jq --arg source "$source" '[.items[] | .destination // empty | select(startswith($source + ":"))] | length' <<<"$copied") ||
+            read_failed "read where the copy into $source put ${orphaned[*]}"
+        [ "$landed" -eq "${#orphaned[@]}" ] ||
+            { echo "refresh-plan: copying ${orphaned[*]} into $source answered $(jq -c '[.items[] | {source, action, destination}]' <<<"$copied"), not one task each; repair what it names, then retry" >&2; exit 2; }
+        written="after the board-only tasks were copied into $plan"
+        authored=$("${store[@]}" task list --source "$source" --project "$plan" --all --json --no-interactive) || :
+        whole "listing of $plan's tasks" "$authored"
+    fi
+    batch=$(jq -c --slurpfile listed <(printf '%s\n' "$authored") --arg destination "$destination" --argjson keys "$keys" "$pairs"'
+        $listed[0] as $authored | (.items | map({key: .id, value: .item.status.category}) | from_entries) as $status
+        | (pairs($authored; $destination) | map({key: .authoring, value: $status[.board]}) | from_entries) as $wanted
+        | {schema_version: 1, updates: [$authored.items[]
+            | {item: .id, now: .item.status.category, wanted: $wanted[.id], remove: [.item.metadata | keys[] | select(IN($keys[]))]}
+            | select((.wanted != null and .wanted != .now) or (.remove | length) > 0)
+            | {item, remove_metadata: .remove} + (if .wanted != null and .wanted != .now then {status: .wanted} else {} end)]}' <<<"$boarded") ||
+        read_failed "compose the status and key updates of $plan's tasks"
+    owed=$(jq '.updates | length' <<<"$batch") || read_failed "count the updates owed to $plan's tasks"
+    if [ "$owed" -gt 0 ]; then
+        written="after $plan's tasks took their board statuses and lost their run-written keys"
+        applied=$("${store[@]}" task update-many "$source" --input - --json --no-interactive <<<"$batch") ||
+            { echo "refresh-plan: the plan store did not apply every update to $plan's tasks: $(jq -c '[.results[]? | select(.outcome != "written")] | if length > 0 then . else null end // .failure' <<<"$applied" 2>/dev/null || printf '%s' "$applied"); repair what it names, then retry" >&2; exit 2; }
+    fi
+    # A task brought in from the board — this time or by an interrupted refresh before —
+    # still names its board dependencies; each is remapped onto its authoring counterpart, so
+    # the plan resolves inside its own source.
+    brought=$(jq -r --arg destination "$destination" '.items[] | select((.item.metadata["onetaskgraph.origin"] // "") | startswith($destination + ":")) | .id' <<<"$authored") ||
+        { echo "refresh-plan: could not read which of $plan's tasks came from $destination out of its listing; re-run once the plan store lists it whole" >&2; exit 2; }
+    imported=()
+    [ -z "$brought" ] || mapfile -t imported <<<"$brought"
+    for task in ${imported[@]+"${imported[@]}"}; do
+        edges=$("${store[@]}" task deps "$task" --json --no-interactive) || :
+        whole "dependencies of $task" "$edges"
+        mapped=$(jq -c --slurpfile listed <(printf '%s\n' "$authored") --arg task "$task" --arg destination "$destination" "$pairs"'
+            $listed[0] as $authored | (pairs($authored; $destination) | map({key: .board, value: .authoring}) | from_entries) as $counterpart
+            | [.items[] | select(.from.id == $task) | .to
+               | if (.id | startswith($destination + ":")) then {id: $counterpart[.id], kind, edge: .id} else {id, kind} end]' <<<"$edges") ||
+            read_failed "map $task's board dependencies onto $plan"
+        unmapped=$(jq -r '[.[] | select(.id == null) | .edge] | join(", ")' <<<"$mapped") ||
+            read_failed "read which of $task's dependencies have no task in $plan"
+        [ -z "$unmapped" ] ||
+            { echo "refresh-plan: $task, brought in from the board, depends on $unmapped, which has no task in $plan to map its edge onto; add that task to the plan or remove the edge on the board, then retry" >&2; exit 1; }
+        remapped=0
+        jq -e 'any(.[]; has("edge"))' >/dev/null <<<"$mapped" || remapped=$?
+        [ "$remapped" -le 1 ] || read_failed "read whether any of $task's dependencies need remapping"
+        if [ "$remapped" -eq 0 ]; then
+            listed_depends=$(jq -c '.[] | {id, kind}' <<<"$mapped") ||
+                { echo "refresh-plan: could not read $task's remapped dependencies; re-run once the plan store lists them whole" >&2; exit 2; }
+            mapfile -t depends <<<"$listed_depends"
+            args=()
+            for one in "${depends[@]}"; do args+=(--depends-on "$one"); done
+            updated=$("${store[@]}" task update "$task" "${args[@]}" --json --no-interactive 2>&1) ||
+                { echo "refresh-plan: the plan store could not remap $task's dependencies onto $plan: $updated; repair what it names, then retry" >&2; exit 2; }
+        fi
+    done
+
 # `just finish-plan <source>:<project> [destination]` runs the planning road from `check`
 # onward over a plan already drafted, or edited since: `templates/planning/finishing.md.j2`,
 # created in `authoring` and launched in its own flow under the board credential, since the

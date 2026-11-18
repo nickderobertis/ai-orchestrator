@@ -3583,7 +3583,12 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
         after = _rendered_task(changed)
 
         unreviewed = _current_bar_review_states(environment, RENDERED_QUALIFIED)
-        reviewed(RENDERED_QUALIFIED)
+        # The plan now has a board copy, and the review reads the run's record (each task's
+        # settlement and amendment) from that copy, so it reviews with the board in reach.
+        with monkeypatch.context() as on_the_board_too:
+            for key, held in remote.items():
+                on_the_board_too.setenv(key, held)
+            reviewed(RENDERED_QUALIFIED)
         rereviewed = _current_bar_review_states(environment, RENDERED_QUALIFIED)
         rechecked = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
         second = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "plans")

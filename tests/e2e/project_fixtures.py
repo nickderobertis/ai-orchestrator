@@ -26,6 +26,7 @@ from typing import Any, TypedDict
 
 import boundary_home
 import plan_fixture_source
+import run_written_keys
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator.record_shapes import hosted_origin
@@ -676,13 +677,9 @@ def review_bar() -> str:
     ).stdout.strip()
 
 
-#: The engine-owned keys `scripts/review-plan-item.sh` leaves out of a review's digest.
-SETTLEMENT_EXCLUDES = (
-    "--exclude",
-    "onepipeline.projected_status",
-    "--exclude",
-    "onepipeline.settlement",
-)
+#: The run-written keys `scripts/review-plan-item.sh` leaves out of a review's digest, as
+#: `config/run-written-keys.txt` lists them.
+RUN_WRITTEN_EXCLUDES = run_written_keys.EXCLUDES
 
 
 def attested_reviewed(project: str, environment: Mapping[str, str] | None = None) -> str:
@@ -707,7 +704,7 @@ def attested_reviewed(project: str, environment: Mapping[str, str] | None = None
     for kind, item in [*records, ("project", project)]:
         done = subprocess.run(
             [str(ONETASKGRAPH_BIN), kind, "attest", item, "--kind", "plan-review"]
-            + ["--by", "review-plan", "--bar", review_bar(), *SETTLEMENT_EXCLUDES]
+            + ["--by", "review-plan", "--bar", review_bar(), *RUN_WRITTEN_EXCLUDES]
             + ["--no-interactive"],
             cwd=REPO_ROOT,
             env=env,
