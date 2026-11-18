@@ -1,7 +1,7 @@
 # DAG Observatory
 
 The live and historical view of orchestrated DAG execution — which also
-**supervises** it, stopping runs, replying to and attesting on them, and shutting down
+**supervises** it, stopping runs, acting on human items, and shutting down
 the host, each behind the engine's own authority and the acting session the server runs as — is
 [`onepipeline-ui`](https://github.com/nickderobertis/onepipeline-ui). It is not
 built in this repository, and since `onepipeline-api serve --ui` it is not even
@@ -98,11 +98,11 @@ newest run; there is no separate project page.
 **The post-launch verbs a person acts through are routes, and the view offers them.**
 A run has two tabs — **Graph** and **Overall** — under a header carrying
 its status and liveness, its **Run details**, and a per-run **Stop**, which is `stop`
-as the acting session behind a confirm. The read API still serves the channel — its
-queue, a reply composer's byte-for-byte envelope, `attest` on each ready human action,
-**Next** and a raised surface — but the view has offered none of them since
-onepipeline-ui 0.83.5 removed its **Channel** tab, so a channel is answered from a
-terminal with `just channel-next` and `just channel-reply`. The rendered reads (`status`, `results`, `goals`,
+as the acting session behind a confirm. A run's channel is not the browser's:
+onepipeline-ui 0.83.5 removed the view's **Channel** tab and 0.84.0 removed the read
+API's channel and attest routes, which answer `404 removed_route`, so a channel is
+answered, and a ready human action attested, from a terminal with `just channel-next`
+and `just channel-reply`. The rendered reads (`status`, `results`, `goals`,
 `transcript`, `telemetry`, `host`) are routes whose information the view shows across
 **Run details**, **Overall**, a node's **Task** and **Remote** tabs, the conversation
 and **Host**, rather than in a tab of their own. **Host** is a page of its own: the
@@ -145,10 +145,9 @@ run's work or plan with the reason "the run ended", so neither view keeps an ite
 nothing can act on.
 
 **Those controls are the whole of what the view acts through.** A run is acted on by
-its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, a human
+its per-run **Stop**, a human
 item by its raise, answer, batch of answers, completion and dismissal, its reopen and its note, and the host by its one host-wide
-shutdown; every other route the view calls reads. Of a run's controls the view itself
-calls only **Stop** since 0.83.5, the channel's four being the read API's alone. Every
+shutdown; every other route the view calls reads. Every
 read lives in the project sidebar, the run's two tabs, **Run details**, **Host** and
 **Action items**.
 **Watching, adopting and shutting down one run or one session's runs are not the
@@ -157,7 +156,7 @@ they would affect another manager already watching or driving the run, and each 
 route answers `404 removed_route`.
 What the browser never does is launch: a plan is authored and launched from a terminal, and
 everything here is *post*-launch. A planning run and its spikes run are ordinary runs
-with ordinary channels, so a reply to one is the same post-launch route whatever the
+with ordinary channels, so one is answered from a terminal like any other, whatever the
 run is planning.
 
 **Who it acts as is one session, and this host names it.**
@@ -297,7 +296,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.83.6**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.84.0**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, question cards answered by choice or in a
 person's own words, the per-run **Stop** with the owner-naming refusal, and the
@@ -367,7 +366,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed engine says which that is, without a network or a clone: the npm platform
 package `onepipeline-cli` installs ships a CycloneDX SBOM under its `sboms/`, declaring
-one version per linked crate; on the adopted release that is **oneagentgraph 0.13.1**.
+one version per linked crate; on the adopted release that is **oneagentgraph 0.13.2**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new

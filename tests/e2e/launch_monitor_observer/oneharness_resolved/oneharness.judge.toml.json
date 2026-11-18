@@ -277,6 +277,9 @@
       "shared_model_catalog": {
         "value": true
       },
+      "skip_git_repo_check": {
+        "value": true
+      },
       "variant": {
         "alternate": {
           "allowed_tools": {
@@ -322,6 +325,9 @@
             "value": null
           },
           "shared_model_catalog": {
+            "value": true
+          },
+          "skip_git_repo_check": {
             "value": true
           },
           "unset_env": {
@@ -373,6 +379,9 @@
             "value": null
           },
           "shared_model_catalog": {
+            "value": true
+          },
+          "skip_git_repo_check": {
             "value": true
           },
           "unset_env": {

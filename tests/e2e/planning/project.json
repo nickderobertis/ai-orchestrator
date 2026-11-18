@@ -13,6 +13,7 @@
     "support-delegation-checkout",
     "support-fake-backend",
     "support-fake-codex",
+    "support-fake-codex-untrusted-directory",
     "support-follow-up-variables",
     "support-github-board",
     "support-harness-indirections",

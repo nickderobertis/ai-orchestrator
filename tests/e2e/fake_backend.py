@@ -636,6 +636,15 @@ CODEX_BINARY_ENV = "ONEHARNESS_BIN_CODEX"
 CODEX_SERVES_APP_SERVER_ENV = "FAKE_CODEX_SERVES_APP_SERVER"
 #: What a turn answered by that binary answers, one entry per launch, the last repeating.
 CODEX_ANSWERS_ENV = "FAKE_CODEX_ANSWERS"
+#: Set, a panel harness judge's turn — `graphs/planner.yaml`'s `reviewer` — is answered one
+#: layer lower: by the real CLI over its own config, its chain unpinned and no harness mocked,
+#: so the Codex provider binary `ONEHARNESS_BIN_CODEX` names is what oneharness spawns, in the
+#: directory the turn names, and that binary gives this file's answer (`FAKE_CODEX_ANSWERS`).
+#: It exists because a mocked harness never starts a provider, so a directory the provider
+#: refuses would pass here while the real chain fell through to Claude on every review. A
+#: turn here with no `ONEHARNESS_BIN_CODEX` fails rather than reaching a real provider. Unlike
+#: a supervisor's turn it is an `exec` turn, so `FAKE_CODEX_SERVES_APP_SERVER` is not set.
+PANEL_JUDGE_AT_PROVIDER_ENV = "FAKE_BACKEND_PANEL_JUDGE_AT_PROVIDER"
 #: What the stand-in worker says on every turn, and what the supervisor counts.
 WORKER_REPLY = "the stand-in worker reported without changing anything"
 
@@ -962,6 +971,16 @@ def _answered_at_provider(argv: list[str]) -> bool:
     )
 
 
+def _panel_judge_at_provider(argv: list[str]) -> bool:
+    """Whether this turn is a panel judge's that `PANEL_JUDGE_AT_PROVIDER_ENV` sends lower."""
+    config = _last_flag(argv, CONFIG_FLAG)
+    return (
+        bool(os.environ.get(PANEL_JUDGE_AT_PROVIDER_ENV))
+        and config is not None
+        and PANEL_JUDGE_CONFIG.fullmatch(Path(config).name) is not None
+    )
+
+
 def _answer(
     argv: list[str],
     text: str,
@@ -984,6 +1003,16 @@ def _answer(
         print(f"fake_backend: {REAL_BINARY_ENV} is not set", file=sys.stderr)
         return 2
     environment = dict(os.environ)
+    if _panel_judge_at_provider(argv) and not (lost or activity or controlled):
+        if not environment.get(CODEX_BINARY_ENV):
+            print(f"fake_backend: {CODEX_BINARY_ENV} is not set", file=sys.stderr)
+            return 2
+        environment[CODEX_ANSWERS_ENV] = json.dumps([text])
+        # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+        at_provider = subprocess.run(
+            [real, *argv], env=environment, stdin=subprocess.DEVNULL, check=False
+        )
+        return at_provider.returncode
     environment[MOCK_STDOUT_ENV] = json.dumps({"result": text})
     harness = _pinned_identity(real, argv)
     mocked = MOCK_HARNESS

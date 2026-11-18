@@ -33,6 +33,7 @@ from typing import NamedTuple
 import pytest
 import yaml
 from conftest import git
+from judging_codex import JudgeInput
 from planning_bench import Bench, bench, judge_inputs, judge_only_turns, just, run
 from scratch_identity import GIT_IDENTITY, PLANNING_FLOW_ORIGIN, rules_for_hosted, seeded
 from waits import timeout as e2e_timeout
@@ -289,7 +290,7 @@ class Review(NamedTuple):
     judge-only reviewer turn it ran."""
 
     ran: subprocess.CompletedProcess[str]
-    inputs: list[dict[str, object]]
+    inputs: list[JudgeInput]
     reviewer: list[str]
 
 
@@ -435,7 +436,7 @@ def _flat(text: str) -> str:
     return " ".join(text.split())
 
 
-def _judged(review: Review, rule: str, description: str) -> list[dict[str, object]]:
+def _judged(review: Review, rule: str, description: str) -> list[JudgeInput]:
     """Every llmlint batch of ``review`` whose input carries ``rule`` with ``description``."""
     return [
         one
@@ -446,10 +447,8 @@ def _judged(review: Review, rule: str, description: str) -> list[dict[str, objec
     ]
 
 
-def _read(batch: dict[str, object]) -> dict[str, str]:
-    read = batch["read"]
-    assert isinstance(read, dict), batch
-    return {str(path): str(text) for path, text in read.items()}
+def _read(batch: JudgeInput) -> dict[str, str]:
+    return batch["read"]
 
 
 def _refused_through(sequence: Sequence, review: Review, rule: str, text: str, kind: str) -> None:

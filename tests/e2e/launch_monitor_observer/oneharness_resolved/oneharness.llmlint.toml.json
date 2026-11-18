@@ -238,8 +238,7 @@
           "-c",
           "sandbox_permissions=[\"disk-full-read-access\",\"network-full-access\"]",
           "-c",
-          "features.apps=false",
-          "--skip-git-repo-check"
+          "features.apps=false"
         ]
       },
       "bin": {
@@ -259,6 +258,9 @@
         "value": null
       },
       "shared_model_catalog": {
+        "value": true
+      },
+      "skip_git_repo_check": {
         "value": true
       },
       "variant": {
@@ -303,6 +305,9 @@
             "value": null
           },
           "shared_model_catalog": {
+            "value": true
+          },
+          "skip_git_repo_check": {
             "value": true
           },
           "unset_env": {
@@ -350,6 +355,9 @@
             "value": null
           },
           "shared_model_catalog": {
+            "value": true
+          },
+          "skip_git_repo_check": {
             "value": true
           },
           "unset_env": {

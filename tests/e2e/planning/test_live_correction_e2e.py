@@ -33,8 +33,10 @@ import pytest
 import run_written_keys
 from drafting import design_commands, plan_commands
 from fake_backend import JUDGE_REFUSAL, JUDGE_REFUSES_ENV
+from judging_codex import JudgeInput
 from planning_bench import (
     Bench,
+    assert_reviewed_on_codex,
     bench,
     judge_inputs,
     judge_only_turns,
@@ -81,6 +83,8 @@ class Op(NamedTuple):
     judged_after_refusal: list[str]
     judged_after_pass: list[str]
     reviewer_after_pass: list[str]
+    #: Every input the Codex double was handed while the passing reply was judged.
+    codex_after_pass: list[JudgeInput]
 
 
 class Sequence(NamedTuple):
@@ -282,6 +286,7 @@ def _correct(bench: Bench, run_id: str, name: str, build: object) -> Op:
     after_refusal = _committed(bench, run_id)
     judged_refused = _judged(bench)[judged:]
     judged = len(_judged(bench))
+    codex = len(judge_inputs(bench))
     passed = _reply(bench, run_id, *build(passing_text, "b"))
     return Op(
         name,
@@ -294,6 +299,7 @@ def _correct(bench: Bench, run_id: str, name: str, build: object) -> Op:
         judged_refused,
         _judged(bench)[judged:],
         _reviewer(bench)[reviewer:],
+        judge_inputs(bench)[codex:],
     )
 
 
@@ -305,6 +311,7 @@ def _defect(bench: Bench, run_id: str) -> Op:
     after_refusal = _committed(bench, run_id)
     refused_turns = _reviewer(bench)[reviewer:]
     judged, reviewer = len(_judged(bench)), len(_reviewer(bench))
+    codex = len(judge_inputs(bench))
     passing = "DEFECT-FIXED: a request-level test reads the route's JSON body."
     passed = _reply(bench, run_id, {"op": "amend", "id": DOCS, "text": f"- {passing}"})
     return Op(
@@ -318,6 +325,7 @@ def _defect(bench: Bench, run_id: str) -> Op:
         refused_turns,
         _judged(bench)[judged:],
         _reviewer(bench)[reviewer:],
+        judge_inputs(bench)[codex:],
     )
 
 
@@ -337,6 +345,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     native = f"plan-lc-{os.getpid()}"
     plan = _plan(bench_, native)
     reviewed = just(bench_, "review-plan", plan)
+    assert_reviewed_on_codex(judge_inputs(bench_), reviewed)
     assert reviewed.returncode == 0, reviewed.stdout + reviewed.stderr
     # Reviewed, but with no design document yet: the launch check refuses it as absent.
     undesigned = just(bench_, "orchestrate", plan, "--dag-graph", "off")
@@ -601,6 +610,16 @@ def test_a_live_edit_carrying_a_plan_quality_defect_is_refused_and_applied_witho
     assert defect.passed.returncode == 0, defect.passed.stdout + defect.passed.stderr
     assert defect.committed_after_pass > defect.committed_after_refusal
     assert JUDGE_REFUSAL not in defect.passed.stderr
+
+
+@pytest.mark.parametrize("name", ["amend", "requeue", "retry", "add"])
+def test_the_plan_edit_hook_runs_its_reviewer_on_codex_in_its_non_repository_scratch(
+    sequence: Sequence, name: str
+) -> None:
+    """Hook mode: the reviewer judging a live correction runs its Codex turn where the hook
+    laid the task out, which is no repository, and the Codex double answers it."""
+    op = sequence.ops[name]
+    assert_reviewed_on_codex(op.codex_after_pass, op.passed)
 
 
 def test_nothing_of_a_refused_reply_is_committed(sequence: Sequence) -> None:

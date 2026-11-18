@@ -318,12 +318,15 @@ def _with_command_ceiling(harness: dict[str, Any]) -> dict[str, Any]:
     Claude Code's ceiling merges into the harness's `env` beside what it already holds;
     Codex's arguments are the whole `args` list, since a child's list replaces a parent's.
     Claude Code's `args` are dropped, since the judge's are its reading-only tool set,
-    which only the judge sides carry.
+    which only the judge sides carry. Codex's `skip_git_repo_check` is cleared on the
+    harness and every variant, since only the judge and judged-lint roles run a turn
+    outside a git repository; a worker runs in its worktree.
     Typed `Any` like every effective configuration in this module: it is `oneharness`'s
-    JSON, whose schema that CLI owns and validates, and only these two keys are read.
+    JSON, whose schema that CLI owns and validates, and only these keys are read.
     """
     claude_code = harness["claude-code"]
     codex = harness["codex"]
+    no_skip = {"value": False}
     return {
         **harness,
         "claude-code": {
@@ -331,7 +334,15 @@ def _with_command_ceiling(harness: dict[str, Any]) -> dict[str, Any]:
             "env": {**claude_code["env"], CLAUDE_CODE_CEILING: {"value": CEILING_MS}},
             "args": {"value": None},
         },
-        "codex": {**codex, "args": {"value": list(CODEX_CEILING_ARGS)}},
+        "codex": {
+            **codex,
+            "args": {"value": list(CODEX_CEILING_ARGS)},
+            "skip_git_repo_check": no_skip,
+            "variant": {
+                name: {**variant, "skip_git_repo_check": no_skip}
+                for name, variant in codex.get("variant", {}).items()
+            },
+        },
     }
 
 

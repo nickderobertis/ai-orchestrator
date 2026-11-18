@@ -1,7 +1,7 @@
 """What `docs/dag-ui.md` says the DAG Observatory can do, against the reader's own contract.
 
 `docs/dag-ui.md` lists the browser's supervising surface — the project-centric sidebar,
-the channel and its reply composer, `attest`, the per-run `stop`, the Host page with its
+the per-run `stop`, the Action items page, the Host page with its
 unwatched report and its one host-wide shutdown, and the rendered reads — the refusal a
 stranger's stop meets, and that those controls are the whole of what the view acts through.
 Every one of those is `onepipeline-ui`'s: this repository builds none of the view and
@@ -59,9 +59,6 @@ class Capability(NamedTuple):
 #: words and the contract states them as paths: the pairing *is* the claim being held.
 CAPABILITIES = (
     Capability("The navigation is project-centric", " /api/v2/projects "),
-    Capability("the channel", " /api/v2/runs/{run}/channel "),
-    Capability("reply composer", "/channel/reply"),
-    Capability("`attest`", "/api/v2/runs/{run}/attest"),
     Capability("per-run **Stop**", "/api/v2/runs/{run}/stop"),
     Capability("the unwatched route", "/api/v2/unwatched"),
     Capability("`status`", "/api/v2/runs/{run}/status"),
@@ -80,10 +77,6 @@ WHOLE = "Those controls are the whole of what the view acts through."
 #: Every write route the contract declares, against the words the page lists it in.
 CONTROLS = {
     "POST /api/v2/runs/{run}/stop": "its per-run **Stop**",
-    "POST /api/v2/runs/{run}/channel/next": "its channel's **Next**",
-    "POST /api/v2/runs/{run}/channel/reply": "reply,",
-    "POST /api/v2/runs/{run}/channel/surface": "raised surface",
-    "POST /api/v2/runs/{run}/attest": "raised surface and `attest`, a human",
     "POST /api/v2/shutdown": "the host by its one host-wide shutdown",
     "POST /api/human-items": "a human item by its raise,",
     "POST /api/human-items/{id}/answer": "answer,",

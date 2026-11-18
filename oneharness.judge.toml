@@ -55,12 +55,14 @@ harnesses = [
 # setting: the `read-only` mode passes `--sandbox read-only` on a fresh turn and re-asserts
 # it on a resumed one.
 #
-# No `--skip-git-repo-check` here: a dispatch's supervisor runs `codex app-server`, which
-# rejects that flag in every release (0.159.2 through 0.169.0), so carrying it killed every
-# Codex-supervised dispatch. A plan review run in a non-repository scratch directory may
-# fall through to Claude until that path gets the flag on its own.
+# `skip_git_repo_check` is the typed setting, never `--skip-git-repo-check` in `args`:
+# oneharness adds that flag to `codex exec` and `exec resume` alone, so a plan review run
+# in `scripts/review-plan-item.sh`'s `mktemp -d` scratch directory is answered on Codex
+# rather than refused as untrusted, while a dispatch's supervisor, which runs `codex
+# app-server` and rejects the flag, never receives it. Raw `args` reach both launches.
 [harness.codex]
 args = ["-c", "features.apps=false"]
+skip_git_repo_check = true
 
 # The one remaining fill. The `read-only` mode hands Claude Code its own reading tool set
 # under `bypassPermissions` and still loads every MCP server the worktree or identity

@@ -241,12 +241,14 @@ worker's.
 
 Every supervisory Codex role — both judges, the monitor, the plan reviewer, the drafter and the judged lint tier — also passes `-c features.apps=false` in
 its `[harness.codex]` args, which removes the ChatGPT-app connector tools
-(`mcp__codex_apps__…`, some 260 of a judge turn's 275) and leaves the shell. The judged-lint
-role also passes `--skip-git-repo-check`, because the plan checklist runs it as `codex exec`
-in `scripts/review-plan-item.sh`'s `mktemp -d` scratch directory, which Codex otherwise
-refuses as untrusted. The judge role cannot: a dispatch's supervisor runs `codex app-server`,
-which rejects that flag, so the planner's reviewer still falls through to Claude there. The worker roles and the shared parents carry none of these
-settings.
+(`mcp__codex_apps__…`, some 260 of a judge turn's 275) and leaves the shell. The judge and
+judged-lint roles also skip Codex's git-repository check, because a plan review runs both as
+`codex exec` in `scripts/review-plan-item.sh`'s `mktemp -d` scratch directory, which Codex
+otherwise refuses as untrusted, sending the review to a Claude identity. Each states the typed
+`skip_git_repo_check = true` under `[harness.codex]` rather than the raw flag in `args`, because
+oneharness applies the setting to `codex exec` only and never to `codex app-server`, which
+rejects the flag — and a dispatch's supervisor runs the judge role as `codex app-server`. The
+worker roles and the shared parents carry none of these settings.
 
 The Codex stand-in, `tests/e2e/fake_codex.py`, mirrors both of those refusals. An `app-server`
 launch carrying an argument real `codex app-server` does not accept exits 2 with clap's
@@ -258,9 +260,13 @@ alone, so `app-server` starts outside every repository as real Codex does.
 supervisor is answered on Codex under the shipped `oneharness.judge.toml`, through the real
 `oneharness` CLI with the stand-in as its binary rather than `--mock-harness`, which checks no
 argv: a judge config carrying a flag `codex app-server` rejects fails it at the supervisor's
-first turn.
+first turn. The planning journeys under `tests/e2e/planning/` answer the planner's reviewer
+the same way, down to the stand-in as `codex exec`, and fail a review — `just review-plan` or
+a live correction's hook — whose reviewer turn the stand-in refused as untrusted.
 `tests/e2e/launch_monitor_observer/test_supervisory_codex_posture_e2e.py` holds them to what the real CLI
-resolves and to the argv a dry run builds per identity, and fails on a mode other than
+resolves and to the argv a dry run builds per identity — every Codex identity of the judge and
+judged-lint roles building `--skip-git-repo-check` into its `exec` argv and never into its
+controlled `app-server` one — and fails on a mode other than
 `read-only`, a sandbox pinned by hand or missing from Codex's argv, a Claude Code tool
 set other than the read-only one (plus `Bash` under `dontAsk` and the decline rule alone,
 for the dispatch judge), a grant on the design-document judge, or a lost
@@ -333,8 +339,8 @@ checklist holds the plan, each task's front matter carrying its `depends_on` edg
 starts without the writable escape hatch**: onejudge refuses a panel of two or more judges
 holding one whose mode is writable (`refuse_writable_panels` in its `cli/config.rs`), and
 the reviewer is `read-only` for the reason the section above gives, so the graph sets no
-`allow_writable_judges`. The shape is stated in [onejudge v0.23.2's
-`judges.md`](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.23.2/docs/judges.md)
+`allow_writable_judges`. The shape is stated in [onejudge v0.23.5's
+`judges.md`](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.23.5/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
 graph member, in [oneagentgraph v0.5.6's
 `contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.6/docs/contract.md).
@@ -435,7 +441,7 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.30.0 is
+`config/oneharness.version` release and rejects a stale binary. Version 0.31.0 is
 the adopted release. Up to 0.28.8 the releases since 0.17.0 change how a reader meets the
 CLI and what a Codex process it starts downloads, and none of it moves what this host's
 configs select. 0.29.0 moves every sync-policy field into a `[sync]` section
@@ -443,7 +449,11 @@ configs select. 0.29.0 moves every sync-policy field into a `[sync]` section
 `config/manager-allowlist.toml` states its list there, and 0.30.0 applies a top-level
 `allowed_tools` to one run alone
 ([oneharness#1626](https://github.com/nickderobertis/oneharness/pull/1626)), the dispatch
-judge's grant described under "The mode a judge runs in". 0.23.0 launches every Codex run and usage probe with plugins off
+judge's grant described under "The mode a judge runs in". 0.31.0 adds the Codex-only typed
+`skip_git_repo_check`, which passes `--skip-git-repo-check` to `codex exec` and `exec resume`
+alone and never to `codex app-server`
+([oneharness#1658](https://github.com/nickderobertis/oneharness/pull/1658)), the judge and
+judged-lint roles' setting described under "The mode a judge runs in". 0.23.0 launches every Codex run and usage probe with plugins off
 (`-c features.plugins=false`) unless a config's typed `plugins = true` opts in
 ([oneharness#1457](https://github.com/nickderobertis/oneharness/pull/1457)), which
 `tests/e2e/launch_monitor_observer/test_codex_plugins_off_e2e.py` reads off the argv
@@ -1114,7 +1124,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.30.0, a config's per-harness `model` **beats** the variable, while the `--model`
+0.31.0, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/release_pins/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -1251,7 +1261,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.30.0, confirmed against the binary:
+candidate it ended up running — through oneharness 0.31.0, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -1708,7 +1718,7 @@ gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.23.2 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.23.2/docs/protocol.md)),
+([onejudge v0.23.5 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.23.5/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and

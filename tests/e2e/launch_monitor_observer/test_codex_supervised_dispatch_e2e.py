@@ -6,6 +6,10 @@ accepts, and a supervisor's controlled turn starts `codex app-server`, which ref
 journey noticed, because every supervisor turn here was answered by `--mock-harness`, which
 never checks the argv it is handed.
 
+The judge config now skips Codex's git-repository check through the typed
+`skip_git_repo_check`, which oneharness adds to `codex exec` alone, so this journey is also
+what proves the setting never reaches the supervisor's `codex app-server`.
+
 So this journey answers the supervisor one layer lower. `tests/e2e/fake_backend.py`, under
 `FAKE_BACKEND_SUPERVISOR_AT_PROVIDER`, hands each supervisor turn to the real `oneharness` CLI
 over the shipped `oneharness.judge.toml` with its first Codex identity pinned and nothing

@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.113.5 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.114.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -161,7 +161,7 @@ a schema version, not a field to discover.
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
 under the 0.22.0 CLI and onejudge 0.19, and read off the tags as unchanged through
-the 0.22.0/0.20.0 upgrade, the 0.26.1/0.21.0 upgrade, the 0.26.1/0.22.0 upgrade, the 0.26.1/0.22.1 upgrade, the 0.26.1/0.22.2 upgrade, the 0.26.1/0.22.5 upgrade, the 0.26.1/0.23.1 upgrade, the 0.30.0/0.23.1 upgrade and the 0.30.0/0.23.2 upgrade (`config/oneharness.version` and
+the 0.22.0/0.20.0 upgrade, the 0.26.1/0.21.0 upgrade, the 0.26.1/0.22.0 upgrade, the 0.26.1/0.22.1 upgrade, the 0.26.1/0.22.2 upgrade, the 0.26.1/0.22.5 upgrade, the 0.26.1/0.23.1 upgrade, the 0.30.0/0.23.1 upgrade, the 0.30.0/0.23.2 upgrade and the 0.31.0/0.23.5 upgrade (`config/oneharness.version` and
 `config/onejudge.version`); the pair before it is the boundary the older per-party
 accounting sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -320,14 +320,14 @@ turns onejudge 0.19.0 ran through
 `oneharness.judge.toml` and `oneharness.design-doc-judge.toml`, two on Codex and two on
 Claude Code: each record's `usage` block is the same five keys and nothing else.
 It moved again to 0.19.5 with the engine 0.75.0, to 0.20.0 with the engine 0.80.2 and to
-0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0 and to 0.22.1 with the engine 0.96.1 and to 0.22.2 with the engine 0.101.2 and to 0.22.4 with the engine 0.105.0 and to 0.22.5 with the engine 0.106.0 and to 0.23.0 with the engine 0.106.3 and to 0.23.1 with the engine 0.107.0 and to 0.23.2 with the engine 0.113.5, and both files are unchanged between `onejudge-v0.19.0` and
+0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0 and to 0.22.1 with the engine 0.96.1 and to 0.22.2 with the engine 0.101.2 and to 0.22.4 with the engine 0.105.0 and to 0.22.5 with the engine 0.106.0 and to 0.23.0 with the engine 0.106.3 and to 0.23.1 with the engine 0.107.0 and to 0.23.2 with the engine 0.113.5 and to 0.23.5 with the engine 0.114.0, and both files are unchanged between `onejudge-v0.19.0` and
 `onejudge-v0.22.2` too; from there to `onejudge-v0.22.5` only
-doc comments in `report.rs` moved, and neither file moved from there to `onejudge-v0.23.2`, the CLI this host pins. The
-engine links `oneharness-core` 0.29.1 for itself, onejudge 0.23.2 and oneagentgraph 0.13.1, read off the
+doc comments in `report.rs` moved, and neither file moved from there to `onejudge-v0.23.5`, the CLI this host pins. The
+engine links `oneharness-core` 0.34.0 for itself, onejudge 0.23.5 and oneagentgraph 0.13.2, read off the
 SBOM its npm platform package ships. Between `oneharness-core-v0.24.2` and `oneharness-core-v0.28.2`, `domain/usage.rs`
 gains the reset-credit report above and a millisecond RFC 3339 reader
 ([oneharness#1464](https://github.com/nickderobertis/oneharness/pull/1464)), touching
-no per-turn token usage, and it is unchanged from there to `oneharness-core-v0.29.1`; this
+no per-turn token usage, and it is unchanged from there to `oneharness-core-v0.34.0`; this
 was read off the tags and was not re-taken on judge turns.
 The oneharness half then moved to 0.26.1 with that engine: `oneharness-cli` 0.26.1 was
 built on `oneharness-core` 0.29.1, read off its wheel's own SBOM, and between
@@ -342,6 +342,10 @@ and `oneharness-core-v0.33.0` `domain/usage.rs` is unchanged, so that report's o
 `SCHEMA_VERSION` stays `0.1` and no per-turn token usage moves, while the history format's
 `SCHEMA_VERSION` moves from `1.11` to `1.12`, which adds only the `unsupported_input` failure
 kind and touches no `usage` a run line carries.
+It moved again to 0.31.0 with the engine 0.114.0: `oneharness-cli` 0.31.0 is compiled against
+`oneharness-core` 0.34.0, read off its wheel's own SBOM, and between `oneharness-core-v0.33.0`
+and `oneharness-core-v0.34.0` neither `domain/usage.rs` nor `domain/history.rs` changes, so
+that report's own `SCHEMA_VERSION` stays `0.1` and the history format's stays `1.12`.
 `tests/test_engine_history_vocabulary.py` re-reads that latest move off the wheel and the two
 tags; it was not re-taken on judge turns.
 `dispatches`,
@@ -474,7 +478,7 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.83.6**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.84.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 29 on the envelope, as 0.81.2 and 0.82.0 served, where 0.81.1, 0.81.0, 0.80.0 and 0.79.0
    served 28, 0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
@@ -486,8 +490,8 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    gives a node's result the `awaiting` releases its settlement still awaits, 28 opens
    a run progressively, and 29 serves a plan task's and a node result's `command` kind and
    lists a run's refused edits, each view's shape stated by onepipeline-ui's own `docs/contract.md`;
-   `timeline_schema_version` 15, where 0.65.4, 0.62.1, 0.62.0, 0.61.0, 0.60.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served 14, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
-   11 and 0.21.1 served 10 — 15 carries each check’s requirement label and recorded URL, and 14 gives every `turn-started`, `turn-message` and
+   `timeline_schema_version` 16, where 0.83.6 served 15, 0.65.4, 0.62.1, 0.62.0, 0.61.0, 0.60.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served 14, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
+   11 and 0.21.1 served 10 — 16 serves every payload field of an event under the record's own wire key, where 15 served a selection under English labels, and gives every record of a surface the state that surface came to, 15 carries each check’s requirement label and recorded URL, and 14 gives every `turn-started`, `turn-message` and
    `turn-activity` event a one-line `description` the engine's resolver writes, 13 counts a
    journal record relayed again under one `(stream, seq)` once, and bounds each session lane
    by its own first and last record, and 11 carries each change request's `review` record from

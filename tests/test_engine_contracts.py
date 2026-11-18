@@ -3372,6 +3372,8 @@ AUTHORED_NODE_FIELDS = frozenset(
         "steps",
         "adoption",
         "consumes",
+        "guard",
+        "guard_timeout_seconds",
     }
 )
 #: The `Node` fields `task_document` takes out of the rendered node before the rest become

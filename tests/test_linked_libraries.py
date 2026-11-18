@@ -878,9 +878,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.13.1", core="0.29.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.23.2", core="0.29.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.113.5", core="0.29.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.13.2", core="0.34.0"),
+    LinkedCore(dependent="onejudge", dependent_version="0.23.5", core="0.34.0"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.114.0", core="0.34.0"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -1363,10 +1363,10 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     and this host also installs each of them as a standalone CLI whose wheel resolved its
     own `oneharness-core`. Those two numbers are free to differ, and have on every
     adoption recorded here but one — so a reader who measured the sibling's own wheel
-    would be measuring an artifact no dispatch loads. On this adoption one pair differs
-    and one coincides: `onejudge-cli` resolved 0.29.0 while the engine links 0.29.1 for
-    it, and `oneagentgraph-cli` resolved the same 0.29.1. They coincided before too, at
-    0.24.0, on an
+    would be measuring an artifact no dispatch loads. On this adoption both pairs
+    coincide: `onejudge-cli` and `oneagentgraph-cli` each resolved 0.34.0, the core the
+    engine links for them, where on the adoption before `onejudge-cli` resolved 0.29.0
+    against the engine's 0.29.1. They coincided before too, at 0.24.0, on an
     earlier adoption, and parted when the engine moved to 0.24.1 — a coincidence and not
     a contract: it is the reason the pairing below is written out rather than asserted
     as an inequality.
@@ -1386,8 +1386,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     }
 
     assert measured == {
-        "oneagentgraph-cli": ("0.29.1", "0.29.1"),
-        "onejudge-cli": ("0.29.0", "0.29.1"),
+        "oneagentgraph-cli": ("0.34.0", "0.34.0"),
+        "onejudge-cli": ("0.34.0", "0.34.0"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "

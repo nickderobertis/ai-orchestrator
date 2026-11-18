@@ -16,7 +16,7 @@ paid turn. The argv a mode builds is oneharness's, so it is read off the CLI rat
 restated here, and a release that changes it shows up as a changed argv below.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] Not expensive: the
-module's 21 journeys each ask the installed `oneharness` for a resolved config, a dry-run
+module's 23 journeys each ask the installed `oneharness` for a resolved config, a dry-run
 argv or its harness list — no provider turn, no launch, no network — and none takes more
 than a fraction of a second (`pytest --durations`), so a project of its own would buy no
 skipped work.
@@ -84,6 +84,12 @@ CONNECTOR_ROLES = (
 
 #: codex-cli's switch for the ChatGPT-app connector tools, as the argv pair codex reads.
 CONNECTORS_OFF = ["-c", "features.apps=false"]
+
+#: The roles whose Codex turn may run outside any git repository — the plan review's judge
+#: and its judged-lint checklist, both run in `scripts/review-plan-item.sh`'s `mktemp -d`
+#: scratch directory — and the typed setting each states for it, never the raw flag.
+GIT_CHECK_SKIPPING_ROLES = ("oneharness.judge.toml", "oneharness.llmlint.toml")
+SKIP_GIT_CHECK = "--skip-git-repo-check"
 
 #: The roles whose turn is a worker's, and the parents nothing runs against.
 WORKER_ROLES = (
@@ -162,6 +168,38 @@ def _planned(oneharness_bin: str, config: str, harness_id: str) -> dict[str, Any
     results: list[dict[str, Any]] = json.loads(proc.stdout)["results"]
     assert len(results) == 1, f"{config} planned {results} for {harness_id}"
     return results[0]
+
+
+def _planned_controlled(oneharness_bin: str, config: str, harness_id: str) -> list[str]:
+    """The argv a controlled turn of `config` would hand `harness_id` — the launch a
+    dispatch's supervisor makes, `codex app-server` on Codex — spending and writing nothing."""
+    proc = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            config,
+            "--harness",
+            harness_id,
+            "--print-command",
+            "--control",
+            "--session",
+            "posture-dry-run",
+            "--prompt",
+            "x",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        env=_environment(),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+    )
+    assert proc.returncode == 0, f"{config} did not plan a controlled {harness_id}: {proc.stderr}"
+    (result,) = json.loads(proc.stdout)["results"]
+    command: list[str] = result["command"]
+    return command
 
 
 def _planned_command(oneharness_bin: str, config: str, harness_id: str) -> str:
@@ -385,6 +423,39 @@ def test_the_llmlint_role_keeps_its_sandbox_grant_beside_the_switch(oneharness_b
         "-c",
         'sandbox_permissions=["disk-full-read-access","network-full-access"]',
     ], args
+
+
+@pytest.mark.parametrize("config", GIT_CHECK_SKIPPING_ROLES)
+def test_the_git_check_skip_reaches_codex_exec_and_never_codex_app_server(
+    oneharness_bin: str, config: str
+) -> None:
+    """Every Codex identity skips the git-repository check on `exec`, and on `exec` alone.
+
+    The role states the typed `skip_git_repo_check` and never the raw flag in `args`, which
+    would reach `codex app-server` too — and real `app-server` rejects it, so a dispatch's
+    supervisor would never start. What each identity is handed is read off the real CLI's
+    dry runs: the one-shot `exec` argv a plan review runs, and the controlled turn's
+    `app-server` argv a dispatch's supervisor runs.
+    """
+    resolved = _resolved(oneharness_bin, config)["harness"]["codex"]
+    assert resolved["skip_git_repo_check"] == {"value": True, "source": config}, (
+        f"{config} must state skip_git_repo_check = true in its own [harness.codex]; "
+        f"oneharness resolves {resolved['skip_git_repo_check']}"
+    )
+    assert SKIP_GIT_CHECK not in (resolved["args"]["value"] or []), (
+        f"{config} passes {SKIP_GIT_CHECK} through [harness.codex] args, which reach "
+        f"`codex app-server` too: {resolved['args']}"
+    )
+
+    codex = _identities(oneharness_bin, config, "codex")
+    assert codex == ["codex:primary", "codex:alternate"], codex
+    for identity in codex:
+        one_shot = _planned(oneharness_bin, config, identity)["command"]
+        assert one_shot[:2] == ["codex", "exec"], f"{identity} under {config}: {one_shot}"
+        assert one_shot.count(SKIP_GIT_CHECK) == 1, f"{identity} under {config}: {one_shot}"
+        controlled = _planned_controlled(oneharness_bin, config, identity)
+        assert controlled[:2] == ["codex", "app-server"], f"{identity} under {config}: {controlled}"
+        assert SKIP_GIT_CHECK not in controlled, f"{identity} under {config}: {controlled}"
 
 
 @pytest.mark.parametrize("config", WORKER_ROLES + SHARED_PARENTS)
