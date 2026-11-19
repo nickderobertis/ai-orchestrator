@@ -1,8 +1,7 @@
 ---
 onetaskgraph_template: 1
 description: >-
-  The planner's finalize task, reworking a plan from its spikes' reports, or reporting that
-  there is nothing to finalize when the plan has no spikes project.
+  The planner's finalize task, reworking a plan from its spikes' reports.
 variables:
   plan:
     description: The qualified id of the plan to finalize.
@@ -13,12 +12,8 @@ variables:
     type: text
     required: true
 ---
-**First, check whether the spikes project exists**: run `onetaskgraph project show
-{{ plan }}-spikes`. When it finds no such project, the plan needed no measurement: report at
-once that there is nothing to finalize, reading nothing else and changing nothing.
-
 {# llmlint: ignore-block[changed_behavior_has_e2e] A planner or design writer carries this out by its own reading of the store, which the suite never scripts a verdict for: it doubles the model's turn, so a journey could only assert what its own script chose. What the host decides around it is driven: the planning journeys hold that this step runs with this task, at its place in the flow, over the records the store holds. #}
-Otherwise every spike of `{{ plan }}-spikes` has settled. **Which tasks to rework**: when no
+Every spike of `{{ plan }}-spikes` has settled. **Which tasks to rework**: when no
 task of `{{ plan }}` names a spike in its `spikes` answer yet, this is the plan's first
 finalize, and every task a report bears on is reworked. Otherwise rework exactly the tasks
 `scripts/spike-records.sh rework {{ plan }}` lists, from the refreshed reports of the spikes
@@ -34,7 +29,7 @@ it). Spike branches stay until the plan's own run succeeds.
 
 ## Acceptance criteria
 
-- Where `{{ plan }}-spikes` exists, every task this finalize reworks — on a first finalize every task a spike report bears on; on the finalize `just finish-plan` runs after re-running stale spikes, each task `scripts/spike-records.sh rework {{ plan }}` listed — states what the report measured, and names that spike in its `spikes` answer.
+- Every task this finalize reworks — on a first finalize every task a spike report bears on; on the finalize `just finish-plan` runs after re-running stale spikes, each task `scripts/spike-records.sh rework {{ plan }}` listed — states what the report measured, and names that spike in its `spikes` answer.
 - Every task is the rendering of its template its provenance records.
 
 ## Additional info

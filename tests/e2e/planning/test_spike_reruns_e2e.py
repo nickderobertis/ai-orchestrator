@@ -49,6 +49,7 @@ import pytest
 from conftest import git
 from drafting import (
     DESIGN_MARKER,
+    FINALIZE_MARKER,
     RESOLVE,
     SPIKE_CRITERIA,
     SPIKE_WHY,
@@ -82,8 +83,6 @@ EXECUTION_ALIAS = "execution"
 HEALTH, VISUAL = "spike-health", "spike-visual"
 #: The docs task builds on both spikes, so a re-finish editing one shows `rework` naming only it.
 DOCS_SPIKES = (HEALTH, VISUAL)
-#: A phrase only the planning templates' finalize task carries.
-FINALIZE_MARKER = "**First, check whether the spikes project exists**"
 #: The dispatch appendix's report-update rule, as a re-run spike's task must carry it.
 REPORT_RULE = "A spike whose report already exists updates that report."
 PRESERVE_RULE = "keep every other entry's answers and images exactly as they are"

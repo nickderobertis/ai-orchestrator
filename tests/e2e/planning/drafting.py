@@ -21,6 +21,7 @@ DRAFT_MARKER = "## Where the plan goes"
 DESIGN_MARKER = "Write the design document a person reviews the plan"
 SPIKE_BRIEF_MARKER = "spike brief the manager relays while the spikes run beside you"
 SPIKE_MARKER = "SPIKE-WORK: measure the health route"
+FINALIZE_MARKER = "**Which tasks to rework**"
 
 STORE = ".venv/bin/onetaskgraph"
 RESOLVE = "scripts/onepipeline.sh template resolve"

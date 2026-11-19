@@ -324,7 +324,7 @@ which is the point of it. Its members, in order:
 | `refresh` | command | `just refresh-plan <plan> <destination>`: a replan starts from its run's current state |
 | `draft` | planner, `graphs/planner.yaml` | writes the plan into `authoring`, and `<plan>-spikes` when it needs a measurement |
 | `spikes` | command | starts the spikes run in the same flow when the draft created one; `done` at once otherwise |
-| `finalize` | planner | reworks the plan from the spike reports |
+| `finalize` | planner, guarded | reworks the plan from the spike reports; its guard settles it `done (not-needed)` without a dispatch when the plan has no spikes |
 | `check` | command | `onepipeline plan check <plan> --check orchestrator/host_adoption_check.py` |
 | `review` | command | `scripts/review-plan-item.sh <plan>` |
 | `design` | design-doc writer, `graphs/design-doc.yaml` | renders the design document as a document of the plan |
@@ -771,7 +771,13 @@ beside the brief writer, with nobody approving them. Each spike writes its repor
 document `<plan native id>-<spike id>-report` of the **plan's** project, from
 `templates/spike-report.md.j2`, so it travels to the board with the plan. The planning run's
 `finalize` planner then reworks the plan from the reports. A draft with no spikes creates no
-spikes project, and the `spikes` step settles `done` at once.
+spikes project, and the `spikes` step settles `done` at once. `finalize` is guarded: its
+`onepipeline.guard`, which the engine runs with no shell of its own before dispatching it,
+lists `<plan>-spikes` through `.venv/bin/onetaskgraph task list` and counts its tasks. None
+exits 3, so `finalize` settles `done (not-needed)` without a dispatch, a planner or a judge,
+and check, review, design and copy follow at once; one or more exits 0 and dispatches the
+planner. A lookup that fails exits 2, never 3, so the node settles `failed` with outcome
+`guard-failed` and the run stops rather than skipping a finalize the plan needed.
 
 **The spike brief is information, and nothing waits on it.** The brief writer writes the
 document `<plan native id>-spike-brief` and raises one non-blocking `check-in` surface on
@@ -2790,6 +2796,9 @@ Each node settles once, and the run's result records that settlement:
 - `done`: the agent completed or the lifecycle published successfully.
 - `done` with outcome `no-changes`: an explicit `expects_no_diff` node settled
   deterministically without an agent dispatch.
+- `done` with outcome `not-needed`: the node's `onepipeline.guard` exited 3, so it settled
+  without a dispatch, session or human item, its detail the guard's stderr tail; `status`
+  prints it `done (not-needed): <detail>`. Its dependents run as after any `done`.
 - `waiting`: a ready human node or lifecycle human step needs action. Its
   `human_actions` entry includes the exact `task`, direct `unblocks`, and whether
   it unblocks workstream publication.

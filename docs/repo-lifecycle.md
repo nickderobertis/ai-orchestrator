@@ -227,6 +227,9 @@ The adoption after that moves the engine to 0.114.0, the read API to 0.84.0, the
 linking it, onejudge to 0.23.5 and oneagentgraph to 0.13.2, the releases it links, and the
 oneharness CLI to 0.31.0: all of them read the
 typed `[harness.codex] skip_git_repo_check`, which oneharness applies to `codex exec` alone.
+With that engine a node may carry a guard, `onepipeline.guard`, which the engine runs
+before dispatching it and which settles the node `done (not-needed)` without a dispatch
+when it exits 3.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole
@@ -342,7 +345,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `done` | `queued` | The host took the merge and will land it once its checks pass. |
 | `done` | `preserved` | The node declared `publish: "preserve"`, so nothing was drafted or published: its session closed and its branch was put on the identity's origin with `onevcs preserve`, the settlement naming the branch, the commit it stands at and where the push went. It never lands. `just unpublished` counts it until it is acknowledged, and `just reclaim-branch <branch> --repo <checkout> --discard` deletes it once nothing needs it. |
 | `done` | `no-changes` | Every step declared no diff, or the base already carried the branch's content. |
-| `done` | `not-needed` | The node's `guard` exited 3 when it first became actionable, so nothing was dispatched, run or raised for it and nothing landed; its dependents proceed. The detail is the tail of the guard's stderr, where it wrote any. |
+| `done` | `not-needed` | The node's `onepipeline.guard` exited 3, so it settled without a dispatch, session, branch or human item, its detail the guard's stderr tail; its dependents proceed, and nothing is owed unless the guard judged wrongly, which a `retry` evaluates again. |
 | `failed` | `empty-branch` | A lifecycle dispatch left its branch level with its base, having committed nothing to it, and the node declared no `expects_no_diff` — settled before any drafting or publication is spent, naming the branch and what it was compared against (https://github.com/nickderobertis/onepipeline/pull/229). The other reading `no-changes` used to cover: a worker asked for a change that produced none. A retry carrying `expects_no_diff` accepts it as that deterministic success, which settles without a dispatch; an amended task sends it back to produce a diff. |
 | `complete-but-draft` | `change-draft` | Every step ran and the branch is published, and the host is holding its change request as a **draft** because a release the node adopted early has not happened yet. Deliberately neither `done` nor a failure and deliberately not settled: merging now would make the node's temporary git pin permanent in a base branch, so no dependent starts on it and no run holding one has settled. What clears it is the release arriving, which puts a new worker on the branch this node already has. |
 | `complete-but-held` | `held-for-release` | The `local-direct` counterpart of `complete-but-draft`: a node adopting a release early whose publication opens no change request is never published as a draft, so its finished branch is kept unlanded on its origin through `onevcs preserve` and nothing reaches its base. Read everywhere `complete-but-draft` is: no dependent starts on it and no run holding one has settled. The release arriving re-dispatches it on that branch, whose publication then lands as any `local-direct` one does. |
@@ -360,7 +363,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `failed` | `task-failed` | The dispatch failed its own judge. |
 | `failed` | `command-failed` | A `kind: command` node exited non-zero or could not be started; its detail is the exit status and the tail of its stderr. |
 | `failed` | `command-timed-out` | A `kind: command` node outlived its `timeout_seconds`, and its process tree was stopped. |
-| `failed` | `guard-failed` | The node's `guard` exited other than 0 or 3, could not be started, or outlived its `guard_timeout_seconds` (300 seconds when absent): a broken guard is never read as not needed. The detail names the exit status or the reason, then the tail of its stderr. |
+| `failed` | `guard-failed` | The node's guard exited with neither 0 nor 3, could not be started or timed out, so the node was never run; its detail is the exit status or reason and the guard's stderr tail. Repair what that names — a broken store or a missing program — then `retry` the node, which runs its guard again. |
 | `failed` | `task-failed-change-open` | It failed its judge having already opened a change request — the URL is on the settlement. |
 | `failed` | `dispatch-died` | The dispatch started and the agent worked, but the dispatch process then ended without an agent verdict; unlike a pre-work infrastructure refusal, it is not retried. Its `died:` line in `just results`, and its line in `just status`, say where the work stands in one of three forms (https://github.com/nickderobertis/onepipeline/pull/726): **landed on its base** at the landed commit, where the run recorded the node's landing; **retired** as holding no work beyond its base, where an idle pass of the driver deleted the branch; and otherwise the branch that may carry finished work, at its head where one is recorded. Read the landed form before recovering anything: that work is already on the base. |
 | `failed` | `provider-failed` | The same death, where what killed the dispatch was the **provider** — a narrowing of `dispatch-died` and not a second word for it. A node whose provider went is a node with nothing wrong with its work, so read it as the quota, auth, or outage question `just status`'s health block answers rather than looking for what the work got wrong. A node that failed its own task still settles `task-failed`, and a dispatch that died to anything else still settles `dispatch-died`. |
@@ -1745,10 +1748,12 @@ the one whose alias sorts first. The `Node` schema is
 `execution_checkout`, `steps`, `resume`, `adoption`, `consumes`, `delivers`, `pool`,
 `overflow`, `task_record`, `assets_from`, `human_item`, `command`, `timeout_seconds`, `guard`,
 `guard_timeout_seconds` — and anything else is refused while the plan loads. `guard` and
-`guard_timeout_seconds`, from onepipeline 0.114.0, are an optional program run with no shell
-when the node first becomes actionable and its deadline: exit 0 proceeds, exit 3 settles the
-node `not-needed` and anything else `guard-failed` (onepipeline's `docs/contract.md`,
-*Guards*); no plan here writes one. `command` and `timeout_seconds`, from
+`guard_timeout_seconds`, from onepipeline 0.114.0, are a program and its arguments the engine
+runs with no shell before it would start an agent, command or human node, and that run's
+deadline: exit 0 runs the node, exit 3 settles it `done` with
+outcome `not-needed`, and anything else settles it `failed` with outcome `guard-failed`
+(onepipeline's `docs/contract.md`, *Guards*); the planning template's `finalize` carries one.
+`command` and `timeout_seconds`, from
 onepipeline 0.106.2, belong to a `kind: command` node alone: a program and its arguments
 run with no shell from the launch directory, settled on its exit status, and refused on
 any other kind (onepipeline's `docs/contract.md`, *Command steps*); no plan here writes one. `human_item`, from onepipeline 0.96.0, is a

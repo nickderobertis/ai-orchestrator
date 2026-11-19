@@ -49,7 +49,7 @@ from typing import NamedTuple
 
 import pytest
 from conftest import git
-from drafting import DRAFT_MARKER, SPIKE_MARKER, SPIKES, brief, drafting
+from drafting import DRAFT_MARKER, FINALIZE_MARKER, SPIKE_MARKER, SPIKES, brief, drafting
 from planning_bench import (
     BOARD,
     Bench,
@@ -86,8 +86,6 @@ PLANNING_NODES = [
     "copy",
     "approve-design",
 ]
-#: A phrase only the planning template's finalize task carries.
-FINALIZE_MARKER = "**First, check whether the spikes project exists**"
 #: The project whose run another branch is preserved under: titled as a plan's spikes project
 #: is, so its run's id is one the success hook has to read the project of before keeping it.
 OTHER_PROJECT = "authoring:another-plan-spikes"

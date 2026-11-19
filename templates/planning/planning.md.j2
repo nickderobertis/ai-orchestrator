@@ -82,6 +82,31 @@ members:
       onepipeline.id: finalize
       onepipeline.persona: ../personas/planner.yaml
       onepipeline.agent_graph: graphs/planner.yaml
+      # The engine runs this guard, with no shell of its own, before dispatching finalize: exit 3
+      # settles it `done (not-needed)` with no dispatch, 0 dispatches it, and anything else fails
+      # it `guard-failed`. Only the script's own decision exits 3; a failed lookup exits 2.
+      onepipeline.guard:
+        - bash
+        - -c
+        - |
+          set -o pipefail
+          plan=$1
+          if ! listed=$(.venv/bin/onetaskgraph task list --source "${plan%%:*}" --project "$plan-spikes" --json --no-interactive); then
+            echo "the plan store could not list $plan-spikes, so whether $plan has spikes cannot be told" >&2
+            exit 2
+          fi
+          if ! count=$(jq -er 'if (.errors // []) == [] and (.items | type) == "array" then .items | length else error("not a whole listing") end' <<<"$listed") ||
+            ! [[ $count =~ ^[0-9]+$ ]]; then
+            echo "the plan store's listing of $plan-spikes could not be counted: $listed" >&2
+            exit 2
+          fi
+          if [ "$count" -eq 0 ]; then
+            echo "$plan has no spikes project, so there is nothing to finalize" >&2
+            exit 3
+          fi
+          exit 0
+        - finalize-guard
+        - "{{ plan }}"
   - id: "{{ native }}-planning-spike-evidence"
     title: "Record the spike evidence of {{ plan }}"
     template: {file: step.md.j2}

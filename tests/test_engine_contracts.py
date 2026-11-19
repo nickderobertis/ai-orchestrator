@@ -3353,6 +3353,8 @@ AUTHORED_NODE_FIELDS = frozenset(
         "kind",
         "command",
         "timeout_seconds",
+        "guard",
+        "guard_timeout_seconds",
         "persona",
         "max_turns",
         "sets",
@@ -3372,8 +3374,6 @@ AUTHORED_NODE_FIELDS = frozenset(
         "steps",
         "adoption",
         "consumes",
-        "guard",
-        "guard_timeout_seconds",
     }
 )
 #: The `Node` fields `task_document` takes out of the rendered node before the rest become
