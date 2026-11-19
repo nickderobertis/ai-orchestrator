@@ -49,7 +49,7 @@ from typing import NamedTuple
 
 from onebudgetspec_sdk import report
 
-from orchestrator.plan_store import NodeId
+from orchestrator.record_shapes import NodeId
 from orchestrator.root import REPO_ROOT
 
 #: The task metadata key a plan's graph is grouped into units by.

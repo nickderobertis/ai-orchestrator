@@ -56,7 +56,6 @@
       "{workspaceRoot}/config/onepipeline.launch.yaml",
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/examples/**/*",

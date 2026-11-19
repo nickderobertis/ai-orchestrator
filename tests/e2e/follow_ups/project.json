@@ -59,7 +59,6 @@
       "{workspaceRoot}/graphs/node-scope.yaml",
       "{workspaceRoot}/personas/follow-up.yaml",
       "{workspaceRoot}/orchestrator/npm_installs.py",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/scripts/apply-repo-registry.sh",

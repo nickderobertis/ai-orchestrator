@@ -264,8 +264,8 @@ plan brief destination="plans":
 # `just refresh-plan <source>:<project> [destination]` starts a replan from the run's current
 # state, the planning road's first step. It acts only when the plan records a copy in
 # `destination`: the run is then the board's, and the authoring copy holds the plan alone.
-# Each authoring task takes its board task's status and loses every key of
-# `config/run-written-keys.txt` it holds; its title, content, other metadata and template
+# Each authoring task takes its board task's status and loses every run-written key it
+# holds, as the engine's `plan writeback-keys` names them; its title, content, other metadata and template
 # answers are left as they are. A board task with no authoring counterpart, a node a live
 # `add` created, is copied into the authoring project, its run-written keys removed in the
 # same step and its dependency edges remapped onto their authoring counterparts, so the next
@@ -283,9 +283,13 @@ refresh-plan plan destination="plans":
     plan={{ quote(plan) }} destination={{ quote(destination) }}
     source=${plan%%:*}
     store=(scripts/plan-store.sh .venv/bin/onetaskgraph)
-    if ! listed_keys=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' -e '/^$/d' config/run-written-keys.txt) || [ -z "$listed_keys" ] ||
-        ! keys=$(jq -Rsc 'split("\n") | map(select(. != ""))' <<<"$listed_keys"); then
-        echo "refresh-plan: could not read the run-written keys from config/run-written-keys.txt; restore it from the repository, then retry" >&2; exit 2
+    # The run-written keys are the engine's answer, the union of its task and project lists.
+    # The engine is asked before the store wrapper's own provisioning check runs, so the
+    # checkout is held to being provisioned first.
+    scripts/require-provisioned.sh
+    if ! answer=$(scripts/onepipeline.sh plan writeback-keys --json) ||
+        ! keys=$(jq -ec 'select((.task | type == "array" and length > 0) and (.project | type == "array") and all(.task[], .project[]; type == "string" and . != "")) | .task + .project | unique' <<<"$answer"); then
+        echo "refresh-plan: the engine printed no run-written keys as lists of non-empty names; check that 'scripts/onepipeline.sh plan writeback-keys --json' answers at the adopted pin, then retry" >&2; exit 2
     fi
     whole() {
         jq -e '(.errors // []) == [] and .next == null and (.items | type) == "array"' >/dev/null <<<"$2" 2>/dev/null && return 0

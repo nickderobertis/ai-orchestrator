@@ -38,8 +38,10 @@ if str(ROOT) not in sys.path:
 # The engine runs this file by its path, not as a module of an installed package, so this
 # checkout's `orchestrator` package is importable only once its root is on `sys.path` above.
 from orchestrator import host_installs  # noqa: E402 - needs the path set above
-from orchestrator.plan_store import NodeId  # noqa: E402 - needs the path set above
-from orchestrator.record_shapes import hosted_origin  # noqa: E402 - needs the path set above
+from orchestrator.record_shapes import (  # noqa: E402 - needs the path set above
+    NodeId,
+    hosted_origin,
+)
 
 #: How long one `onevcs` question may take before it is answered as unknown.
 TIMEOUT_SECONDS = 60

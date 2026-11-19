@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 import onetaskgraph_user_layer
+import plan_store_client
 import pytest
 from linear_board import linear_board
 from project_fixtures import attested_reviewed, project_from_plan
@@ -42,7 +43,6 @@ from test_adopted_engine_reads_an_adopted_run_e2e import _just, _until
 from test_orchestrate_launch_e2e import CandidatePlan, _node
 from test_orchestrate_launch_e2e import _environment as _launched_environment
 
-from orchestrator import plan_store
 from orchestrator.run_reading import RunId
 
 # What the recipes this journey runs leave in the temporary directory is this module's own
@@ -95,8 +95,8 @@ def _edge_into_the_tracker(project: str) -> None:
     source, native = project.split(":", 1)
     (edged,) = [
         task
-        for page in plan_store.every_page(
-            project, plan_store.client().task_list, source=[source], project=native
+        for page in plan_store_client.every_page(
+            project, plan_store_client.client().task_list, source=[source], project=native
         )
         for task in page.items
         if task.item.metadata.get("onepipeline.id") == "edged"

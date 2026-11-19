@@ -1,15 +1,16 @@
 {
-  "name": "support-run-written-keys",
+  "name": "support-plan-store-client",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "tags": [
     "type:test-support"
   ],
-  "implicitDependencies": [],
+  "implicitDependencies": [
+    "support-published-tools"
+  ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/run_written_keys.py",
-      "{workspaceRoot}/config/run-written-keys.txt",
+      "{workspaceRoot}/tests/plan_store_client.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

@@ -40,9 +40,9 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import budget_telemetry
+import engine_writeback_keys
 import onetaskgraph_user_layer
 import pytest
-import run_written_keys
 from drafting import design_commands
 from github_board import RequestCost, _GitHubFixture, _request_points, _serving_board
 from planning_bench import Bench, bench, judge_only_turns, just, run, store, store_json
@@ -117,7 +117,7 @@ def _attested(bench_: Bench, items: list[tuple[str, str]], bar: str) -> None:
         attested = store(
             bench_,
             *(kind, "attest", item, "--kind", "plan-review", "--by", "review-plan", "--bar", bar),
-            *run_written_keys.EXCLUDES,
+            *engine_writeback_keys.excludes(),
         )
         assert attested.returncode == 0, attested.stdout + attested.stderr
 

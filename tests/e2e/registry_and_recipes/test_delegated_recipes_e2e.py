@@ -49,6 +49,7 @@ from delegation_checkout import (
     READ_API,
     ROOT,
     TEMPLATE_ROOT_TRACE_ENV,
+    WRITEBACK_KEYS_ENV,
 )
 from delegation_checkout import at as _at
 from delegation_checkout import delegation_checkout as _checkout
@@ -2397,3 +2398,60 @@ def test_server_explains_unloadable_credentials_helper(tmp_path: Path, sabotage:
     assert str(helper) in result.stderr
     assert "just bootstrap" in result.stderr
     assert not trace.exists()
+
+
+#: Engine answers to `plan writeback-keys --json` that name no usable run-written key:
+#: nothing at all, empty lists, a list that is not one, and a list holding an empty name.
+UNUSABLE_WRITEBACK_KEYS = {
+    "nothing": "",
+    "empty lists": '{"task":[],"project":[]}',
+    "not a list": '{"task":"onepipeline.settlement","project":[]}',
+    "an empty name": '{"task":["onepipeline.settlement",""],"project":[]}',
+}
+
+
+@pytest.mark.parametrize(
+    "recipe",
+    [("review-plan", "plans:example"), ("refresh-plan", "authoring:example")],
+    ids=["review-plan", "refresh-plan"],
+)
+@pytest.mark.parametrize("answer", sorted(UNUSABLE_WRITEBACK_KEYS))
+def test_a_reader_of_the_run_written_keys_refuses_an_engine_answering_none(
+    tmp_path: Path, recipe: tuple[str, str], answer: str
+) -> None:
+    """The run-written keys are the engine's answer, so an unusable answer stops the reader.
+
+    `scripts/review-plan-item.sh` and `just refresh-plan` leave those keys out of what a
+    review attests and strip them from an authoring plan; read as an empty list, the review
+    would attest a digest a run's next write voids and the refresh would keep the run's
+    record in the plan. So each exits non-zero, naming the verb it asked, before it reads
+    or writes the plan store.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(
+        checkout, trace, *recipe, env={WRITEBACK_KEYS_ENV: UNUSABLE_WRITEBACK_KEYS[answer]}
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "plan writeback-keys --json" in result.stderr, result.stderr
+    asked = trace.read_text(encoding="utf-8").splitlines()
+    assert asked == [f"{_at(checkout, ENGINE)} plan writeback-keys --json"], asked
+
+
+@pytest.mark.parametrize(
+    "recipe",
+    [("review-plan", "plans:example"), ("refresh-plan", "authoring:example")],
+    ids=["review-plan", "refresh-plan"],
+)
+def test_a_reader_of_the_run_written_keys_goes_on_to_the_store_on_a_usable_answer(
+    tmp_path: Path, recipe: tuple[str, str]
+) -> None:
+    """The refusal above is about the answer: a usable one lets the reader reach the store."""
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, *recipe)
+
+    assert "plan writeback-keys" not in result.stderr, result.stderr
+    asked = trace.read_text(encoding="utf-8").splitlines()
+    assert asked[0] == f"{_at(checkout, ENGINE)} plan writeback-keys --json", asked

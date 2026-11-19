@@ -74,9 +74,9 @@ CHAIN = REPO_ROOT / "oneharness.toml"
 #: is measured is the permission layer, not the model.
 JUDGE = REPO_ROOT / "oneharness.judge.toml"
 #: The pinned `oneharness` CLI, which resolves both configs for the probe: the one the lock
-#: installs beside the interpreter running this, taken without resolving symlinks, as
-#: `orchestrator/plan_store.py` takes its CLI, so a copy of this checkout run on another
-#: checkout's environment reads that environment's install.
+#: installs beside the interpreter running this, taken without resolving symlinks, so a
+#: copy of this checkout run on another checkout's environment reads that environment's
+#: install.
 ONEHARNESS = Path(sys.executable).parent / "oneharness"
 #: Phrases a refused turn says when the identity, not the probe, is the problem, matched as
 #: whole words so an unrelated failure ("could not generate") is never read as a spent quota.

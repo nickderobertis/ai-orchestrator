@@ -28,7 +28,6 @@
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/nx.json",
       "{workspaceRoot}/onetaskgraph.yaml",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/personas/planner.yaml",

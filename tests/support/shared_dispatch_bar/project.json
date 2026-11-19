@@ -11,7 +11,6 @@
       "{workspaceRoot}/tests/shared_dispatch_bar.py",
       "{workspaceRoot}/orchestrator/host_installs.py",
       "{workspaceRoot}/orchestrator/npm_installs.py",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"

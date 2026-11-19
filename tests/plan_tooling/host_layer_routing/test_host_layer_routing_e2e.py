@@ -45,10 +45,10 @@ from github_board import (
     _plan_environment,
     _serving_board,
 )
+from plan_store_client import WRITABLE_PLUGIN
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
 #: A public repository every neutral fixture names: this repository's own identity.

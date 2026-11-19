@@ -70,7 +70,6 @@ import jsonschema
 import onejudge_bundle
 import probe_run_root
 import pytest
-import run_written_keys
 from registered_checkouts import discover_checkouts
 from test_linked_libraries import _linked_version
 
@@ -3342,144 +3341,6 @@ def test_the_settlement_keys_a_targeted_update_may_set_are_exactly_the_engines()
     )
 
 
-#: The `Node` fields only a live edit sets, which the write-back renders under the engine's
-#: reserved prefix. The engine names no list of them, so every field its `task_document`
-#: renders is classified here, as one of these or as one a plan authors, and a field the
-#: pinned engine renders that neither names fails the gate until it is classified.
-RUN_WRITTEN_NODE_FIELDS = ("amendment", "context", "parked", "resume", "branch")
-AUTHORED_NODE_FIELDS = frozenset(
-    {
-        "human_item",
-        "kind",
-        "command",
-        "timeout_seconds",
-        "guard",
-        "guard_timeout_seconds",
-        "persona",
-        "max_turns",
-        "sets",
-        "expects_no_diff",
-        "executor",
-        "agent_graph",
-        "repo_type",
-        "workflow",
-        "merge_policy",
-        "base_branch",
-        "body",
-        "draft",
-        "publish",
-        "execution_checkout",
-        "pool",
-        "overflow",
-        "steps",
-        "adoption",
-        "consumes",
-    }
-)
-#: The `Node` fields `task_document` takes out of the rendered node before the rest become
-#: `onepipeline.<field>` keys, each named by literal or by a `&str` constant.
-_REMOVED_FIELD = re.compile(r'\.remove\((?:"(?P<literal>\w+)"|(?P<constant>[A-Z_]+))\)')
-
-
-def _rendered_node_fields(node_fields: set[str]) -> set[str]:
-    """The `Node` fields the pinned write-back renders as `onepipeline.<field>` keys."""
-    writeback = _source(ONEPIPELINE, "writeback.rs")
-    start = writeback.find("fn task_document(")
-    assert start != -1, f"onepipeline {ONEPIPELINE.ref} no longer composes `task_document`"
-    body = writeback[start : writeback.find("\nfn ", start + 1)]
-    constants = {one["name"]: one["value"] for one in _STR_CONSTANT.finditer(writeback)}
-    removed = {
-        found["literal"] or constants.get(found["constant"], found["constant"])
-        for found in _REMOVED_FIELD.finditer(body)
-    }
-    return node_fields - removed
-
-
-#: A `&str` constant of the write-back, by name.
-_STR_CONSTANT = re.compile(r'const (?P<name>[A-Z_]+): &str = "(?P<value>[^"]+)";')
-
-
-def _projection_keys(taskgraph: str, name: str) -> set[str]:
-    """The keys the write-back's `&[&str]` list ``name`` holds, each constant resolved."""
-    found = re.search(rf"const {name}: &\[&str\] = &\[(?P<body>[^\]]*)\];", taskgraph)
-    assert found is not None, f"onepipeline {ONEPIPELINE.ref} no longer declares `{name}`"
-    constants = {one["name"]: one["value"] for one in _STR_CONSTANT.finditer(taskgraph)}
-    named = re.findall(r"[A-Z_]+", found.group("body"))
-    unresolved = [one for one in named if one not in constants]
-    assert not unresolved, f"`{name}` names {unresolved}, which this gate cannot resolve"
-    return {constants[one] for one in named}
-
-
-def run_written_drift(listed: tuple[str, ...]) -> list[str]:
-    """Every way ``listed`` differs from the keys the pinned engine's write-back owns."""
-    taskgraph = _source(ONEPIPELINE, "taskgraph.rs")
-    reserved = re.search(r'const RESERVED: &str = "([^"]+)";', taskgraph)
-    assert reserved is not None, f"onepipeline {ONEPIPELINE.ref} no longer declares RESERVED"
-    node_struct = _source(ONEPIPELINE, "plan.rs").split("pub struct Node {", 1)[1]
-    node_fields = set(STRUCT_FIELD.findall(node_struct.split("\n}\n", 1)[0]))
-    drift = [
-        f"`{field}` is not a field of the pinned `Node`, so no live edit sets it"
-        for field in RUN_WRITTEN_NODE_FIELDS
-        if field not in node_fields
-    ]
-    classified = AUTHORED_NODE_FIELDS | set(RUN_WRITTEN_NODE_FIELDS)
-    drift += [
-        f"the write-back renders `{field}`, which is classified neither as authored nor as "
-        "set only by a live edit; classify it here and in the list"
-        for field in sorted(_rendered_node_fields(node_fields) - classified)
-    ]
-    owned = (
-        _projection_keys(taskgraph, "PROJECTION_ONLY")
-        | _projection_keys(taskgraph, "PROJECT_PROJECTION_ONLY")
-        | {reserved.group(1) + field for field in RUN_WRITTEN_NODE_FIELDS}
-    )
-    drift += [f"the list lacks `{key}`" for key in sorted(owned - set(listed))]
-    drift += [f"the engine writes no `{key}`" for key in sorted(set(listed) - owned)]
-    return drift
-
-
-def test_the_run_written_keys_are_the_ones_the_pinned_engine_writes() -> None:
-    """`config/run-written-keys.txt` is exactly what the pinned write-back owns.
-
-    A key missing is one a review judges and an attestation is voided by; a key too many is
-    authored content a review never reads. So both directions are held, naming the key.
-    """
-    drift = run_written_drift(run_written_keys.RUN_WRITTEN_KEYS)
-    assert not drift, (
-        f"config/run-written-keys.txt differs from onepipeline {ONEPIPELINE.ref}: "
-        + "; ".join(drift)
-    )
-
-
-def test_every_field_the_write_back_renders_is_classified() -> None:
-    """A field the engine adds to `Node` and renders fails the gate, naming it, until it is
-    classified as authored or as set only by a live edit: the stated live-edit set cannot
-    silently fall behind the engine."""
-    node_struct = _source(ONEPIPELINE, "plan.rs").split("pub struct Node {", 1)[1]
-    node_fields = set(STRUCT_FIELD.findall(node_struct.split("\n}\n", 1)[0]))
-    rendered = _rendered_node_fields(node_fields)
-    assert rendered and "persona" in rendered and "title" not in rendered, sorted(rendered)
-    assert AUTHORED_NODE_FIELDS.isdisjoint(RUN_WRITTEN_NODE_FIELDS)
-    assert rendered == AUTHORED_NODE_FIELDS | set(RUN_WRITTEN_NODE_FIELDS), sorted(
-        rendered ^ (AUTHORED_NODE_FIELDS | set(RUN_WRITTEN_NODE_FIELDS))
-    )
-
-
-@pytest.mark.parametrize(
-    "listed",
-    [
-        run_written_keys.RUN_WRITTEN_KEYS[1:],
-        (*run_written_keys.RUN_WRITTEN_KEYS, "onepipeline.persona"),
-    ],
-    ids=["a-key-missing", "a-key-too-many"],
-)
-def test_a_run_written_list_off_the_engine_is_named(listed: tuple[str, ...]) -> None:
-    """The comparison above fails, naming the key, on either side moving."""
-    drift = run_written_drift(listed)
-    assert len(drift) == 1, drift
-    assert "onepipeline.settlement" in drift[0] or "onepipeline.persona" in drift[0], drift
-
-
 def test_a_targeted_attempts_allowed_calls_are_the_engines_targeted_writes() -> None:
     """`TARGETED_CALLS` names only store operations the engine calls a targeted write.
 
@@ -3804,8 +3665,8 @@ LINEAGE_KEY_DECLARATION = re.compile(
 #: The action counts a projection line carries, as the record's own struct declares them.
 PROJECTION_ACTIONS_STRUCT = re.compile(r"pub struct ProjectionActions \{(.*?)\n\}", re.DOTALL)
 PROJECTION_ACTIONS_FIELD = re.compile(r"^\s{4}pub ([a-z_]+): u64,", re.MULTILINE)
-#: The stored shape this repository's readers rely on — `orchestrator/plan_store.py` reads
-#: items by `onepipeline.id` — as key → what the prose must say it holds.
+#: The stored shape this repository's readers rely on — they find an item by
+#: `onepipeline.id` — as key → what the prose must say it holds.
 LINEAGE_KEYS = {
     "onepipeline.id": "root",
     "onepipeline.node": "head",
@@ -3850,7 +3711,7 @@ def test_the_lineage_item_keys_the_prose_states_are_the_ones_the_engine_writes()
     assert set(declared) == set(LINEAGE_KEYS), (
         f"onepipeline {ONEPIPELINE.ref} declares the reserved item keys {sorted(declared)}, "
         f"and this repository reads {sorted(LINEAGE_KEYS)}; re-read src/taskgraph.rs and "
-        "correct orchestrator/plan_store.py's readers and docs/orchestration.md together"
+        "correct this repository's readers and docs/orchestration.md together"
     )
     contract = _lineage_contract()
     lineage = contract["lineage"]

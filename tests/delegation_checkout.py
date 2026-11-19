@@ -189,6 +189,13 @@ CHECK_OUTPUT_ENV = "FAKE_CHECK_OUTPUT"
 #: engine whose answer is not that document.
 STATUS_ANSWER_ENV = "FAKE_STATUS_ANSWER"
 
+#: What the doubled engine's `plan writeback-keys --json` prints instead of its default
+#: answer, when a journey names one, empty included: how a journey states an engine
+#: answering no usable list.
+WRITEBACK_KEYS_ENV = "FAKE_WRITEBACK_KEYS"
+#: The doubled engine's default answer: one key of each list, in the verb's shape.
+DEFAULT_WRITEBACK_KEYS = '{"task":["onepipeline.settlement"],"project":["onepipeline.driver"]}'
+
 #: Where both doubled engines below record the template root each call was handed, one
 #: `<root> <argv>` line per call, when a journey names the file; `<unset>` when none was.
 TEMPLATE_ROOT_TRACE_ENV = "FAKE_TEMPLATE_ROOT_TRACE"
@@ -215,9 +222,6 @@ def delegation_checkout(tmp_path: Path) -> tuple[Path, Path]:
     shutil.copy2(
         ROOT / "config/plan-checklist.llmlint.yml", checkout / "config/plan-checklist.llmlint.yml"
     )
-    # The run-written keys `just refresh-plan` and the review strip from a plan: both
-    # refuse a checkout without the list rather than judge or rewrite a plan without it.
-    shutil.copy2(ROOT / "config/run-written-keys.txt", checkout / "config/run-written-keys.txt")
     # The host root's registration, which the launch wrapper refuses a checkout without.
     # Written rather than copied: which names it registers is
     # `tests/test_task_templates.py`'s, and these journeys are about where a recipe lands
@@ -331,6 +335,13 @@ case "$*" in
     else
       printf '{{"reference":"onepipeline:plan-task","entry":"plan-task.md.j2",'
       printf '"templates":[{{"name":"plan-task.md.j2","source":"## Acceptance criteria"}}]}}'
+    fi
+    exit 0 ;;
+  "plan writeback-keys --json")
+    if [ -n "${{FAKE_WRITEBACK_KEYS+set}}" ]; then
+      printf '%s\\n' "$FAKE_WRITEBACK_KEYS"
+    else
+      printf '%s\\n' '{DEFAULT_WRITEBACK_KEYS}'
     fi
     exit 0 ;;
   "status "*" --json")

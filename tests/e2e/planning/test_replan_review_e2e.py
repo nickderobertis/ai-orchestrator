@@ -46,8 +46,8 @@ import subprocess
 from collections.abc import Iterator, Mapping
 from typing import Any, NamedTuple
 
+import engine_writeback_keys
 import pytest
-import run_written_keys
 import yaml
 from fake_backend import (
     JUDGE_REFUSAL,
@@ -189,7 +189,9 @@ def _metadata(bench_: Bench, kind: str, item: str) -> dict[str, Any]:
 
 def _run_written(metadata: dict[str, Any]) -> dict[str, Any]:
     return {
-        key: value for key, value in metadata.items() if key in run_written_keys.RUN_WRITTEN_KEYS
+        key: value
+        for key, value in metadata.items()
+        if key in engine_writeback_keys.run_written_keys()
     }
 
 
@@ -614,7 +616,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
 
 
 def _carries_run_written_key(text: str) -> list[str]:
-    return [key for key in run_written_keys.RUN_WRITTEN_KEYS if key in text]
+    return [key for key in engine_writeback_keys.run_written_keys() if key in text]
 
 
 def _turn_of(review: Review, node: str) -> dict[str, Any]:

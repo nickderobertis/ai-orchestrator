@@ -42,13 +42,14 @@ from typing import NamedTuple
 import boundary_home
 import follow_up_store
 import follow_up_variables
+import plan_store_client
 import pytest
 import short_state
 from harness_indirections import established_indirections
 from project_fixtures import helper, project_from_plan
+from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_store
 from orchestrator.root import REPO_ROOT
 
 # What the recipes these journeys run leave in the temporary directory, by design or
@@ -168,8 +169,8 @@ def _configured(monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     monkeypatch.delenv(follow_up_variables.root_name(), raising=False)
     monkeypatch.delenv(follow_up_store.RUNS_ROOT, raising=False)
     return (
-        plan_store.ensure_writable_source_root(follow_up_variables.source()),
-        plan_store.ensure_writable_source_root(RUNS_SOURCE),
+        plan_store_client.ensure_writable_source_root(follow_up_variables.source()),
+        plan_store_client.ensure_writable_source_root(RUNS_SOURCE),
     )
 
 
@@ -205,7 +206,7 @@ def _drafted(drafts: Path, run: str, title: str, registry: Path) -> Path:
 def _seeded_project(runs: Path, native: str) -> Path:
     """A plan project under ``runs`` named as `just follow-ups` names the run's follow-up plan."""
     created = subprocess.run(  # noqa: S603 - the locked plan-store CLI
-        [str(plan_store.locked_binary()), "project", "create", RUNS_SOURCE, "--id", native]
+        [str(ONETASKGRAPH_BIN), "project", "create", RUNS_SOURCE, "--id", native]
         + ["--title", "A plan a developer authored, which no test may replace"],
         cwd=REPO_ROOT,
         env={**os.environ, follow_up_store.RUNS_ROOT: str(runs)},

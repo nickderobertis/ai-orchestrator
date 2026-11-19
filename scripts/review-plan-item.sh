@@ -9,7 +9,7 @@
 # persona's plan-review bar (`personas/planner.yaml`), never a task's own worker persona's
 # and never the base config's completion clause alone, with a `--task` saying it is a plan
 # document under review: its criteria state what its nodes will deliver, and its delivery
-# state is not judged. The keys a run writes (`config/run-written-keys.txt`) are left out of
+# state is not judged. The keys a run writes (`onepipeline plan writeback-keys`) are left out of
 # everything a judge reads and out of every attestation's digest, so a run settling, landing
 # or amending a task neither reaches the judge as metadata nor voids a pass.
 #
@@ -77,10 +77,16 @@ framing="This is a plan document — a project's description or one of its tasks
 # What the description's judge is told besides: which tasks beside it are delivered work.
 delivered_framing="The tasks under delivered/ beside this description were settled done by their run: they are delivered work, shown as context only. Never refuse the description for the content of one of them."
 
-keys_file="$root/config/run-written-keys.txt"
-if ! listed_keys=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' -e '/^$/d' "$keys_file") || [ -z "$listed_keys" ] ||
+# The keys a run writes are the engine's own answer, the union of its task and project lists,
+# so no copy of them is kept here to drift from the write-back that owns them. A task list
+# that is not a non-empty list of non-empty names, or a project list that is not a list of
+# them, is refused rather than read as nothing to leave out.
+writeback_keys='select((.task | type == "array" and length > 0) and (.project | type == "array")
+    and all(.task[], .project[]; type == "string" and . != "")) | .task + .project | unique | .[]'
+if ! answer=$("$script_dir/onepipeline.sh" plan writeback-keys --json) ||
+    ! listed_keys=$(jq -er "$writeback_keys" <<<"$answer") ||
     ! run_written=$(jq -Rsc 'split("\n") | map(select(. != ""))' <<<"$listed_keys"); then
-    echo "review-plan-item: could not read the run-written keys from $keys_file; restore it from the repository, then retry" >&2
+    echo "review-plan-item: the engine printed no run-written keys as lists of non-empty names; check that 'scripts/onepipeline.sh plan writeback-keys --json' answers at the adopted pin, then retry" >&2
     exit 2
 fi
 mapfile -t keys <<<"$listed_keys"

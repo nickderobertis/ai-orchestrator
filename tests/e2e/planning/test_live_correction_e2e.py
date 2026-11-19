@@ -29,8 +29,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import engine_writeback_keys
 import pytest
-import run_written_keys
 from drafting import design_commands, plan_commands
 from fake_backend import JUDGE_REFUSAL, JUDGE_REFUSES_ENV
 from judging_codex import JudgeInput
@@ -593,7 +593,9 @@ def test_the_hook_judges_a_live_edit_as_a_plan_and_reads_no_run_written_key(
         ]
         assert framed, [prompt[:400] for prompt in op.reviewer_after_pass]
         read = [*op.judged_after_refusal, *op.judged_after_pass, *op.reviewer_after_pass]
-        carried = [key for text in read for key in run_written_keys.RUN_WRITTEN_KEYS if key in text]
+        carried = [
+            key for text in read for key in engine_writeback_keys.run_written_keys() if key in text
+        ]
         assert not carried, carried
 
 

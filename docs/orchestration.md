@@ -335,8 +335,8 @@ which is the point of it. Its members, in order:
 refresh-plan <source>:<project> [destination]` acts only on a plan that records a copy in
 `destination` in its `onetaskgraph.copies`, whose run is then the board's. Each authoring task
 takes its board task's status by a targeted `task update`, and every key
-`config/run-written-keys.txt` lists — what the engine's write-back writes and no plan authors —
-is removed from it; its title, content, other metadata and template answers stay, so the
+`onepipeline plan writeback-keys --json` names in its `task` or `project` list — what the
+engine's write-back writes and no plan authors — is removed from it; its title, content, other metadata and template answers stay, so the
 planner can still regenerate it. A board task with no authoring counterpart, a node a live
 `add` created, is brought into the plan holding no run-written key, and the next copy updates
 that same board item. A counterpart is found from the authoring side alone: the authoring

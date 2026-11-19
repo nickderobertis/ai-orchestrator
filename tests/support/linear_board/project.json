@@ -5,11 +5,12 @@
   "tags": [
     "type:test-support"
   ],
-  "implicitDependencies": [],
+  "implicitDependencies": [
+    "support-plan-store-client"
+  ],
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/linear_board.py",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/onetaskgraph.yaml",

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import ast
 import re
-from pathlib import Path
 
 import pytest
 
@@ -200,5 +199,6 @@ stood_up = f"sources.{SNAPSHOT_SOURCE}.config.root={root}"
 
 
 def test_the_scan_reads_every_module_of_the_package() -> None:
-    """The store's own reader is a module of the package the scan walks."""
-    assert Path(PACKAGE / "plan_store.py") in set(PACKAGE.rglob("*.py"))
+    """A top-level module and a nested one are both modules the scan walks."""
+    walked = set(PACKAGE.rglob("*.py"))
+    assert {PACKAGE / "record_shapes.py", PACKAGE / "budgets" / "design_doc_dag.py"} <= walked

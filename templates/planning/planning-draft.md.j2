@@ -60,7 +60,7 @@ plan. Read each task's `onepipeline.amendment` from that board copy, the item it
 --json | jq '.items[0].item.metadata["onepipeline.amendment"]'`. An amendment is the run's
 binding ruling on its task, which stays as it is: never restate it in the task's text, which
 the relaunch would then apply twice. The keys a run writes, those
-`config/run-written-keys.txt` lists — settlements, landings, dispatches, amendments among
+`onepipeline plan writeback-keys --json` names — settlements, landings, dispatches, amendments among
 them — are the run's record, never written into the plan.
 
 **Repositories that span visibilities.** When the brief's `Repositories:` line names

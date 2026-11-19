@@ -44,8 +44,8 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import engine_writeback_keys
 import pytest
-import run_written_keys
 from drafting import DESIGN_MARKER, DRAFT_MARKER, design_commands
 from github_board import _serving_board
 from planning_bench import (
@@ -137,7 +137,7 @@ def _listed(bench_: Bench, source: str, project: str) -> list[dict[str, Any]]:
 
 
 def _run_written(metadata: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in metadata.items() if k in run_written_keys.RUN_WRITTEN_KEYS}
+    return {k: v for k, v in metadata.items() if k in engine_writeback_keys.run_written_keys()}
 
 
 def _answers(bench_: Bench, task: str) -> str:

@@ -69,7 +69,6 @@
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/orchestrator/host_installs.py",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/tests/session_open_conflict/project.json",

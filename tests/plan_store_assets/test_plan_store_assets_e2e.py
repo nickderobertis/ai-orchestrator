@@ -3,11 +3,10 @@
 A visual plan's spike report and design document reference paired and single screenshots
 as `![alt](./<name>)`, are written into the drafting source with each image as an
 `--asset`, and are copied onward from there. This drives that sequence through the locked
-`.venv/bin/onetaskgraph` every plan-store read here runs, run from this checkout as
-`orchestrator/plan_store.py` runs it, over two scratch `local-md` sources declared the
-way the store's own environment layer declares a source. The images are generated per
-test from seeded pseudo-random pixels, so compression cannot shrink them below the size
-a real screenshot has and no two are alike.
+`.venv/bin/onetaskgraph`, run from this checkout's root, over two scratch `local-md`
+sources declared the way the store's own environment layer declares a source. The images
+are generated per test from seeded pseudo-random pixels, so compression cannot shrink them
+below the size a real screenshot has and no two are alike.
 
 The second source is public to the store, so each copy first checks the private addresses
 the host's private sources hold, here on a loopback board: a copy lands only once they

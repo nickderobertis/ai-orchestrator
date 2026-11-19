@@ -14,11 +14,11 @@ from typing import Any
 
 import onetaskgraph_user_layer
 import plan_root_variable
+import plan_store_client
 import pytest
 from linear_board import MEASURED_REWRITES, Rewrite, linear_board, linear_stored
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import plan_store
 from orchestrator.root import REPO_ROOT
 
 
@@ -449,7 +449,7 @@ def test_real_store_copy_and_person_edit(tmp_path: Path, monkeypatch: pytest.Mon
             )
         task = source + ":" + board.issues()[0]["id"]
         cli("task", "status", "set", task, "done")
-        settings = plan_store.configured_settings()
+        settings = plan_store_client.configured_settings()
         assert (
             board.issues()[0]["state"]["name"]
             == settings[f"sources.{source}.config.status_mapping.done.task"]

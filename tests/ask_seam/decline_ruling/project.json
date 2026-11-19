@@ -36,7 +36,6 @@
       "{workspaceRoot}/oneharness.orchestrator.toml",
       "{workspaceRoot}/oneharness.toml",
       "{workspaceRoot}/onetaskgraph.yaml",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/personas/orchestrator.yaml",

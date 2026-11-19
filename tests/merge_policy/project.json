@@ -56,7 +56,6 @@
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/scripts/session-setup.sh",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/tests/merge_policy/**/*"

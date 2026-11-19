@@ -19,6 +19,7 @@ from typing import Literal, NamedTuple, NewType, TypedDict
 import boundary_home
 import jsonschema
 import plan_root_variable
+import plan_store_client
 import pytest
 import yaml
 from fake_backend import PROMPT_LOG_ENV, TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED
@@ -70,6 +71,7 @@ from onetaskgraph_sdk import (
     TaskDetail,
 )
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
+from plan_store_client import PlanDocument, PlanNode
 from plan_store_pin import (
     PACING_FLOOR,
     adopted_release,
@@ -91,8 +93,6 @@ from test_orchestrate_launch_e2e import REQUIRE_RENDERED_ENV
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_store
-from orchestrator.record_shapes import PlanDocument, PlanNode
 from orchestrator.root import REPO_ROOT
 
 
@@ -1948,8 +1948,8 @@ def test_the_cache_rules_agents_md_restates_are_the_adopted_stores_and_this_host
 ):
     """The rules hold at the adopted tag, and no read in `orchestrator/` pins one.
 
-    So `orchestrator/plan_store.py`'s single-item reads stay unpinned, as the section says,
-    until a change that pins one moves this test with it.
+    So any single-item read a module of `orchestrator/` makes stays unpinned, as the section
+    says, until a change that pins one moves this test with it.
     """
     checkout = registered_checkouts()["github.com/nickderobertis/onetaskgraph"]
     readme = subprocess.run(
@@ -1966,7 +1966,7 @@ def test_the_cache_rules_agents_md_restates_are_the_adopted_stores_and_this_host
     # Every SDK read that takes a pin, read off the installed client's own signatures.
     pinned_reads = {
         name
-        for name, member in inspect.getmembers(plan_store.client(), callable)
+        for name, member in inspect.getmembers(plan_store_client.client(), callable)
         if not name.startswith("_") and "pin" in inspect.signature(member).parameters
     }
     assert {"task_show", "project_show", "document_show"} <= pinned_reads, pinned_reads
@@ -3441,13 +3441,18 @@ def _rendered_task(qualified: str) -> _RenderedTask:
     source, native = RENDERED_QUALIFIED.split(":", 1)
     held = [
         task
-        for page in plan_store.every_page(
-            RENDERED_QUALIFIED, plan_store.client().task_list, source=[source], project=native
+        for page in plan_store_client.every_page(
+            RENDERED_QUALIFIED,
+            plan_store_client.client().task_list,
+            source=[source],
+            project=native,
         )
         for task in page.items
     ]
     nodes = {task.id.model_dump(): task.item.metadata.get("onepipeline.id") for task in held}
-    graph = plan_store.sdk(plan_store.client().project_graph(RENDERED_QUALIFIED, complete=True))
+    graph = plan_store_client.sdk(
+        plan_store_client.client().project_graph(RENDERED_QUALIFIED, complete=True)
+    )
     (task,) = [one for one in held if one.id.model_dump() == qualified]
     return _RenderedTask(
         qualified,

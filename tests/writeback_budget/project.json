@@ -15,6 +15,7 @@
     "support-harness-indirections",
     "support-no-paid-provider",
     "support-plan-fixture-source",
+    "support-plan-store-client",
     "support-project-fixtures",
     "support-published-tools",
     "support-short-state",
@@ -62,7 +63,6 @@
       "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/scripts/session-setup.sh",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/tests/writeback_budget/**/*"

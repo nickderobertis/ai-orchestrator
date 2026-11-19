@@ -55,7 +55,7 @@ def test_the_scan_covers_the_repaired_documents_and_skips_the_agents_symlink() -
         "README.md",
         "AGENTS.md",
         "docs/orchestration.md",
-        "orchestrator/plan_store.py",
+        "orchestrator/record_shapes.py",
     } <= scanned
     assert "CLAUDE.md" not in scanned, "the AGENTS.md symlink would double every finding"
 

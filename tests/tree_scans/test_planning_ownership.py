@@ -171,18 +171,12 @@ SHARED: dict[str, Shared] = {
     "scripts/nx.sh": Shared("runs Nx for the checks a dispatch's gate measures"),
     "scripts/preserved-log.sh": Shared("keeps a stage's redacted log"),
     "scripts/setup-llmlint.sh": Shared("installs the judged lint tier"),
-    "orchestrator/plan_store.py": Shared(
-        "the locked plan-store client the host's own readers read through",
-        matches=(
-            "it is the store client itself: every read the host's own readers make goes through it"
-        ),
-    ),
     "orchestrator/host_installs.py": Shared(
         "the table of what this host installs, read by `host_adoption_check.py` and the "
         "release-pin tests"
     ),
     "orchestrator/record_shapes.py": Shared(
-        "normalized origins and record ids every reader shares"
+        "a plan node's id type and the normalized-origin parser `host_adoption_check.py` reads"
     ),
     "orchestrator/run_reading.py": Shared("reads a run's settlement, as the engine publishes it"),
     "orchestrator/npm_installs.py": Shared("the engine's npm install, every verb's binary"),

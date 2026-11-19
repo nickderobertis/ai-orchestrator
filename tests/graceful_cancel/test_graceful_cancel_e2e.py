@@ -31,11 +31,12 @@ import pytest
 import short_state
 from fake_backend import AGENT_DELAY_ENV
 from harness_indirections import established_indirections
+from plan_store_client import WRITABLE_PLUGIN
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 from waits import until
 
-from orchestrator.plan_store import WRITABLE_PLUGIN, NodeId
+from orchestrator.record_shapes import NodeId
 from orchestrator.root import REPO_ROOT
 
 #: The paid model's stand-ins, and the guard covering the identities neither seam reaches.

@@ -22,12 +22,12 @@ import subprocess
 import follow_up_variables
 import jsonschema
 import onetaskgraph_user_layer
+import plan_store_client
 import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
+from plan_store_client import WRITABLE_PLUGIN
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import plan_store
-from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
 
@@ -593,9 +593,9 @@ def test_the_tracked_document_declares_no_route_and_no_private_tracker_but_its_o
         for source, visibility in DECLARED_VISIBILITY.items()
         if visibility == "private"
     ), private
-    assert plan_store.reachable("plans") == ("plans",)
-    assert plan_store.reachable("followups") == ("followups",)
-    assert plan_store.reachable("human-public") == ("human-public",)
+    assert plan_store_client.reachable("plans") == ("plans",)
+    assert plan_store_client.reachable("followups") == ("followups",)
+    assert plan_store_client.reachable("human-public") == ("human-public",)
     configured = set(read_plan_sources(_configuration()))
     assert set(read_default_sources(_configuration())) <= configured
 
@@ -839,7 +839,7 @@ def test_the_example_linear_sources_resolve_their_states_endpoint_and_routes(
     Read through the CLI's own resolution for the reason the board mappings above are, with
     the example installed as the user layer. The endpoint is held to the schema's default and
     to no setting of the layer's, so the source reaches Linear itself and never a fixture
-    address left behind. `plan_store.reachable` is read under the same layer, because it is
+    address left behind. `plan_store_client.reachable` is read under the same layer, because it is
     how a copy's home is looked for among the routed sources and a ticket's family is read.
     """
     properties = _linear_schema()["properties"]
@@ -867,12 +867,12 @@ def test_the_example_linear_sources_resolve_their_states_endpoint_and_routes(
         monkeypatch.delenv(name)
     home = onetaskgraph_user_layer.installed(tmp_path_factory.mktemp("routed-layer"))
     monkeypatch.setenv(onetaskgraph_user_layer.XDG_CONFIG_HOME, str(home))
-    assert plan_store.reachable("plans") == (
+    assert plan_store_client.reachable("plans") == (
         "plans",
         onetaskgraph_user_layer.PRIVATE_PLANS,
         onetaskgraph_user_layer.ORGANIZATION_PLANS,
     )
-    assert plan_store.reachable("followups") == (
+    assert plan_store_client.reachable("followups") == (
         "followups",
         onetaskgraph_user_layer.PRIVATE_FOLLOWUPS,
         onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,

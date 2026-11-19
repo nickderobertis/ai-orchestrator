@@ -37,10 +37,10 @@ from driven_run import (
     quiet_projections,
     waited_for,
 )
+from plan_store_client import PROJECTS_DIRECTORY, TASKS_DIRECTORY
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator.record_shapes import PROJECTS_DIRECTORY, TASKS_DIRECTORY
 from orchestrator.root import REPO_ROOT
 
 #: The session these launches run under, stated rather than inherited: this suite runs

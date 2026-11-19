@@ -10,8 +10,7 @@ it waits for as `concurrent-deferred`; the same plan without the dependency is r
 naming the holding run, its node and the dependency that would acknowledge it; and that
 plan with `--acknowledge-concurrent` launches, recording `concurrent-acknowledged` over
 the holder. The dependency is written the way a plan authored here carries one, as the
-`onepipeline.deps` task metadata a cross-DAG reference is stored under
-(`orchestrator/record_shapes.py`'s `CROSS_DAG_DEPS`).
+`onepipeline.deps` task metadata a cross-DAG reference is stored under.
 
 Everything is real — the recipes, `scripts/onepipeline.sh`, the installed `onepipeline`,
 `onevcs`'s session registry and the identity's checkouts — and the only thing doubled is

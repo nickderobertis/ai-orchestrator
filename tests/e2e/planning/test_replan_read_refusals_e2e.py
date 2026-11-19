@@ -2,16 +2,18 @@
 
 `just review-plan` and the launch gate `scripts/plan-attestation-check.sh` each read what a run
 wrote of a plan from the one board copy the project's `onetaskgraph.copies` names, or from the
-plan's own tasks when it names none, and the review leaves the whole run-written list
-(`config/run-written-keys.txt`) out of what it attests. When any of that cannot be read — a
+plan's own tasks when it names none, and the review leaves every key the engine's write-back
+owns out of what it attests. When any of that cannot be read — a
 copy link that is not an object of ids, a link naming two destinations, a board copy the store
 cannot list, a task's link naming no item the board holds, a settlement that is not an object
 with a text status — reading the plan as if it had no run state would judge, or pass, a task
 under the wrong settlement, so both stop with exit 2 and a diagnostic naming what to repair.
-The review alone stops on an unreadable run-written list, which only its attestations exclude,
-and on an amendment that is not text, which only its judges read. The review does the same,
-carrying the store's structured failure, for a project the store cannot show, and for a pass
-the store cannot record, naming the task or project and the re-review.
+The review alone stops on an amendment that is not text, which only its judges read; its
+refusal of an engine answering no run-written keys is
+`tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py`'s, which doubles the engine.
+The review does the same, carrying the store's structured failure, for a project the store
+cannot show, and for a pass the store cannot record, naming the task or project and the
+re-review.
 
 One bench (`planning_bench`), one small plan per case built through this host's own templates
 and `just copy-plan`, and the malformed value planted in the store's own Markdown front
@@ -55,7 +57,6 @@ pytestmark = [
 ]
 
 REFUSED = 2
-KEYS = Path("config") / "run-written-keys.txt"
 
 
 def _front_matter(path: Path, edit: Callable[[dict[str, Any]], None]) -> None:
@@ -125,7 +126,6 @@ def _case(bench_: Bench, plan: str) -> Case:
 
 #: Each case: the review's diagnostic, then the gate's (None where the gate reads no such thing).
 EXPECTED: dict[str, tuple[str, str | None]] = {
-    "empty key list": ("review-plan-item: could not read the run-written keys from", None),
     "project copies not an object": (
         "onetaskgraph.copies is not an object naming each destination's copy by a non-empty id",
         "whose onetaskgraph.copies names each destination's copy by a non-empty id",
@@ -187,15 +187,6 @@ def cases(
     tag = os.getpid()
     found: dict[str, Case] = {}
     found["project absent"] = _case(bench_, f"authoring:absent-{tag}")
-
-    keys = bench_.checkout / KEYS
-    listed = keys.read_text(encoding="utf-8")
-    own = _plan(bench_, f"keys-{tag}", boarded=False)
-    keys.write_text("# every key removed\n", encoding="utf-8")
-    try:
-        found["empty key list"] = _case(bench_, own.plan)
-    finally:
-        keys.write_text(listed, encoding="utf-8")
 
     plan = _plan(bench_, f"proj-copies-{tag}", boarded=False).plan
     _front_matter(

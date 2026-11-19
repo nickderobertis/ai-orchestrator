@@ -138,11 +138,7 @@ governed by its `config/<tool>.version` pin, `llmlint` excepted.
   roles a bare `persona` resolves to.
 - **`onejudge`** — the worker / simulated-user conversation every dispatch runs in.
 - **`oneharness`** — each side's harness, identity, model and deadline (`oneharness*.toml`).
-<!-- llmlint: ignore-block[instruction_layer_localized] Which `onetaskgraph` answers is a host-wide fact rather than an `orchestrator/` implementation constraint: every board command a manager runs reads through that resolution, and the reader diagnosing a read about the wrong release is the manager; `tests/plan_guidance/test_plan_store_guidance.py` holds this one copy to `orchestrator/plan_store.py`. The block runs to the end of this bullet. -->
-- **`onetaskgraph`** — the plan store `onetaskgraph.yaml` configures. Every plan-store read
-  in `orchestrator/` runs the locked install, `.venv/bin/onetaskgraph`, never one `PATH` or
-  `ONETASKGRAPH_SDK_BINARY` offers; `orchestrator/plan_store.py` says why.
-<!-- llmlint: ignore-end[instruction_layer_localized] -->
+- **`onetaskgraph`** — the plan store `onetaskgraph.yaml` configures.
 - **`onepipeline-ui`** — `just dag-ui`'s DAG API and view, which supervises runs and drives
   none.
 - **`onemessagebus`** — the bus the channel, events and notes run on
@@ -832,12 +828,12 @@ library verbs it calls.
 - `scripts/render-diagram.sh` — renders the Planned-tasks graph PNG with mmdc; its `design-doc-dag-*` budgets stay.
 - `orchestrator/host_adoption_check.py` — the `plan check --check` executable holding the host-install rules `uninstalled` and `default-taken` against `orchestrator/host_installs.py`.
 - `scripts/budget-design-doc-summary.sh` — the root `design-doc-budget-summary-length` budget's measurement.
-- `scripts/review-plan-item.sh` — `oneagentgraph run --judge-only`, `onetaskgraph project attestation check`, `onetaskgraph task list`, `onetaskgraph project show`, `onetaskgraph task attest` and `onetaskgraph project attest`.
+- `scripts/review-plan-item.sh` — `onepipeline plan writeback-keys`, `oneagentgraph run --judge-only`, `onetaskgraph project attestation check`, `onetaskgraph task list`, `onetaskgraph project show`, `onetaskgraph task attest` and `onetaskgraph project attest`.
 - `scripts/plan-attestation-check.sh` — `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onepipeline template resolve`, `onetaskgraph project attestation check`, `onetaskgraph project show`, `onetaskgraph task list`, `onetaskgraph document list` and `onetaskgraph document attestation check`.
-- `scripts/spike-records.sh` — the spike records and the flows' spikes run: `onetaskgraph task attest`, `onepipeline start` and `onepipeline watch`, its wait an interim workaround its header states.
+- `scripts/spike-records.sh` — the spike records and the flows' spikes run: `onetaskgraph task attest`, `onepipeline plan writeback-keys`, `onepipeline start` and `onepipeline watch`, its wait an interim workaround its header states.
 - `scripts/spike-evidence-check.sh` — the spike-evidence check: `onetaskgraph project attestation check`.
 - `scripts/run-ended.sh` — its spike-discard lines: `onepipeline status`, `onetaskgraph project show`, `onepipeline unpublished` and `just reclaim-branch --discard`.
-- `justfile` — the recipes `plan`, `refresh-plan`, `finish-plan`, `check-plan`, `review-plan`, `copy-plan`, `approve-design` and `spike-unaffected`: `onetaskgraph project create`, `project show`, `project copy`, `task list`, `task update-many`, `task deps`, `task update`, `document list` and `document attest`, `llmlint rules`, and `onepipeline flow run`, `start`, `plan check`, `template resolve`, `attest` and `adopt`, and `scripts/review-plan-item.sh` and `scripts/spike-records.sh`.
+- `justfile` — the recipes `plan`, `refresh-plan`, `finish-plan`, `check-plan`, `review-plan`, `copy-plan`, `approve-design` and `spike-unaffected`: `onetaskgraph project create`, `project show`, `project copy`, `task list`, `task update-many`, `task deps`, `task update`, `document list` and `document attest`, `llmlint rules`, and `onepipeline flow run`, `start`, `plan check`, `plan writeback-keys`, `template resolve`, `attest` and `adopt`, and `scripts/review-plan-item.sh` and `scripts/spike-records.sh`.
 
 Nothing else under `orchestrator/` or `scripts/` serves planning, and
 `tests/tree_scans/test_planning_ownership.py` holds it.

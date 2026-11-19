@@ -15,7 +15,6 @@
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/config/read-api.address",
       "{workspaceRoot}/config/plan-checklist.llmlint.yml",
-      "{workspaceRoot}/config/run-written-keys.txt",
       "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/planner-surface.sh",
       "{workspaceRoot}/scripts/new-persona.sh",
@@ -48,7 +47,6 @@
       "{workspaceRoot}/scripts/host-sweep.sh",
       "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

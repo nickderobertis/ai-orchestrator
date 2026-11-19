@@ -21,7 +21,6 @@
     "support-published-surface",
     "support-registered-checkouts",
     "support-run-snapshot",
-    "support-run-written-keys",
     "support-short-state",
     "support-test-linked-libraries",
     "support-waits",

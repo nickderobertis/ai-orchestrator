@@ -13,6 +13,7 @@
     "support-github-board",
     "support-linear-board",
     "support-onetaskgraph-user-layer",
+    "support-plan-store-client",
     "support-published-tools",
     "support-waits"
   ],
@@ -29,7 +30,6 @@
       "{workspaceRoot}/orchestrator/gate_impact.py",
       "{workspaceRoot}/orchestrator/host_installs.py",
       "{workspaceRoot}/orchestrator/npm_installs.py",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/redaction.py",
       "{workspaceRoot}/orchestrator/root.py",

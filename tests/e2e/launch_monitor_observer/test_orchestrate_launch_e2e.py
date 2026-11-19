@@ -32,6 +32,7 @@ from typing import Any, Literal, NamedTuple, NewType, Required, TypedDict, cast
 
 import follow_up_variables
 import plan_root_variable
+import plan_store_client
 import pytest
 import short_state
 from example_records import SOURCE, ExampleCopy, isolated_examples, tracked_root
@@ -49,6 +50,7 @@ from harness_configs import copied_with_its_parents, harness_routing
 from harness_indirections import established_indirections
 from no_paid_provider import REFUSAL, VERSION
 from observer_environment import ENVIRONMENT_PATH_ENV
+from plan_store_client import WRITABLE_PLUGIN
 from planner_channel import BUS_CONFIG, RUNS_OWN_PROJECTION_COMPLAINT
 from project_fixtures import helper, project_from_plan, read_project_plan, resolving
 from published_surface import surface_of
@@ -62,7 +64,6 @@ from test_short_state_budget import SUFFIX, composition_overhead, shipped_sessio
 from waits import deadline, until
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_store
 from orchestrator.labels import (
     NODE_LABEL,
     POINTER_FILE_NAME,
@@ -70,7 +71,6 @@ from orchestrator.labels import (
     SCOPE_LABEL,
     Scope,
 )
-from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
 # What the recipes these journeys run leave in the temporary directory, by design or
@@ -4605,8 +4605,8 @@ def test_launch_omits_withdrawn_tasks_and_refuses_their_dependents(
     store, native = source.split(":", 1)
     withdrawn = next(
         task.id.model_dump()
-        for page in plan_store.every_page(
-            source, plan_store.client().task_list, source=[store], project=native
+        for page in plan_store_client.every_page(
+            source, plan_store_client.client().task_list, source=[store], project=native
         )
         for task in page.items
         if task.item.metadata.get("onepipeline.id") == "withdrawn"

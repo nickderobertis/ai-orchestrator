@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, NewType
 
-from orchestrator import plan_store
+import plan_store_client
 
 
 @dataclass(frozen=True)
@@ -430,7 +430,7 @@ class LinearBoard:
         ``settings`` is a resolved configuration's flat `sources.<name>.config.<key>` entries;
         omitted, this checkout's own, and a journey whose store is its own passes that store's.
         """
-        settings = plan_store.configured_settings() if settings is None else settings
+        settings = plan_store_client.configured_settings() if settings is None else settings
         prefix = f"sources.{source}.config."
         key = settings.get(prefix + "api_key_env")
         if not isinstance(key, str):

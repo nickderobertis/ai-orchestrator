@@ -7,17 +7,16 @@
   ],
   "implicitDependencies": [
     "support-boundary-home",
+    "support-engine-writeback-keys",
     "support-fake-codex",
     "support-no-paid-provider",
     "support-plan-fixture-source",
-    "support-published-tools",
-    "support-run-written-keys"
+    "support-published-tools"
   ],
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/e2e/project_fixtures.py",
       "{workspaceRoot}/orchestrator/npm_installs.py",
-      "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/record_shapes.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
