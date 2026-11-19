@@ -478,9 +478,9 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.84.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.84.1**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 29 on the envelope, as 0.81.2 and 0.82.0 served, where 0.81.1, 0.81.0, 0.80.0 and 0.79.0
+   what re-opens this paragraph: `telemetry_schema_version` 30 on the envelope, where 0.84.0, 0.82.0 and 0.81.2 served 29 and 0.81.1, 0.81.0, 0.80.0 and 0.79.0
    served 28, 0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
    0.48.1 served 24, 0.44.0 served 21, 0.13.0 served 20 and
    0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15 — 26 reads every
@@ -489,7 +489,8 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    27 serves a node's `complete-but-draft` and `complete-but-held` statuses as themselves and
    gives a node's result the `awaiting` releases its settlement still awaits, 28 opens
    a run progressively, and 29 serves a plan task's and a node result's `command` kind and
-   lists a run's refused edits, each view's shape stated by onepipeline-ui's own `docs/contract.md`;
+   lists a run's refused edits, and 30 is what that contract calls a turn's words in their
+   place, each view's shape stated by onepipeline-ui's own `docs/contract.md`;
    `timeline_schema_version` 16, where 0.83.6 served 15, 0.65.4, 0.62.1, 0.62.0, 0.61.0, 0.60.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served 14, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
    11 and 0.21.1 served 10 — 16 serves every payload field of an event under the record's own wire key, where 15 served a selection under English labels, and gives every record of a surface the state that surface came to, 15 carries each check’s requirement label and recorded URL, and 14 gives every `turn-started`, `turn-message` and
    `turn-activity` event a one-line `description` the engine's resolver writes, 13 counts a

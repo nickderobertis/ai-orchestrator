@@ -436,7 +436,7 @@ finish-plan plan destination="plans":
     fi
     scripts/plan-store.sh .venv/bin/onetaskgraph project create authoring --id "$id" --title "$title finishing" \
         --template templates/planning/finishing.md.j2 --metadata onepipeline.schema_version=3 \
-        --var "plan=$plan" --var "native=$native" --var destination={{ quote(destination) }} \
+        --var "plan=$plan" --var "native=$native" --var "plan_title=$title" --var destination={{ quote(destination) }} \
         --var "brief_text=$brief_text" \
         --no-interactive >&2
     exec scripts/plan-store.sh scripts/onepipeline.sh flow run --name "${title//[^A-Za-z0-9._-]/-}-finishing" -- bash -c '
@@ -508,11 +508,32 @@ render-diagram *args:
     @./scripts/render-diagram.sh "$@"
 
 # `just copy-plan <source>:<project> [destination]` copies a plan, its tasks and its
-# documents with `onetaskgraph project copy`; attestations travel with the copy.
+# documents with `onetaskgraph project copy`; attestations travel with the copy. Run as the
+# planning road's `copy` step, where the engine names `ONEPIPELINE_STEP_OUTPUTS`, it also
+# publishes `{"design_url": …}`: the location the copy recorded, in the plan's design
+# document's `onetaskgraph.copy_locations`, for the board copy of that document — its `url`,
+# or the `path` a local Markdown destination records. Exit 1 then refuses, publishing
+# nothing, a plan holding no design document rendered from `onepipeline:design-doc` or
+# several, or one whose copy recorded no location for it in `destination`.
 [group("planning")]
 [doc("Copy a plan, its tasks and its documents onto the plan board.")]
 copy-plan plan destination="plans":
-    @scripts/plan-store.sh .venv/bin/onetaskgraph project copy {{ quote(plan) }} --to {{ quote(destination) }} --documents --no-interactive
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plan={{ quote(plan) }}
+    destination={{ quote(destination) }}
+    scripts/plan-store.sh .venv/bin/onetaskgraph project copy "$plan" --to "$destination" --documents --no-interactive
+    [ -n "${ONEPIPELINE_STEP_OUTPUTS:-}" ] || exit 0
+    listed=$(scripts/plan-store.sh .venv/bin/onetaskgraph document list --source "${plan%%:*}" --project "$plan" --json --no-interactive)
+    url=$(jq -er --arg plan "$plan" --arg to "$destination" '
+        "copy-plan: the copy of \($plan) into \($to) recorded no design-document location to publish as design_url" as $none
+        | [.items[] | select(.item.metadata["onetaskgraph.template"].template == "onepipeline:design-doc")]
+        | if length == 0 then error("\($none): \($plan) holds no design document rendered from onepipeline:design-doc; write it with just finish-plan \($plan), then retry")
+          elif length > 1 then error("copy-plan: \($plan) holds \(length) design documents rendered from onepipeline:design-doc, not one, so which to link is unclear; remove all but the current one with the plan store, then retry")
+          else (.[0].item.metadata["onetaskgraph.copy_locations"][$to].location // {}) as $at
+          | ($at.url // $at.path // error("\($none): its design document \(.[0].id) holds no onetaskgraph.copy_locations entry for \($to); rerun just copy-plan \($plan) \($to), then retry")) end' <<<"$listed") ||
+        exit 1
+    jq -n --arg url "$url" '{design_url: $url}' >"$ONEPIPELINE_STEP_OUTPUTS"
 
 # Read the next planner surface, with the events that led to it: `just channel-next
 # <run-id>`.

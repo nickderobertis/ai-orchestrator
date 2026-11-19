@@ -153,12 +153,12 @@ members:
     title: "Copy {{ plan }} and its documents to {{ destination }}"
     template: {file: step.md.j2}
     answers:
-      description: "`onetaskgraph project copy` of the plan, its tasks and its documents, into `{{ destination }}`."
+      description: "`just copy-plan` copies the plan, its tasks and its documents into `{{ destination }}`, and publishes the board copy's location of the design document as the step output `design_url`."
     depends_on: ["{{ native }}-planning-design"]
     metadata:
       onepipeline.id: copy
       onepipeline.kind: command
-      onepipeline.command: [.venv/bin/onetaskgraph, project, copy, "{{ plan }}", --to, "{{ destination }}", --documents, --no-interactive]
+      onepipeline.command: [just, copy-plan, "{{ plan }}", "{{ destination }}"]
   - id: "{{ native }}-planning-approve-design"
     title: "Approve the design of {{ plan }}"
     template: {file: step.md.j2}
@@ -169,14 +169,17 @@ members:
       onepipeline.id: approve-design
       onepipeline.kind: human
       onepipeline.human_item:
-        kind: task
+        kind: question
         priority: medium
-        title: "Read and approve the design for {{ plan }}"
+        title: >-
+          Approve the design "{{ plan_title }}" or suggest changes
         body: >-
-          Read the design document of the copy of {{ plan }} in {{ destination }} (its id is
-          the `onetaskgraph.copies` entry `onetaskgraph project show {{ plan }} --json`
-          names). Once the user approves it, run `just approve-design <that copy>
-          <this run's id>`.
+          [Read the design document](${steps.copy.design_url}) for "{{ plan_title }}".
+          Choose Approve if it is right, or write the changes you want.
+        choices:
+          - id: approve
+            title: Approve
+            description: The design is right as written, and the plan may run.
 ---
 The planning run of `{{ plan }}`, from the brief `{{ brief }}`: refresh, draft, spikes, finalize, spike evidence, check, review,
 design document, copy to `{{ destination }}`, and the user's approval.

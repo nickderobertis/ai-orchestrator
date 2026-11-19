@@ -6,9 +6,13 @@ One sequence on one bench (`planning_bench`), each step through the real recipe:
    settles `done` at once — no spikes run is started and no person is asked to approve
    spikes — and its `finalize` guard settles `finalize` `done (not-needed)` with no planner
    or judge dispatched for it, so the run goes on to check, review, design and copy and waits
-   at `approve-design` with the plan and its design document on the board copy.
+   at `approve-design` with the plan and its design document on the board copy. Its
+   `approve-design` item is a question to the user quoting the plan's title, offering one
+   Approve choice, and linking the design document through the `copy` step's published
+   `design_url`, which the engine substitutes with where the board copy holds it.
 2. `just finish-plan` over the same plan, whose draft is done, creates the `finishing`
-   template's members alone and runs them, rewriting the design document.
+   template's members alone and runs them, rewriting the design document. Each of the two
+   planning projects loads under the engine's own `plan check`.
 3. The board copy is approved and one reviewed task's criteria are edited on it. The
    orchestrate recipe refuses the plan naming that task; `just review-plan` spends exactly
    one judge-only call, for that task; the orchestrate recipe then launches the plan.
@@ -21,10 +25,10 @@ import os
 import shutil
 import subprocess
 from collections.abc import Iterator
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import pytest
-from drafting import DESIGN_MARKER, FINALIZE_MARKER, brief, drafting
+from drafting import DESIGN_MARKER, FINALIZE_MARKER, brief, drafting, plan_title
 from judging_codex import JudgeInput
 from planning_bench import (
     BOARD,
@@ -67,6 +71,16 @@ FINISHING_NODES = [
 ]
 
 NEW_CRITERION = "A request-level test drives the route and reads its JSON body."
+#: How the approval question's body links the design document before the engine substitutes it.
+DESIGN_LINK = "[Read the design document](${steps.copy.design_url})"
+
+
+class Approval(NamedTuple):
+    """One planning project's rendered approval node, and the engine's load of the project."""
+
+    project: str
+    human_item: dict[str, Any]
+    checked: subprocess.CompletedProcess[str]
 
 
 class Sequence(NamedTuple):
@@ -78,7 +92,7 @@ class Sequence(NamedTuple):
     planning_run: str
     planning: dict[str, object]
     journal: list[dict[str, object]]
-    items: list[dict[str, object]]
+    items: list[dict[str, Any]]
     finished: subprocess.CompletedProcess[str]
     finishing_run: str
     finishing: dict[str, object]
@@ -91,6 +105,36 @@ class Sequence(NamedTuple):
     reviewer_codex: list[JudgeInput]
     edited_task: str
     launched: subprocess.CompletedProcess[str]
+    planning_approval: Approval
+    finishing_approval: Approval
+
+
+def _listed(answer: dict[str, object]) -> list[dict[str, Any]]:
+    """The records a plan-store list answered, refused by name when it answered no list."""
+    items = answer.get("items")
+    assert isinstance(items, list), answer
+    return items
+
+
+def _approval(bench: Bench, suffix: str) -> Approval:
+    """The one authoring project ending ``suffix``: its `approve-design` item and its check."""
+    projects = store_json(bench, "project", "list", "--source", "authoring")
+    (project,) = [str(one["id"]) for one in _listed(projects) if suffix in str(one["id"])]
+    members = store_json(bench, "task", "list", "--source", "authoring", "--project", project)
+    (metadata,) = [
+        one["item"]["metadata"]
+        for one in _listed(members)
+        if one["item"]["metadata"].get("onepipeline.id") == "approve-design"
+    ]
+    # As `config/onepipeline.workflows.yaml` launches it: tasks rendered from this host's
+    # `templates/planning/` files rather than resolved by name.
+    checked = run(
+        bench,
+        *("scripts/onepipeline.sh", "plan", "check", project),
+        *("--require-rendered", "false", "--template-root", "templates"),
+        seconds=300,
+    )
+    return Approval(project, metadata["onepipeline.human_item"], checked)
 
 
 def _nodes(answer: dict[str, object]) -> dict[str, str]:
@@ -105,7 +149,7 @@ def _only_run(bench: Bench, suffix: str) -> str:
     return found[0]
 
 
-def _items(bench: Bench, run_id: str) -> list[dict[str, object]]:
+def _items(bench: Bench, run_id: str) -> list[dict[str, Any]]:
     answered = run(
         bench,
         "scripts/onepipeline.sh",
@@ -156,6 +200,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         .splitlines()
     ]
     items = _items(bench_, planning_run)
+    planning_approval = _approval(bench_, f"{native}-planning-")
 
     before = _design_renders(bench_, native)
     finished = just(bench_, "finish-plan", f"authoring:{native}", BOARD)
@@ -163,25 +208,24 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     finishing = status(bench_, finishing_run)
     projects = store_json(bench_, "project", "list", "--source", "authoring")
     finishing_project = [
-        str(one["id"])
-        for one in projects.get("items", [])
-        if f"{native}-finishing" in str(one["id"])
+        str(one["id"]) for one in _listed(projects) if f"{native}-finishing" in str(one["id"])
     ]
     assert len(finishing_project) == 1, projects
     members = store_json(
         bench_, "task", "list", "--source", "authoring", "--project", finishing_project[0]
     )
     finishing_members = sorted(
-        str(one["item"]["metadata"]["onepipeline.id"]) for one in members["items"]
+        str(one["item"]["metadata"]["onepipeline.id"]) for one in _listed(members)
     )
     after = _design_renders(bench_, native)
+    finishing_approval = _approval(bench_, f"{native}-finishing-")
 
     approved = just(bench_, "approve-design", f"{BOARD}:{native}", finishing_run)
     assert approved.returncode == 0, approved.stdout + approved.stderr
     tasks = store_json(bench_, "task", "list", "--source", BOARD, "--project", f"{BOARD}:{native}")
     edited_task = next(
         str(one["id"])
-        for one in tasks["items"]
+        for one in _listed(tasks)
         if one["item"]["metadata"].get("onepipeline.id") == "route"
     )
     rendered = run(
@@ -221,6 +265,8 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         reviewer_codex,
         edited_task,
         launched,
+        planning_approval,
+        finishing_approval,
     )
     for one in runs_of(bench_):
         if not one.startswith("."):
@@ -305,13 +351,13 @@ def test_the_board_copy_holds_the_plan_and_its_design_document(sequence: Sequenc
         f"{BOARD}:{sequence.native}",
     )
     templates = [
-        one["item"]["metadata"]["onetaskgraph.template"]["template"] for one in documents["items"]
+        one["item"]["metadata"]["onetaskgraph.template"]["template"] for one in _listed(documents)
     ]
     assert templates == ["onepipeline:design-doc"], documents
     tasks = store_json(
         sequence.bench, "task", "list", "--source", BOARD, "--project", f"{BOARD}:{sequence.native}"
     )
-    assert len(tasks["items"]) == 2, tasks
+    assert len(_listed(tasks)) == 2, tasks
 
 
 def test_the_design_document_tabulates_each_planned_task_from_the_stores_graph(
@@ -321,9 +367,9 @@ def test_the_design_document_tabulates_each_planned_task_from_the_stores_graph(
     what it depends on by title, every row naming the task it is."""
     copy = f"{BOARD}:{sequence.native}"
     documents = store_json(sequence.bench, "document", "list", "--source", BOARD, "--project", copy)
-    (document,) = documents["items"]
+    (document,) = _listed(documents)
     shown = store_json(sequence.bench, "document", "show", str(document["id"]))
-    content = str(shown["items"][0]["item"]["content"])
+    content = str(_listed(shown)[0]["item"]["content"])
     table = content.split("## Planned tasks", 1)[1]
     rows = [line for line in table.splitlines() if line.startswith("| ") and "---" not in line]
     cells = [[cell.strip() for cell in row.strip("|").split("|")] for row in rows[1:]]
@@ -376,3 +422,65 @@ def test_the_re_reviewed_plan_launches(sequence: Sequence) -> None:
     assert launched.returncode == 0, launched.stdout + launched.stderr
     settled = json.loads(launched.stdout.strip().splitlines()[-1])
     assert settled["settlement"] == "complete", settled
+
+
+@pytest.mark.parametrize("which", ["planning", "finishing"])
+def test_each_planning_project_loads_and_asks_the_user_to_approve_its_design(
+    sequence: Sequence, which: str
+) -> None:
+    """The rendered `approve-design` item is a question to the user, linking the document.
+
+    The engine's own `plan check` accepts the project — the placeholder names the node's
+    one dependency, `copy`, and a question may offer choices — and the item names no copy
+    id and no command for the manager to run.
+    """
+    approval = getattr(sequence, f"{which}_approval")
+    checked = approval.checked
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    item = approval.human_item
+    assert item["kind"] == "question", item
+    assert item["priority"] == "medium", item
+    (choice,) = item["choices"]
+    assert (choice["id"], choice["title"]) == ("approve", "Approve"), item
+    title = plan_title(sequence.native)
+    assert item["title"] == f'Approve the design "{title}" or suggest changes', item
+    body = str(item["body"])
+    assert DESIGN_LINK in body, body
+    assert title in body, body
+    assert "just " not in body and "`" not in body, body
+    assert f"{BOARD}:" not in body and "authoring:" not in body, body
+    assert "onetaskgraph" not in body, body
+
+
+def test_the_raised_question_links_where_the_board_copy_holds_the_design_document(
+    sequence: Sequence,
+) -> None:
+    """The engine substitutes the copy step's `design_url` into the item it raises.
+
+    The bench's board is a local Markdown source, whose copy records the document's path as
+    its location, so the link the user is handed is that file.
+    """
+    documents = store_json(
+        sequence.bench,
+        "document",
+        "list",
+        "--source",
+        "authoring",
+        "--project",
+        f"authoring:{sequence.native}",
+    )
+    (design,) = [
+        one
+        for one in _listed(documents)
+        if one["item"]["metadata"]["onetaskgraph.template"]["template"] == "onepipeline:design-doc"
+    ]
+    location = design["item"]["metadata"]["onetaskgraph.copy_locations"][BOARD]["location"]
+    asked = [
+        entry["item"]
+        for entry in sequence.items
+        if str(entry["item"].get("title", "")).startswith("Approve the design")
+    ]
+    assert len(asked) == 1, sequence.items
+    body = json.dumps(asked[0])
+    assert f"[Read the design document]({location['path']})" in body, body
+    assert "${steps." not in body, body

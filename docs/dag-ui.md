@@ -123,8 +123,8 @@ items. Each item shows its **source** — the plan and run it came from, the man
 for a question raised outside a run, or the host — and whether it blocks work, as
 "blocks N steps in <plan>", "blocks all of <plan>" or "blocks all work on this host";
 the scope behind that is the engine's internal record, never a filter or a column.
-Completing a planning run's `approve-design` task here is an ordinary **Complete**: it
-attests that step, and records no approval, which is `just approve-design`'s alone.
+Answering a planning run's `approve-design` question here, by **Approve** or in a person's
+own words, attests that step and records no approval, which is `just approve-design`'s alone.
 **Reopen** puts a resolved item back; each item says whether it can be reopened and, where
 it cannot, why. A note is a completed
 item's comment or a dismissed item's reason. A write here records actor
@@ -296,14 +296,15 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.84.0**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.84.1**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, question cards answered by choice or in a
 person's own words, the per-run **Stop** with the owner-naming refusal, and the
 **Host** page with the one host-wide shutdown. It reads every turn whole from the
 oneharness history file its record points at, through the engine's transcript
 resolver, and a reference whose file this host no longer holds reads as **transcript
-unavailable** rather than as an empty turn. The whole of that
+unavailable** rather than as an empty turn. A node's timeline always finishes loading,
+and its transcript reads in the order the turns were recorded. The whole of that
 is [Supervising from the browser](#supervising-from-the-browser) above; what belongs
 here is what the view has to *render* and may find nothing behind.
 

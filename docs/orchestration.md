@@ -328,8 +328,8 @@ which is the point of it. Its members, in order:
 | `check` | command | `onepipeline plan check <plan> --check orchestrator/host_adoption_check.py` |
 | `review` | command | `scripts/review-plan-item.sh <plan>` |
 | `design` | design-doc writer, `graphs/design-doc.yaml` | renders the design document as a document of the plan |
-| `copy` | command | `onetaskgraph project copy <plan> --to <destination> --documents` |
-| `approve-design` | `kind: human` | raises the item asking the user to approve the board copy |
+| `copy` | command | `just copy-plan <plan> <destination>`, publishing the step output `design_url` |
+| `approve-design` | `kind: human` | raises the question asking the user to approve the board copy's design, linking `design_url` |
 
 **A replan starts from what its run wrote, and the plan it edits holds none of it.** `just
 refresh-plan <source>:<project> [destination]` acts only on a plan that records a copy in
@@ -425,12 +425,17 @@ each release adoption can complete.
 <destination> --documents`, the planning run's `copy` step. The copy carries every record's
 metadata, its attestations included, and the plan's documents. A copy between local Markdown
 projects files every task under the project it landed as, and a board copy gets the ids the
-board assigns.
+board assigns. Run as that step, where the engine names `ONEPIPELINE_STEP_OUTPUTS`, it also
+publishes `design_url`: the location the copy recorded in the design document's
+`onetaskgraph.copy_locations` for the destination, its `url` on a board or its `path` on a
+local Markdown source. A plan with no design document, or several, or a copy that recorded
+no location for it fails the step naming which, and publishes nothing.
 
 **Where the destination holds what landed is read back out of it rather than composed.** A
 destination decides its own native ids, so the copy is found through the store's own
 `onetaskgraph.copies` record on the plan (`onetaskgraph project show <plan> --json`), and the
-planning run's `approve-design` item tells the user where to read it.
+planning run's `approve-design` item links the user to the design document there, through
+the `copy` step's published `design_url`.
 
 ### Approving the design document a plan is read as
 
@@ -3940,11 +3945,13 @@ going.
   from its own title and action prose at Low, the fallback for no store priority. Answering
   or completing the item attests the step once, as the `attest` below does, and dismissing
   it drops the step and detaches what depends on it.
-* **A planning run's `approve-design` step** is one of those nodes: its item asks the user to
-  read and approve the design document of the board copy, and `just approve-design <copy>
-  <run>` records the approval and attests the step. Completing the item alone attests the
-  step without recording an approval, so the launch gate, which reads the approval record and
-  never the item, still refuses the plan until `just approve-design` has run.
+* **A planning run's `approve-design` step** is one of those nodes: its item is a question to
+  the user, titled with the plan's title, linking the board copy's design document and
+  offering one **Approve** choice, any other answer being the changes they want. The manager
+  reads the answer, and `just approve-design <copy> <run>` records the approval and attests
+  the step, or the plan is revised. Answering the item alone attests the step without
+  recording an approval, so the launch gate, which reads the approval record and never the
+  item, still refuses the plan until `just approve-design` has run.
 * **A follow-up batch's review**: one task per batch, holding nothing, linking every ticket
   the batch created or updated once, grouped by priority with a separate "No priority"
   group, by the engine's `ticket_review` rule. onefollowup's `settle` runs the configured
