@@ -8,16 +8,25 @@ design writer renders it, with what each task delivers answered. The table holds
 task of the plan — its unit, what it delivers and what it depends on by title — and none for
 the external task, inside one expandable block. A plan of one task or none, and a legacy
 `planned_tasks` answer of one row or none, shows its table with no expandable block at all.
+
+Each row's Where-it-lives cell is the location the store's graph reports for the task, written
+alone, and a dependency on a task of the plan links its title to that location, so the store's
+own `project copy` onto the loopback GitHub board (`tests/github_board.py`) points both at the
+issue of the task's copy. A dependency outside the plan stays a plain title, a title holding
+`[`, `]` and `|` stays one link in one cell, and a graph answered before nodes carried a
+location renders its rows as it always did.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
 import yaml
+from github_board import BOARD, _serving_board
 from planning_bench import local_source
 
 from orchestrator.root import REPO_ROOT
@@ -150,12 +159,18 @@ def _inside_block(section: str, count: int) -> str:
     return section.split("</summary>", 1)[1].split("</details>", 1)[0]
 
 
+#: A column delimiter: a `|` no backslash escapes.
+_DELIMITER = re.compile(r"(?<!\\)\|")
+
+
 def _rows(section: str) -> dict[str, list[str]]:
     rows = [line for line in section.splitlines() if line.startswith("| ") and "---" not in line]
     assert rows[0] == "| Task | Unit | What it delivers | Depends on | Where it lives |", rows
     return {
         row[0]: row
-        for row in ([cell.strip() for cell in line.strip("|").split("|")] for line in rows[1:])
+        for row in (
+            [cell.strip() for cell in _DELIMITER.split(line.strip())[1:-1]] for line in rows[1:]
+        )
     }
 
 
@@ -233,6 +248,101 @@ def test_a_legacy_answer_of_one_row_shows_no_block_and_of_two_rows_one(tmp_path:
     two = _planned_tasks(environment, root, tmp_path, {"planned_tasks": _LEGACY_ROWS})
     cells = _rows(_inside_block(two, 2))
     assert list(cells) == ["feat: add the health route", "docs: document the health route"]
+
+
+def _located(graph: dict[str, object], task: str) -> str:
+    """The location the store's ``graph`` reports for ``task``, as its one string."""
+    nodes = graph["nodes"]
+    assert isinstance(nodes, list), graph
+    (node,) = [one for one in nodes if one["id"] == task]
+    (where,) = dict(node["location"]).values()
+    return str(where)
+
+
+# llmlint: ignore-block[e2e_not_mocked] GitHub's Projects API is the one boundary doubled,
+# because a copy onto it writes to a live board; the template, the pinned engine's `template
+# resolve`, the locked plan store's `document create`, `project graph` and `project copy` are real.
+def test_the_board_copy_links_each_task_and_in_plan_dependency_to_its_issue(
+    tmp_path: Path,
+) -> None:
+    environment, root = _store(tmp_path)
+    outside = _task(environment, "other", "feat: the other plan's schema", "Schema")
+    route = _task(environment, "plan", "feat: add the health route", "API")
+    docs = _task(environment, "plan", "docs: document the health route", "Docs", route, outside)
+    graph = _graph(environment)
+    table = _planned_tasks(
+        environment,
+        root,
+        tmp_path,
+        {"graph": graph, "delivers": {route: "the route itself", docs: "the operator guide"}},
+    )
+    authored = _rows(_inside_block(table, 2))
+    assert authored["feat: add the health route"][4] == _located(graph, route), authored
+    assert authored["docs: document the health route"][3] == (
+        f"[feat: add the health route]({_located(graph, route)}); feat: the other plan's schema"
+    ), authored
+
+    with _serving_board() as remote:
+        board = environment | remote
+        _run(board, STORE, "project", "copy", "scratch:plan", "--to", "plans", "--documents")
+        issues = {one.title: one for one in BOARD.issues}
+        (design,) = [one for title, one in issues.items() if title.endswith("Design")]
+        address = {
+            title: str(issues[title].content()["url"])
+            for title in ("feat: add the health route", "docs: document the health route")
+        }
+        copied = design.body.split("## Planned tasks", 1)[1]
+
+    cells = _rows(_inside_block(copied, 2))
+    for title, url in address.items():
+        assert cells[title][4] == url, (title, cells)
+    assert cells["docs: document the health route"][3] == (
+        f"[feat: add the health route]({address['feat: add the health route']}); "
+        "feat: the other plan's schema"
+    ), cells
+    assert str(root) not in copied, copied
+    assert "scratch:" not in copied, copied
+
+
+# llmlint: ignore-end[e2e_not_mocked]
+
+
+def test_a_title_holding_brackets_and_a_bar_stays_one_link_in_one_cell(tmp_path: Path) -> None:
+    environment, root = _store(tmp_path)
+    route = _task(environment, "plan", "feat: add [the] health | route", "API")
+    _task(environment, "plan", "docs: document the health route", "Docs", route)
+    graph = _graph(environment)
+    table = _planned_tasks(environment, root, tmp_path, {"graph": graph})
+    cells = _rows(_inside_block(table, 2))
+    assert all(len(row) == 5 for row in cells.values()), cells
+    assert cells["docs: document the health route"][3] == (
+        f"[feat: add \\[the\\] health \\| route]({_located(graph, route)})"
+    ), cells
+
+
+def test_a_graph_whose_nodes_carry_no_location_renders_its_rows_as_before(
+    tmp_path: Path,
+) -> None:
+    environment, root = _store(tmp_path)
+    outside = _task(environment, "other", "feat: the other plan's schema", "Schema")
+    route = _task(environment, "plan", "feat: add the health route", "API")
+    docs = _task(environment, "plan", "docs: document the health route", "Docs", route, outside)
+    graph = _graph(environment)
+    nodes = graph["nodes"]
+    assert isinstance(nodes, list), graph
+    stored = graph | {"nodes": [{k: v for k, v in one.items() if k != "location"} for one in nodes]}
+    table = _planned_tasks(
+        environment,
+        root,
+        tmp_path,
+        {"graph": stored, "delivers": {route: "the route itself", docs: "the operator guide"}},
+    )
+    rows = [line for line in _inside_block(table, 2).splitlines() if line.startswith("| ")]
+    assert rows[2:] == [
+        f"| feat: add the health route | API | the route itself | none | {route} |",
+        "| docs: document the health route | Docs | the operator guide | "
+        f"feat: add the health route; feat: the other plan's schema | {docs} |",
+    ], rows
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

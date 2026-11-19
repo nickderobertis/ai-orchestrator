@@ -142,6 +142,8 @@ variables:
 ---
 {#- A table cell is one line holding no bare column delimiter, whatever an answer says. -#}
 {% macro cell(value) %}{{ value | replace("|", "\\|") | replace("\r\n", " ") | replace("\n", " ") | replace("\r", " ") }}{% endmacro %}
+{#- Where the plan store reports a graph node: its `url` or `path`, or `""` for a node it reports none for. -#}
+{% macro located(node) %}{% if node.location is defined and node.location %}{{ node.location.url if node.location.url is defined else node.location.path }}{% endif %}{% endmacro %}
 {#- An expandable block's summary is HTML: `&`, `<` and `>` as entities, each backtick span as `<code>`. -#}
 {% macro summary(title) %}{% for piece in title | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") | split("`") %}{% if loop.index0 is odd and not loop.last %}<code>{{ piece }}</code>{% elif loop.index0 is odd %}`{{ piece }}{% else %}{{ piece }}{% endif %}{% endfor %}{% endmacro %}
 {#- One prose or code part of a decision, a code part fenced longer than any backtick run it holds. -#}
@@ -619,7 +621,11 @@ The export may carry files these patterns match although their contents cannot b
 
   Every row's task, unit and dependencies render from the `graph` answer, the plan store's
   own reading of the plan, and the Architecture's unit names are that graph's groups, so the
-  writer authors only `delivers`. Where it lives is the qualified id the store names. For a plan of more than one task with at least one
+  writer authors only `delivers`. Where it lives, and each dependency on a task of this plan,
+  render from each graph node's `location`, the location the plan store reports for it, never
+  one composed by hand: the cell holds that location alone and the dependency links its title
+  to it, so the store's copy points both at the task's copy on the board; a node with no
+  location keeps its qualified id and its plain title. For a plan of more than one task with at least one
   dependency edge, the flow also renders that graph, each task inside its unit's box, and
   the section opens with it: `dag_image` names that generated image and the document holds
   it as an asset. The writer never draws, edits or replaces it, and a plan of one task or of
@@ -647,10 +653,15 @@ The export may carry files these patterns match although their contents cannot b
 {% set deps = namespace(titles=[]) %}
 {% for edge in graph.edges if edge.to == node.id %}
 {% for other in graph.nodes if other.id == edge["from"] %}
+{% set where = located(other) %}
+{% if where and not other.external %}
+{% set deps.titles = deps.titles + ["[" ~ (other.title | replace("\\", "\\\\") | replace("[", "\\[") | replace("]", "\\]")) ~ "](" ~ where ~ ")"] %}
+{% else %}
 {% set deps.titles = deps.titles + [other.title] %}
+{% endif %}
 {% endfor %}
 {% endfor %}
-| {{ cell(node.title) }} | {{ cell(node.group or "none") }} | {{ cell(delivers[node.id] | default("")) }} | {{ cell(deps.titles | join("; ") or "none") }} | {{ cell(node.id) }} |
+| {{ cell(node.title) }} | {{ cell(node.group or "none") }} | {{ cell(delivers[node.id] | default("")) }} | {{ cell(deps.titles | join("; ") or "none") }} | {{ cell(located(node) or node.id) }} |
 {% endfor %}
 
 {% else %}
