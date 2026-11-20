@@ -134,11 +134,20 @@ VERSION_MOVED = "version-moved"
 ASSIGNEE = "bob"
 ROUTED_PRIORITY = "high"
 
-#: The store's metadata slot on GitHub, and the marker and block the Linear store writes its
-#: `Fields` section under, as each stores them.
+#: The store's metadata slot on GitHub, and on Linear the collapsed metadata block and the
+#: collapsed `Fields` section standing directly before it, as each stores them: the section
+#: is the one `+++ Fields` block followed by a metadata block opening with the
+#: `onetaskgraph.fields` sentinel, as onetaskgraph's `docs/metadata.md` states under "On
+#: Linear: one collapsed `Fields` section".
 GITHUB_SLOT = re.compile(r"\n*<!-- onetaskgraph\.metadata\n.*?\n-->\n*", re.DOTALL)
-LINEAR_SLOT = re.compile(r"\n*<!-- onetaskgraph\.metadata `.*?` -->\n*", re.DOTALL)
-FIELDS_MARKER = "<!-- `onetaskgraph.fields` -->"
+LINEAR_SLOT = re.compile(
+    r"\n*\+\+\+ onetaskgraph metadata\n\n(?:`onetaskgraph\.fields`\n\n)?`\{[^\n]*\}`\n\n\+\+\+\n*"
+)
+FIELDS_SECTION = re.compile(
+    r"\n*\+\+\+ Fields\n\n(?P<section>(?:(?!\n\+\+\+\n).)*)\n\n\+\+\+\n\n"
+    r"(?=\+\+\+ onetaskgraph metadata\n\n`onetaskgraph\.fields`\n)",
+    re.DOTALL,
+)
 ESTIMATE_LINE = re.compile(r"^(?P<bullet>[-*]) Priority estimate: .*$", re.MULTILINE)
 
 
@@ -413,9 +422,7 @@ def _unspanned(text: str) -> str:
 def _linear_fields(description: str) -> dict[str, str]:
     """The values the stored description's collapsed `Fields` section shows, by field: one
     bullet a field, its value a code span, or one nested bullet a line."""
-    assert description.count(FIELDS_MARKER) == 1, description
-    section = LINEAR_SLOT.split(description.split(FIELDS_MARKER, 1)[1])[0]
-    assert section.lstrip().startswith(("+++ Fields", "<details>")), section
+    (section,) = [found["section"] for found in FIELDS_SECTION.finditer(description)]
     held: dict[str, list[str]] = {}
     name = None
     for line in section.splitlines():
@@ -794,11 +801,14 @@ def test_on_linear_the_fields_are_one_collapsed_section_a_store_read_leaves_out(
     journey: Journey,
 ) -> None:
     if journey.destination != LINEAR:
-        assert FIELDS_MARKER not in journey.new.stored
+        assert FIELDS_SECTION.search(journey.new.stored) is None
         return
     stored = journey.new.stored
-    assert stored.index(FIELDS_MARKER) > stored.index("## Evidence"), stored
-    assert FIELDS_MARKER not in journey.new.body
+    (section,) = FIELDS_SECTION.finditer(stored)
+    assert section.start() > stored.index("## Evidence"), stored
+    assert LINEAR_SLOT.search(stored, section.end()), stored
+    assert "<!--" not in stored, stored
+    assert FIELDS_SECTION.search(journey.new.body) is None
     assert "Fields" not in journey.new.body.rsplit("## Evidence", 1)[1], journey.new.body
 
 

@@ -48,33 +48,66 @@ EVERY_CONSTRUCT = (
     "```sh\n- [x] **not\nbold** `kept\n```\n\n"
     "| Column |\n| --- |\n| value |\n"
 )
-SLOT = '<!-- onetaskgraph.metadata `{"onetaskgraph.origin":"authoring:wire"}` -->'
+#: The collapsed metadata block onetaskgraph 0.14.19 writes, in the bytes its
+#: `docs/metadata.md` ("Linear's slot, settled") states.
+BLOCK = '+++ onetaskgraph metadata\n\n`{"onetaskgraph.origin":"authoring:wire"}`\n\n+++'
+#: The one-line comment slot earlier releases wrote, which seeded fixtures still hold.
+LEGACY_SLOT = '<!-- onetaskgraph.metadata `{"onetaskgraph.origin":"authoring:wire"}` -->'
 
 
+@pytest.mark.parametrize("slot", [BLOCK, LEGACY_SLOT], ids=["block", "legacy"])
 @pytest.mark.parametrize(
     "written", [rule.written for rule in MEASURED_REWRITES] + [EVERY_CONSTRUCT, "Plain prose."]
 )
-def test_what_the_wire_stored_is_kept_byte_for_byte_beneath_a_slot(written: str) -> None:
+def test_what_the_wire_stored_is_kept_byte_for_byte_beneath_a_slot(written: str, slot: str) -> None:
     """Linear holds its own stored content stable, as the spike measured on every probe.
 
-    A stored form written again is stored as it is, and so is one with the metadata slot
-    after it, but for the one change the spike found there: a stored form ending in a table
-    row keeps a single line break before the slot rather than a blank line.
+    A stored form written again is stored as it is, and so is one with the metadata block
+    or the legacy slot after it, but for the one change the spike found there: a stored form
+    ending in a table row keeps a single line break before it rather than a blank line.
     """
     stored = linear_stored(written, MEASURED_REWRITES)
     assert linear_stored(stored, MEASURED_REWRITES) == stored
-    answered = linear_stored(stored + "\n\n" + SLOT, MEASURED_REWRITES)
+    answered = linear_stored(stored + "\n\n" + slot, MEASURED_REWRITES)
     separator = "\n" if re.search(r"^\|[^\n]+\|\n\Z", stored, re.M) else "\n\n"
-    assert answered == stored + separator + SLOT
+    assert answered == stored + separator + slot
     assert linear_stored(answered, MEASURED_REWRITES) == answered
 
 
-def test_a_table_ending_long_form_keeps_one_line_break_before_its_slot() -> None:
+@pytest.mark.parametrize("slot", [BLOCK, LEGACY_SLOT], ids=["block", "legacy"])
+def test_a_table_ending_long_form_keeps_one_line_break_before_its_slot(slot: str) -> None:
     """The spike's `pipe-table` write-back: S kept, its `\\n\\n` separator stored as `\\n`."""
     # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The bytes session 3 of the spike recorded raw for `pipe-table`, held as the measurement this wire reproduces.  # noqa: E501
     stored = "| Column A | Column B |\n| -- | -- |\n| one | two |\n| three | four |\n"
-    assert linear_stored(stored + "\n\n" + SLOT, MEASURED_REWRITES) == stored + "\n" + SLOT
-    assert linear_stored(stored + "\n" + SLOT, MEASURED_REWRITES) == stored + "\n" + SLOT
+    assert linear_stored(stored + "\n\n" + slot, MEASURED_REWRITES) == stored + "\n" + slot
+    assert linear_stored(stored + "\n" + slot, MEASURED_REWRITES) == stored + "\n" + slot
+
+
+@pytest.mark.parametrize(
+    "description,metadata",
+    [
+        ("Body.\n\n" + BLOCK, {"onetaskgraph.origin": "authoring:wire"}),
+        (
+            "Body.\n\n+++ Fields\n\n* **Owner**: `nick`\n\n+++\n\n"
+            '+++ onetaskgraph metadata\n\n`onetaskgraph.fields`\n\n`{"k":1}`\n\n+++',
+            {"k": 1},
+        ),
+        ("Body.\n\n" + LEGACY_SLOT, {"onetaskgraph.origin": "authoring:wire"}),
+        # A caller's own block with the same summary is content anywhere but last.
+        (BLOCK + "\n\nMore of the body.", {}),
+        ("Plain prose.", {}),
+    ],
+    ids=["block", "fields-section", "legacy", "block-not-last", "none"],
+)
+def test_the_wire_observes_metadata_in_the_block_and_the_legacy_slot(
+    description: str, metadata: dict[str, object]
+) -> None:
+    """An item's observed metadata is read out of the collapsed block or the legacy slot."""
+    with linear_board() as board:
+        board.create_issue("seeded", "Seeded", description)
+        [issue] = board.issues()
+        assert issue["metadata"] == metadata
+        assert issue["description"] == description
 
 
 def test_the_wire_logs_what_each_request_read_wrote_and_rewrote() -> None:
@@ -103,20 +136,26 @@ def test_the_wire_logs_what_each_request_read_wrote_and_rewrote() -> None:
         kept = created("Plain prose.")
         ask(
             "mutation DocumentUpdate { documentUpdate { success } }",
-            {"id": rewritten, "input": {"content": "* one\n\n" + SLOT}},
+            {"id": rewritten, "input": {"content": "* one\n\n" + BLOCK}},
         )
         ask("query Document { document { id } }", {"id": rewritten})
         ask("query Documents { documents { nodes { id } } }", {})
         logged = [
-            (request["operation"], request["written"], request["rewritten"], request["read"])
+            (
+                request["operation"],
+                request["written"],
+                request["rewritten"],
+                request["read"],
+                request["mutation"],
+            )
             for request in board.requests()
         ]
     assert logged == [
-        ("DocumentCreate", rewritten, True, []),
-        ("DocumentCreate", kept, False, []),
-        ("DocumentUpdate", rewritten, False, []),
-        ("Document", None, False, [rewritten]),
-        ("Documents", None, False, sorted([rewritten, kept])),
+        ("DocumentCreate", rewritten, True, [], True),
+        ("DocumentCreate", kept, False, [], True),
+        ("DocumentUpdate", rewritten, False, [], True),
+        ("Document", None, False, [rewritten], False),
+        ("Documents", None, False, sorted([rewritten, kept]), False),
     ]
 
 
@@ -291,7 +330,7 @@ def test_long_forms_match_the_spikes_stored_bytes(
 
         created = write(kind + "Create", written)
         assert created[field] == expected
-        slot = '<!-- onetaskgraph.metadata `{"approved":true}` -->'
+        slot = '+++ onetaskgraph metadata\n\n`{"approved":true}`\n\n+++'
         updated = write(kind + "Update", str(created[field]) + "\n\n" + slot, str(created["id"]))
         assert updated[field] == expected + "\n" + slot
         repeated = write(kind + "Update", str(updated[field]), str(created["id"]))
@@ -443,10 +482,11 @@ def test_real_store_copy_and_person_edit(tmp_path: Path, monkeypatch: pytest.Mon
             metadata = json.dumps(item["metadata"], sort_keys=True, separators=(",", ":"))
             assert item[field] == (
                 linear_stored(
-                    content + "\n\n<!-- onetaskgraph.metadata `" + metadata + "` -->",
+                    content + "\n\n+++ onetaskgraph metadata\n\n`" + metadata + "`\n\n+++",
                     MEASURED_REWRITES,
                 )
             )
+            assert "<!-- onetaskgraph.metadata" not in item[field]
         task = source + ":" + board.issues()[0]["id"]
         cli("task", "status", "set", task, "done")
         settings = plan_store_client.configured_settings()

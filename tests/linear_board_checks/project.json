@@ -25,7 +25,11 @@
       "{workspaceRoot}/orchestrator/run_reading.py",
       "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/config/onepipeline.version",
-      "{workspaceRoot}/templates/**/*"
+      "{workspaceRoot}/templates/**/*",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
+      "{workspaceRoot}/scripts/credentials-env.sh"
     ]
   },
   "targets": {

@@ -364,7 +364,8 @@ def test_the_design_document_tabulates_each_planned_task_from_the_stores_graph(
     sequence: Sequence,
 ) -> None:
     """The Planned-tasks table renders the store's own graph: a row per task, its unit and
-    what it depends on by title, every row naming the task it is."""
+    what it depends on by title, linked to where that task lives, every row naming the task it
+    is."""
     copy = f"{BOARD}:{sequence.native}"
     documents = store_json(sequence.bench, "document", "list", "--source", BOARD, "--project", copy)
     (document,) = _listed(documents)
@@ -376,10 +377,13 @@ def test_the_design_document_tabulates_each_planned_task_from_the_stores_graph(
     by_title = {row[0]: row for row in cells}
     assert set(by_title) == {"feat: add the health route", "docs: document the health route"}, rows
     assert by_title["feat: add the health route"][1:4] == ["API", "", "none"], rows
+    # An in-plan dependency links its title to the location the store reports for that task,
+    # which is the same location the dependency's own row says it lives at.
+    first_lives = by_title["feat: add the health route"][4]
     assert by_title["docs: document the health route"][1:4] == [
         "Docs",
         "",
-        "feat: add the health route",
+        f"[feat: add the health route]({first_lives})",
     ], rows
     assert all(row[4] for row in cells), rows
 

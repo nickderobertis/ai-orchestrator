@@ -121,6 +121,20 @@ def _indented_code(text: str) -> str:
     )
 
 
+#: Where the store's own trailing block opens: the collapsed metadata block, the `Fields`
+#: section a source writes before it, or the HTML-comment slot of releases before 0.14.19.
+_STORE_BLOCK = r"\+\+\+ onetaskgraph metadata\n|\+\+\+ Fields\n|<!-- onetaskgraph.metadata "
+#: The collapsed metadata block ending a long form, in the bytes onetaskgraph 0.14.19's
+#: `docs/metadata.md` ("Linear's slot, settled") states: its summary line, a blank line, the
+#: canonical JSON in one code span — after the `onetaskgraph.fields` sentinel paragraph when
+#: a `Fields` section stands before it — a blank line, and `+++` with nothing after it.
+_METADATA_BLOCK = re.compile(
+    r"(?:\A|\n\n)\+\+\+ onetaskgraph metadata\n\n(?:`onetaskgraph\.fields`\n\n)?"
+    r"`(?P<json>\{[^\n]*\})`\n\n\+\+\+\Z"
+)
+#: The one-line comment slot earlier releases wrote, which seeded fixtures still hold.
+_LEGACY_SLOT = re.compile(r"<!-- onetaskgraph.metadata `(?P<json>.+?)` -->", re.S)
+
 # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Each example is what the
 # spike `spike-linear-stored-content` measured real Linear storing (harness f2344284), or the
 # earlier long-form observation it re-took. This wire is held to that measurement, not to
@@ -166,13 +180,15 @@ MEASURED_REWRITES: tuple[Rewrite, ...] = (
         "See `code span wraps` here.",
         block=True,
     ),
+    # A table ending the content and the store's trailing block — the collapsed metadata
+    # block, the `Fields` section before it, or the legacy comment slot — set off by two
+    # blank lines are stored with one, as onetaskgraph 0.14.19's own loopback holds it
+    # (`crates/onetaskgraph-e2e-support/src/linear_markdown.rs`).
     Rewrite(
         "table-slot-separator",
-        lambda s: re.sub(
-            r"(^\|[^\n]+\|\n)\n+(?=<!-- onetaskgraph.metadata )", r"\1\n", s, flags=re.M
-        ),
-        "| one |\n\n\n<!-- onetaskgraph.metadata `{}` -->",
-        "| one |\n\n<!-- onetaskgraph.metadata `{}` -->",
+        lambda s: re.sub(r"(^\|[^\n]+\|\n)\n+(?=" + _STORE_BLOCK + ")", r"\1\n", s, flags=re.M),
+        "| one |\n\n\n+++ onetaskgraph metadata\n\n`{}`\n\n+++",
+        "| one |\n\n+++ onetaskgraph metadata\n\n`{}`\n\n+++",
         block=True,
     ),
     Rewrite("bullet", lambda s: re.sub(r"^(\s*)- ", r"\1* ", s, flags=re.M), "- one", "* one"),
@@ -299,7 +315,9 @@ class Request:
     An aliased batch is logged as one entry per alias, in order, each naming its ``alias``
     (``a0`` onward) and carrying that alias's own variables and what it alone read and
     wrote; ``alias`` is ``None`` on a request that was not batched. So the requests sent on
-    the wire are the entries whose ``alias`` is ``None`` or ``a0``.
+    the wire are the entries whose ``alias`` is ``None`` or ``a0``. ``mutation`` is whether
+    the request asked the wire to change anything: a GraphQL `mutation` document, or an
+    asset upload.
     """
 
     operation: str
@@ -309,6 +327,7 @@ class Request:
     written: str | None = None
     rewritten: bool = False
     alias: str | None = None
+    mutation: bool = False
 
 
 def _now() -> str:
@@ -552,8 +571,8 @@ class LinearBoard:
             result = [self._wire(item) for item in items.values()]
             for item in result:
                 raw = item.get("description", item.get("content", ""))
-                slot = re.search(r"<!-- onetaskgraph.metadata `(.+?)` -->", raw, re.S)
-                item["metadata"] = json.loads(slot[1]) if slot else {}
+                slot = _METADATA_BLOCK.search(raw) or _LEGACY_SLOT.search(raw)
+                item["metadata"] = json.loads(slot["json"]) if slot else {}
                 if "name" in item:
                     item["title"] = item["name"]
             return result
@@ -775,11 +794,11 @@ class LinearBoard:
         declaration = re.match(r"\s*(?:query|mutation)\s*([A-Za-z_]\w*)?", query)
         named = operation_name or (declaration[1] if declaration and declaration[1] else None)
         aliased = _aliases(query)
+        mutation = query.lstrip().startswith("mutation")
         with self._lock:
             if aliased:
-                mutation = query.lstrip().startswith("mutation")
                 return self._resolve_aliased(aliased, named, variables, mutation, client)
-            return self._answered(match[1], named or match[1], variables, client, None)
+            return self._answered(match[1], named or match[1], variables, client, None, mutation)
 
     def _answered(
         self,
@@ -788,9 +807,12 @@ class LinearBoard:
         variables: dict[str, Any],
         client: int | None,
         alias: str | None,
+        mutation: bool,
     ) -> dict[str, Any]:
         """Answer one root ``operation`` and log it, under the lock `dispatch` holds."""
-        logged = Request(named, copy.deepcopy(variables), client=client, alias=alias)
+        logged = Request(
+            named, copy.deepcopy(variables), client=client, alias=alias, mutation=mutation
+        )
         self._requests.append(logged)
         self._answering = logged
         try:
@@ -821,7 +843,9 @@ class LinearBoard:
                 if name.endswith(suffix)
             }
             try:
-                answer[f"a{at}"] = self._answered(root, named or root, own, client, f"a{at}")[root]
+                answer[f"a{at}"] = self._answered(
+                    root, named or root, own, client, f"a{at}", mutation
+                )[root]
             except (IdConflict, ValueError, KeyError, StopIteration) as refused:
                 if held is not None:
                     # Nothing of a refused mutation document landed, its earlier aliases included.
@@ -1163,7 +1187,7 @@ def linear_board(*, rewrites: Sequence[Rewrite] = MEASURED_REWRITES) -> Iterator
         def do_PUT(self) -> None:
             body = self.rfile.read(int(self.headers["Content-Length"]))
             with board._lock:
-                board._requests.append(Request("PUT", {"path": self.path}))
+                board._requests.append(Request("PUT", {"path": self.path}, mutation=True))
                 board._assets[self.path] = body
             self.send_response(200)
             self.end_headers()
