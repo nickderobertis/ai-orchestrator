@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.117.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.117.2 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -478,7 +478,7 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.87.1**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.87.2**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 30 on the envelope, as 0.84.1 served, where 0.84.0, 0.82.0 and 0.81.2 served 29 and 0.81.1, 0.81.0, 0.80.0 and 0.79.0
    served 28, 0.78.0 served 27, 0.55.0, 0.52.0 and 0.51.0 served 26 and
@@ -491,7 +491,7 @@ correctly role-labelled, out of 12,387 runs. Nothing served them.
    a run progressively, and 29 serves a plan task's and a node result's `command` kind and
    lists a run's refused edits, and 30 is what that contract calls a turn's words in their
    place, each view's shape stated by onepipeline-ui's own `docs/contract.md`;
-   `timeline_schema_version` 17, where 0.87.0 and 0.84.1 served 16 and 0.83.6 served 15, 0.65.4, 0.62.1, 0.62.0, 0.61.0, 0.60.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served 14, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
+   `timeline_schema_version` 17, as 0.87.1 served, where 0.87.0 and 0.84.1 served 16 and 0.83.6 served 15, 0.65.4, 0.62.1, 0.62.0, 0.61.0, 0.60.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served 14, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
    11 and 0.21.1 served 10 — 17 serves a refused edit's `edit-rejected` event a `refusal`
    reference naming the artifact that holds its complete refusal, 16 serves every payload field of an event under the record's own wire key, where 15 served a selection under English labels, and gives every record of a surface the state that surface came to, 15 carries each check’s requirement label and recorded URL, and 14 gives every `turn-started`, `turn-message` and
    `turn-activity` event a one-line `description` the engine's resolver writes, 13 counts a
