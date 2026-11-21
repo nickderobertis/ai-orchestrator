@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
@@ -273,3 +274,154 @@ def test_the_planner_states_every_human_nodes_item_with_an_explicit_priority() -
         assert word in planner and word in manager, word
     assert "a task bound for `plans` carries none, because that source maps none" in planner
     assert "separate from a plan-store task's own priority" in manager
+
+
+#: The manager's expiry rule, as AGENTS.md states it once, and the engine words it restates.
+EXPIRY_RULE = (
+    "**Give every item you raise the expiry that keeps it from going stale**, which retires it "
+    "`expired` once it holds: a `time` for a decision with a moment, a `run` or `node` "
+    "condition for an item about a run's work, a `check` for one about host state such as "
+    "free disk space"
+)
+EXPIRY_ON_HUMAN_NODES = (
+    "Declare expiry on a `kind: human` node only where that node being dropped, and its "
+    "dependents proceeding without it, is acceptable."
+)
+#: Each engine word the rule restates, as the pinned contract spells it.
+EXPIRY_WORDS = {
+    "`expired`": "`HumanItemState` gains `expired`",
+    "`time`": '`{"when":"time",',
+    "`run`": '`{"when":"run",',
+    "`node`": '`{"when":"node",',
+    "`check`": '`{"when":"check",',
+}
+
+
+@pytest.mark.parametrize("said", (EXPIRY_RULE, EXPIRY_ON_HUMAN_NODES))
+def test_agents_md_states_the_expiry_rule_exactly_once(said: str) -> None:
+    whole = _flat((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    assert _manager().count(said) == 1, f"AGENTS.md's manager loop must state {said!r} once"
+    assert whole.count(said) == 1, f"AGENTS.md states {said!r} outside the manager loop"
+
+
+@pytest.mark.parametrize(("word", "defined"), EXPIRY_WORDS.items())
+def test_each_expiry_word_the_rule_restates_is_the_pinned_engines(word: str, defined: str) -> None:
+    assert word in EXPIRY_RULE
+    assert defined in _contract(), (
+        f"onepipeline {ONEPIPELINE_DOCS.ref}'s contract no longer defines {word} as {defined!r}; "
+        "re-read its Human items Expiry and restate AGENTS.md and docs/orchestration.md"
+    )
+
+
+#: The sentence that introduces `docs/orchestration.md`'s example disk-space raise.
+EXAMPLE_LEAD = "This raise expires a disk-space question once `/home` has 20 GiB free again:"
+
+
+def _example_raise() -> dict[str, object]:
+    """The example raise input `docs/orchestration.md`'s Human items section gives."""
+    text = (REPO_ROOT / "docs" / "orchestration.md").read_text(encoding="utf-8")
+    assert EXAMPLE_LEAD in _flat(text), "docs/orchestration.md lost its example's lead"
+    block = re.search(r"again:\n\n```json\n(.*?)\n```", text, re.DOTALL)
+    assert block is not None, "docs/orchestration.md lost its example disk-space raise"
+    parsed: dict[str, object] = json.loads(block.group(1))
+    return parsed
+
+
+def _check_of(raised: dict[str, object]) -> dict[str, object]:
+    expiry = raised["expiry"]
+    assert isinstance(expiry, list) and len(expiry) == 1, expiry
+    condition: dict[str, object] = expiry[0]
+    assert condition["when"] == "check", condition
+    return condition
+
+
+def test_the_documented_disk_space_raise_is_accepted_by_the_pinned_engine(tmp_path: Path) -> None:
+    """Fed to the pinned engine's `--sample` raise, the example is accepted and keeps its check."""
+    example = _example_raise()
+    sample = tmp_path / "sample.json"
+    sample.write_text('{"schema_version": 1, "items": [], "approval_keys": {}}', "utf-8")
+    raised = tmp_path / "raise.json"
+    raised.write_text(json.dumps(example), "utf-8")
+    shown = subprocess.run(
+        [str(ENGINE_BIN), "human-items", "--sample", str(sample), "raise", "--input", str(raised)],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert shown.returncode == 0, shown.stderr
+    item = json.loads(shown.stdout)["item"]["item"]
+    assert item["state"] == "open", item
+    assert item["expiry"] == [_check_of(example)], item["expiry"]
+
+
+@pytest.mark.parametrize(("threshold_kib", "expired"), (("0", True), (str(2**62), False)))
+def test_the_documented_check_reports_by_the_engines_result_protocol(
+    threshold_kib: str, expired: bool
+) -> None:
+    """The example's own check, run as the engine runs it — argv from its `cwd` — exits 0 and
+    prints one object whose boolean `expired` says whether the directory's free space meets
+    the threshold: zero is always met, 2**62 KiB never is."""
+    check = _check_of(_example_raise())
+    command = check["command"]
+    assert isinstance(command, list) and command[:2] == ["sh", "-c"], command
+    argv = [str(part) for part in command[:-1]] + [threshold_kib]
+    ran = subprocess.run(
+        argv, cwd=str(check["cwd"]), text=True, capture_output=True, check=False, timeout=30
+    )
+    assert ran.returncode == 0, ran.stderr
+    printed = json.loads(ran.stdout)
+    assert printed["expired"] is expired, printed
+    if expired:
+        assert isinstance(printed["reason"], str) and printed["reason"].strip(), printed
+
+
+#: What `docs/orchestration.md` tells an operator about when an expiry is recorded, each held
+#: beside the pinned contract sentence it restates.
+LIFECYCLE = {
+    "every engine read — `list`, `report`, `show` and `watch`": "so every `list`, `report`, "
+    "`show` and `watch`",
+    "each live run driver's pass": "and so does each live run driver's pass",
+    "`interval_seconds` after the check last ran (default 60, minimum 10, maximum 86400), or at "
+    "once if it has never run": '"interval_seconds":<10..=86400>',
+    "at most `timeout_seconds` (default 10, maximum 60)": '"timeout_seconds":<1..=60>',
+    "older than the timeout plus a 5-second grace": "the check's timeout plus a 5-second grace",
+    "Time, run and node conditions** are evaluated in process on every sweep": "Time, run and "
+    "node conditions are read in process",
+    "only an exit 0 printing exactly one JSON object with a boolean `expired` decides the "
+    "outcome": "Exit codes alone never decide the outcome",
+    "any other exit, exit 1 included, a signal, a program that cannot start, a `cwd` that does "
+    "not exist, its timeout": "any other exit, exit 1 included; a signal",
+}
+#: The lifecycle sentences that promise no more than the engine and the page deliver.
+LIFECYCLE_LIMITS = (
+    "the page's live tick, at most every 10 seconds while an Action items view is open",
+    "a report taken before the check is next due can still show the item open when its "
+    "condition already holds",
+    "with nothing reading and no run live, nothing sweeps, so an item of either kind stays open "
+    "until the next look",
+    "This host's `follow-up-review` hook deliberately carries no expiry",
+    "An expired task's board ticket closes as cancelled — not planned, on GitHub Projects — "
+    "never as completed",
+)
+
+
+@pytest.mark.parametrize(("said", "defined"), LIFECYCLE.items())
+def test_the_operator_lifecycle_restates_the_pinned_engines_expiry(said: str, defined: str) -> None:
+    assert _mechanics().count(said) == 1, f"docs/orchestration.md must state {said!r} once"
+    assert defined in _contract(), (
+        f"onepipeline {ONEPIPELINE_DOCS.ref}'s contract no longer says {defined!r}; re-read its "
+        f"Human items Expiry and restate docs/orchestration.md's {said!r}"
+    )
+
+
+@pytest.mark.parametrize("said", LIFECYCLE_LIMITS)
+def test_the_operator_lifecycle_states_its_limits(said: str) -> None:
+    assert _mechanics().count(said) == 1, f"docs/orchestration.md must state {said!r} once"
+
+
+def test_the_follow_up_review_hook_carries_no_expiry() -> None:
+    config = yaml.safe_load((REPO_ROOT / ".onepipeline" / "config.yaml").read_text("utf-8"))
+    (hook,) = [h for h in config["human_items"]["hooks"] if h["phase"] == "follow-up-review"]
+    assert "expiry" not in hook, "docs/orchestration.md says the follow-up review never expires"

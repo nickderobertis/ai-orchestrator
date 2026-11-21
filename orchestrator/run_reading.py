@@ -5,8 +5,9 @@ driven, and how it ended or what it is paused on — which the engine publishes 
 `schemas/run-reading.schema.json`. :func:`decide` reads that answer into one decision:
 
 * ``ended`` — the reading carries an ending, of any kind, so the run's drafts are final;
-* ``driven <word>`` — something still drives the run;
-* ``paused <what waits>`` — nothing drives it, and it waits on a decision;
+* ``paused <what waits>`` — it waits on a decision, whether nothing drives it or a
+  retained driver waits on that decision to drive it on;
+* ``driven <word>`` — something still drives the run, and it waits on no decision;
 * ``crashed <word>`` — nothing drives it, it has not ended, and nothing is decided on;
 * ``unreadable <why>`` — the answer is not the engine's document.
 
@@ -354,8 +355,8 @@ def _checked(answer: str, run: RunId) -> dict[str, object]:
         _waiting(paused)
     if ending is not None and paused is not None:
         raise Unreadable("it reads both ended and paused")
-    if reading["driven"] and (ending is not None or paused is not None):
-        raise Unreadable("it reads driven and yet ended or paused")
+    if reading["driven"] and ending is not None:
+        raise Unreadable("it reads driven and yet ended")
     return reading
 
 
@@ -368,8 +369,8 @@ def decide(answer: str, run: RunId) -> Decided:
     waiting = None if paused is None else _waiting(paused)
     if ending is not None:
         return Decided(Decision.ENDED, "")
-    if driven:
-        return Decided(Decision.DRIVEN, word)
     if waiting is not None:
         return Decided(Decision.PAUSED, waiting)
+    if driven:
+        return Decided(Decision.DRIVEN, word)
     return Decided(Decision.CRASHED, word)

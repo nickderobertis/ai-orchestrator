@@ -484,7 +484,8 @@ spike-unaffected task *args:
 # `just approve-design <source>:<project> [run]` records the user's approval on the board
 # copy's design document — `onetaskgraph document attest --kind design-approval`, under the
 # design-doc template's digest — and, given the planning run, attests its waiting
-# `approve-design` node and adopts the run so it settles. Editing the document or the template voids it; `just orchestrate`'s
+# `approve-design` node and, unless a driver retained over that decision already drives it
+# on, adopts the run so it settles. Editing the document or the template voids it; `just orchestrate`'s
 # launch check refuses the plan until it is approved again.
 [group("planning")]
 [doc("Record the user's approval of a plan's design document and release the planning run.")]
@@ -498,7 +499,14 @@ approve-design plan run="":
         { echo "approve-design: the engine resolved no design-doc template digest to record the approval under; repair the template until 'scripts/onepipeline.sh template check design-doc' passes, then retry" >&2; exit 2; }
     scripts/plan-store.sh .venv/bin/onetaskgraph document attest "$document" --kind design-approval --by approve-design \
         --bar "$bar" --no-interactive
-    [ -z {{ quote(run) }} ] || { scripts/onepipeline.sh attest {{ quote(run) }} approve-design && scripts/onepipeline.sh adopt {{ quote(run) }} --detach; }
+    [ -z {{ quote(run) }} ] || {
+        scripts/onepipeline.sh attest {{ quote(run) }} approve-design
+        # A driver retained over the decision drives the run on from the attestation, and the
+        # engine refuses an adopt while it does; only a run nothing drives is adopted.
+        driven=$(scripts/onepipeline.sh status {{ quote(run) }} --json | jq -r 'if (.driven | type) == "boolean" then .driven else error("no driven reading") end') ||
+            { echo "approve-design: the approval and attestation are recorded, but the engine's status of run {{ run }} gave no driven reading; read it with 'just status {{ run }}', and adopt it with 'just orchestrate --adopt {{ run }}' only if nothing drives it" >&2; exit 2; }
+        [ "$driven" = true ] || scripts/onepipeline.sh adopt {{ quote(run) }} --detach
+    }
 
 # Render one Mermaid source to the PNG a design document references: `just render-diagram
 # <source.mmd> <output.png>`. The locked mermaid-cli draws it in the locked font, on the

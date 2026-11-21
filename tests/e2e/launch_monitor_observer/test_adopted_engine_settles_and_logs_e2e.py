@@ -182,9 +182,9 @@ def _reply(held: HeldRun, *commands: dict[str, Any]) -> dict[str, Any]:
     """Send one edit envelope over the live channel, as a manager types it, and read its receipt.
 
     The recipe is the engine's `onepipeline reply`, and its receipt says what became of
-    the commands: a run handed back at its gate has nothing driving it, so the reply
-    applies the edit itself as the run's single writer — and were the launch's driver
-    still letting go, that driver would apply it within the reply's wait. Either way the
+    the commands: a run handed back at its gate keeps the launch's driver, retained over
+    the decision, which applies the edit within the reply's wait — and were nothing
+    driving it, the reply would apply it itself as the run's single writer. Either way the
     receipt reads `applied`, and nothing waits on an adopt.
     """
     sent = _just(
@@ -228,32 +228,28 @@ def test_a_node_settled_after_a_park_ends_the_park_and_the_run_reports_itself_co
     `done` and stayed parked — so the run never settled, and `just status` went on
     reporting a node idle for a decision nobody had made.
 
-    The launch hands the run back at its gate, so the three edits are sent to a run
-    nothing is driving, and each reply applies its edit before the next is sent — the
-    park first, so opening the gate dispatches nothing.
+    The launch hands the run back at its gate with its driver retained over the decision,
+    so the three edits travel in one envelope, applied in order with no pass between them —
+    the park first, so opening the gate dispatches nothing, and the settlement before the
+    driver could read the parked node as the run's unfinished end.
     """
-    for receipt in (
-        _reply(
-            held,
-            {
-                "op": "cancel",
-                "id": WORK_NODE,
-                "reason": "the report this node would write is already on the issue",
-            },
-        ),
+    receipt = _reply(
+        held,
+        {
+            "op": "cancel",
+            "id": WORK_NODE,
+            "reason": "the report this node would write is already on the issue",
+        },
         # The gate opens, so the parked node is the only thing between the run and its end.
-        _reply(held, {"op": "attest", "ref": GATE_NODE}),
-        _reply(
-            held,
-            {
-                "op": "settle",
-                "id": WORK_NODE,
-                "outcome": "done",
-                "evidence": "the report is on the issue; nothing is left for a dispatch to do",
-            },
-        ),
-    ):
-        assert "verdict" not in receipt, receipt
+        {"op": "attest", "ref": GATE_NODE},
+        {
+            "op": "settle",
+            "id": WORK_NODE,
+            "outcome": "done",
+            "evidence": "the report is on the issue; nothing is left for a dispatch to do",
+        },
+    )
+    assert "verdict" not in receipt, receipt
 
     results = _waited_for("the run to report itself complete", lambda: _results(held))
     assert f"{WORK_NODE}" in results and "done (settled-from-evidence)" in results, results

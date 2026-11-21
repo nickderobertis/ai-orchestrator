@@ -8,8 +8,8 @@ waiting, a manager could not put it behind work it had to follow, and every othe
 in the same envelope was refused with it. `tests/test_adopted_engine_carries_this_plan.py`
 holds that the adopted release's history contains the landing; this journey holds that the
 installed engine does what it landed, through the recipes a manager uses: `just
-channel-reply` to edit and attest, `just status` to read the run, and `just orchestrate
---adopt` to drive it.
+channel-reply` to edit and attest, `just status` to read the run, and `just watch` to wait
+while the launch's own driver, retained over the decision, drives it on.
 
 The run is an approval with one agent node behind it, launched with `--dag-graph off` so
 nothing but this journey writes to its channel. The launch hands the run back paused at
@@ -113,7 +113,7 @@ def _status(paused: PausedRun) -> str:
 
 
 def _awaiting_attestation(paused: PausedRun) -> bool:
-    """Whether the run is paused on the approval's attestation alone and nothing drives it."""
+    """Whether the run is paused on the approval's attestation alone, driven or not."""
     return _reading(paused) == Decided(Decision.PAUSED, f'human action "{APPROVAL}" is waiting')
 
 
@@ -164,10 +164,18 @@ def _settled(paused: PausedRun, node: str) -> str | None:
     return None
 
 
-def _adopted(paused: PausedRun) -> None:
-    """Drive the run with a fresh driver until it hands the run back or settles."""
-    adopting = _just("orchestrate", "--adopt", paused.run, environment=paused.environment)
-    assert adopting.returncode == 0, adopting.stdout + adopting.stderr
+def _settled_run(paused: PausedRun) -> None:
+    """Wait while the launch's retained driver takes the run to its ending."""
+    watched = _just(
+        "watch",
+        paused.run,
+        "--until",
+        "settled",
+        "--timeout",
+        "240",
+        environment=paused.environment,
+    )
+    assert watched.returncode == 0, watched.stdout + watched.stderr
 
 
 @pytest.fixture
@@ -218,38 +226,33 @@ def test_a_waiting_approval_reparented_onto_unfinished_work_waits_for_it_again(
         "persona": "engineer",
         "task": _task(f"Prepare the release run {paused.run} approves."),
     }
-    _applied(
-        paused,
-        {
-            "op": "add",
-            "node": prerequisite,
-        },
+    regating: tuple[EditCommand, EditCommand] = (
+        {"op": "add", "node": prerequisite},
         {"op": "reparent", "id": APPROVAL, "deps": [PREREQUISITE]},
     )
-
-    # Re-gated: the run no longer waits on the approval, the work it now follows is what
-    # is next, and an attestation is refused while that work is unfinished.
-    # Undriven, unended and waiting on no decision: the reader's word for that is
-    # `crashed`, and here it means only that the ready work has no driver yet.
-    regated = _reading(paused)
-    assert regated.decision is Decision.CRASHED, regated
-    status = _status(paused)
-    assert f"{PREREQUISITE}: ready" in status, status
-    assert f"attest {paused.run} {APPROVAL}" not in status, status
-    said = _refused(paused, {"op": "attest", "ref": APPROVAL})
+    # Re-gated, the approval is refused an attestation while the work it now follows is
+    # unfinished: judged after the reparent in one envelope, it refuses the envelope whole,
+    # which a separate attestation racing the retained driver could not show.
+    said = _refused(paused, *regating, {"op": "attest", "ref": APPROVAL})
     assert f"'{APPROVAL}' is not a ready, waiting human action" in said, said
+    assert _awaiting_attestation(paused), "a refused envelope re-gated the approval"
 
-    # Driven, the new work runs and settles, and the approval waits on its attestation
-    # again with the node behind it still undispatched.
-    _adopted(paused)
-    assert _awaiting_attestation(paused), _status(paused)
+    _applied(paused, *regating)
+    # The run no longer waits on the approval: the driver retained over the decision takes
+    # the new work up with nobody adopting the run.
+    assert not _awaiting_attestation(paused), _status(paused)
+
+    # The new work runs and settles, and the approval waits on its attestation again with
+    # the node behind it still undispatched.
+    _until("the approval to wait again", lambda: _awaiting_attestation(paused))
     assert _settled(paused, PREREQUISITE) == "done", _results(paused)
     assert _settled(paused, SHIP) is None, _results(paused)
 
     _applied(paused, {"op": "attest", "ref": APPROVAL})
-    _adopted(paused)
-    finished = _reading(paused)
-    assert finished.decision is Decision.ENDED, finished
+    _settled_run(paused)
+    # The watch answers on the settlement; the driver's own exit, which records the
+    # ending, follows it.
+    _until("the run to end", lambda: _reading(paused).decision is Decision.ENDED)
     assert "SETTLED" in _status(paused), _status(paused)
     assert {_settled(paused, node) for node in (APPROVAL, PREREQUISITE, SHIP)} == {"done"}, (
         _results(paused)

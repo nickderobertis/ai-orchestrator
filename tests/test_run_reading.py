@@ -44,7 +44,8 @@ ENDED = {
         },
     ],
 }
-#: The same run read while driven, paused on a human node and a question, and crashed.
+#: The same run read while driven, paused on a human node and a question, and crashed. A
+#: paused run may also read driven, its retained driver waiting on the decision.
 DRIVEN = ENDED | {"word": "ACTIVE", "liveness": "ACTIVE", "driven": True, "ending": None}
 PAUSED = ENDED | {
     "word": "PAUSED",
@@ -80,6 +81,10 @@ def _read(reading: object) -> run_reading.Decided:
         (
             PAUSED | {"paused": {"human_actions": [], "blocking_surface": True}},
             "paused a blocking surface is waiting",
+        ),
+        (
+            PAUSED | {"liveness": "ACTIVE", "driven": True},
+            'paused human action "gate" is waiting; a blocking surface is waiting',
         ),
         (CRASHED, "crashed DRIVER DEAD"),
         (
@@ -120,6 +125,7 @@ def _read(reading: object) -> run_reading.Decided:
         "driven",
         "paused",
         "surface-only",
+        "paused-with-its-retained-driver-waiting",
         "crashed",
         "driven-with-unanswered-envelopes-and-an-inbox",
         "ungrouped",
@@ -321,8 +327,7 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
             "a node awaits releases that are not a list",
         ),
         (json.dumps(ENDED | {"paused": PAUSED["paused"]}), "it reads both ended and paused"),
-        (json.dumps(ENDED | {"driven": True}), "it reads driven and yet ended or paused"),
-        (json.dumps(PAUSED | {"driven": True}), "it reads driven and yet ended or paused"),
+        (json.dumps(ENDED | {"driven": True}), "it reads driven and yet ended"),
     ],
 )
 def test_an_answer_that_is_not_the_engines_reading_is_unreadable(answer: str, said: str) -> None:

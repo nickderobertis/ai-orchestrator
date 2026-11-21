@@ -267,11 +267,11 @@ def _launched(
 
 @contextlib.contextmanager
 def _gated(tmp_path: Path, oneharness_bin: str, run: RunId) -> Iterator[Replying]:
-    """A launched run whose frontier is a human gate, and which nothing drives.
+    """A launched run whose frontier is a human gate.
 
     Nothing is ever dispatched — `work` depends on the gate and nobody attests it — so this
-    run costs a launch and no provider turn at all, and the launch's driver hands the run
-    back at the gate: from then on nothing drives it, which `_undriven` asks the run itself.
+    run costs a launch and no provider turn at all, and the launch hands the run back at the
+    gate to the driver it retains over the decision, which `_held_at_its_gate` asks the run.
     An edit adding a node is judged by the plan-edit hook, whose judge turn the stand-in
     answers through the real `oneharness`.
     """
@@ -302,7 +302,7 @@ def _gated(tmp_path: Path, oneharness_bin: str, run: RunId) -> Iterator[Replying
 def replying(
     tmp_path: Path, oneharness_bin: str, request: pytest.FixtureRequest
 ) -> Iterator[Replying]:
-    """A gated run nothing drives; see `_gated`."""
+    """A run held at its gate; see `_gated`."""
     with _gated(tmp_path, oneharness_bin, _named(request, "channel-reply")) as launched:
         yield launched
 
@@ -317,18 +317,23 @@ def other_replying(
 
 
 @pytest.fixture
-def settled(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Replying]:
+def settled(
+    tmp_path: Path, oneharness_bin: str, request: pytest.FixtureRequest
+) -> Iterator[Replying]:
     """A run that settled complete and whose attached driver has exited.
 
     One node that settles without a dispatch, launched attached, so the launch returns
     once the run has settled. The run-end hooks are named empty, because the success hook
-    would launch a follow-up run this session would then owe as well.
+    would launch a follow-up run this session would then owe as well. An edit adding a
+    node is judged by the plan-edit hook, as `_gated`'s is.
     """
     _require_just()
     run = _named(request, "settled")
+    environment = _environment(tmp_path)
+    environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     launched = _launched(
         tmp_path,
-        _environment(tmp_path),
+        environment,
         run,
         [{"id": "only", "task": SETTLES_ON_ITS_OWN, "expects_no_diff": True}],
         "--success-hook=",
@@ -593,8 +598,17 @@ def _undriven(replying: Replying) -> dict[str, Any]:
         time.sleep(0.5)
 
 
+def _held_at_its_gate(replying: Replying) -> bool:
+    """Whether the run has not ended and waits on its gate, driven by a retained driver or not."""
+    status = _just("status", replying.run, "--json", environment=replying.environment)
+    assert status.returncode == 0, f"`just status --json` failed:\n{status.stderr}"
+    # `cast` and no validation, as `_undriven` reads it.
+    reading = cast(dict[str, Any], json.loads(status.stdout))
+    return reading["ending"] is None and reading["paused"] is not None
+
+
 def _unfinished_and_undriven(replying: Replying) -> bool:
-    """Whether nothing drives the run and it has not ended — held at its gate, not settled."""
+    """Whether nothing drives the run and it has not ended — reopened, not settled."""
     return _undriven(replying)["ending"] is None
 
 
@@ -729,30 +743,32 @@ def test_a_valid_edit_is_applied_by_the_driver_holding_the_run(
 
 
 def test_a_valid_edit_to_a_run_nothing_drives_is_applied_by_the_reply_itself(
-    replying: Replying,
+    settled: Replying,
 ) -> None:
     """With nothing driving the run, the reply is its single writer and applies the edit.
 
-    No adopt, and no queue left waiting for one: the envelope is piped in, the receipt says
-    the commands were applied — by this process, which records the envelope in the run's
+    The run settled and its attached driver exited — a run held at a human gate keeps the
+    launch's driver, retained over the decision, so it is not one nothing drives. No adopt,
+    and no queue left waiting for one: the envelope is piped in, the receipt says the
+    commands were applied — by this process, which records the envelope in the run's
     command record under the next id that record numbers envelopes by and answers it there,
     so the receipt names that durable id and nothing is left waiting for a driver — the
     journal records the edit as the planner's, on a stream other than the one the launch's
-    driver wrote, and the run is still one nothing drives.
+    driver wrote, and the run, reopened by the added node, is still one nothing drives.
     """
-    assert _unfinished_and_undriven(replying), "the premise is a run nothing drives"
+    assert _undriven(settled)["word"] == "SETTLED", "the premise is a run nothing drives"
     node = "added-undriven"
-    commands = _records(replying, "commands")
+    commands = _records(settled, "commands")
 
-    receipt = _receipt(_send(replying, _settling(node, GATE_NODE)))
+    receipt = _receipt(_send(settled, _settling(node)))
 
     assert receipt == {"reply": commands, "state": "applied", "commands": "applied"}, receipt
-    assert _records(replying, "commands") == commands + 1, "the envelope was never recorded"
-    assert not _waiting(replying, "commands"), "the edit was left queued for a driver"
-    assert _authored_by_the_planner(replying, node) != _driver_stream(replying, "node-held"), (
+    assert _records(settled, "commands") == commands + 1, "the envelope was never recorded"
+    assert not _waiting(settled, "commands"), "the edit was left queued for a driver"
+    assert _authored_by_the_planner(settled, node) != _driver_stream(settled, "node-settled"), (
         "the edit was journalled on the launch driver's stream, which had exited"
     )
-    assert _unfinished_and_undriven(replying), "the reply left something driving the run"
+    assert _unfinished_and_undriven(settled), "the reply left something driving the run"
 
 
 def _monitor_refusal(op: str) -> str:
@@ -781,7 +797,7 @@ def test_an_author_the_configuration_does_not_declare_or_grant_is_refused(
     the op — the withdrawal with the reason the configuration declares for it. None appends
     anything or leaves a record in the run's journal.
     """
-    assert _unfinished_and_undriven(replying), "the premise is a run nothing drives"
+    assert _held_at_its_gate(replying), "the premise is a run held at its gate"
     commands = _records(replying, "commands")
     written = len(_recorded(replying, *WRITTEN_BY_A_REPLY))
 

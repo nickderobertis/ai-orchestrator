@@ -14,8 +14,9 @@ record names, and the verb's own answer while that run is unsettled and unwatche
 
 **The launch journeys keep a dispatch working** so they can verify each launch shape
 while its driver is still alive. Convergence no longer excuses supervision: the adoption
-journey also asks the verb after the original driver converges on a human action and
-lets go, before attesting that action. That run remains owed until explicitly closed.
+journey also asks the verb after the original driver converges on a human action, before
+the stop that lets an adoption take the run over. That run remains owed until explicitly
+closed.
 
 `--dag-graph off` for the same reason the `just plan` recipe names it: an observer watches
 a run for its whole life and every turn it takes is another dispatch, which is real cost
@@ -369,20 +370,21 @@ def _detached(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
 def _adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
     """`just orchestrate --adopt`, a fresh driver attached to a run whose own has gone.
 
-    Reachable only from the state the gate produces: the detached launch converges on a
-    human action nobody has attested and its driver lets go, which is a run nothing is
-    driving with an intact ledger. Attesting the action is what gives the fresh driver
-    something to do, and the agent node behind it is what is still working while the verb
-    is asked. The converged run is also owed before adoption.
+    Reachable only from the state a stop produces: the detached launch converges on a
+    human action nobody has attested, and its driver — retained over that decision rather
+    than letting go — holds the run until `just stop` ends it, leaving a run nothing is
+    driving with an intact ledger. The converged run is owed before it is stopped. The
+    adoption hands the run back at the same human action to the driver it retains, so
+    attesting the action is what gives that driver something to do, and the agent node
+    behind it is what is still working while the verb is asked.
 
-    **The order of those two is the whole of this fixture, and getting it wrong measures
-    nothing.** The attestation has to come after the original driver is gone: attested
-    while it is still alive, that driver picks the work up itself, never converges, and
-    `--adopt` is then refused for as long as the work runs — so what finally adopts the
-    run is a driver that arrives to find it complete.
+    **The order is the whole of this fixture, and getting it wrong measures nothing.** The
+    engine refuses `--adopt` while a driver holds the run, and a retained driver holds it
+    for as long as the decision waits, so only a stop leaves a run to adopt; attested
+    before the stop, the retained driver picks the work up itself and the stop ends it.
 
     The adoption runs beside the journey for the same reason the attached launch does: it
-    stays attached to the run it just took over.
+    stays attached to the run it just took over until the run waits on its decision.
     """
     _requirements()
     for launch in _launched(tmp_path, oneharness_bin, RunId("unwatched-orchestrate-adopted")):
@@ -395,20 +397,36 @@ def _adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
             ["just", "orchestrate", project, "--detach", *WITHOUT_OBSERVER], launch.environment
         )
         assert started.returncode == 0, f"the launch failed:\n{started.stdout}{started.stderr}"
-        _until_the_driver_lets_go(launch)
+        _until_paused(launch)
         assert launch.run in _until_named(launch), "convergence must not close an owed run"
-        _attested(launch, NodeId("approve"))
+        stopped = _just("stop", launch.run, environment=launch.environment, seconds=120)
+        assert stopped.returncode == 0, f"the stop failed:\n{stopped.stdout}{stopped.stderr}"
+        _until_the_driver_lets_go(launch)
         streamed = tmp_path / "adopted.log"
         with streamed.open("w", encoding="utf-8") as sink:
             adopting = _adopting(launch, sink)
             try:
+                _attested(launch, NodeId("approve"))
                 yield launch
             finally:
                 stop_launch(launch.run, launch.environment, adopting)
 
 
+def _until_paused(launch: Launch, *, seconds: float = 300) -> None:
+    """Wait for the run to read paused on its decision, as `just status --json` says."""
+    limit = time.monotonic() + e2e_timeout(seconds)
+    reading = ""
+    while time.monotonic() < limit:
+        status = _just("status", launch.run, "--json", environment=launch.environment)
+        reading = status.stdout + status.stderr
+        if status.returncode == 0 and json.loads(status.stdout)["paused"] is not None:
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"run {launch.run} never paused on its human action:\n{reading}")
+
+
 def _until_the_driver_lets_go(launch: Launch, *, seconds: float = 300) -> None:
-    """Wait for the launch's own driver to be gone, which is what `--adopt` is for.
+    """Wait for the stopped launch's own driver to be gone, which is what `--adopt` is for.
 
     Asked of the process the launch recorded rather than of a view over the run, because
     that is exactly the fact `--adopt` refuses on and the two are answered differently: a
@@ -430,7 +448,7 @@ def _until_the_driver_lets_go(launch: Launch, *, seconds: float = 300) -> None:
             return
         time.sleep(0.5)
     raise AssertionError(
-        f"the driver {driver} that launched run {launch.run} never let go of it, so there "
+        f"the driver {driver} that launched run {launch.run} outlived its stop, so there "
         "is nothing for an adoption to take over"
     )
 

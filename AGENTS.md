@@ -470,7 +470,7 @@ not have read any earlier message:
   by a list of your own. An item's full detail goes to the user only when they ask for it,
   read with `--full`; `--all` is the whole host's, never the update's.
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that adopted human items requires this document to state the manager's half — its own items relayed on every update, questions through items, worker-to-manager asks, acting for the user, dismissal, reconnect, the shared view, source and blocking — and to restate the engine's priority and authoring definitions, which `tests/test_human_items_guidance.py` holds word for word to the pinned engine's contract; the mechanics are `docs/orchestration.md`'s. -->
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that adopted human items requires this document to state the manager's half — its own items relayed on every update, questions through items, worker-to-manager asks, acting for the user, dismissal, expiry, reconnect, the shared view, source and blocking — and to restate the engine's priority and authoring definitions, which `tests/test_human_items_guidance.py` holds word for word to the pinned engine's contract; the mechanics are `docs/orchestration.md`'s. -->
 **Human items are the one queue of what a person must do or decide**, shared by every
 manager session on the host; the browser's **Action items** page acts on the same store, so
 the CLI and the page show and do the same things.
@@ -491,8 +491,13 @@ completing an item attests a step for them; the receipt records this session act
 for them. Dismiss what nothing needs with `just
 human-items dismiss <item> [--reason TEXT]`; a run's end dismisses its own as "the run
 ended", and a resolution made while you were away reaches your next `just human-items
-watch` once. `just human-items reopen <item>` puts a completed or dismissed item back and
-returns its hold, unless a person's answer or a run settled it. `just human-items note <item>`, its text given as `--text`, comments on a completed item or
+watch` once. **Give every item you raise the expiry that keeps it from going stale**, which
+retires it `expired` once it holds: a `time` for a decision with a moment, a `run` or `node`
+condition for an item about a run's work, a `check` for one about host state such as free
+disk space.
+Declare expiry on a `kind: human` node only where that node being dropped, and its dependents
+proceeding without it, is acceptable. `just human-items reopen <item>` puts a completed,
+dismissed or expired item back and returns its hold, unless a person's answer or a run settled it. `just human-items note <item>`, its text given as `--text`, comments on a completed item or
 states a dismissed one's reason, and releases nothing. Each arrives on a tied run's channel
 as a non-blocking `human-item` surface, so read it as what a person did. A plan states each `kind: human` node's item in `onepipeline.human_item`, its
 priority always explicit and separate from a plan-store task's own priority, which a

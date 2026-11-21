@@ -15,8 +15,9 @@ itself supplies; nothing here calls a validator directly. The plan is mixed by t
 registry's rules — one synthetic public repository and one synthetic private one — and is
 the shape the engine accepts: a private `publish: "preserve"` producer and a public consumer
 joined by an export edge, behind a human gate nobody attests, so nothing is dispatched and the
-reply is the run's single writer. Only the paid model is stood in, at the provider boundary,
-exactly as `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` stands it in.
+reply is applied by the driver the launch retains over that decision. Only the paid model is
+stood in, at the provider boundary, exactly as
+`tests/ask_seam/channel_reply/test_channel_reply_e2e.py` stands it in.
 
 The plan is stored as the boundary guidance prescribes it: one private coordinating project
 in a source declared private, under the tracked configuration's write screening, holding a
@@ -311,21 +312,24 @@ def mixed(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iter
     runs = Path(environment["ONEPIPELINE_RUNS_DIR"])
     held = Mixed(environment, run, runs / run / "channel", runs / run)
     try:
-        _undriven(held)
+        _held_at_its_gate(held)
         yield held
     finally:
         _just("stop", run, environment=environment, seconds=60)
 
 
-def _undriven(mixed: Mixed) -> None:
-    """Wait until nothing drives the run, so the reply is its single writer."""
+def _held_at_its_gate(mixed: Mixed) -> None:
+    """Wait until the run waits on its gate, unended, whether or not a driver is retained."""
     limit = deadline(120)
     while True:
         status = _just("status", mixed.run, "--json", environment=mixed.environment)
         assert status.returncode == 0, status.stderr
-        if json.loads(status.stdout)["driven"] is False:
+        reading = json.loads(status.stdout)
+        if reading["ending"] is None and reading["paused"] is not None:
             return
-        assert time.monotonic() < limit, f"run {mixed.run} is still driven:\n{status.stdout}"
+        assert time.monotonic() < limit, (
+            f"run {mixed.run} never waited on its gate:\n{status.stdout}"
+        )
         time.sleep(0.5)
 
 

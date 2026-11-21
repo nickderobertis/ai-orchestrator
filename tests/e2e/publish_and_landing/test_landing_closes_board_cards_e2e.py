@@ -487,6 +487,17 @@ def _keys(document: object) -> Iterator[str]:
             return
 
 
+def _setting_keys(record: str) -> Iterator[str]:
+    """Every key of a launch record that names a setting, at any depth.
+
+    `task_digests` is keyed by the plan's node ids, which are this journey's own names
+    rather than anything the launch was configured with, so its keys are left out.
+    """
+    document = json.loads(record)
+    assert isinstance(document, dict), record
+    yield from _keys({key: value for key, value in document.items() if key != "task_digests"})
+
+
 def _status_writes(item: _Issue) -> list[_GraphQLRequest]:
     """Every Status write either board took for ``item``'s row."""
     return [
@@ -521,7 +532,7 @@ def _assert_closed(bench: Bench, closed: list[_Issue], run: str | None) -> None:
     ]
     assert walked == [], f"a board's items were read: {walked}"
     if run is not None:
-        keys = sorted(_keys(json.loads(_launch_record(bench, run))))
+        keys = sorted(_setting_keys(_launch_record(bench, run)))
         assert not [key for key in keys if "clos" in key.lower()], (
             f"the run's launch record carries a closure setting: {keys}"
         )
@@ -953,7 +964,7 @@ def test_a_run_settling_with_every_node_done_moves_its_plan_home_to_done(
         assert walked == [], f"the run read a board's items: {walked}"
         (recorded,) = _home_records(bench, homed.run)
         assert (recorded["project"], recorded["outcome"]) == (homed.project, "written"), recorded
-        keys = sorted(_keys(json.loads(_launch_record(bench, homed.run))))
+        keys = sorted(_setting_keys(_launch_record(bench, homed.run)))
         assert not [key for key in keys if re.search(r"clos|home", key, re.IGNORECASE)], (
             f"the run's launch record carries a closure or home setting: {keys}"
         )

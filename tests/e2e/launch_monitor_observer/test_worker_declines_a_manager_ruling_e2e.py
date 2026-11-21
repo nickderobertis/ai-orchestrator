@@ -9,7 +9,7 @@ with its reason, and never silently (`config/onejudge.base.yaml`,
 
 The journey launches a real run through `just orchestrate`, holds it at a human gate,
 carries one manager note to the node behind the gate through `just channel-reply`, opens the
-gate and adopts the run so the node is really dispatched. Only the paid model is doubled, at
+gate and waits while the launch's own driver dispatches the node. Only the paid model is doubled, at
 the `oneharness` seam (`tests/e2e/fake_backend.py`): its worker-side turn finds the
 manager's ruling reference in the attribution the engine rendered into its own prompt and
 runs `"$ORCHESTRATOR_DECLINE_RULING" --ruling <ref>` with its reason, from its own inherited
@@ -164,11 +164,11 @@ def _reply(environment: dict[str, str], run: str, *commands: dict[str, Any]) -> 
 def _launch(
     tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str, side: str, reason: str
 ) -> Iterator[Dispatched]:
-    """Launch the gated plan, carry a manager note to its node, open the gate, and adopt.
+    """Launch the gated plan, carry a manager note to its node, open the gate, and wait.
 
-    The launch hands the run back at its gate, so the note is applied to a run nothing
-    drives and is carried to the node's first dispatch; the adopt then drives the run to
-    settlement, dispatching the node once, with this host's observer graph left off so the
+    The launch hands the run back at its gate while its driver stays live, so the note is
+    carried to the node's first dispatch; opening the gate lets that same driver take the
+    run to settlement, dispatching the node once, with this host's observer graph left off so the
     only surface on the channel afterwards is the one `side` raised.
     """
     if shutil.which("just") is None:
@@ -229,8 +229,19 @@ def _launch(
             {"op": "note", "id": WORK_NODE, "addressee": "both", "text": MANAGER_NOTE},
         )
         _reply(environment, run, {"op": "attest", "ref": GATE_NODE})
-        adopted = _just("orchestrate", "--adopt", run, environment=environment, seconds=600)
-        assert adopted.returncode == 0, f"the adopt failed:\n{adopted.stdout}\n{adopted.stderr}"
+        settled = _just(
+            "watch",
+            run,
+            "--until",
+            "settled",
+            "--timeout",
+            "540",
+            environment=environment,
+            seconds=600,
+        )
+        assert settled.returncode == 0, (
+            f"the run did not settle:\n{settled.stdout}\n{settled.stderr}"
+        )
         assert turns_log.is_file(), f"no harness turn was recorded at {turns_log}"
         assert decline_record.is_file() and decline_record.read_text(encoding="utf-8"), (
             f"no {side}-side turn of the dispatched node was handed a manager's ruling to "
