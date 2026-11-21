@@ -242,6 +242,11 @@ The adoption after that moves the engine to 0.117.0, the read API to 0.87.0 that
 and onevcs to 0.68.0, the release the engine links, whose registry stays at store schema 7:
 a human item declares the conditions it expires on, and the engine retires it as `expired`
 once one holds ([Human items](./orchestration.md#human-items)).
+The adoption after that moves the read API to 0.87.1, which links the same engine 0.117.0:
+the view shows a refused live edit as an event with the one-line `summary` its
+`edit-rejected` record carries — the plan-edit hook's first stdout line — and its cursor
+follows the pointer. The engine stays at 0.117.0, which already carries that record; 0.117.1
+waits for a read API linking it.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole

@@ -33,8 +33,13 @@
 #   review-plan-item.sh < <hook document>
 #       The engine's plan-edit hook (`plan_edit_hook` in config/onepipeline.launch.yaml):
 #       the document on stdin is one live edit's composed task, judged the same way and
-#       recorded nothing. Exit 0 passes, 1 refuses with the judge's findings on stderr,
-#       anything else is "could not be judged".
+#       recorded nothing. Exit 0 passes, 1 refuses, anything else is "could not be judged".
+#       A refusal's first stdout line is one line naming the reviewed task and the
+#       reviewer's first finding, and its stderr the reviewer's findings alone: the engine
+#       reads the first non-empty stdout line as the refusal's summary and stderr as its full
+#       reason. The judge run's event rendering, which carries its whole prompt, goes to a log
+#       under the scratch directory instead, which nothing a refusal reads opens; a judge that
+#       could not judge leaves its cause on stderr.
 #
 # What a run writes is read from the copy the run writes: a task's board copy — the item
 # its `onetaskgraph.copies` entry names under the destination the project's own
@@ -132,8 +137,11 @@ judged() {
     shift 3
     local -a flags=()
     mapfile -t flags < <(persona_flags "$persona")
-    "${judge[@]}" ${flags[@]+"${flags[@]}"} --task "$task" --dir "$scratch" --input "$input" "$@" --output text >&2
+    "${judge[@]}" ${flags[@]+"${flags[@]}"} --task "$task" --dir "$scratch" --input "$input" "$@" --output text >&3
 }
+# Where each judge run's event rendering goes: stderr for a review, the hook's own log for a
+# live edit (below).
+exec 3>&2
 
 # A jq read of the store's own answers, saved under the scratch directory, that fails means
 # jq is missing or broken, or the store answered something other than the documents it
@@ -182,9 +190,61 @@ if [ "$#" -eq 0 ]; then
     file=$(native_file "$id" "$scratch/tasks") || exit 2
     composed=$(jq -r '"---\n" + ({title: .task.title, depends_on: (.node.deps | if . == null then [] else . end)} | tojson) + "\n---\n" + .task.body' <<<"$hook") || exit 2
     printf '%s\n' "$composed" >"$file" || scratch_failed "$file"
+    # The event rendering carries the judge's whole prompt and the run's event log, which a
+    # refusal's reader cannot show in a line, so it goes to a log no refusal reads; what the
+    # judge printed on stderr is kept to be read back below.
+    # llmlint: ignore-block[changed_behavior_has_e2e] Each arm here fails only when the scratch directory this script made, and wrote the judged task into a moment before, refuses a further write or read, or when jq fails on a title the document check above already proved is a string; no journey reaches either without racing the filesystem under the test or doubling coreutils or jq, which this repository's journeys never double. Each arm exits 2 with the same could-not-judge meaning the journeys drive for real through a judge that cannot judge.
+    exec 3>"$scratch/judge-events.log" || scratch_failed "$scratch/judge-events.log"
+    # Made before the judge runs, so a scratch that cannot hold it stops here rather than
+    # leaving the redirection's failure to read as the judge's refusal.
+    : >"$scratch/judge.err" || scratch_failed "$scratch/judge.err"
+    title=$(jq -r 'if .task.title == "" then .node.id else .task.title end' <<<"$hook" |
+        tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//') || read_failed "read the hook document's task title"
     status=0
-    judged "$file" "$plan_reviewer" "$framing" || status=$?
-    exit "$status"
+    judged "$file" "$plan_reviewer" "$framing" 2>"$scratch/judge.err" || status=$?
+    judge_err=$(cat -- "$scratch/judge.err") || {
+        echo "review-plan-item: the plan reviewer exited $status, but what it wrote on stderr could not be read back from $scratch/judge.err, so its verdict is unknown; free space under ${TMPDIR:-/tmp} or point TMPDIR at a writable directory, then send the edit again" >&2
+        exit 2
+    }
+    # llmlint: ignore-end[changed_behavior_has_e2e]
+    if [ "$status" -ne 1 ]; then
+        [ -z "$judge_err" ] || printf '%s\n' "$judge_err" >&2
+        [ "$status" -eq 0 ] ||
+            echo "review-plan-item: the plan reviewer could not judge '$title' (exit $status; its diagnostic is above), so nothing was judged; repair what it names, then send the edit again" >&2
+        exit "$status"
+    fi
+    # oneagentgraph states a fail as a `<member> failed its bar (<bar>):` line followed by one
+    # `  - <finding>` line per finding, a finding's further lines indented beneath it; what
+    # follows that line is the findings. The first finding is the summary's, whole and on one
+    # line, because its first line alone can be only a judge's tally; the engine reads a
+    # bounded stdout and cuts the summary on a character boundary, so it is not cut here.
+    # llmlint: ignore-block[changed_behavior_has_e2e] Reached only when sed or tr fail on text already in memory, which no journey produces without doubling coreutils, which this repository's journeys never do; the arm exits 2, the could-not-judge exit the journeys drive for real.
+    unread() {
+        printf '%s\n' "$judge_err" >&2
+        echo "review-plan-item: the plan reviewer refused '$title', but sed or tr could not $1 (their diagnostic is above, beside all the reviewer wrote), so no summary was made; check that those tools answer, then send the edit again" >&2
+        exit 2
+    }
+    findings=$(sed -n '/^oneagentgraph: .* failed its bar (.*):$/,$p' <<<"$judge_err" | sed '1d') ||
+        unread "read its findings from what it wrote on stderr"
+    first="" seen=0
+    while IFS= read -r line; do
+        case $line in
+            "  - "*)
+                [ "$seen" -eq 0 ] || break
+                seen=1 first=${line#"  - "}
+                ;;
+            *) [ "$seen" -eq 0 ] || first+=" $line" ;;
+        esac
+    done <<<"$findings"
+    first=$(tr -s '[:space:]' ' ' <<<"$first" | sed 's/^ //; s/ $//') ||
+        unread "put its first finding on one line"
+    # llmlint: ignore-end[changed_behavior_has_e2e]
+    # A refusal whose findings are not in that shape still refuses, with all it said beside it.
+    # llmlint: ignore-block[tool_output_is_signal] The plan-edit hook contract (onepipeline docs/contract.md, "The plan-edit hook's two streams") makes stdout's first line the refusal's one-line summary and stderr its findings alone, so a resubmission instruction has no place on either; the engine's own refusal tells the manager that none of the reply's edits were applied.
+    printf "the plan reviewer refused '%s': %s\n" "$title" "${first:-its findings are on stderr}"
+    printf '%s\n' "${findings:-$judge_err}" >&2
+    # llmlint: ignore-end[tool_output_is_signal]
+    exit 1
 fi
 
 plan=$1

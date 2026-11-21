@@ -5,9 +5,9 @@
     "": {
       "name": "ai-orchestrator",
       "dependencies": {
-        "onepipeline-api-cli": "0.87.0",
+        "onepipeline-api-cli": "0.87.1",
         "onepipeline-cli": "0.117.0",
-        "onepipeline-ui": "0.87.0",
+        "onepipeline-ui": "0.87.1",
       },
       "devDependencies": {
         "@expo-google-fonts/noto-sans": "0.4.2",
@@ -569,15 +569,15 @@
 
     "once": ["once@1.4.0", "", { "dependencies": { "wrappy": "1" } }, "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w=="],
 
-    "onepipeline-api-cli": ["onepipeline-api-cli@0.87.0", "", { "optionalDependencies": { "onepipeline-api-cli-darwin-arm64": "0.87.0", "onepipeline-api-cli-linux-arm64": "0.87.0", "onepipeline-api-cli-linux-x64": "0.87.0", "onepipeline-api-cli-win32-x64": "0.87.0" }, "bin": { "onepipeline-api": "bin/onepipeline-api.js" } }, "sha512-fnuNURRbJ5a2d1nloauEZ3gRt+QlUdDi0GuGDtQmVmUIFNPplOtN9J99EMK+HNhQtLV8TAqQsN5r46yFsutwog=="],
+    "onepipeline-api-cli": ["onepipeline-api-cli@0.87.1", "", { "optionalDependencies": { "onepipeline-api-cli-darwin-arm64": "0.87.1", "onepipeline-api-cli-linux-arm64": "0.87.1", "onepipeline-api-cli-linux-x64": "0.87.1", "onepipeline-api-cli-win32-x64": "0.87.1" }, "bin": { "onepipeline-api": "bin/onepipeline-api.js" } }, "sha512-yqFnezjtmjg0Dq6RB4A1gOzHKvAJoLgclrMV5ENLpruCiupR1KT+r6fUseGCc91ksLbHWeUrdPyePnM26Djxaw=="],
 
-    "onepipeline-api-cli-darwin-arm64": ["onepipeline-api-cli-darwin-arm64@0.87.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-VmoVwS0LeKXZEWoDlJSlQ/h2Hsh7Zwq44YSQcYtdrriTpNG5lxMytYqvfjwmXHQbdE6PhUygO5xGV/pU0yHMzg=="],
+    "onepipeline-api-cli-darwin-arm64": ["onepipeline-api-cli-darwin-arm64@0.87.1", "", { "os": "darwin", "cpu": "arm64" }, "sha512-ne36EoGxBOoGIqYX1y64ZfNbkM4nWBZX7Djm2LCGk//Px+RYgURiyVU4exxpxIelRSNuel51bPsyJRfNXw0+Ew=="],
 
-    "onepipeline-api-cli-linux-arm64": ["onepipeline-api-cli-linux-arm64@0.87.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-ras+nUuhDNduH7OtHmrbYuxgXreIV7b45IvDhaxUY7gOqRhsLpXmdSU8clz4mjG0GpN/PLKg7cXhb82BGsOVKw=="],
+    "onepipeline-api-cli-linux-arm64": ["onepipeline-api-cli-linux-arm64@0.87.1", "", { "os": "linux", "cpu": "arm64" }, "sha512-Y2BUOTRX5wVBtR/oIGRGSDphYz8C80NlTYJFgotbBQW9dhaps+q/d/XXSVfk6v89MbwqnJ5nNL+NohK/Rtsc9w=="],
 
-    "onepipeline-api-cli-linux-x64": ["onepipeline-api-cli-linux-x64@0.87.0", "", { "os": "linux", "cpu": "x64" }, "sha512-YjJeaX+jcxRjD6+kdu7oTVSQWB5jqgezKb/dYKZcg/YbwheV0SVQ+lkAxB5//r2G1fiKpaEfcf1k1wC4v60OQQ=="],
+    "onepipeline-api-cli-linux-x64": ["onepipeline-api-cli-linux-x64@0.87.1", "", { "os": "linux", "cpu": "x64" }, "sha512-CxXgu8EcQdUHc0bbc6NTXpmR+NOHguxZZdIAyektaFb8FdQt/DkVXkLKSvSxPoa8RL8X1s7HQCZkukYq9Q1DLw=="],
 
-    "onepipeline-api-cli-win32-x64": ["onepipeline-api-cli-win32-x64@0.87.0", "", { "os": "win32", "cpu": "x64" }, "sha512-VcUBV019Vp1LIcMK0p7ACVhV4lcxrHPo2xfptpCRiZQpvq5UFcnbeod7qkopBAlFekLndEK8UhO2qMpAjzikXA=="],
+    "onepipeline-api-cli-win32-x64": ["onepipeline-api-cli-win32-x64@0.87.1", "", { "os": "win32", "cpu": "x64" }, "sha512-MlRV/R4XOuKa7uF1Ju2IfjqMqy6aq80sydjAJUxUxaGWAs4oYPqIUoofHKQls2vSg+X2HmzOVMUkVyd/oRiK0w=="],
 
     "onepipeline-cli": ["onepipeline-cli@0.117.0", "", { "optionalDependencies": { "onepipeline-cli-darwin-arm64": "0.117.0", "onepipeline-cli-linux-arm64": "0.117.0", "onepipeline-cli-linux-x64": "0.117.0", "onepipeline-cli-win32-x64": "0.117.0" }, "bin": { "onepipeline": "bin/onepipeline.js" } }, "sha512-BkwpiojJBpPSkwTlDtB652MsbgyNKt7iPuu8WFr53qPj1a6LFwlOv26EL+CbJBSg2K9i/xVbzeHCtOD46cNAjg=="],
 
@@ -589,7 +589,7 @@
 
     "onepipeline-cli-win32-x64": ["onepipeline-cli-win32-x64@0.117.0", "", { "os": "win32", "cpu": "x64" }, "sha512-wnkjgBaVqW9ATX6f/AhRPhVD3hkFrZlc0CD9BBgbJddGq1d4owwLLaBIgpcKhyzyQDefQYXKGIk3Fkbg47dWsQ=="],
 
-    "onepipeline-ui": ["onepipeline-ui@0.87.0", "", {}, "sha512-JlCokZ6x5yd42F/gH0jaRA57xKPaDNKTSesWNd+MJNywRQZ8K3mwM7Q9Gb0T8sG0Yu60nXMNH+1S+cmzHjBe8g=="],
+    "onepipeline-ui": ["onepipeline-ui@0.87.1", "", {}, "sha512-uvXGyKE1XMmUlXRu74j3Wn1pGHPWYszXMQjhJJindkyrz5wQO4HR30mxQPuGpC0MOiS+2HUnNFL/Ir+0mqJnig=="],
 
     "onetime": ["onetime@5.1.2", "", { "dependencies": { "mimic-fn": "^2.1.0" } }, "sha512-kbpaSSGJTWdAY5KPVeMOKXSrPtr8C8C7wodJbcsd51jRnmD+GZu8Y0VoU6Dm5Z4vWr0Ig/1NKuWRKf7j5aaYSg=="],
 

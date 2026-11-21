@@ -624,6 +624,79 @@ def test_the_plan_edit_hook_runs_its_reviewer_on_codex_in_its_non_repository_scr
     assert_reviewed_on_codex(op.codex_after_pass, op.passed)
 
 
+#: What the planner graph's judge-only run renders as events, which a refusal never carries:
+#: the run's own event kinds, and the reviewer's bar its prompt opens with.
+EVENT_RENDERING = ("graph-started", "member-started", "turn-started", BAR)
+
+
+class Refused(NamedTuple):
+    """Which nodes one refused correction is about."""
+
+    #: The node the correction names, which its refusal is recorded against.
+    named: str
+    #: The node the refused task is for, which the summary names: a retry's replacement.
+    judged: str
+
+
+REFUSED_NODE = {
+    "amend": Refused(named=DOCS, judged=DOCS),
+    "requeue": Refused(named=ROUTE, judged=ROUTE),
+    "retry": Refused(named=FLAKY, judged=f"{FLAKY}-a"),
+    "add": Refused(named="probe-a", judged="probe-a"),
+}
+
+
+# `Any`: a journal record's payload, read by key and never typed.
+def _rejected(sequence: Sequence) -> list[dict[str, Any]]:
+    """Every `edit-rejected` record the run's journal holds, in order."""
+    journal = sequence.bench.runs / sequence.run / "events.jsonl"
+    records = [json.loads(line) for line in journal.read_text(encoding="utf-8").splitlines()]
+    return [one for one in records if one.get("kind") == "edit-rejected"]
+
+
+def _full_reason(record: dict[str, Any]) -> str:
+    """The complete refusal the record's `full_reason` artifact holds, as a JSON string."""
+    artifact = str(record["payload"]["full_reason"])
+    assert artifact in [one["id"] for one in record["artifacts"]], record
+    full = json.loads(Path(artifact).read_text(encoding="utf-8"))
+    assert isinstance(full, str), full
+    return full
+
+
+@pytest.mark.parametrize("name", ["amend", "requeue", "retry", "add"])
+def test_a_refusal_is_recorded_with_its_reviewers_first_finding_on_one_line(
+    sequence: Sequence, name: str
+) -> None:
+    """The hook's one stdout line becomes the record's `summary`, and its findings the
+    `reason` and full reason, with nothing of the judge run's event rendering in any."""
+    refused = REFUSED_NODE[name]
+    rejected = [
+        one
+        for one in _rejected(sequence)
+        if one["payload"].get("node") == refused.named
+        and "the plan reviewer refused" in str(one["payload"].get("summary"))
+    ]
+    assert rejected, [one["payload"] for one in _rejected(sequence)]
+    for one in rejected:
+        summary, reason = str(one["payload"]["summary"]), str(one["payload"]["reason"])
+        full = _full_reason(one)
+        assert "\n" not in summary and len(summary) <= 200, summary
+        opening = f"{name} of node '{refused.judged}': the plan reviewer refused '"
+        assert summary.startswith(opening), one
+        # The finding the summary names, as far as its bound kept it, opens the reviewer's
+        # findings, which the full reason holds every line of.
+        finding = summary.split("refused '", 1)[1].split("': ", 1)[1].removesuffix("…")
+        assert finding and finding in " ".join(full.split()), (summary, full)
+        for rendered in EVENT_RENDERING:
+            for text in (summary, reason, full):
+                assert rendered not in text, (rendered, text)
+
+
+def test_an_edit_the_judge_cannot_judge_is_recorded_as_unjudged(sequence: Sequence) -> None:
+    summaries = [str(one["payload"].get("summary")) for one in _rejected(sequence)]
+    assert f"amend of node '{DOCS}': the plan-edit hook could not judge it" in summaries, summaries
+
+
 def test_nothing_of_a_refused_reply_is_committed(sequence: Sequence) -> None:
     for op in sequence.ops.values():
         assert op.committed_after_refusal == op.committed_before, op
