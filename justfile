@@ -782,78 +782,59 @@ follow-ups run:
 # Answer people's comments on follow-up tickets through onefollowup:
 # `just follow-ups-answer-comments [--dry-run]`.
 #
-# Creates the `follow-up-comments` plan from `templates/follow-up-comments.md.j2` — gather,
-# answer, settle — and runs it attached in a flow. Each of its steps is this recipe again:
-# `--gather` runs `onefollowup comments gather`, keeping its answer in the run's own
-# directory for the steps after it; `--answer` creates each owning batch's feedback plan from
-# `templates/follow-up-feedback.md.j2` for the files `onefollowup comments launches` writes
-# and runs it attached in the same flow, failing when one fails; `--settle` runs
-# `onefollowup comments settle`. `--dry-run` runs only `onefollowup comments gather --dry-run`.
+# `onefollowup comments answer` in a flow: it gathers the comments to answer, runs the
+# `comments.launch_command` `onefollowup.yaml` configures — `just follow-ups-answer-batch` —
+# once per owning batch, each feedback run joining this flow, and settles only when every
+# batch succeeded; otherwise it exits 1 naming the failed batches. `--dry-run` is
+# `onefollowup comments answer --dry-run`, which prints what `comments gather --dry-run` does.
 [doc("Answer people's comments on follow-up tickets through onefollowup; `--dry-run` reports only.")]
 follow-ups-answer-comments *args:
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="{{repo_root}}/node_modules/.bin:{{repo_root}}/.venv/bin:$PATH"
-    export ONEPIPELINE_TEMPLATE_ROOT="{{repo_root}}/templates"
     # The owner `onefollowup.yaml`'s review sink names: a launch's, else this manager session's.
     if [ -z "${ONEFOLLOWUP_HOOKS__OWNER__SESSION:-}" ]; then
         . "{{repo_root}}/scripts/launcher-session.sh"
         export ONEFOLLOWUP_HOOKS__OWNER__SESSION="${ONEPIPELINE_LAUNCHER_SESSION:-}"
     fi
-    gathered="${ONEPIPELINE_RUN_ROOT:-}/gathering.json"
     case "${1:-}" in
         --dry-run)
-            exec onefollowup comments gather --dry-run
-            ;;
-        --gather)
-            onefollowup comments gather | tee "$gathered"
-            ;;
-        --answer)
-            launches=$(onefollowup comments launches --snapshot "$(jq -er '.snapshot' "$gathered")")
-            # Parsed before the loop, so a launch list jq cannot read fails the step rather than
-            # leaving the loop below nothing to run.
-            listed=$(jq -er '.launches[] | [.batch, .feedback] | @tsv' <<<"$launches" || jq -e '.launches == []' <<<"$launches" >/dev/null) || {
-                echo "follow-ups-answer-comments: onefollowup comments launches answered a launch list this step cannot read; adopt the release config/onefollowup.version names with 'just bootstrap', then rerun 'just follow-ups-answer-comments'" >&2
-                exit 2
-            }
-            loader=$(mktemp)
-            trap 'rm -f "$loader"' EXIT
-            onepipeline template resolve follow-up-task --json >"$loader"
-            failed=0
-            while IFS=$'\t' read -r batch feedback; do
-                [ -n "$batch" ] || continue
-                stamp=$(basename -- "$feedback" .md)
-                project="$batch-answers-$stamp"
-                onetaskgraph project create follow-up-runs --id "$project" --title "$project" \
-                    --template "{{repo_root}}/templates/follow-up-feedback.md.j2" --search-path "{{repo_root}}/templates" \
-                    --var "project=$project" --var "batch=$batch" --var "checkout={{repo_root}}" \
-                    --var "feedback=$feedback" --var "task_loader=$loader" --no-interactive \
-                    --metadata 'onepipeline.schema_version=3' \
-                    --metadata "onepipeline.goal={\"text\": \"Answer the comments on batch $batch\"}" >/dev/null
-                ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off \
-                    --label kind=follow-ups --launch-config config/onepipeline.workflows.yaml || failed=1
-            done <<<"$listed"
-            exit "$failed"
-            ;;
-        --settle)
-            exec onefollowup comments settle --snapshot "$(jq -er '.snapshot' "$gathered")"
+            onefollowup comments answer --dry-run
             ;;
         "")
-            project="follow-up-comments-$(date -u +%Y%m%dT%H%M%SZ | tr 'TZ' 'tz')"
-            onetaskgraph project create follow-up-runs --id "$project" --title "$project" \
-                --template "{{repo_root}}/templates/follow-up-comments.md.j2" --search-path "{{repo_root}}/templates" \
-                --var "project=$project" --no-interactive \
-                --metadata 'onepipeline.schema_version=3' \
-                --metadata 'onepipeline.goal={"text": "Answer the comments on follow-up tickets"}' >/dev/null
-            exec ./scripts/onepipeline.sh flow run --name "$project" -- \
-                ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off \
-                --label kind=follow-ups --launch-config config/onepipeline.workflows.yaml
+            exec ./scripts/onepipeline.sh flow run --name "follow-up-comments-$(date -u +%Y%m%dt%H%M%Sz)" -- \
+                onefollowup comments answer
             ;;
         *)
             echo "follow-ups-answer-comments: '$1' is not an option; usage: just follow-ups-answer-comments [--dry-run]" >&2
             exit 2
             ;;
     esac
+
+# Run one owning batch's feedback plan, attached: `just follow-ups-answer-batch <batch>
+# <feedback file>`, the `comments.launch_command` `onefollowup comments answer` runs once per
+# batch. It creates the plan from `templates/follow-up-feedback.md.j2`, its answering task
+# through the `follow-up-task` template loader, and starts it attached, so a feedback run that
+# fails fails its batch.
+[doc("Run one batch's feedback plan, attached, for `onefollowup comments answer`.")]
+follow-ups-answer-batch batch feedback:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="{{repo_root}}/node_modules/.bin:{{repo_root}}/.venv/bin:$PATH"
+    export ONEPIPELINE_TEMPLATE_ROOT="{{repo_root}}/templates"
+    batch={{ quote(batch) }} feedback={{ quote(feedback) }}
+    project="$batch-answers-$(basename -- "$feedback" .md)"
+    loader=$(mktemp)
+    trap 'rm -f "$loader"' EXIT
+    onepipeline template resolve follow-up-task --json >"$loader"
+    onetaskgraph project create follow-up-runs --id "$project" --title "$project" \
+        --template "{{repo_root}}/templates/follow-up-feedback.md.j2" --search-path "{{repo_root}}/templates" \
+        --var "project=$project" --var "batch=$batch" --var "checkout={{repo_root}}" \
+        --var "feedback=$feedback" --var "task_loader=$loader" --no-interactive \
+        --metadata 'onepipeline.schema_version=3' \
+        --metadata "onepipeline.goal={\"text\": \"Answer the comments on batch $batch\"}" >/dev/null
+    ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off \
+        --label kind=follow-ups --launch-config config/onepipeline.workflows.yaml
 
 # Register a repository checkout alias. Publication policy and approvals come from
 # the repository's own `onevcs.toml` and any host rule overriding it, never from flags here; `onevcs` detects

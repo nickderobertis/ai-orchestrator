@@ -1,7 +1,8 @@
 """The one file this host configures its follow-up loop with, held to exactly what it states.
 
 onefollowup carries the loop — drafts, verification, tickets, comment answers — and this
-repository states only its store, destination, budget inputs and review sink, in the root
+repository states only its store, destination, budget inputs, review sink and the command
+`onefollowup comments answer` launches each batch's feedback run with, in the root
 `onefollowup.yaml`. Everything else is onefollowup's shipped default, so a key added here is
 a decision about triage this host has deliberately not taken. Read twice: as the file says
 it, and as the installed `onefollowup config show --sources` resolves it.
@@ -41,6 +42,7 @@ STATED: dict[str, object] = {
             "{context_file}",
         ],
     },
+    "comments": {"launch_command": ["just", "follow-ups-answer-batch", "{batch}", "{feedback}"]},
 }
 
 #: Where every caller states the owner the review sink's context names, and a session.
@@ -48,7 +50,7 @@ OWNER_ENV = "ONEFOLLOWUP_HOOKS__OWNER__SESSION"
 SESSION = "e2e-manager-session"
 
 
-def test_the_file_states_exactly_the_store_destination_inputs_and_sink() -> None:
+def test_the_file_states_exactly_the_store_destination_inputs_sink_and_launch() -> None:
     stated = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
 
     assert stated == STATED

@@ -7,6 +7,13 @@ spawning the hook, and by the script launching the follow-up run through `just f
 — so this module launches real plans through the real recipe and reads what each layer
 left: the hook's log under the run, `just results`, `just runs`, and the launch records.
 
+A successful run of a plan whose `<plan>-spikes` project's run preserved branches has those
+branches discarded by the success hook through the engine's `onepipeline unpublished
+--project <plan>-spikes --discard`, one line each, before the follow-up run launches; a
+branch the discard refuses is kept and named, and a branch another project's run preserved
+is left alone. The branches are preserved in a seeded scratch `onevcs` registry, never this
+host's.
+
 Everything between the recipe and the model is real: `just orchestrate`,
 `scripts/orchestrate.sh`, `scripts/onepipeline.sh` and its design-approval gate, the
 installed `onepipeline` driver, `scripts/run-ended.sh`, and `just follow-ups` with the
@@ -45,9 +52,11 @@ import follow_up_variables
 import plan_root_variable
 import pytest
 import short_state
+from conftest import git
 from fake_backend import RUN_ON_MARKER_ENV
 from harness_indirections import established_indirections
 from project_fixtures import helper, project_from_plan
+from scratch_identity import GIT_IDENTITY, Identity, onevcs_in, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -347,6 +356,128 @@ def _stop(bench: Bench, *runs: str) -> None:
             _just(bench, "stop", run, seconds=60)
 
 
+#: The spikes of the plan the spiked journey launches: the first is discarded, the second is
+#: checked out with an uncommitted edit, which `onevcs` refuses to discard.
+DISCARDED_SPIKE, REFUSED_SPIKE = "spike-health", "spike-load"
+
+
+class Spiked(NamedTuple):
+    """A successful run whose plan's spikes preserved branches, read back after its hooks."""
+
+    launch: Launch
+    log: str
+    discarded: str
+    refused: str
+    another: str
+    remote: frozenset[str]
+
+
+def _command_project(bench: Bench, project: str) -> str:
+    """Create ``project`` holding one command node, which is all a spikes project's run needs
+    to preserve branches under its group; start it to completion and answer its run."""
+    source, native = project.split(":")
+    body = bench.tmp / "spikes-task.md"
+    body.write_text("Measures nothing.\n", encoding="utf-8")
+    store = str(REPO_ROOT / ".venv" / "bin" / "onetaskgraph")
+    node = ('onepipeline.id="probe"', 'onepipeline.kind="command"', 'onepipeline.command=["true"]')
+    for argv in (
+        [store, "project", "create", source, "--id", native, "--title", "Spikes"]
+        + ["--metadata", "onepipeline.schema_version=3", "--no-interactive"],
+        [store, "task", "create", source, "--project", project, "--title", "Probe"]
+        + ["--body-file", str(body)]
+        + [flag for one in node for flag in ("--metadata", one)]
+        + ["--no-interactive"],
+        [str(REPO_ROOT / "scripts" / "onepipeline.sh"), "start", project]
+        + ["--launch-config", "config/onepipeline.workflows.yaml", "--dag-graph", "off"],
+    ):
+        ran = subprocess.run(  # noqa: S603 - the pinned plan store and this checkout's engine wrapper
+            argv,
+            cwd=REPO_ROOT,
+            env=bench.environment,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(300),
+            check=False,
+        )
+        assert ran.returncode == 0, ran.stdout + ran.stderr
+    return str(json.loads(ran.stdout.strip().splitlines()[-1])["run_id"])
+
+
+def _preserve(identity: Identity, run: str, branch: str) -> str:
+    """Preserve one committed ``branch`` as a node of ``run`` leaves one; answer its name."""
+    opened = onevcs_in(
+        identity,
+        "session",
+        "open",
+        str(identity.publication),
+        "--branch-name",
+        branch,
+        "--label",
+        f"run={run}",
+        "--label",
+        f"node={branch.rsplit('/', 1)[-1]}",
+    )
+    assert opened.returncode == 0, opened.stdout + opened.stderr
+    session = json.loads(opened.stdout)
+    worktree = Path(session["worktree"])
+    (worktree / "measured.txt").write_text(f"{branch}\n", encoding="utf-8")
+    git("add", "-A", cwd=worktree)
+    git(*GIT_IDENTITY, "commit", "-qm", f"feat: measure {branch}", cwd=worktree)
+    preserved = onevcs_in(
+        identity, "preserve", "--repo", str(identity.publication), session["branch"]
+    )
+    assert preserved.returncode == 0, preserved.stdout + preserved.stderr
+    closed = onevcs_in(identity, "session", "close", session["token"])
+    assert closed.returncode == 0, closed.stdout + closed.stderr
+    return str(session["branch"])
+
+
+def _remote_branches(identity: Identity) -> frozenset[str]:
+    listed = git("ls-remote", "--heads", "origin", cwd=identity.publication)
+    return frozenset(
+        line.split("refs/heads/", 1)[1] for line in listed.splitlines() if "refs/heads/" in line
+    )
+
+
+@pytest.fixture(scope="module")
+def spiked(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Spiked:
+    """A plan drafting one follow-up, whose spikes project's run preserved two branches, and
+    another project's run one, launched to success through the recipe."""
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    tmp = tmp_path_factory.mktemp("run-end-spiked")
+    identity = seeded(tmp / "identity")
+    bench = _drafting(_bench(tmp, oneharness_bin))
+    bench = bench._replace(
+        environment=bench.environment | identity.environment | {"ONEVCS_HOME": str(identity.home)}
+    )
+    run = f"hooks-spiked-{os.getpid()}"
+    project = _project(bench, run)
+    native = project.split(":")[1]
+    spikes_run = _command_project(bench, f"{project}-spikes")
+    another_run = _command_project(bench, f"{project}-another-spikes")
+    discarded = _preserve(identity, spikes_run, f"{native}/{DISCARDED_SPIKE}")
+    refused = _preserve(identity, spikes_run, f"{native}/{REFUSED_SPIKE}")
+    another = _preserve(identity, another_run, f"{native}-another/{DISCARDED_SPIKE}")
+    # Checked out with an edit nobody committed, which `onevcs` refuses to discard before it
+    # touches anything; put back once the run has settled.
+    git("fetch", "-q", "origin", cwd=identity.execution)
+    git("checkout", "-q", refused, cwd=identity.execution)
+    (identity.execution / "unsaved.txt").write_text("an edit nobody committed\n", "utf-8")
+    follow_up = ""
+    try:
+        launch = Launch(_just(bench, "orchestrate", project, "--dag-graph", "off"), run)
+        log_path = bench.runs / run / "hooks" / "success.log"
+        log = log_path.read_text(encoding="utf-8") if log_path.is_file() else ""
+        matched = LAUNCHED.search(log)
+        follow_up = matched["follow_up"] if matched else ""
+        return Spiked(launch, log, discarded, refused, another, _remote_branches(identity))
+    finally:
+        (identity.execution / "unsaved.txt").unlink()
+        git("checkout", "-q", "main", cwd=identity.execution)
+        _stop(bench, run, spikes_run, another_run, *([follow_up] if follow_up else []))
+
+
 @pytest.fixture(scope="module")
 def succeeded(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Succeeded:
     if shutil.which("just") is None:
@@ -435,6 +566,32 @@ def test_a_completed_run_that_drafted_nothing_launches_no_follow_up_run(
     assert LAUNCHED.search(ended.log) is None, ended.log
     assert EMPTY_BATCH.format(run=run) in ended.hooked.result.stderr
     assert not list(ended.bench.runs.glob(f"{run}{FOLLOW_UPS_SUFFIX}*"))
+
+
+def test_a_successful_run_discards_exactly_its_plans_spike_branches_one_line_each(
+    spiked: Spiked,
+) -> None:
+    run = spiked.launch.run
+    assert _settlement(spiked.launch) == {"run_id": run, "settlement": "complete"}, (
+        spiked.launch.result.stderr
+    )
+    lines = spiked.log.splitlines()
+    assert len([line for line in lines if spiked.discarded in line]) == 1, spiked.log
+    assert spiked.discarded not in spiked.remote, spiked.remote
+    assert spiked.another not in spiked.log, spiked.log
+    assert spiked.another in spiked.remote, spiked.remote
+
+
+def test_a_spike_branch_the_discard_refuses_is_kept_and_named_before_the_follow_up_run(
+    spiked: Spiked,
+) -> None:
+    lines = spiked.log.splitlines()
+    named = [index for index, line in enumerate(lines) if spiked.refused in line]
+    assert named, spiked.log
+    assert spiked.refused in spiked.remote, spiked.remote
+    launched = [index for index, line in enumerate(lines) if LAUNCHED.match(line)]
+    assert len(launched) == 1, spiked.log
+    assert max(named) < launched[0], spiked.log
 
 
 def test_the_hooks_output_reaches_the_attached_launch_and_the_results_view(
@@ -801,9 +958,82 @@ def test_the_success_hook_exits_with_the_recipes_status_when_the_recipe_refuses(
     ran = _hook(tmp_path, environment)
 
     assert ran.returncode != 0, ran.stdout + ran.stderr
+    # The plan's spike branches cannot be found for a run with no record either; the hook says
+    # so, discards nothing, and still runs the recipe.
+    lines = ran.stdout.splitlines()
+    unread = [
+        index
+        for index, line in enumerate(lines)
+        if "run-ended: the plan of run refused could not be read from 'onepipeline status', "
+        "so no spike branch was discarded" in line
+    ]
+    recipe = [index for index, line in enumerate(lines) if "'just follow-ups refused'" in line]
+    assert unread and recipe and unread[0] < recipe[0], ran.stdout
     assert "but 'just follow-ups refused' exited" in ran.stdout, ran.stdout
     assert "so no follow-up run was launched" in ran.stdout, ran.stdout
     assert not (tmp_path / "runs" / "refused-follow-ups").exists()
+
+
+def test_a_discard_that_fails_is_named_and_the_follow_up_recipe_still_runs(
+    drafted_nothing: Ended, tmp_path: Path
+) -> None:
+    """The engine's discard failing outright — its registry no directory — keeps every branch,
+    names the command that discards them, and leaves the follow-up recipe to run after it."""
+    bench, run = drafted_nothing.bench, drafted_nothing.hooked.run
+    not_a_registry = tmp_path / "not-a-registry"
+    not_a_registry.write_text("", encoding="utf-8")
+
+    ran = subprocess.run(  # noqa: S603 - the script under test, spawned as the engine spawns it
+        [str(RUN_ENDED)],
+        cwd=REPO_ROOT,
+        env=bench.environment
+        | {
+            "ONEPIPELINE_HOOK": "success",
+            "ONEPIPELINE_RUN_ID": run,
+            "ONEPIPELINE_RUN_ROOT": str(bench.runs / run),
+            "ONEVCS_HOME": str(not_a_registry),
+        },
+        input="",
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+        check=False,
+    )
+    try:
+        lines = ran.stdout.splitlines()
+        failed = [
+            index
+            for index, line in enumerate(lines)
+            if line.startswith(
+                f"run-ended: 'onepipeline unpublished --project {_group(bench, run)}-spikes "
+                "--discard' exited "
+            )
+            and "'just unpublished --project" in line
+        ]
+        recipe = [
+            index
+            for index, line in enumerate(lines)
+            if f"just follow-ups {run}" in line or "holds no follow-up drafts" in line
+        ]
+        assert failed and recipe and failed[0] < recipe[0], ran.stdout + ran.stderr
+    finally:
+        launched = [path.name for path in bench.runs.glob(f"{run}{FOLLOW_UPS_SUFFIX}*")]
+        _stop(bench, *launched)
+
+
+def _group(bench: Bench, run: str) -> str:
+    """The plan a run was launched from, as `onepipeline status` records its group."""
+    shown = subprocess.run(  # noqa: S603 - this checkout's real engine wrapper
+        [str(REPO_ROOT / "scripts" / "onepipeline.sh"), "status", run, "--json"],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    return str(json.loads(shown.stdout)["group"])
 
 
 class Reason(NamedTuple):

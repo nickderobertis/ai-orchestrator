@@ -94,7 +94,6 @@
       "{workspaceRoot}/templates/follow-ups.md.j2",
       "{workspaceRoot}/templates/follow-up-step.md.j2",
       "{workspaceRoot}/templates/follow-up-task.md.j2",
-      "{workspaceRoot}/templates/follow-up-comments.md.j2",
       "{workspaceRoot}/templates/follow-up-feedback.md.j2",
       "{workspaceRoot}/templates/plan-task.md.j2",
       "{workspaceRoot}/templates/plan-task-budgets.md.j2",

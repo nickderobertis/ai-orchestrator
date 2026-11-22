@@ -21,15 +21,12 @@ One sequence on one bench (`planning_bench`), every step through the real recipe
    once the review or approval is recorded again.
 4. Every launch the gate accepts in 2 and 3 ends with a failed node — every worker turn lost
    at the doubled provider — so the failure hook runs, no success branch fires, and the
-   spike branch is still preserved after them. The plan's next launches succeed, its
-   reviews standing across each settlement's write-back, and each fires
-   the real success hook in a launch environment that fails one of its discard's reads — the
-   plan's project unreadable, the preserved branches unlistable, the discard refused for a
-   branch checked out with an edit — keeping the branch and saying how to discard it. The
-   last, launched as it is, discards the spike branch (gone from the origin and from
-   `onepipeline unpublished`) while a branch preserved by a node of another project is kept.
-   That order is forced: a run that succeeds marks the board's tasks done, so a later launch
-   of the same copy dispatches nothing and could not fail.
+   spike branch is still preserved after them. The plan's next launch succeeds, and its
+   success hook discards the spike branch (gone from the origin and from `onepipeline
+   unpublished`) while a branch preserved by a node of another project is kept: the
+   board copy's run is grouped under its authoring plan, whose `<plan>-spikes` project's
+   run preserved it. What the hook does with a branch the discard refuses is
+   `tests/run_end_hooks/`'s journey.
 
 Human items go to the bench's `humans` local source, the plans to its `authoring` and
 `board` local sources, follow-up drafts to an empty local drafts root, and every `onevcs`
@@ -40,7 +37,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -71,7 +67,6 @@ from planning_bench import (
     status,
     store,
     store_json,
-    store_setting,
 )
 from scratch_identity import GIT_IDENTITY, Identity, onevcs_in, seeded
 from waits import timeout as e2e_timeout
@@ -98,7 +93,7 @@ PLANNING_NODES = [
     "approve-design",
 ]
 #: The project whose run another branch is preserved under: titled as a plan's spikes project
-#: is, so its run's id is one the success hook has to read the project of before keeping it.
+#: is, so its run's id reads like this plan's spikes run and only its group tells them apart.
 OTHER_PROJECT = "authoring:another-plan-spikes"
 #: How long the plan recipe may take to return.
 SETTLE_SECONDS = 900.0
@@ -147,11 +142,6 @@ class Sequence(NamedTuple):
     failed_log: str
     remote_after_failure: frozenset[str]
     unpublished_after_failure: list[dict[str, object]]
-    hooked_unreadable_project: str
-    hooked_unlistable_branches: str
-    hooked_unreclaimable: str
-    hooked_unreadable_spikes_run: str
-    remote_after_hooks: frozenset[str]
     succeeded: Launch
     success_log: str
     remote_after_success: frozenset[str]
@@ -536,50 +526,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     remote_after_failure = _remote_branches(identity)
     unpublished_after_failure = _unpublished(bench_)
 
-    # The plan's next launches succeed — the first does the work and marks the board copy's
-    # tasks done, so each after it settles at once, its review standing because the review
-    # leaves the settlement write-back's keys out — and each fires the real success hook,
-    # launched in an environment that fails one of its discard's reads in turn: the plan's
-    # project unreadable from an empty authoring root, the preserved branches unlistable
-    # from a registry that is no directory, the discard refused for a branch checked out
-    # with an edit, and the spikes run's project unreadable with its record moved aside.
-    # Each keeps the spike branch; the last, launched as it is, discards it.
-    empty_store = tmp / "empty-store"
-    empty_store.mkdir()
-    unreadable = _launch(
-        bench_,
-        copy,
-        {**bench_.environment, store_setting("authoring", "config.root"): str(empty_store)},
-    )
-    hooked_unreadable_project = _hook_log(bench_, unreadable.run, "success")
-    not_a_registry = tmp / "not-a-registry"
-    not_a_registry.write_text("", encoding="utf-8")
-    unlistable = _launch(bench_, copy, {**bench_.environment, "ONEVCS_HOME": str(not_a_registry)})
-    hooked_unlistable_branches = _hook_log(bench_, unlistable.run, "success")
-    # Checked out with an edit in the execution checkout, which `onevcs` refuses to
-    # discard before it touches anything; put back once the run has settled.
-    git("checkout", "-q", spike_branch, cwd=identity.execution)
-    (identity.execution / "unsaved.txt").write_text("an edit nobody committed\n", encoding="utf-8")
-    try:
-        unreclaimable = _launch(bench_, copy)
-    finally:
-        (identity.execution / "unsaved.txt").unlink()
-        git("checkout", "-q", "main", cwd=identity.execution)
-    hooked_unreclaimable = _hook_log(bench_, unreclaimable.run, "success")
-    # llmlint: ignore-block[tests_mirror_real_usage] The engine has no verb that removes or
-    # damages one run's record, and pointing the hook at another run store would fail its
-    # read of the main run before it reached the spikes run, so the spikes run's record is
-    # moved aside for one launch and put back; the hook and every read it makes are real.
-    aside = tmp / "spikes-run-aside"
-    (bench_.runs / spikes_run).rename(aside)
-    try:
-        unreadable_spikes_run = _launch(bench_, copy)
-    finally:
-        aside.rename(bench_.runs / spikes_run)
-    # llmlint: ignore-end[tests_mirror_real_usage]
-    hooked_unreadable_spikes_run = _hook_log(bench_, unreadable_spikes_run.run, "success")
-    remote_after_hooks = _remote_branches(identity)
-
+    # The plan's next launch succeeds, and its success hook discards the spike branch.
     succeeded = _launch(bench_, copy)
     success_log = _hook_log(bench_, succeeded.run, "success")
     remote_after_success = _remote_branches(identity)
@@ -618,11 +565,6 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         failed_log,
         remote_after_failure,
         unpublished_after_failure,
-        hooked_unreadable_project,
-        hooked_unlistable_branches,
-        hooked_unreclaimable,
-        hooked_unreadable_spikes_run,
-        remote_after_hooks,
         succeeded,
         success_log,
         remote_after_success,
@@ -791,58 +733,6 @@ def test_a_run_ending_with_a_failed_node_keeps_the_spike_branch(sequence: Sequen
     }
 
 
-BY_HAND = "'just reclaim-branch <branch> --repo <identity> --discard'"
-#: These runs draft nothing, so onefollowup reports their batch empty and the success hook
-#: relays the recipe's one line instead of launching a follow-up run.
-FOLLOW_UPS = "holds no follow-up drafts"
-#: The success hook's line when `just follow-ups` itself failed, naming the recipe.
-FOLLOW_UPS_REFUSED = re.compile(
-    r"but 'just follow-ups \S+' exited \d+, so no follow-up run was launched"
-)
-
-
-def test_an_unreadable_project_stops_the_discard_saying_so_and_follow_ups_still_run(
-    sequence: Sequence,
-) -> None:
-    logged = sequence.hooked_unreadable_project
-    assert "could not be read from the plan store, so no spike branch was discarded" in logged
-    assert BY_HAND in logged and FOLLOW_UPS in logged, logged
-
-
-def test_unlistable_branches_stop_the_discard_saying_so_and_follow_ups_still_run(
-    sequence: Sequence,
-) -> None:
-    logged = sequence.hooked_unlistable_branches
-    assert "the preserved branches could not be listed by 'onepipeline unpublished'" in logged
-    # The registry this case breaks leaves the run a hashed public id, its follow-up batch,
-    # which `onepipeline telemetry` resolves to no run, so the `batch_preparing` hook and
-    # `onefollowup snapshot` fail; the hook still reached `just follow-ups` and says so. Once
-    # the engine resolves a public id (drafted upstream as a follow-up), this asserts
-    # FOLLOW_UPS like its siblings.
-    assert BY_HAND in logged and FOLLOW_UPS_REFUSED.search(logged), logged
-
-
-def test_a_refused_discard_keeps_the_branch_saying_how_to_discard_it(sequence: Sequence) -> None:
-    logged = sequence.hooked_unreclaimable
-    assert f"spike branch {sequence.spike_branch} of " in logged, logged
-    assert "could not be discarded" in logged and FOLLOW_UPS in logged, logged
-    assert sequence.spike_branch in sequence.remote_after_hooks
-    assert sequence.other_branch in sequence.remote_after_hooks
-
-
-def test_a_spikes_run_whose_project_cannot_be_read_keeps_its_branch_saying_so(
-    sequence: Sequence,
-) -> None:
-    logged = sequence.hooked_unreadable_spikes_run
-    assert (
-        f"the project of run {sequence.spikes_run} could not be read from 'onepipeline status'"
-        in logged
-    ), logged
-    assert "so its preserved branches were kept" in logged and FOLLOW_UPS in logged, logged
-    assert "discarded the spike branches" not in logged, logged
-    assert sequence.spike_branch in sequence.remote_after_hooks
-
-
 def test_a_successful_run_discards_the_spike_branch_and_keeps_another_projects(
     sequence: Sequence,
 ) -> None:
@@ -850,6 +740,7 @@ def test_a_successful_run_discards_the_spike_branch_and_keeps_another_projects(
     assert settled["settlement"] == "complete", settled
     assert sequence.spike_branch in sequence.success_log, sequence.success_log
     assert "could not be read" not in sequence.success_log, sequence.success_log
+    assert sequence.other_branch not in sequence.success_log, sequence.success_log
     assert sequence.spike_branch not in sequence.remote_after_success
     branches = {str(row.get("branch")) for row in sequence.unpublished_after_success}
     assert sequence.spike_branch not in branches, branches

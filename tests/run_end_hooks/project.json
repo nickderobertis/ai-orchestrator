@@ -19,6 +19,7 @@
     "support-plan-store-client",
     "support-project-fixtures",
     "support-published-tools",
+    "support-scratch-identity",
     "support-short-state",
     "support-waits"
   ],

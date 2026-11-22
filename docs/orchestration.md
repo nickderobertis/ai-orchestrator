@@ -836,10 +836,10 @@ its base dependency kept; a fan-in no chain resolves is refused at `plan check`,
 dependency on another repository's spike orders only.
 
 **A spike branch is kept until the plan's main run succeeds**: the success hook,
-`scripts/run-ended.sh`, reads the run's plan (`onepipeline status`, `onetaskgraph project
-show`), lists what the plan's spikes run preserved with `onepipeline unpublished`, and
-discards each with `just reclaim-branch <branch> --repo <repository> --discard`, reporting
-each. A failed run keeps them for its retries and recovery, and so does a plan never
+`scripts/run-ended.sh`, reads the run's plan from `onepipeline status`, and the engine's
+`onepipeline unpublished --project <plan>-spikes --discard` discards every branch that
+project's runs preserved, one line each, keeping and naming any branch `onevcs` refuses. A
+failed run keeps them for its retries and recovery, and so does a plan never
 launched; `git ls-remote --heads origin '*/spike-*'` lists what is left from any machine.
 
 The published CLIs do not know that split and nothing here renames them to it.
@@ -1376,8 +1376,8 @@ onefollowup and launches it detached, or, for a batch `onefollowup snapshot` rep
 launches none and prints `batch <batch> of run <run> holds no follow-up drafts; no follow-up
 run was launched`; a run `just orchestrate` launched whose every node
 ended `done` has it launched for it by the success hook, and a manager types it for a run
-that ended any other way. `just follow-ups-answer-comments` runs onefollowup's comment pass
-as a plan in a flow, answering each person's comment on this host's tickets once, by the
+that ended any other way. `just follow-ups-answer-comments` runs onefollowup's comment pass,
+`onefollowup comments answer`, in a flow, answering each person's comment on this host's tickets once, by the
 batch that owns its ticket; `--dry-run` only gathers and reports. [Follow-ups are drafted,
 not surfaced](#follow-ups-are-drafted-not-surfaced) says what each does and how the hooks
 reach it.
@@ -2120,15 +2120,14 @@ launch and the drafting command export at onefollowup's environment layer,
 item's title and body in `.onepipeline/config.yaml` expand only what that context supplies.
 `tests/e2e/follow_ups/` holds settle running the hook and the engine raising the item.
 
-**Answering comments.** `just follow-ups-answer-comments` creates the `follow-up-comments`
-plan from `templates/follow-up-comments.md.j2` and runs it attached in a flow: `gather`
-(`onefollowup comments gather`) selects each person's comment for the batch owning its
-ticket; `answer` creates, for each batch `onefollowup comments launches` names, its one-node
-feedback plan from `templates/follow-up-feedback.md.j2` — the follow-up agent pointed at
-that batch's feedback file — and runs it attached in the same flow, failing when one fails;
-and `settle` (`onefollowup comments settle`) verifies every reply, sends every ticket change
-and moves the watermark. A run of each feedback plan is supervised like any run, its
-questions on its own channel. `--dry-run` runs only `onefollowup comments gather --dry-run`.
+**Answering comments.** `just follow-ups-answer-comments` runs `onefollowup comments
+answer` in a flow: it gathers each person's comment for the batch owning its ticket, runs the
+`comments.launch_command` `onefollowup.yaml` configures, `just follow-ups-answer-batch
+<batch> <feedback>`, once per batch, and settles only when every batch succeeded, exiting 1
+naming any batch that failed. That recipe creates the batch's one-node feedback plan from
+`templates/follow-up-feedback.md.j2` — the follow-up agent pointed at that batch's feedback
+file — and runs it attached, joining the same flow. A run of each feedback plan is
+supervised like any run, its questions on its own channel. `--dry-run` prints what `onefollowup comments gather --dry-run` prints.
 
 **A brief to pick up "accepted" follow-up tickets** means the items at the role
 onefollowup marks `selected` — `Todo` on the board — and nothing else; each node working

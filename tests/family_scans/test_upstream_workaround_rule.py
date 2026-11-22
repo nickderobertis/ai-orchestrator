@@ -195,6 +195,12 @@ RETIRED: dict[str, str] = {
         "`onepipeline publish-branch` / `repo-recover`, which the two landing recipes run "
         "through scripts/onepipeline.sh with every caller argument forwarded"
     ),
+    "templates/follow-up-comments.md.j2": (
+        "onefollowup 0.11.0+'s `comments answer`, which gathers, runs the configured "
+        "`comments.launch_command` (`just follow-ups-answer-batch`) once per owning batch and "
+        "settles only when every batch succeeded, run by `just follow-ups-answer-comments` in a "
+        "flow"
+    ),
 }
 
 

@@ -13,6 +13,7 @@ of it leaves is those programs'.
     scripted_agent.py verify <checkout> <batch> <new-draft-title> <evidence-draft-title> \
         <existing-item> <existing-root-cause>
     scripted_agent.py feedback <checkout> <batch>
+    scripted_agent.py file <checkout> <batch> <root-cause>
 
 It reads onefollowup's store from `ONEFOLLOWUP_STORE`, which the journey's launch exported
 and the dispatch inherited.
@@ -65,12 +66,14 @@ def witness(repository: str) -> str:
     return f"{repository} src/cursor.py:12 at {BASIS}"
 
 
-def _ticket(batch: str, repository: str, host: str, draft: str, title: str) -> str:
+def _ticket(
+    batch: str, repository: str, host: str, draft: str, title: str, cause: str = NEW_ROOT_CAUSE
+) -> str:
     """A ticket in onefollowup's shipped default shape: every part plain, a one-unit fix,
     prose-only evidence, and every value the priority and the board read in its record."""
     record = {
         "schema": 14,
-        "root_cause": NEW_ROOT_CAUSE,
+        "root_cause": cause,
         "repository": repository,
         "created_by_run": batch,
         "owning_runs": [batch],
@@ -233,6 +236,40 @@ def verify(checkout: Path, batch: str, new: str, evidence: str, item: str, cause
     _run(checkout, ["onefollowup", "check", "--batch", batch])
 
 
+def file(checkout: Path, batch: str, cause: str) -> None:
+    """File the batch's one draft as a ticket for root cause ``cause``, dismissing every
+    candidate `prepare` found for it."""
+    store = Path(os.environ["ONEFOLLOWUP_STORE"])
+    work = store / ".onefollowup"
+    answers = work / "dispositions" / f"{batch}.json"
+    held = json.loads(answers.read_text(encoding="utf-8"))
+    config = _run(checkout, ["onefollowup", "config", "show"])["config"]
+    assert isinstance(config, dict), config
+    (draft,) = held["drafts"]
+    repository = "github.com/nickderobertis/some-service"
+    tickets = work / "tasks" / batch / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+    (tickets / f"{cause}.md").write_text(
+        _ticket(batch, repository, str(config["host_label"]), draft, f"{cause} fails", cause),
+        encoding="utf-8",
+    )
+    _run(checkout, ["onefollowup", "ticket", "validate", "--batch", batch, cause])
+    _run(checkout, ["onefollowup", "ticket", "copy", "--batch", batch, cause])
+    found = candidates((work / "tasks" / batch / "task.md").read_text(encoding="utf-8"))
+    held["dispositions"] = [
+        {
+            "draft": draft,
+            "disposition": "filed",
+            "root_causes": [cause],
+            "detail": "Verified at the basis.",
+            "kind": "root-cause",
+            "dismissed": dismissed(found, draft, None),
+        }
+    ]
+    answers.write_text(json.dumps(held, indent=2) + "\n", encoding="utf-8")
+    _run(checkout, ["onefollowup", "check", "--batch", batch])
+
+
 def _ticked(line: str, label: str) -> str | None:
     prefix = f"- {label}: `"
     return line[len(prefix) : -1] if line.startswith(prefix) and line.endswith("`") else None
@@ -306,11 +343,15 @@ def _reply_id(answer: object) -> str:
 
 
 def main(argv: list[str]) -> None:
-    mode, checkout = argv[0], Path(argv[1])
-    if mode == "verify":
-        verify(checkout, *argv[2:7])
-    else:
-        feedback(checkout, argv[2])
+    match argv:
+        case ["verify", checkout, *rest]:
+            verify(Path(checkout), *rest[:5])
+        case ["file", checkout, batch, cause]:
+            file(Path(checkout), batch, cause)
+        case [_, checkout, batch, *_]:
+            feedback(Path(checkout), batch)
+        case _:
+            raise SystemExit(f"scripted_agent.py: unrecognized arguments {argv}")
 
 
 if __name__ == "__main__":

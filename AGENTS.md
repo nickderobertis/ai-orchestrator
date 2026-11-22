@@ -618,8 +618,8 @@ success hook, launching the follow-up run.
 **A dispatch briefed to pick up accepted follow-up tickets selects `Todo` items only**, on
 either destination — `onefollowup config show` prints the status roles — and each node
 working one names it in the store's `delivers` field, one ticket per node. People's board
-comments are answered by `just follow-ups-answer-comments`, which runs onefollowup's comment
-pass as a plan in a flow; `--dry-run` only reports what it would gather.
+comments are answered by `just follow-ups-answer-comments`, which runs `onefollowup comments
+answer` in a flow; `--dry-run` only reports what it would gather.
 
 **`complete` waits for the follow-up run's settlement and the links you relayed**, or for
 the user's recorded answer to that question item. Hooks come with an engine adopted between runs, so a run
@@ -840,7 +840,7 @@ library verbs it calls; the host-install rules are onevcs's, from `config/onevcs
 - `scripts/plan-attestation-check.sh` — `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onepipeline template resolve`, `onetaskgraph project attestation check` (`--not-status`, `--state`), `onetaskgraph document list` and `onetaskgraph document attestation check`.
 - `scripts/spike-records.sh` — the spike records and the flows' spikes run: `onetaskgraph task attest`, `onepipeline plan writeback-keys`, `onepipeline start` and `onepipeline watch`, its wait an interim workaround its header states.
 - `scripts/spike-evidence-check.sh` — the spike-evidence check: `onetaskgraph project attestation check`.
-- `scripts/run-ended.sh` — its spike-discard lines: `onepipeline status`, `onetaskgraph project show`, `onepipeline unpublished` and `just reclaim-branch --discard`.
+- `scripts/run-ended.sh` — its spike-discard lines: `onepipeline status` and `onepipeline unpublished --project --discard`.
 - `justfile` — the recipes `plan`, `refresh-plan`, `finish-plan`, `check-plan`, `review-plan`, `copy-plan`, `approve-design` and `spike-unaffected`: `onetaskgraph project create`, `project show`, `project copy`, `task list`, `task update-many`, `task deps`, `task update`, `document list` and `document attest`, `llmlint rules`, and `onepipeline flow run`, `start`, `plan check`, `plan writeback-keys`, `template resolve`, `attest` and `adopt`, and `scripts/review-plan-item.sh` and `scripts/spike-records.sh`.
 
 Nothing else under `orchestrator/` or `scripts/` serves planning, and

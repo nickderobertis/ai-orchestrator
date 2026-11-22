@@ -137,7 +137,7 @@ allowed_tools = [
 
     # The `uv run` forms AGENTS.md tells a manager to run, and no interpreter-wide one.
     "Bash(uv run --no-sync onefollowup config show)",
-    # llmlint: ignore-block[least_privilege_grants] `just follow-up`, `just follow-ups`, `just follow-ups-answer-comments` and `node_modules/.bin/onepipeline supersessions`: each suffix is only the run, file or flag the one verb names, and the verb bounds it — `follow-up` records one unverified draft against its run, `follow-ups` and `follow-ups-answer-comments` create a plan from a template and launch it through the engine's ledger, and `supersessions` reads the named run's journal and with `--record` records only its superseded branches.
+    # llmlint: ignore-block[least_privilege_grants] `just follow-up`, `just follow-ups`, `just follow-ups-answer-comments` and `node_modules/.bin/onepipeline supersessions`: each suffix is only the run, file or flag the one verb names, and the verb bounds it — `follow-up` records one unverified draft against its run, `follow-ups` creates a plan from a template and launches it through the engine's ledger, `follow-ups-answer-comments` runs `onefollowup comments answer`, whose per-batch feedback plans launch the same way, and `supersessions` reads the named run's journal and with `--record` records only its superseded branches.
     "Bash(just follow-up:*)",
     "Bash(just follow-ups:*)",
     "Bash(just follow-ups-answer-comments:*)",

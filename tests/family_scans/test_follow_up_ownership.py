@@ -52,7 +52,8 @@ WRAPPERS: dict[str, frozenset[str]] = {
     ),
     "recipe:follow-up": frozenset(),
     "recipe:follow-ups": LAUNCH | {"onefollowup", "jq"},
-    "recipe:follow-ups-answer-comments": LAUNCH | {"onefollowup", "jq"},
+    "recipe:follow-ups-answer-comments": LAUNCH | {"onefollowup"},
+    "recipe:follow-ups-answer-batch": LAUNCH,
 }
 #: `scripts/run-ended.sh`'s success branch runs `just follow-ups`, so it is a wrapper by
 #: what it calls rather than by what it touches; it is named for that reason.
