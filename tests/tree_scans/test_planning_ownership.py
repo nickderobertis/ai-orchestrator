@@ -146,7 +146,8 @@ SHARED: dict[str, Shared] = {
         "the engine wrapper every verb goes through: the pinned binary, the template root, "
         "the acting session and the launch config",
         matches=(
-            "it defaults `plan check` to `--require-rendered true`, the engine's own "
+            "it gives `plan check` the `--require-rendered` answer its project launches "
+            "under — `false` for a spikes project, `true` for every other — the engine's own "
             "rendered-only check, which a `start` reads from the launch config instead"
         ),
     ),

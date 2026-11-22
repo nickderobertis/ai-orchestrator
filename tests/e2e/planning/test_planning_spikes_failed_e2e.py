@@ -59,6 +59,7 @@ def failed(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Ite
         tmp,
         oneharness_bin,
         "e2e-planning-spikes-failed",
+        rendered_only_as_configured=True,
         ONEVCS_HOME=str(identity.home),
         **identity.environment,
     )

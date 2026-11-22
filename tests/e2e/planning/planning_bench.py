@@ -121,12 +121,33 @@ def checkout_copy(destination: Path) -> Path:
     return destination
 
 
-def bench(tmp: Path, oneharness_bin: str, session: str, **extra: str) -> Bench:
-    """A bench in ``tmp``: a checkout copy and an environment launching into it."""
+#: The engine's variable beneath `--require-rendered`, which `tests/conftest.py` exports
+#: `false` for the session's hand-written fixture plans.
+REQUIRE_RENDERED_ENV = "ONEPIPELINE_REQUIRE_RENDERED"
+
+
+def bench(
+    tmp: Path,
+    oneharness_bin: str,
+    session: str,
+    *,
+    rendered_only_as_configured: bool = False,
+    **extra: str,
+) -> Bench:
+    """A bench in ``tmp``: a checkout copy and an environment launching into it.
+
+    ``rendered_only_as_configured`` removes the session's `ONEPIPELINE_REQUIRE_RENDERED`
+    opt-out from the bench, so every plan check and launch on it reads the rendered-only
+    answer this host configures — `scripts/onepipeline.sh`'s per-project one for a `plan
+    check`, the launch config's for a `start` — as a journey creating or checking a spikes
+    project must.
+    """
     checkout = checkout_copy(tmp / "checkout")
     environment = dict(os.environ)
     for name in INHERITED:
         environment.pop(name, None)
+    if rendered_only_as_configured:
+        environment.pop(REQUIRE_RENDERED_ENV, None)
     runs, board = tmp / "runs", tmp / BOARD
     board.mkdir()
     environment["CLAUDE_CODE_SESSION_ID"] = session

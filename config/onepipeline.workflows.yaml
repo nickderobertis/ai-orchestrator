@@ -5,6 +5,11 @@
 # nothing has reviewed yet, which is the point of it), no plan-edit hook, no run-end hook
 # and no drafting graph. A planning run's tasks are rendered by the store from this host's
 # `templates/planning/` files rather than resolved by name, so `require_rendered` is off.
+# This is the authoritative value for a spikes project, which `scripts/spike-records.sh`
+# launches under this document; `plan check` reads no launch config, so
+# `scripts/onepipeline.sh` restates it as `--require-rendered false` for a project whose own
+# record carries the store's provenance naming `templates/planning/spikes.md.j2`, and
+# `--require-rendered true` for every other project.
 # Paths are relative to the launch directory, this checkout's root.
 schema_version: 14
 require_rendered: false

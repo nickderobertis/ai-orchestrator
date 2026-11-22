@@ -3,7 +3,9 @@
 One sequence on one bench (`planning_bench`), every step through the real recipe:
 
 1. `just plan <brief> board` drafts a two-task plan and, from `templates/planning/spikes.md.j2`,
-   its spikes project with two lifecycle spikes against a scratch identity. The planning
+   its spikes project with two lifecycle spikes against a scratch identity, which the draft's
+   `just check-plan` accepts — the bench runs with `ONEPIPELINE_REQUIRE_RENDERED` removed,
+   so that check and every launch read the rendered-only answer this host configures. The planning
    run's `spikes` step starts the spikes run in the same flow; with nothing attested, its
    spikes dispatch while the brief writer, held unfinished, still runs. Released, the
    writer raises one `check-in` naming the brief, the plan and each spike, and no human
@@ -49,9 +51,18 @@ from typing import NamedTuple
 
 import pytest
 from conftest import git
-from drafting import DRAFT_MARKER, FINALIZE_MARKER, SPIKE_MARKER, SPIKES, brief, drafting
+from drafting import (
+    DRAFT_MARKER,
+    FINALIZE_MARKER,
+    SPIKE_MARKER,
+    SPIKES,
+    brief,
+    drafting,
+    spikes_check_record,
+)
 from planning_bench import (
     BOARD,
+    REQUIRE_RENDERED_ENV,
     Bench,
     bench,
     just,
@@ -107,6 +118,7 @@ class Sequence(NamedTuple):
     identity: Identity
     native: str
     planned: subprocess.CompletedProcess[str]
+    spikes_checked: str
     checklist: str
     planning_run: str
     spikes_run: str
@@ -358,6 +370,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         tmp,
         oneharness_bin,
         "e2e-planning-spikes",
+        rendered_only_as_configured=True,
         ONEVCS_HOME=str(identity.home),
         **identity.environment,
     )
@@ -430,6 +443,8 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     planned = subprocess.CompletedProcess(
         planning_process.args, planning_process.returncode, out.read_text(), err.read_text()
     )
+    checked_record = spikes_check_record(bench_)
+    spikes_checked = checked_record.read_text("utf-8") if checked_record.exists() else ""
     planning_run = _only_run(bench_, "-planning")
     spikes = status(bench_, spikes_run)
     spikes_items = _items(bench_, spikes_run)
@@ -574,6 +589,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         identity,
         native,
         planned,
+        spikes_checked,
         checklist.stdout,
         planning_run,
         spikes_run,
@@ -646,6 +662,17 @@ def test_the_drafts_dispatched_task_carries_the_checklist_llmlint_printed(
     rules = sequence.checklist.strip()
     assert "plan_criteria_draft_needs_its_grant" in rules, rules
     assert rules in str(drafts[0]["prompt"]), str(drafts[0]["prompt"])[-2000:]
+
+
+def test_the_drafted_spikes_project_passes_check_plan_as_this_host_configures_it(
+    sequence: Sequence,
+) -> None:
+    """The draft's `just check-plan` of its spikes project, `spike-brief` member and all, ran
+    with `ONEPIPELINE_REQUIRE_RENDERED` absent and was accepted."""
+    assert REQUIRE_RENDERED_ENV not in sequence.bench.environment
+    checked = sequence.spikes_checked
+    assert checked.rstrip().endswith("exit 0"), checked
+    assert f"authoring:{sequence.native}-spikes: accepted" in checked, checked
 
 
 def test_the_spikes_run_starts_in_the_planning_runs_flow(sequence: Sequence) -> None:

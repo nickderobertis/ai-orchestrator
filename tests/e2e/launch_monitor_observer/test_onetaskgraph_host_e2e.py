@@ -3735,3 +3735,375 @@ def test_a_hand_written_plan_is_refused_by_check_plan_and_at_launch_unless_the_c
 # llmlint: ignore-end[tests_mirror_real_usage]
 # llmlint: ignore-end[e2e_not_mocked]
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker, expensive_tests_stay_behind_their_own_edge]  # noqa: E501
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task placing these journeys requires them beside `just check-plan`'s hand-written-plan journey in this module, reusing its rendering helpers; they drive the same recipe, engine and plan store under the same `launchMonitorObserverWorkspace` edge that journey already pays, so a project of their own would key the same files.  # noqa: E501
+#: The rules the engine's rendered-only check refuses a node by, verbatim from the pinned
+#: onepipeline's `src/templates.rs` (`RULE_NO_PROVENANCE`, `RULE_BODY_CHANGED`,
+#: `RULE_FOREIGN`), so a refusal is asserted by the rule it names and nothing more.
+RULE_NO_PROVENANCE = "not rendered: no provenance"
+RULE_BODY_CHANGED = "body differs from its rendering"
+RULE_FOREIGN = "not rendered by onepipeline"
+#: The launch documents a spikes project and every other plan launch under, whose
+#: `require_rendered` `scripts/onepipeline.sh` restates for a `plan check`.
+WORKFLOWS_LAUNCH_CONFIG = REPO_ROOT / "config" / "onepipeline.workflows.yaml"
+PLAN_LAUNCH_CONFIG = REPO_ROOT / "config" / "onepipeline.launch.yaml"
+
+
+def _requires_rendered(document: Path) -> object:
+    """The `require_rendered` a launch document states, which these journeys hold the
+    wrapper's restatement to: an outcome asserted below is the one this value implies."""
+    stated = yaml.safe_load(document.read_text(encoding="utf-8"))
+    assert isinstance(stated, dict), document
+    return stated.get("require_rendered")
+
+
+#: This host's spikes template, which `scripts/onepipeline.sh` tells a spikes project by.
+SPIKES_TEMPLATE = REPO_ROOT / "templates" / "planning" / "spikes.md.j2"
+#: The node every refusal case's one task is planned under.
+CHECKED_NODE = "the-checked-task"
+#: The answers every `plan-task` rendering here is given.
+CHECKED_ANSWERS = {
+    "what": "Add the health route and the test that drives it.",
+    "why": "Operators cannot tell whether the service is up.",
+    "acceptance_criteria": ["A request-level test drives the route end to end."],
+}
+
+
+class _Unrendered(StrEnum):
+    """How a refusal case's one task departs from being its `plan-task` rendering."""
+
+    HAND_WRITTEN = "hand-written"
+    HAND_EDITED = "hand-edited"
+    FOREIGN = "foreign"
+
+
+#: The rule the engine refuses each departure by.
+UNRENDERED_RULES = {
+    _Unrendered.HAND_WRITTEN: RULE_NO_PROVENANCE,
+    _Unrendered.HAND_EDITED: RULE_BODY_CHANGED,
+    _Unrendered.FOREIGN: RULE_FOREIGN,
+}
+
+
+def _created(made: subprocess.CompletedProcess[str]) -> str:
+    """The qualified id a store create printed first, refused by name when it failed."""
+    assert made.returncode == 0, made.stdout + made.stderr
+    return made.stdout.split()[0]
+
+
+def _store_verb(
+    environment: Mapping[str, str], *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    """One verb of the pinned plan store, as a planner runs it from this checkout."""
+    return subprocess.run(
+        [str(ONETASKGRAPH_BIN), *arguments, "--no-interactive"],
+        cwd=REPO_ROOT,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+
+def _spikes_project(environment: Mapping[str, str], native: str) -> str:
+    """`authoring:<native>-spikes` created from this host's spikes template, as the draft
+    creates it, its `spike-brief` member with it; answers its qualified id."""
+    return _created(
+        _store_verb(
+            environment,
+            "project",
+            "create",
+            AUTHORING_SOURCE,
+            "--id",
+            f"{native}-spikes",
+            "--title",
+            f"{native} spikes",
+            "--template",
+            str(SPIKES_TEMPLATE),
+            "--var",
+            f"plan={AUTHORING_SOURCE}:{native}",
+            "--var",
+            f"native={native}",
+            "--metadata",
+            "onepipeline.schema_version=3",
+        )
+    )
+
+
+def _described_project(environment: Mapping[str, str], native: str) -> str:
+    """`authoring:<native>` created from `plan-description`, as a planner creates a plan."""
+    made = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -euo pipefail; onepipeline template resolve plan-description --json | "
+            'onetaskgraph project create "$@" --template-loader - --no-interactive',
+            "described-project",
+            AUTHORING_SOURCE,
+            "--id",
+            native,
+            "--title",
+            native,
+            "--var",
+            "overview=Add a health route.",
+            "--metadata",
+            "onepipeline.schema_version=3",
+            "--metadata",
+            'onepipeline.goal={"text": "Give the service a health route"}',
+        ],
+        cwd=REPO_ROOT,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return _created(made)
+
+
+def _task_flags(project: str, title: str) -> list[str]:
+    return [
+        "create",
+        AUTHORING_SOURCE,
+        "--project",
+        project,
+        "--title",
+        title,
+        f"--metadata=onepipeline.id={json.dumps(CHECKED_NODE)}",
+        '--metadata=onepipeline.persona="engineer"',
+    ]
+
+
+def _plan_task(tmp_path: Path, environment: Mapping[str, str], project: str) -> str:
+    """One task of ``project`` rendered from `plan-task`, the way a planner creates one."""
+    answers = tmp_path / f"{project.replace(':', '-')}.answers.json"
+    answers.write_text(json.dumps(CHECKED_ANSWERS), encoding="utf-8")
+    return _created(
+        _through_the_template(
+            environment,
+            *_task_flags(project, "feat: add the health route"),
+            "--template-loader",
+            "-",
+            "--answers",
+            str(answers),
+            "--no-interactive",
+        )
+    )
+
+
+def _unrendered_task(
+    tmp_path: Path, root: Path, environment: Mapping[str, str], project: str, how: _Unrendered
+) -> None:
+    """Add to ``project`` one task that is not its `plan-task` rendering, in the way ``how``."""
+    title = "feat: add the health route"
+    match how:
+        case _Unrendered.HAND_WRITTEN:
+            body = tmp_path / "hand-written.md"
+            body.write_text(
+                "## What\n\nAdd the health route.\n\n## Why\n\nOperators need it.\n\n"
+                "## Acceptance criteria\n\n- A request-level test drives the route.\n",
+                encoding="utf-8",
+            )
+            _created(
+                _store_verb(
+                    environment, "task", *_task_flags(project, title), "--body-file", str(body)
+                )
+            )
+        case _Unrendered.HAND_EDITED:
+            record = _record_of(root, _plan_task(tmp_path, environment, project))
+            stated = str(CHECKED_ANSWERS["why"])
+            text = record.read_text(encoding="utf-8")
+            assert stated in text, text
+            # llmlint: ignore[tests_mirror_real_usage] A hand edit of the stored body is the departure under test, and editing the record file is how a person makes one: no store verb changes a rendered body without re-rendering it.  # noqa: E501
+            record.write_text(text.replace(stated, "Edited by hand after rendering.", 1), "utf-8")
+        case _Unrendered.FOREIGN:
+            template = tmp_path / "foreign-task.md.j2"
+            template.write_text(
+                "---\nonetaskgraph_template: 1\ndescription: A task template of this test's own.\n"
+                "variables:\n  what:\n    description: What the task does.\n    type: text\n"
+                "    required: true\n---\n"
+                "## What\n\n{{ what }}\n\n## Why\n\nOperators need it.\n\n"
+                "## Acceptance criteria\n\n- A request-level test drives the route.\n",
+                encoding="utf-8",
+            )
+            _created(
+                _store_verb(
+                    environment,
+                    "task",
+                    *_task_flags(project, title),
+                    "--template",
+                    str(template),
+                    "--var",
+                    "what=Add the health route.",
+                )
+            )
+
+
+def _refused_naming(checked: subprocess.CompletedProcess[str], rule: str) -> None:
+    """``checked`` refused by ``rule`` for :data:`CHECKED_NODE`: a plan's launch document
+    holds it to its rendering, which the wrapper's `true` restates."""
+    assert _requires_rendered(PLAN_LAUNCH_CONFIG) is True, PLAN_LAUNCH_CONFIG
+    reported = checked.stdout + checked.stderr
+    assert checked.returncode == 1, reported
+    assert f"node '{CHECKED_NODE}'" in reported, reported
+    assert rule in reported, reported
+
+
+def test_a_spikes_project_from_this_hosts_template_passes_check_plan_as_configured(
+    tmp_path: Path,
+) -> None:
+    """With `ONEPIPELINE_REQUIRE_RENDERED` absent, `just check-plan` accepts a spikes project
+    created from `templates/planning/spikes.md.j2` — its `spike-brief` member rendered from a
+    host template rather than resolved by name — holding a `plan-task`-rendered spike, while
+    a caller's own `--require-rendered true`, or the exported variable, still refuses it."""
+    root = tmp_path / "authoring"
+    root.mkdir()
+    environment = _rendering_environment(root)
+    assert REQUIRE_RENDERED_ENV not in environment
+    spikes = _spikes_project(environment, "health")
+    _plan_task(tmp_path, environment, spikes)
+
+    checked = _recipe(environment, "check-plan", spikes)
+    strict = subprocess.run(
+        [
+            "scripts/plan-store.sh",
+            "scripts/onepipeline.sh",
+            "plan",
+            "check",
+            spikes,
+            "--require-rendered",
+            "true",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(600),
+        check=False,
+    )
+    exported = _recipe({**environment, REQUIRE_RENDERED_ENV: "true"}, "check-plan", spikes)
+
+    # The spikes run launches under the workflows document, so its check is accepted only
+    # while that document leaves the rendered-only check off.
+    assert _requires_rendered(WORKFLOWS_LAUNCH_CONFIG) is False, WORKFLOWS_LAUNCH_CONFIG
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert f"{spikes}: accepted" in checked.stdout, checked.stdout
+    for said in (strict, exported):
+        reported = said.stdout + said.stderr
+        assert said.returncode == 1, reported
+        assert "node 'spike-brief'" in reported and RULE_FOREIGN in reported, reported
+
+
+@pytest.mark.parametrize("how", list(_Unrendered), ids=str)
+def test_a_plan_project_is_refused_by_check_plan_for_a_task_that_is_not_its_rendering(
+    tmp_path: Path, how: _Unrendered
+) -> None:
+    """With `ONEPIPELINE_REQUIRE_RENDERED` absent, `just check-plan` refuses an ordinary plan
+    project holding one task that is hand-written, hand-edited after its `plan-task`
+    rendering, or rendered from a template of this test's own, by the engine's rule for it."""
+    root = tmp_path / "authoring"
+    root.mkdir()
+    environment = _rendering_environment(root)
+    assert REQUIRE_RENDERED_ENV not in environment
+    plan = _described_project(environment, "health")
+    _unrendered_task(tmp_path, root, environment, plan, how)
+
+    _refused_naming(_recipe(environment, "check-plan", plan), UNRENDERED_RULES[how])
+
+
+@pytest.mark.parametrize("how", [_Unrendered.HAND_EDITED, _Unrendered.FOREIGN], ids=str)
+def test_a_project_only_named_like_a_spikes_project_is_checked_strictly(
+    tmp_path: Path, how: _Unrendered
+) -> None:
+    """A project named `<x>-spikes` but created from `plan-description` rather than this
+    host's spikes template is no spikes project: `just check-plan`, with
+    `ONEPIPELINE_REQUIRE_RENDERED` absent, refuses it by the same rule a plan is refused by."""
+    root = tmp_path / "authoring"
+    root.mkdir()
+    environment = _rendering_environment(root)
+    assert REQUIRE_RENDERED_ENV not in environment
+    named = _described_project(environment, "health-spikes")
+    assert named.endswith("-spikes"), named
+    _unrendered_task(tmp_path, root, environment, named, how)
+
+    _refused_naming(_recipe(environment, "check-plan", named), UNRENDERED_RULES[how])
+
+
+#: The rest of the planning and finishing flows' `check` step after its project, the second
+#: form of `plan check` this host's own callers produce beside `just check-plan`'s.
+FLOW_CHECK_STEP = (
+    "--check",
+    "orchestrator/host_adoption_check.py",
+    "--check",
+    "scripts/spike-evidence-check.sh",
+)
+#: `plan check` forms no caller of this host produces, each spelled around ``{project}``:
+#: an option before the project, an option after it that is no `--check`, and none at all.
+UNRECOGNIZED_FORMS = {
+    "option-first": ("--json", "{project}"),
+    "other-option-after": ("{project}", "--check", "orchestrator/host_adoption_check.py", "--json"),
+    "project-alone": ("{project}",),
+}
+
+
+def _plan_check(
+    environment: Mapping[str, str], *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    """`scripts/onepipeline.sh plan check`, through the store wrapper the recipe runs it in."""
+    return subprocess.run(
+        ["scripts/plan-store.sh", "scripts/onepipeline.sh", "plan", "check", *arguments],
+        cwd=REPO_ROOT,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(600),
+        check=False,
+    )
+
+
+def test_the_flows_check_step_form_relaxes_a_spikes_project_as_check_plan_does(
+    tmp_path: Path,
+) -> None:
+    """With `ONEPIPELINE_REQUIRE_RENDERED` absent, the planning flow's `check` step, as its
+    template spells it, accepts a spikes project and refuses a plan's hand-written task."""
+    root = tmp_path / "authoring"
+    root.mkdir()
+    environment = _rendering_environment(root)
+    assert REQUIRE_RENDERED_ENV not in environment
+    spikes = _spikes_project(environment, "health")
+    _plan_task(tmp_path, environment, spikes)
+    plan = _described_project(environment, "ordinary")
+    _unrendered_task(tmp_path, root, environment, plan, _Unrendered.HAND_WRITTEN)
+
+    accepted = _plan_check({**environment, "ORCHESTRATOR_PLAN": spikes}, spikes, *FLOW_CHECK_STEP)
+    refused = _plan_check({**environment, "ORCHESTRATOR_PLAN": plan}, plan, *FLOW_CHECK_STEP)
+
+    assert _requires_rendered(WORKFLOWS_LAUNCH_CONFIG) is False, WORKFLOWS_LAUNCH_CONFIG
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert f"{spikes}: accepted" in accepted.stdout, accepted.stdout
+    _refused_naming(refused, RULE_NO_PROVENANCE)
+
+
+@pytest.mark.parametrize("form", UNRECOGNIZED_FORMS.values(), ids=UNRECOGNIZED_FORMS.keys())
+def test_a_plan_check_form_no_caller_here_produces_stays_strict_for_a_spikes_project(
+    tmp_path: Path, form: tuple[str, ...]
+) -> None:
+    """With `ONEPIPELINE_REQUIRE_RENDERED` absent, a `plan check` in a form this host's own
+    callers never produce keeps the strict check, so a spikes project is refused for its
+    `spike-brief` member exactly as a plan would be."""
+    root = tmp_path / "authoring"
+    root.mkdir()
+    environment = _rendering_environment(root)
+    assert REQUIRE_RENDERED_ENV not in environment
+    spikes = _spikes_project(environment, "health")
+    _plan_task(tmp_path, environment, spikes)
+
+    checked = _plan_check(environment, *(word.format(project=spikes) for word in form))
+
+    reported = checked.stdout + checked.stderr
+    assert checked.returncode == 1, reported
+    assert "node 'spike-brief'" in reported and RULE_FOREIGN in reported, reported
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

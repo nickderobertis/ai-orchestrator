@@ -592,14 +592,18 @@ def _test_plan_store_cache(tmp_path_factory: pytest.TempPathFactory) -> Iterator
 def _hand_written_fixture_plans() -> Iterator[None]:
     """Load this suite's hand-written fixture plans without `require_rendered`.
 
-    Every plan-loading launch `scripts/onepipeline.sh` makes names
-    `--require-rendered true` unless the caller named the flag or exported the engine's own
-    variable beneath it, and almost every journey here launches or checks a plan whose tasks
-    it wrote by hand, about something other than how a task is rendered. So the variable is
-    exported `false` for the session — the one place anything exports it — and the journeys
-    about rendering remove it from the environment they launch in, which is what makes them
-    prove the `true` default rather than this. Session scope and by mutating the
-    environment, for the reason the plan-store roots above give.
+    Every launch reads `require_rendered` from its launch config, and every `plan check`
+    `scripts/onepipeline.sh` runs names `--require-rendered false` for a spikes project —
+    one whose own record carries the store's provenance naming this checkout's
+    `templates/planning/spikes.md.j2` — and `--require-rendered true` for every other,
+    unless the caller named the flag or exported the engine's own variable beneath it.
+    Almost every journey here launches or checks a plan whose tasks it wrote by hand, about
+    something other than how a task is rendered. So the variable is exported `false` for the
+    session — the one place anything exports it — and the journeys about rendering, and the
+    planning journeys that create or check a spikes project, remove it from the environment
+    they run in, which is what makes them prove the wrapper's per-project answer rather than
+    this. Session scope and by mutating the environment, for the reason the plan-store roots
+    above give.
     """
     with pytest.MonkeyPatch.context() as patched:
         patched.setenv("ONEPIPELINE_REQUIRE_RENDERED", "false")

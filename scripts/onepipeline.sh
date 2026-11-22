@@ -58,6 +58,19 @@
 # For the same reason a launch carries `ORCHESTRATOR_FOLLOW_UP_DRAFT`, the command every
 # party drafts a non-blocking follow-up with.
 #
+# A `plan check` is given the rendered-only answer its project launches under, chosen per
+# project: `false` for a spikes project, which launches under
+# `config/onepipeline.workflows.yaml`, and `true` for every other, which launches under
+# `config/onepipeline.launch.yaml`. A spikes project is one whose own record, read from the
+# plan store, carries `onetaskgraph.template` provenance whose `template` is this checkout's
+# `templates/planning/spikes.md.j2`, absolute as the store records it; its name decides
+# nothing. That per-project injection is an interim workaround, restating the workflows
+# document's `require_rendered` here because `plan check` takes no `--launch-config`;
+# https://github.com/nickderobertis/onepipeline/issues/1782 retires it. Until then the
+# `plan check` journeys in `tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py`
+# read both documents' `require_rendered` and fail when either stops being the answer
+# injected here.
+#
 # Who is acting is `scripts/launcher-session.sh`'s to answer, sourced here and by
 # `scripts/telemetry-server.sh`, which hands the same answer to the read API so a
 # mutation from the browser is performed as the session that started the server.
@@ -245,10 +258,13 @@ if [ "${1:-} ${2:-}" = "flow run" ]; then
     fi
 fi
 
-# `plan check` defaults to `--require-rendered true`, which a `start` reads from its launch
-# config instead; `plan check` reads no launch config. A caller who names the flag, or
-# exports ONEPIPELINE_REQUIRE_RENDERED, keeps their answer — on a `start` as well, where
-# the engine lets either beat the document.
+# `plan check` reads no launch config, so it is given its project's answer, as the header
+# says, in the forms this host's own callers name it in. Any other form, a store read that
+# fails, or a record without the spikes template's provenance keeps `true`, so nothing
+# that goes wrong here weakens the check, and the engine's own load then reports a project
+# it cannot read. A caller who names the flag, or
+# exports ONEPIPELINE_REQUIRE_RENDERED, keeps their answer — on a `start` as well, where the
+# engine lets either beat the document.
 plan_loading_words=0
 case "${1:-} ${2:-}" in
     "start "*) plan_loading_words=1 ;;
@@ -270,8 +286,35 @@ if [ "$plan_loading_words" -eq 2 ] && [ -z "${ONEPIPELINE_REQUIRE_RENDERED:-}" ]
             --require-rendered | --require-rendered=*) named_require_rendered=true ;;
         esac
     done
+    # Only the forms this host's own callers produce are read: `just check-plan`'s and the
+    # planning and finishing flows' `check` steps, each `plan check <project>` followed by
+    # one or more `--check <path>` pairs. Any other form — an option before the project,
+    # any other option after it — leaves the project unread, which keeps `true`.
+    checked_project=""
+    if [ "$#" -ge 5 ] && [ "${3#-}" = "$3" ]; then
+        recognized_form=true
+        for ((check_index = 4; check_index <= $#; check_index += 2)); do
+            check_value_index=$((check_index + 1))
+            if [ "${!check_index}" != --check ] || [ "$check_value_index" -gt "$#" ] \
+                || [ "${!check_value_index#-}" != "${!check_value_index}" ]; then
+                recognized_form=false
+                break
+            fi
+        done
+        [ "$recognized_form" = false ] || checked_project=$3
+    fi
     if [ "$named_require_rendered" = false ]; then
-        set -- plan check --require-rendered true "${@:3}"
+        require_rendered=true
+        if [ -n "$checked_project" ]; then
+            spikes_template="${script_dir%/scripts}/templates/planning/spikes.md.j2"
+            # llmlint: ignore[tool_output_is_signal] A failed read is answered by keeping `true`, the strict check, and the engine's own load of the same project reports why the store could not read it, so its stderr here would only say it twice.
+            recorded_template=$("${script_dir%/scripts}/.venv/bin/onetaskgraph" project show "$checked_project" --json --no-interactive 2>/dev/null |
+                jq -r '.items[0].item.metadata["onetaskgraph.template"].template // empty' 2>/dev/null) || recorded_template=""
+            if [ "$recorded_template" = "$spikes_template" ]; then
+                require_rendered=false
+            fi
+        fi
+        set -- plan check --require-rendered "$require_rendered" "${@:3}"
     fi
 fi
 

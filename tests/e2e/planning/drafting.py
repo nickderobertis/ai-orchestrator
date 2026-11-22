@@ -140,19 +140,31 @@ def _spike_task(spikes: str, spike: str, repo: str, execution: str, definition: 
     )
 
 
+def spikes_check_record(bench: Bench) -> Path:
+    """Where the draft records its `just check-plan` of the spikes project it drafted:
+    the recipe's output, then an `exit <status>` line."""
+    return bench.tmp / "spikes-check.txt"
+
+
 def spikes_commands(
     native: str,
     repo: str,
     execution: str,
     spikes: tuple[str, ...],
     definitions: dict[str, str] | None = None,
+    *,
+    checked: Path,
 ) -> list[str]:
-    """The draft's extra commands: `authoring:<native>-spikes` from its template, its spikes.
+    """The draft's extra commands: `authoring:<native>-spikes` from its template, its spikes,
+    and the planner's `just check-plan` of that project, recorded at ``checked``.
 
-    ``definitions`` adds to a spike's `what` what else its definition asks, by spike id.
+    ``definitions`` adds to a spike's `what` what else its definition asks, by spike id. The
+    check's refusal is recorded rather than failing the draft, so a journey reads it from
+    ``checked`` beside everything else the run did.
     """
     plan = f"authoring:{native}"
     more = definitions or {}
+    record = shlex.quote(str(checked))
     return [
         f"{STORE} project create authoring --id {native}-spikes "
         f"--title {shlex.quote(plan_title(native) + ' spikes')} "
@@ -162,6 +174,8 @@ def spikes_commands(
             _spike_task(f"{plan}-spikes", spike, repo, execution, more.get(spike, ""))
             for spike in spikes
         ),
+        f"just check-plan {plan}-spikes > {record} 2>&1 && echo 'exit 0' >> {record} "
+        f'|| echo "exit $?" >> {record}',
     ]
 
 
@@ -226,7 +240,9 @@ def drafting(
     """
     draft = plan_commands(native)
     if spikes is not None:
-        draft += spikes_commands(native, *spikes, spike_ids, definitions)
+        draft += spikes_commands(
+            native, *spikes, spike_ids, definitions, checked=spikes_check_record(bench)
+        )
         mark(bench, SPIKE_BRIEF_MARKER, *spike_brief_commands(native, spike_ids, hold))
         for spike in spike_ids:
             mark(bench, SPIKES[spike].marker, *spike_work_commands(spike, hold))
