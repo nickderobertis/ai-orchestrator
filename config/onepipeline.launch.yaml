@@ -36,12 +36,11 @@ hook_timeout: 600
 # The graph a lifecycle change request's body is drafted by.
 pr_author_graph: graphs/pr-author.yaml
 # The launch gate: `scripts/plan-attestation-check.sh` refuses a plan unless every task the
-# launch loads (a withdrawn one it omits is not checked) and the project carry a
+# launch loads (one `done` or withdrawn by its own status is not checked) and the project carry a
 # `plan-review` attestation valid under the planner's current bar and
 # its design document a valid `design-approval`, each read with `onetaskgraph ...
-# attestation check`. It reads which plan from `ORCHESTRATOR_PLAN`, which
-# `scripts/orchestrate.sh` exports, because the engine's check document names no project.
-# `scripts/spike-evidence-check.sh`, reading the same variable, refuses a task built on spikes
+# attestation check`, the plan read from the check document's `project`.
+# `scripts/spike-evidence-check.sh`, reading the same `project`, refuses a task built on spikes
 # that changed after its spike evidence was recorded while those spikes did not.
 checks:
   - [scripts/plan-attestation-check.sh]

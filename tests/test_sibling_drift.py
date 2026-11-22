@@ -83,7 +83,6 @@ def _contradiction(tmp_path: Path) -> list[str]:
         {PRODUCER: declared_targets(checkout)},
         INSTALLED,
         frozenset(),
-        frozenset(),
     )
 
 

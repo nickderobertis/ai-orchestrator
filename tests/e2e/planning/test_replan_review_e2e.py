@@ -17,15 +17,15 @@ without the words presenting it as the run's applied record; `judging_codex.py` 
   reaches the reviewer verbatim after its task's body in a section presenting it as the run's
   applied record rather than a ruling of the plan, and the run's keys on the first plan are
   left as they were. New run-written values after a pass re-open nothing.
-* **Settled tasks are not reviewed.** A board-copied plan whose settlements live on its board
-  copy, and a plan with no board copy whose settlements sit on its own tasks. After the bar
-  moves, a task settled `done` is neither judged nor refused, whether its record covers the
-  whole run-written list, predates the list, its body was edited since, it was re-rendered
-  under a changed `plan-task` template, it has no record, or it carries the defect. Every
-  task not settled `done` is refused by the gate and judged — one whose authoring copy alone
-  says `done`, and one settled `done` and since reopened, among them — and the one carrying
-  the defect is refused, its project with it, until it is repaired; then the description is
-  attested with the settled defect beside it.
+* **Done tasks are not reviewed.** A board-copied plan whose statuses move on its board copy,
+  which the refresh `just review-plan` runs first brings in, and a plan with no board copy
+  whose own tasks are marked. After the bar moves, a task whose status is `done` is neither
+  judged nor refused, whether its record covers the whole run-written list, predates the
+  list, its body was edited since, it was re-rendered under a changed `plan-task` template,
+  it has no record, or it carries the defect. Every task not `done` is refused by the gate
+  and judged — one whose authoring copy alone said `done`, and one `done` and since reopened,
+  among them — and the one carrying the defect is refused, its project with it, until it is
+  repaired; then the description is attested with the done defect beside it.
 * **Withdrawn tasks are not reviewed.** The same two plans each hold a task carrying the
   defect, withdrawn (`cancelled`, the status the store answers for a board issue closed as not
   planned) where its run reads it: on the board copy alone when it is first reviewed, and on
@@ -167,15 +167,19 @@ def _set(bench_: Bench, kind: str, item: str, values: Mapping[str, object]) -> N
         assert answered.returncode == 0, answered.stdout + answered.stderr
 
 
+def _status(bench_: Bench, task: str, status: str) -> None:
+    moved = store(bench_, "task", "update", task, "--status", status)
+    assert moved.returncode == 0, moved.stdout + moved.stderr
+
+
 def _withdraw(bench_: Bench, task: str) -> None:
     """Withdraw ``task`` as the store records a board issue closed as not planned."""
-    withdrawn = store(bench_, "task", "update", task, "--status", "cancelled")
-    assert withdrawn.returncode == 0, withdrawn.stdout + withdrawn.stderr
+    _status(bench_, task, "cancelled")
 
 
-def _unset(bench_: Bench, task: str, key: str) -> None:
-    removed = store(bench_, "task", "update", task, "--remove-metadata", key)
-    assert removed.returncode == 0, removed.stdout + removed.stderr
+def _done(bench_: Bench, task: str) -> None:
+    """Mark ``task`` done, as a run settling it or a person on the board does."""
+    _status(bench_, task, "done")
 
 
 def _metadata(bench_: Bench, kind: str, item: str) -> dict[str, Any]:
@@ -281,7 +285,7 @@ class Review(NamedTuple):
 
 def _reviewed(bench_: Bench, plan: str) -> Review:
     turns, batches = len(judge_only_turns(bench_)), len(judge_inputs(bench_))
-    ran = just(bench_, "review-plan", plan)
+    ran = just(bench_, "review-plan", plan, BOARD)
     return Review(
         ran,
         judge_only_turns(bench_)[turns:],
@@ -296,7 +300,7 @@ def _gate(bench_: Bench, plan: str) -> list[str]:
         (REPO_ROOT / "config" / "onepipeline.launch.yaml").read_text("utf-8")
     )
     checked = run(
-        bench_._replace(environment={**bench_.environment, "ORCHESTRATOR_PLAN": plan}),
+        bench_,
         "scripts/onepipeline.sh",
         *("plan", "check", plan, "--json"),
         *[word for (check,) in registered["checks"] for word in ("--check", check)],
@@ -335,7 +339,6 @@ OWN_TASK_KEYS: dict[str, dict[str, object]] = {
 OWN_PROJECT_KEYS: dict[str, object] = {"onepipeline.driver": {"session": "a-manager", "pid": 1}}
 BOARD_AMENDMENT = "- BOARD-AMENDMENT: the route reports its build commit."
 AMENDMENTS = (str(OWN_TASK_KEYS["amended"]["onepipeline.amendment"]), BOARD_AMENDMENT)
-DONE: dict[str, object] = {"status": "done", "branch": "me/x", "landing": "landed"}
 TWO_KEY = ("--exclude", "onepipeline.projected_status", "--exclude", "onepipeline.settlement")
 #: The settled-task plans' nodes settled `done`: under a whole-list record, under a record
 #: predating the list, edited since its record, re-rendered from unchanged answers under a
@@ -440,20 +443,20 @@ def _settled_plan(bench_: Bench, native: str, *, boarded: bool) -> SettledPlan:
     if not boarded:
         _withdraw(bench_, tasks[WITHDRAWN])
         for node in (*SETTLED, "reopened"):
-            _set(bench_, "task", tasks[node], {"onepipeline.settlement": DONE})
-        # Reopened for more work: its settlement is no longer `done`.
-        _set(bench_, "task", tasks["reopened"], {"onepipeline.settlement": {"status": "failed"}})
+            _done(bench_, tasks[node])
+        # Reopened for more work: it is no longer `done`.
+        _status(bench_, tasks["reopened"], "in-progress")
         return SettledPlan(plan, None, tasks)
     board = _copied(bench_, plan)
     # Withdrawn on its board copy alone, where the run reads it.
     _withdraw(bench_, _board_task(bench_, tasks[WITHDRAWN]))
     for node in (*SETTLED, "reopened"):
-        _set(bench_, "task", _board_task(bench_, tasks[node]), {"onepipeline.settlement": DONE})
-    # Reopened for more work: its board copy, where the run writes, holds no settlement now.
-    _unset(bench_, _board_task(bench_, tasks["reopened"]), "onepipeline.settlement")
-    # A stale settlement on the authoring copy, which the board copy, where the run writes,
-    # does not hold.
-    _set(bench_, "task", tasks["stale"], {"onepipeline.settlement": DONE})
+        _done(bench_, _board_task(bench_, tasks[node]))
+    # Reopened for more work on the board, where the run writes.
+    _status(bench_, _board_task(bench_, tasks["reopened"]), "in-progress")
+    # A stale `done` on the authoring copy, which the board copy does not hold and the
+    # refresh before each review replaces with the board's.
+    _done(bench_, tasks["stale"])
     return SettledPlan(plan, board, tasks)
 
 
@@ -475,12 +478,7 @@ def _settled_journey(bench_: Bench, settled: SettledPlan) -> Settled:
     _render(bench_, tasks["open"], "acceptance_criteria=" + _criteria("open", DEFECT))
     refused = _reviewed(bench_, plan)
     if board:
-        # As the refresh starting a replan does, so the copy writes no stale settlement over
-        # the board copy, where the run writes.
-        _unset(bench_, tasks["stale"], "onepipeline.settlement")
-        # The withdrawal mirrored onto the authoring copy as that refresh does, so the copy
-        # keeps the board copy withdrawn.
-        _withdraw(bench_, tasks[WITHDRAWN])
+        # The review's refresh brought the board's statuses in, so the copy keeps them.
         _copied(bench_, plan)
     gate_refused = _gate(bench_, gated)
     _render(bench_, tasks["open"], "acceptance_criteria=" + _criteria("open"))
@@ -536,6 +534,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     own_tasks = {node: _task(bench_, own, node) for node in OWN_TASK_KEYS}
     for node, values in OWN_TASK_KEYS.items():
         _set(bench_, "task", own_tasks[node], values)
+    _done(bench_, own_tasks["landed"])
     _set(bench_, "project", own, OWN_PROJECT_KEYS)
     own_before = {
         item: _run_written(_metadata(bench_, kind, item))
@@ -653,7 +652,7 @@ def test_a_plan_carrying_run_state_and_unmet_delivery_criteria_passes_review(
         review = sequence.reviews[plan]
         assert review.ran.returncode == 0, review.ran.stdout + review.ran.stderr
         assert JUDGE_UNLESS_REFUSAL not in review.ran.stderr, review.ran.stderr
-        # The first plan's `landed` is settled `done` on its own record, so it is never judged.
+        # The first plan's `landed` is `done` by its own status, so it is never judged.
         landed = {sequence.own_tasks["landed"]} if plan == sequence.own else set()
         states = {task: one["state"] for task, one in sequence.records[plan].items()}
         assert {

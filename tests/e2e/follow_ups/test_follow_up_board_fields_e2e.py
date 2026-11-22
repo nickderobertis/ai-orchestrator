@@ -21,9 +21,8 @@ owner's repositories to. That store is this checkout's `followups` source with i
   evidence and re-estimate under a route that moves its priority and assignee. Every field
   holds its value from #4039's record and every visible body part holds through both, the
   one-unit fix's opening and the estimate line apart, and the priority and assignee read back
-  as the re-estimate set them. Two known gaps are pinned beside it: on Linear the bound re-copy
-  is refused, the card having been written since onefollowup's receipt; and #4039's real card
-  has no such receipt, so its owning run's re-copy lands as a second card.
+  as the re-estimate set them. A known gap is pinned beside it: #4039's real card has no such
+  receipt, so its owning run's re-copy lands as a second card.
 
 Hooks are switched off with onefollowup's own `--set`; the verifying journey beside this one
 drives the configuration unmodified.
@@ -126,9 +125,6 @@ PROJECTION_TEMPLATE = (
 WRITTEN_BY_ONEFOLLOWUP = frozenset(
     {"draft_sources", "transcripts", "priority_estimate", "board_estimate", "projected"}
 )
-
-#: The outcome a store's conditional write is refused with when the item moved since its read.
-VERSION_MOVED = "version-moved"
 
 #: Who the later run's route assigns an onetaskgraph ticket to, and the priority it sets.
 ASSIGNEE = "bob"
@@ -495,16 +491,35 @@ def _record_of(wired: Wired, item: str) -> dict[str, object]:
     return record
 
 
-def _dispose(wired: Wired, batch: str, filed: list[tuple[str, str]]) -> None:
+def _dispose(
+    wired: Wired, batch: str, filed: list[tuple[str, str]], related: str | None = None
+) -> None:
+    """Answer each draft ``filed`` as its root cause, accounting for every duplicate candidate
+    `prepare` listed for it: ``related``, the item this batch's evidence is staged on, and every
+    other one dismissed, as the shipped task requires of a ticket-filing answer. A draft an
+    earlier pass answered keeps that carried answer as it stands, as the task also requires."""
     answers = wired.store.work / "dispositions" / f"{batch}.json"
     held = json.loads(answers.read_text(encoding="utf-8"))
-    held["dispositions"] = [
+    carried_file = answers.with_name(f"{batch}.carried.json")
+    carried = (
         {
+            str(entry["draft"]): entry
+            for entry in json.loads(carried_file.read_text(encoding="utf-8"))["dispositions"]
+        }
+        if carried_file.is_file()
+        else {}
+    )
+    task = wired.store.work / "tasks" / batch / "task.md"
+    found = scripted_agent.candidates(task.read_text(encoding="utf-8"))
+    held["dispositions"] = [
+        carried.get(draft)
+        or {
             "draft": draft,
             "disposition": "filed",
             "root_causes": [cause],
             "detail": "Verified at the basis.",
             "kind": "root-cause",
+            "dismissed": scripted_agent.dismissed(found, draft, related),
         }
         for draft, cause in filed
     ]
@@ -515,7 +530,8 @@ def _publish(
     wired: Wired, config: Path, batch: str, expected: frozenset[str] = frozenset()
 ) -> list[str]:
     """Publish and settle ``batch``; the outcomes it refused, each one of ``expected``."""
-    assert _onefollowup(wired, config, "check", "--batch", batch)["sound"] is True
+    checked = _onefollowup(wired, config, "check", "--batch", batch)
+    assert checked["sound"] is True, checked
     sent = _onefollowup(wired, config, "publish", "--batch", batch)
     outcomes = sent["outcomes"]
     assert isinstance(outcomes, list), sent
@@ -650,7 +666,7 @@ def _reestimate(wired: Wired, config: Path, item: str, cause: str) -> None:
         stdin="A metadata write with no transcript read the board's fields again.\n",
     )
     _onefollowup(wired, config, "ticket", "re-estimate", "--batch", LATER, item)
-    _dispose(wired, LATER, [(draft, cause)])
+    _dispose(wired, LATER, [(draft, cause)], item)
     _publish(wired, config, LATER)
 
 
@@ -741,16 +757,8 @@ def _journey(root: Path, destination: Destination) -> Iterator[Journey]:
         _, new_item = _new_ticket(wired, plain)
         new_read = _read(wired, new_item)
 
-        # Its owning run's re-copy under the shipped kind, the ticket corrected to pass it. On
-        # Linear it is refused: the known gap the case below pins.
-        refused = _file(
-            wired,
-            plain,
-            run,
-            cause,
-            _corrected(authored),
-            frozenset({VERSION_MOVED}) if destination == LINEAR else frozenset(),
-        )
+        # Its owning run's re-copy under the shipped kind, the ticket corrected to pass it.
+        refused = _file(wired, plain, run, cause, _corrected(authored))
         recopied = _read(wired, seeded_item)
         _reestimate(wired, routed, seeded_item, cause)
         reestimated = _read(wired, seeded_item)
@@ -843,8 +851,6 @@ def _without_estimate(body: str) -> str:
 def test_a_bound_recopy_drops_only_the_one_unit_fix_s_opening_paragraph(journey: Journey) -> None:
     """Under the shipped kind, `fix-units` on, the owning run's re-copy lands its corrected
     ticket: the fix loses the summary it said twice, and nothing else moves."""
-    if journey.destination == LINEAR:
-        pytest.skip("refused on Linear: the known gap the case below pins")
     seeded, recopied = journey.seeded, journey.recopied
     assert journey.recopy_refused == []
     opening = _fix_opening(_visible(seeded.body))
@@ -870,26 +876,6 @@ def test_a_later_re_estimate_moves_priority_and_assignee_and_keeps_the_rest(
     assert recopied.assignees == []
     assert reestimated.assignees == [ASSIGNEE], reestimated
     assert journey.later_record.get("board_assignee") == ASSIGNEE, journey.later_record
-
-
-@pytest.mark.xdist_group("board-fields")
-def test_known_gap_on_linear_a_bound_recopy_of_a_card_written_since_its_receipt_is_refused(
-    journey: Journey,
-) -> None:
-    """The known gap the drafted onefollowup follow-up names: a bound re-copy writes on the
-    condition that the card is still at the version onefollowup's receipt recorded, and Linear
-    holds a write to that condition, so a card anything else wrote since — a person, or the
-    relabel that brought #4039's record to schema 14 — is refused `version-moved` and keeps
-    every field and body part it had. GitHub's store reads before it writes and takes no
-    condition. This fails once onefollowup re-reads the card before its bound write; drop the
-    skip above then and let the case above hold Linear too."""
-    if journey.destination != LINEAR:
-        assert journey.recopy_refused == []
-        return
-    assert journey.recopy_refused == [VERSION_MOVED]
-    seeded, recopied = journey.seeded, journey.recopied
-    assert recopied == seeded
-    _held_fields(recopied)
 
 
 def _pre_cutover(root: Path) -> list[_Issue]:

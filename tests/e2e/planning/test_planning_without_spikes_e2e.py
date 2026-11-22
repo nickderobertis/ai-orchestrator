@@ -13,7 +13,8 @@ One sequence on one bench (`planning_bench`), each step through the real recipe:
 2. `just finish-plan` over the same plan, whose draft is done, creates the `finishing`
    template's members alone and runs them, rewriting the design document. Each of the two
    planning projects loads under the engine's own `plan check`.
-3. The board copy is approved and one reviewed task's criteria are edited on it. The
+3. The board copy is approved while the finishing run's own driver still drives it, which
+   the approval attests without adopting, and one reviewed task's criteria are edited on it. The
    orchestrate recipe refuses the plan naming that task; `just review-plan` spends exactly
    one judge-only call, for that task; the orchestrate recipe then launches the plan.
 """
@@ -61,6 +62,7 @@ PLANNING_NODES = [
 ]
 #: Every member the finishing template declares.
 FINISHING_NODES = [
+    "refresh",
     "spikes",
     "spike-evidence",
     "check",
@@ -107,6 +109,8 @@ class Sequence(NamedTuple):
     launched: subprocess.CompletedProcess[str]
     planning_approval: Approval
     finishing_approval: Approval
+    driven_at_approval: object
+    approved: subprocess.CompletedProcess[str]
 
 
 def _listed(answer: dict[str, object]) -> list[dict[str, Any]]:
@@ -220,8 +224,8 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     after = _design_renders(bench_, native)
     finishing_approval = _approval(bench_, f"{native}-finishing-")
 
+    driven_at_approval = status(bench_, finishing_run)["driven"]
     approved = just(bench_, "approve-design", f"{BOARD}:{native}", finishing_run)
-    assert approved.returncode == 0, approved.stdout + approved.stderr
     tasks = store_json(bench_, "task", "list", "--source", BOARD, "--project", f"{BOARD}:{native}")
     edited_task = next(
         str(one["id"])
@@ -267,10 +271,23 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         launched,
         planning_approval,
         finishing_approval,
+        driven_at_approval,
+        approved,
     )
     for one in runs_of(bench_):
         if not one.startswith("."):
             just(bench_, "stop", one, seconds=120)
+
+
+def test_the_design_approval_attests_a_run_its_own_driver_is_still_continuing(
+    sequence: Sequence,
+) -> None:
+    """The engine keeps driving a run past a human attestation and refuses adopting one it
+    still drives, so the approval attests the run's `approve-design` node and adopts nothing."""
+    approved = sequence.approved
+    assert sequence.driven_at_approval is True, sequence.finishing
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert "adopt" not in (approved.stdout + approved.stderr).lower(), approved.stderr
 
 
 def test_the_planning_run_holds_the_planning_templates_members(sequence: Sequence) -> None:

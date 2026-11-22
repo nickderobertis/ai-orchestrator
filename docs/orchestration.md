@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.117.2. The whole of that reasoning —
+onepipeline 0.118.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -325,7 +325,7 @@ which is the point of it. Its members, in order:
 | `draft` | planner, `graphs/planner.yaml` | writes the plan into `authoring`, and `<plan>-spikes` when it needs a measurement |
 | `spikes` | command | starts the spikes run in the same flow when the draft created one; `done` at once otherwise |
 | `finalize` | planner, guarded | reworks the plan from the spike reports; its guard settles it `done (not-needed)` without a dispatch when the plan has no spikes |
-| `check` | command | `onepipeline plan check <plan> --check orchestrator/host_adoption_check.py` |
+| `check` | command | `onepipeline plan check <plan> --check scripts/spike-evidence-check.sh` |
 | `review` | command | `scripts/review-plan-item.sh <plan>` |
 | `design` | design-doc writer, `graphs/design-doc.yaml` | renders the design document as a document of the plan |
 | `copy` | command | `just copy-plan <plan> <destination>`, publishing the step output `design_url` |
@@ -333,25 +333,19 @@ which is the point of it. Its members, in order:
 
 **A replan starts from what its run wrote, and the plan it edits holds none of it.** `just
 refresh-plan <source>:<project> [destination]` acts only on a plan that records a copy in
-`destination` in its `onetaskgraph.copies`, whose run is then the board's. Each authoring task
-takes its board task's status by a targeted `task update`, and every key
-`onepipeline plan writeback-keys --json` names in its `task` or `project` list — what the
-engine's write-back writes and no plan authors — is removed from it; its title, content, other metadata and template answers stay, so the
-planner can still regenerate it. A board task with no authoring counterpart, a node a live
-`add` created, is brought into the plan holding no run-written key, and the next copy updates
-that same board item. A counterpart is found from the authoring side alone: the authoring
-task's own copy link, or the `onetaskgraph.origin` the store stamped on an authoring task an
-earlier refresh brought in, never a board item's origin, which a public board withholds. The
-draft reads each amendment from the board copy and never restates it. Because the authoring
-copy then holds no run-written key, a later `just copy-plan` has none to write over what the
-run wrote meanwhile. A plan with no copy there is its run's own record and is left
-byte-identical. Exit 1 refuses, before anything is written, an authoring project holding a
-run-written key — no plan-store verb removes a project key, so the error names the project's
-file and each key for a person to delete by hand — and a board-only task the store cannot
-bring in, which a person adds by hand or drops from the run; it also refuses an imported
-task's dependency it cannot map onto the plan. Exit 2 is a read that failed, and re-running
-repeats only what is still owed. `just
-finish-plan` does not refresh, because it finishes a replan already drafted.
+`destination` in its `onetaskgraph.copies`, whose run is then the board's, and is then one
+copy back: `onetaskgraph project copy <board copy> --to <source> --update-fields status`, with
+one `--metadata <key>=null` for every key `onepipeline plan writeback-keys --json` names in its
+`task` or `project` list — what the engine's write-back writes and no plan authors. The store
+finds each counterpart through the authoring side's own copy link, takes the board's status
+onto it, removes those keys, and leaves its title, content, other metadata and template
+answers alone, so the planner can still regenerate it; a board task with no counterpart, a
+node a live `add` created, is imported with its edges remapped onto the authoring tasks, and
+the next copy updates that same board item. Because the authoring copy then holds no
+run-written key, a later `just copy-plan` has none to write over what the run wrote
+meanwhile. A plan with no copy there is its run's own record and is left byte-identical. Every
+refusal and its exit status is the store's. `just review-plan` and the finishing flow's first
+step run it, so whatever reviews or launches a plan reads the statuses it brought in.
 
 `just finish-plan <source>:<project> [destination]` launches
 [`templates/planning/finishing.md.j2`](../templates/planning/finishing.md.j2), the same road
@@ -377,19 +371,21 @@ or dies is owed closure: report it, then `just unwatched --acknowledge-flow <ID>
 is `scripts/review-plan-item.sh`, the planning run's `review` step exactly. Its bar is the
 planner member's fingerprint, `oneagentgraph run graphs/planner.yaml --judge-only --member
 worker --bar-fingerprint`; every task whose `plan-review` attestation does not check `valid`
-under it (`onetaskgraph project attestation check --tasks`) is judged by that judge-only run
+under it, as the store's filtered check names it (`onetaskgraph project attestation check
+--tasks --not-status done --not-status cancelled --state void --state absent`), is judged by that judge-only run
 under the planner persona's plan-review bar (`personas/planner.yaml`), never its own worker
 persona's completion bar, and on a pass attested with `onetaskgraph task attest --kind
 plan-review`; then the project's description is judged by the same panel with no persona
-named, with every task beside it, and attested with `onetaskgraph project attest`. A task its
-run settled `done` — its `onepipeline.settlement` status where the run wrote it, its board copy
-when the plan has one — is delivered work: it is never judged, whatever its text and whatever
+named, with every task beside it, and attested with `onetaskgraph project attest`. A task whose
+own status is `done` — the board copy's, which the refresh before every review brings in,
+whether a run settled it or a person marked it — is delivered work: it is never judged, whatever its text and whatever
 the store answers for its record, and the launch gate never refuses it; the description's judge
 reads it under `delivered/` rather than `tasks/`, as context the description is never refused
 for. A task withdrawn where its run reads it — the store's `cancelled` status, which it answers
 for a board issue closed as not planned — is never judged or attested and is left out of
 everything the description's judge reads, because the launch omits it by that same status and
-so the launch gate never holds it to a review. A task its run amended carries the amendment verbatim after its body, in a section
+so the launch gate never holds it to a review. A task its run amended carries the amendment verbatim after its body — its own, or its board
+copy's read through its copy link, since the refresh copies status alone — in a section
 presenting it as the run's applied record — criteria the run added by a live edit, part of the
 task's bar, and not a ruling the plan records, so no ruling reference is expected of it — and
 every judge is told that a task's own text is not expected to restate its amendment, which
@@ -417,9 +413,11 @@ records of the retired host modules, and nothing converts them: re-earn each wit
 review-plan` and a fresh `just approve-design`.
 
 **`just check-plan <source>:<project>`** is the engine's own plan load, `onepipeline plan
-check`, with this host's one registered check, `orchestrator/host_adoption_check.py`, the
-planning run's `check` step exactly; exit 1 is a refusal. The load also asks `onevcs` whether
-each release adoption can complete.
+check`; exit 1 is a refusal. The load asks the `onevcs` it links whether each release
+adoption can complete, and holds each to the `installs` that `config/onevcs.releases.yml`'s
+rule for this repository lists: a node of this repository waiting on any other target is
+refused `uninstalled`, and a `published` node of another repository naming no `consumes`
+behind a producer whose default is listed there `default-taken`.
 
 **`just copy-plan <source>:<project> [destination]`** is `onetaskgraph project copy --to
 <destination> --documents`, the planning run's `copy` step. The copy carries every record's
@@ -487,14 +485,15 @@ attestation of kind `design-approval` on the plan's one document rendered from
 `onepipeline:design-doc` — `onetaskgraph document attest --kind design-approval --by
 approve-design` — under the design-doc template's digest as `onepipeline template resolve
 design-doc --json` states it. It goes on the board copy, because that is the copy the user
-read; given the planning run's id it also attests the run's waiting `approve-design` node
-and, unless a driver retained over that decision drives it on, adopts the run so it settles. Editing the document voids the attestation, and so does
+read; given the planning run's id it also attests the run's waiting `approve-design` node,
+which the run's own driver goes on from, so nothing adopts it. Editing the document voids the attestation, and so does
 changing the template; whether it is still `valid` is the store's answer.
 
 *What the launch refuses, and how it says which.* `config/onepipeline.launch.yaml` registers
 [`scripts/plan-attestation-check.sh`](../scripts/plan-attestation-check.sh) under `checks`,
-reading the plan from `ORCHESTRATOR_PLAN`, which `scripts/orchestrate.sh` exports. It refuses
-the plan once for every record not `valid`: each task not settled `done` and the project for
+reading the plan from the check document's `project`. It refuses
+the plan once for every record not `valid`, as the store's filtered check answers it: each
+loaded task that is not `done`, not `cancelled` and not a member project's, and the project, for
 `plan-review` under the planner's current bar, and the design document for `design-approval` under the
 template's digest — `absent` when the plan holds no design document. Each refusal names the
 record, its kind, the store's state and reason, and the repair: `just review-plan` or `just
@@ -514,7 +513,7 @@ It never writes the project's title, description or labels, and on an item it na
 the fields a projection changed — the status word, the engine's own `onepipeline.*` keys,
 and, where the node's definition moved, its title, body, `delivers` and `depends_on` — so
 a body somebody authored on the board survives every settlement of every run launched from
-it, re-read on the adopted onepipeline 0.117.2, and a person's edit to any field stands
+it, re-read on the adopted onepipeline 0.118.0, and a person's edit to any field stands
 until the run next changes that same field. Below the 0.16.3 that fixed it, it did not:
 the shadow project a copy wrote over the board was built with the body hardcoded to an
 empty string and the copy is a total replacement by contract, so every destination
@@ -536,7 +535,7 @@ is written, and the destination is left exactly as it was. A read that could fal
 a default is a read that can delete, so this is the property that makes the preservation
 above worth anything. It is held in onepipeline's own suite rather than here: since
 https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted onepipeline
-0.117.2 among them — reads and projects plans through the linked onetaskgraph crates and
+0.118.0 among them — reads and projects plans through the linked onetaskgraph crates and
 ignores `ONETASKGRAPH_BIN`, so no host seam can
 inject a refused read into the store in process any more, and
 `store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
@@ -549,7 +548,7 @@ prompt first retry to a one-minute ceiling instead of retrying about four times 
 resets that schedule once it recovers, and retries until the projection lands; stopping or
 settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.117.2, that schedule answers only the failures a retry can change. A projection the store
+0.118.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. A
@@ -859,7 +858,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.117.2 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.118.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -1038,7 +1037,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.117.2 by dumping both sides of a monitor member's whole
+  against onepipeline 0.118.0 by dumping both sides of a monitor member's whole
   environment on the suite's real launches, their paid model doubled: the judge side by
   the probe `tests/e2e/observer_environment.py` stands in for the judge command with, the
   agent side by the stand-in harness's monitor turn recording all of it.
@@ -1440,7 +1439,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.117.2 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.118.0 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1611,7 +1610,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.117.2**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.118.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -1887,7 +1886,7 @@ events stay the record of what an edit became, and are where a `queued` one is r
 **A `queued` receipt resolves even across a driver's death.** A driver claims an
 envelope — moves the channel's command cursor past it — before it answers it, so one
 that died between the two used to take the claimed edits and notes with it. On the
-adopted onepipeline 0.117.2 every record an envelope's effects leave — `edit-committed`,
+adopted onepipeline 0.118.0 every record an envelope's effects leave — `edit-committed`,
 `command-accepted`, `edit-rejected` and `note-shown` — names that `envelope`, and `just
 orchestrate --adopt` replays each envelope the dead driver claimed and never answered
 exactly once: one the journal already shows applied is answered from that record rather
@@ -3516,7 +3515,7 @@ the contract.
 
 **A landing a manager starts is owed the same way, from before it acts until it closes.**
 `just publish-branch`, `just repo-recover` and `just integrate` run the engine's own landing
-verbs, which on the adopted onepipeline 0.117.2 register each landing as supervised work of the
+verbs, which on the adopted onepipeline 0.118.0 register each landing as supervised work of the
 session that started it — in the live flow of that session the verb runs inside, or in a
 flow registered for that landing alone — before drafting, preparing or pushing anything,
 and print it:
@@ -4079,7 +4078,7 @@ not planned, on GitHub Projects — never as completed.
 whatever else happens, so nothing but a person retires it.
 
 **A resolution can be taken back or annotated.** `just human-items reopen <item>` returns a
-completed, dismissed or expired item to open, its hold with it; the engine refuses an answered
+completed, dismissed or expired item to open, its hold with it, and clears its expiry; the engine refuses an answered
 question, a `kind: human` node's item and anything else the engine itself resolved, and says why
 in the item's `reopen` field, so the CLI and the page give one answer. `just human-items
 note <item>`, its text given as `--text`, comments on a completed item or states a dismissed one's reason, and
@@ -4190,7 +4189,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.117.2 rather than restating it independently.
+declaration as it stands in onepipeline 0.118.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and four optional fields: a `criterion`; a `deliver` of `live`, `turn-end` or
@@ -4348,7 +4347,7 @@ outcome` — is answered by that next driver before anything it claims itself, s
 lost.
 
 **A `cancel` does not wait behind a note its node never answers.** On the adopted
-onepipeline 0.117.2 a `cancel` its envelope would apply refuses, in its node's
+onepipeline 0.118.0 a `cancel` its envelope would apply refuses, in its node's
 conversation's place, each note to that node still outstanding — offered or waiting
 behind another — with a reason naming the cancelling envelope, so no turn is presented
 with it; each such refusal is the note's own `edit-rejected` record, and the notes'

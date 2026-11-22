@@ -2,9 +2,9 @@
 
 This Nx project owns three trust boundaries and nothing else: the history labels
 validated before they reach a dispatched subprocess, the redaction rule
-`scripts/preserved-log.sh` mirrors, and the release adoptions of the plan a launch is
-about to dispatch — the two host-install rules `host_adoption_check.py` holds against
-what this host installs. Judging a plan's tasks is the plan store's and the judges', never
+`scripts/preserved-log.sh` mirrors, and the table of what this host installs, which
+`config/onevcs.releases.yml`'s `installs` restates for onevcs to hold release waits
+against. Judging a plan's tasks is the plan store's and the judges', never
 this package's.
 
 - Keep serialized contracts backward compatible, and validate an external record at

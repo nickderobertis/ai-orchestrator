@@ -14,19 +14,16 @@
 # or amending a task neither reaches the judge as metadata nor voids a pass.
 #
 #   review-plan-item.sh <source>:<project>
-#       Reviews what is not yet reviewed. The bar is the planner member's fingerprint
-#       (`--bar-fingerprint`); every task whose `plan-review` attestation does not check
-#       `valid` under it (`onetaskgraph project attestation check --tasks`) is judged and,
-#       on a pass, attested with `onetaskgraph task attest`, excluding the whole run-written
-#       list — except a task its run settled `done`, which is delivered work and is never
-#       judged, whatever its text and whatever the store answers for its record, and a
-#       withdrawn task, which is never judged, attested or shown to any judge, because the
-#       launch omits it by the same status and `scripts/plan-attestation-check.sh` therefore
-#       never holds it to a review. Then, when
+#       Reviews what is not yet reviewed, as a query and a loop: the bar is the planner
+#       member's fingerprint (`--bar-fingerprint`); the store's filtered check
+#       (`onetaskgraph project attestation check --tasks --not-status "done" --not-status
+#       cancelled --state void --state absent`) names the tasks to judge, and each is judged
+#       and, on a pass, attested with `onetaskgraph task attest`, excluding the whole
+#       run-written list. A task's own status decides whether it is judged — `just
+#       refresh-plan` brings the board copy's statuses in first — so a `done` task is laid out
+#       under `delivered/` as context and a `cancelled` (withdrawn) one is left out. Then, when
 #       no task was refused and the project's own attestation is not valid, the project's
-#       description is judged, every task beside it for the judge to read — a task settled
-#       `done` under `delivered/` rather than `tasks/`, as context the description is never
-#       refused for — and attested on a pass.
+#       description is judged, its tasks beside it, and attested on a pass.
 #       Exit 0 when everything is reviewed, 1 when a judge refused something (nothing is
 #       recorded for it), 2 when something could not be read or judged.
 #
@@ -41,24 +38,15 @@
 #       under the scratch directory instead, which nothing a refusal reads opens; a judge that
 #       could not judge leaves its cause on stderr.
 #
-# What a run writes is read from the copy the run writes: a task's board copy — the item
-# its `onetaskgraph.copies` entry names under the destination the project's own
-# `onetaskgraph.copies` names — when it has one, and the task itself otherwise, which is a
-# plan launched from its own authoring copy. That copy's status says whether the task is
-# withdrawn — the store's `cancelled`, which it answers for a board issue closed as not
-# planned — its settlement whether it is settled `done`, and its amendment is rendered
-# verbatim into its judged file as a section after its body, presented as the run's applied
-# record: criteria the run added to the task by a live edit, part of its bar, and not a ruling the plan records, so no ruling reference is
-# expected of it. The task's own text is never expected to restate it. The judged material
-# is written under a scratch directory laid out as the checklist's globs read it —
+# The judged material is laid out under a scratch directory as the checklist's globs read it —
 # `tasks/<id>.md` for a task, `projects/<id>.md` for a description, and `delivered/<id>.md`,
-# which no glob reads, for a task settled `done` — each a front matter of
-# the record's title, `depends_on` and its metadata less the run-written keys, over its
-# body, because the checklist's rules read the budget records and the unit there, and a
-# judge reads a plan's ordering from `depends_on`: the ids of the tasks it depends on, `[]`
-# for none. A project's edges come from the store's graph of it (`onetaskgraph project
-# graph --format json --complete`), read whole or not judged at all; a hook document's from
-# the dependencies its node names (`.node.deps`).
+# which no glob reads, for a `done` task — each a front matter of the record's title,
+# `depends_on` (from `onetaskgraph project graph --format json --complete`, or a hook
+# document's `.node.deps`) and its metadata less the run-written keys, over its body. A judged
+# task's `onepipeline.amendment` — its own, or its board copy's, read through its
+# `onetaskgraph.copies` link, because the refresh copies status alone — is rendered after its
+# body as the run's applied record: criteria the run added by a live edit, part of its bar,
+# with no ruling reference expected and no restatement expected of the task's own text.
 set -euo pipefail
 
 if ! script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) ||
@@ -255,15 +243,17 @@ bar=$("${judge[@]}" --bar-fingerprint) && [ -n "$bar" ] || {
 }
 refused=0
 
-# Every task, composed once: the judge reads each beside the project, and judges each
-# stale one on its own.
-# A source that fails answers its errors in the listing and exits non-zero, so the answer is
-# read either way and refused for what it says.
-listed=$("$store" task list --source "${plan%%:*}" --project "$plan" --all --json --no-interactive) || :
-whole_listing "listing of $plan's tasks" "$listed"
-printf '%s\n' "$listed" >"$scratch/tasks.json" || scratch_failed "$scratch/tasks.json"
-# A failed show answers its structured failure on stdout (its prose on stderr, above), so the
-# diagnostic carries the exit status and that failure rather than only an item count.
+# One listing per layout, each filtered by the store on the task's own status. A source that
+# fails answers its errors in the listing and exits non-zero, so the answer is read either way.
+listing() {
+    local name=$1 answer
+    shift
+    answer=$("$store" task list --source "${plan%%:*}" --project "$plan" --all --json --no-interactive "$@") || :
+    whole_listing "listing of $plan's tasks" "$answer"
+    printf '%s\n' "$answer" >"$scratch/$name.json" || scratch_failed "$scratch/$name.json"
+}
+listing open --not-status "done" --not-status cancelled
+listing delivered --status "done"
 show_status=0
 shown=$("$store" project show "$plan" --json --no-interactive) || show_status=$?
 if [ "$show_status" -ne 0 ] || ! jq -e '(.errors // []) == [] and (.items | length) == 1' >/dev/null <<<"$shown" 2>/dev/null; then
@@ -271,149 +261,91 @@ if [ "$show_status" -ne 0 ] || ! jq -e '(.errors // []) == [] and (.items | leng
     exit 2
 fi
 printf '%s\n' "$shown" >"$scratch/project.json" || scratch_failed "$scratch/project.json"
-
-# The board copy is the one destination the project's own `onetaskgraph.copies` names, read
-# in one listing; a plan with none is its run's own record, read from its own tasks.
-if ! copies=$(jq -c '(.items[0].item.metadata | if has("onetaskgraph.copies") then .["onetaskgraph.copies"] else {} end) | if type == "object" and all(.[]; type == "string" and . != "") then to_entries else error("not an object of ids") end' "$scratch/project.json"); then
-    echo "review-plan-item: $plan's onetaskgraph.copies is not an object naming each destination's copy by a non-empty id, so where its run writes cannot be read; repair it with the plan store, then retry" >&2
-    exit 2
-fi
-destination=""
-count=$(jq 'length' <<<"$copies") || read_failed "count the destinations $plan's onetaskgraph.copies names"
-case $count in
-    0) printf '%s\n' '{"items": []}' >"$scratch/board.json" || scratch_failed "$scratch/board.json" ;;
-    1)
-        if ! destination=$(jq -r '.[0].key' <<<"$copies") || ! board=$(jq -r '.[0].value' <<<"$copies"); then
-            read_failed "read $plan's board copy from its onetaskgraph.copies"
-        fi
-        listed=$("$store" task list --source "$destination" --project "$board" --all --json --no-interactive) || :
-        whole_listing "listing of $plan's board copy $board" "$listed"
-        printf '%s\n' "$listed" >"$scratch/board.json" || scratch_failed "$scratch/board.json"
-        ;;
-    *)
-        echo "review-plan-item: $plan is copied to $(jq -c 'map(.key)' <<<"$copies"), so no one board copy holds what its run wrote; review the plan from a copy naming one destination, then retry" >&2
-        exit 2
-        ;;
-esac
-
-# The copy of one listed task its run reads: its board copy when it has one, itself
-# otherwise; what the run wrote there; whether that settles it `done`; whether that copy is
-# withdrawn — the store's `cancelled`, which it answers for a board issue closed as not
-# planned and which the engine's launch loader omits; and a record's authored metadata, less
-# the run-written keys and the store's own attestation records, whose `excludes` name those
-# keys and which are this review's bookkeeping rather than the plan.
-# shellcheck disable=SC2016 # jq's own variables, expanded by jq rather than the shell.
-run_state='def run_copy($board; $destination):
-        ((.item.metadata | if has("onetaskgraph.copies") then .["onetaskgraph.copies"] else {} end) | if type == "object" then .[$destination] else null end) as $copy
-        | if $destination != "" and $copy != null
-          then ([$board.items[] | select(.id == $copy)][0] // {})
-          else . end;
-    def run_written($board; $destination): run_copy($board; $destination) | .item.metadata // {};
-    def settled_done: .["onepipeline.settlement"].status == "done";
-    def withdrawn($board; $destination): run_copy($board; $destination) | .item.status.category == "cancelled";
-    def authored($keys): with_entries(select(.key | IN($keys[]) or . == "onetaskgraph.attestations" | not));'
-
-# A task's copy link names its board copy by an id the board listing holds exactly once, and
-# that copy answers its status category as text, and what the run wrote there holds its
-# amendment as text and any settlement as an object with a text status, or the run's
-# withdrawal, settlement or binding ruling would be read as absent.
-problems=$(jq -r --slurpfile board "$scratch/board.json" --arg destination "$destination" "$run_state"'
-    [.items[] | .id as $id | (.item.metadata | if has("onetaskgraph.copies") then .["onetaskgraph.copies"] else {} end) as $copies
-     | if ($copies | type) != "object" then "\($id) holds an onetaskgraph.copies that is not an object"
-       elif $destination != "" and $copies[$destination] != null
-            and (($copies[$destination] | type) != "string"
-                 or ([$board[0].items[] | select(.id == $copies[$destination])] | length) != 1)
-       then "\($id) names its copy in \($destination) as \($copies[$destination] | tojson), which the board listing does not hold exactly once"
-       # llmlint: ignore[changed_behavior_has_e2e] The pinned store answers every listed item a text status category, unknown for a status it cannot place, so no plan store a journey drives reaches this refusal: reaching it would mean doubling the plan store, a second fake of a published CLI to maintain for a guard sharing this check its one message and exit.
-       elif (run_copy($board[0]; $destination).item.status.category | type) != "string"
-       then "\($id) has a copy where its run reads it whose status category is not text"
-       elif (run_written($board[0]; $destination)["onepipeline.amendment"] | . != null and type != "string")
-       then "\($id) holds an amendment that is not text"
-       elif (run_written($board[0]; $destination)["onepipeline.settlement"] | . != null and (type != "object" or (.status | type) != "string"))
-       then "\($id) holds an onepipeline.settlement that is not an object with a text status"
-       else empty end] | join("; ")' "$scratch/tasks.json") || read_failed "read where $plan's run wrote from its listings"
-[ -z "$problems" ] || {
-    echo "review-plan-item: what $plan's run wrote cannot be read, so nothing was judged: $problems; repair it with the plan store, then retry" >&2
-    exit 2
-}
 # Each task's dependency edges, read once from the store's own graph of the plan: a read the
-# store cannot answer whole — a failure, a private source unanswered, or a document that is
-# not this plan's graph — stops the review rather than judging a plan with edges missing.
+# store cannot answer whole stops the review rather than judging a plan with edges missing.
 graphed=0
 "$store" project graph "$plan" --format json --complete --no-interactive >"$scratch/graph.json" 2>"$scratch/graph.err" ||
     graphed=$?
 if [ "$graphed" -ne 0 ] ||
     # llmlint: ignore[changed_behavior_has_e2e] This document check guards an exit-0 answer that is not this plan's graph, which the pinned store never prints: reaching it would mean doubling the plan store in the planning journeys, a second fake of a published CLI to maintain for a branch that shares this refusal's one message and exit with the non-zero read `test_a_graph_the_store_cannot_answer_whole_stops_the_review_unjudged` drives for real.
-    ! jq -e --arg plan "$plan" '.project == $plan and (.nodes | type) == "array" and (.edges | type) == "array" and all(.edges[]; (.from | type) == "string" and (.to | type) == "string") and (.unanswered // []) == []' "$scratch/graph.json" >/dev/null 2>&1; then
+    ! jq -e --arg plan "$plan" '.project == $plan and (.edges | type) == "array" and (.unanswered // []) == []
+        and all(.edges[]; (.from | type == "string" and . != "") and (.to | type == "string" and . != ""))' "$scratch/graph.json" >/dev/null 2>&1; then
     reported=$({ cat "$scratch/graph.err" "$scratch/graph.json"; } 2>/dev/null | tr '\n' ' ') || reported=""
     echo "review-plan-item: the plan store's graph of $plan was not answered whole (exit $graphed), so nothing was judged: ${reported:-it printed nothing}; repair what it names, then retry" >&2
     exit 2
 fi
-# Read whole before it is split, so a listing jq cannot read stops the review rather than
-# leaving it judging fewer tasks than the plan holds.
-listing=$(jq -c '.items[]' "$scratch/tasks.json") || read_failed "split the listing of $plan's tasks"
-tasks=()
-[ -z "$listing" ] || mapfile -t tasks <<<"$listing"
-# A withdrawn task will never run, so it is laid out nowhere and never judged; a task settled
-# `done` is delivered work, laid out under `delivered/` and never judged on its own; every
-# other under `tasks/`.
-delivered=()
-withdrawn=()
-for task in ${tasks[@]+"${tasks[@]}"}; do
-    native=$(jq -r '.id' <<<"$task") || read_failed "read a listed task's id of $plan"
-    run_status=$(jq -r --slurpfile board "$scratch/board.json" --arg destination "$destination" "$run_state"'
-        if withdrawn($board[0]; $destination) then "withdrawn"
-        elif run_written($board[0]; $destination) | settled_done then "done"
-        else "open" end' <<<"$task") ||
-        read_failed "read whether $native is withdrawn or settled done"
-    if [ "$run_status" = "withdrawn" ]; then
-        withdrawn+=("$native")
-        continue
-    elif [ "$run_status" = "done" ]; then
-        delivered+=("$native")
-        file=$(native_file "$native" "$scratch/delivered") || exit 2
-    else
-        file=$(native_file "$native" "$scratch/tasks") || exit 2
-    fi
-    composed=$(jq -r --slurpfile graph "$scratch/graph.json" --slurpfile board "$scratch/board.json" --arg destination "$destination" --argjson keys "$run_written" "$run_state"'
-        .id as $id | (run_written($board[0]; $destination)["onepipeline.amendment"]) as $amendment
-        | "---\n" + ({title: .item.title, depends_on: [$graph[0].edges[] | select(.to == $id) | .from], metadata: (.item.metadata | authored($keys))} | tojson) + "\n---\n" + (.item.content // "")
-        + (if ($amendment | type) == "string" and $amendment != ""
-           then "\n\n## Amendment: criteria the run added to this task by a live edit\n\nThis is the run'"'"'s applied record, not a ruling this plan records: the run added these criteria to the task above by a live edit, and they are part of its bar as written. No ruling reference is expected of them, and their having none is no ground to refuse the task. The task'"'"'s own text is not expected to restate them:\n\n" + $amendment + "\n"
-           else "" end)' <<<"$task") ||
-        read_failed "compose $native's judged file"
-    printf '%s\n' "$composed" >"$file" || scratch_failed "$file"
-done
 
-checked=0
-answer=$("$store" project attestation check "$plan" --kind plan-review --tasks --bar "$bar" --json --no-interactive) ||
-    checked=$?
-[ "$checked" -eq 0 ] || [ "$checked" -eq 3 ] || exit 2
-# The check answers for exactly the tasks the listing holds, or what it left out would go
-# unjudged; the two disagreeing is refused.
-if ! jq -e --slurpfile listed "$scratch/tasks.json" '([.tasks[].id] | sort) == ([$listed[0].items[].id] | sort)' >/dev/null <<<"$answer" 2>/dev/null; then
-    echo "review-plan-item: the plan store's attestation check for $plan does not answer for exactly the tasks its listing holds, so nothing was judged; re-run once the store answers both alike" >&2
+# A record's front matter — title, `depends_on`, metadata less the run-written keys and the
+# store's attestation records — over its body, then any amendment the caller passes.
+# shellcheck disable=SC2016 # jq's own variables, expanded by jq rather than the shell.
+compose='.id as $id | "---\n" + ({title: .item.title, depends_on: [$graph[0].edges[] | select(.to == $id) | .from],
+        metadata: (.item.metadata | with_entries(select(.key | IN($keys[]) or . == "onetaskgraph.attestations" | not)))} | tojson)
+    + "\n---\n" + (.item.content // "")
+    + (if $amendment != ""
+       then "\n\n## Amendment: criteria the run added to this task by a live edit\n\nThis is the run'"'"'s applied record, not a ruling this plan records: the run added these criteria to the task above by a live edit, and they are part of its bar as written. No ruling reference is expected of them, and their having none is no ground to refuse the task. The task'"'"'s own text is not expected to restate them:\n\n" + $amendment + "\n"
+       else "" end)'
+write_record() {
+    local task=$1 file=$2 amendment=${3:-} composed
+    composed=$(jq -r --slurpfile graph "$scratch/graph.json" --argjson keys "$run_written" \
+        --arg amendment "$amendment" "$compose" <<<"$task") || read_failed "compose $file"
+    printf '%s\n' "$composed" >"$file" || scratch_failed "$file"
+}
+lay_out() {
+    local items task native file
+    items=$(jq -c '.items[]' "$scratch/$1.json") || read_failed "split the listing of $plan's tasks"
+    while IFS= read -r task; do
+        [ -n "$task" ] || continue
+        native=$(jq -r '.id' <<<"$task") || read_failed "read a listed task's id of $plan"
+        file=$(native_file "$native" "$scratch/$2") || exit 2
+        write_record "$task" "$file"
+    done <<<"$items"
+}
+lay_out open tasks
+lay_out delivered delivered
+
+# A record with no amendment has none; one holding anything but text, `false` and `null`
+# among them, is refused.
+amendment_of='.item.metadata | if has("onepipeline.amendment") then .["onepipeline.amendment"] | if type == "string" then . else error("not text") end else "" end'
+not_text() {
+    echo "review-plan-item: $1 holds an amendment that is not text, so nothing more was judged; set its onepipeline.amendment to the criteria's text, then retry" >&2
     exit 2
-fi
-# A task withdrawn or settled `done` is never judged, whatever the store answers for its
-# record; every other task is judged when its record is not valid.
-unjudged=$(printf '%s\n' ${delivered[@]+"${delivered[@]}"} ${withdrawn[@]+"${withdrawn[@]}"} | jq -Rsc 'split("\n") | map(select(. != ""))') ||
-    read_failed "list which of $plan's tasks are withdrawn or settled done"
-withdrawn_ids=$(printf '%s\n' ${withdrawn[@]+"${withdrawn[@]}"} | jq -Rsc 'split("\n") | map(select(. != ""))') ||
-    read_failed "list which of $plan's tasks are withdrawn"
-listing=$(jq -r --argjson unjudged "$unjudged" '
-    .tasks[] | select(.state != "valid" and (.id | IN($unjudged[]) | not)) | .id' <<<"$answer") ||
-    read_failed "select which of $plan's tasks to judge from the attestation check"
+}
+# A task's copy link is an object naming its one destination's copy by a qualified id, where
+# its run writes; a link of any other shape, or naming several, says no one copy holds it.
+copy_of='.item.metadata | if has("onetaskgraph.copies") then .["onetaskgraph.copies"] else {} end | if type == "object" and length <= 1 and all(.[]; type == "string" and test("^[^:\\s]+:\\S+$")) then (to_entries[0].value // "") else error("malformed") end'
+
+
+# The tasks to judge are the store's answer: open, and without a valid record under the bar.
+checked=0
+answer=$("$store" project attestation check "$plan" --kind plan-review --tasks --bar "$bar" \
+    --not-status "done" --not-status cancelled --state void --state absent --json --no-interactive) || checked=$?
+[ "$checked" -eq 0 ] || [ "$checked" -eq 3 ] || exit 2
+ids=$(jq -r '.tasks | if type == "array" and all(.[]; .id | type == "string" and . != "") then .[].id else error("not a list of tasks") end' <<<"$answer") ||
+    read_failed "read which of $plan's tasks to judge from the attestation check"
 stale=()
-[ -z "$listing" ] || mapfile -t stale <<<"$listing"
+[ -z "$ids" ] || mapfile -t stale <<<"$ids"
 for id in ${stale[@]+"${stale[@]}"}; do
-    # A stale id is judged only as the one listed task it names: the store's two answers
-    # disagreeing is refused rather than judged from the wrong file.
-    if ! jq -e --arg id "$id" '[.items[] | select(.id == $id)] | length == 1' "$scratch/tasks.json" >/dev/null; then
-        echo "review-plan-item: the plan store's attestation check names $id, which its listing of $plan does not hold exactly once, so nothing more was judged; re-run once the store answers both alike" >&2
+    task=$(jq -ce --arg id "$id" '.items[] | select(.id == $id)' "$scratch/open.json") || {
+        echo "review-plan-item: the plan store's attestation check names $id, which its listing of $plan does not hold, so nothing more was judged; re-run once the store answers both alike" >&2
         exit 2
+    }
+    # The amendment is the task's own, or else its board copy's, read through its copy link.
+    # Only text is rendered: anything else is no amendment a judge could read as criteria.
+    amendment=$(jq -r "$amendment_of" <<<"$task") || not_text "$id"
+    copy=$(jq -r "$copy_of" <<<"$task") || {
+        echo "review-plan-item: $id holds an onetaskgraph.copies that is not an object naming one destination's copy by a qualified id, so no one board copy holds its amendment and nothing more was judged; repair its copy link with the plan store, then retry" >&2
+        exit 2
+    }
+    if [ -z "$amendment" ] && [ -n "$copy" ]; then
+        if ! copied=$("$store" task show "$copy" --json --no-interactive) ||
+            ! jq -e --arg copy "$copy" '(.errors // []) == [] and (.items | length) == 1 and .items[0].id == $copy' >/dev/null <<<"$copied" 2>/dev/null; then
+            echo "review-plan-item: the plan store could not show $id's board copy $copy as one record to read its amendment (its diagnostic is above), so nothing more was judged; repair what it names, then retry" >&2
+            exit 2
+        fi
+        amendment=$(jq -r ".items[0] | $amendment_of" <<<"$copied") || not_text "$copy"
     fi
     file=$(native_file "$id" "$scratch/tasks") || exit 2
+    [ -z "$amendment" ] || write_record "$task" "$file" "$amendment"
     status=0
     judged "$file" "$plan_reviewer" "$framing" || status=$?
     case "$status" in
@@ -439,10 +371,10 @@ project_status=0
 case "$project_status" in
     0) ;;
     3)
-        # A withdrawn task is left out of the description's `tasks`, as it is out of every file
-        # beside it: the launch omits it.
-        composed=$(jq -r --slurpfile tasks "$scratch/tasks.json" --slurpfile graph "$scratch/graph.json" --argjson keys "$run_written" --argjson withdrawn "$withdrawn_ids" "$run_state"'
-            .items[0] | "---\n" + ({id: .id, title: .item.title, metadata: (.item.metadata | authored($keys)), tasks: [$tasks[0].items[] | select(.id | IN($withdrawn[]) | not) | .id as $id | {id, title: .item.title, depends_on: [$graph[0].edges[] | select(.to == $id) | .from], metadata: (.item.metadata | authored($keys))}]} | tojson) + "\n---\n" + (.item.content // "")' "$scratch/project.json") ||
+        # The description's `tasks` are every task but a withdrawn one, which the launch omits.
+        composed=$(jq -r --slurpfile open "$scratch/open.json" --slurpfile delivered "$scratch/delivered.json" --slurpfile graph "$scratch/graph.json" --argjson keys "$run_written" '
+            def authored: with_entries(select(.key | IN($keys[]) or . == "onetaskgraph.attestations" | not));
+            .items[0] | "---\n" + ({id: .id, title: .item.title, metadata: (.item.metadata | authored), tasks: [($open[0].items + $delivered[0].items)[] | .id as $id | {id, title: .item.title, depends_on: [$graph[0].edges[] | select(.to == $id) | .from], metadata: (.item.metadata | authored)}]} | tojson) + "\n---\n" + (.item.content // "")' "$scratch/project.json") ||
             read_failed "compose $plan's judged description"
         printf '%s\n' "$composed" >"$described" || scratch_failed "$described"
         status=0

@@ -200,13 +200,13 @@ DELEGATIONS = (
     # graphs, hooks and dispatch-env hook its launch chose, so no default is added to it.
     Delegation("orchestrate", ("--adopt", "run-1"), f"{ENGINE} adopt run-1"),
     # The planning recipe that reaches one engine verb, through the launch wrapper: the
-    # engine's own plan load with this host's install check registered. `just plan`, `just
-    # finish-plan`, `just review-plan` and `just approve-design` compose several library
-    # verbs and are driven whole by `tests/e2e/planning/`.
+    # engine's own plan load, whose linked onevcs holds release waits to this host's
+    # installs. `just plan`, `just finish-plan`, `just review-plan` and `just
+    # approve-design` compose several library verbs and are driven whole by `tests/e2e/planning/`.
     Delegation(
         "check-plan",
         ("authoring:probe",),
-        f"{ENGINE} plan check authoring:probe --check orchestrator/host_adoption_check.py",
+        f"{ENGINE} plan check authoring:probe",
     ),
     Delegation("channel-next", ("run-1",), f"{ENGINE} next run-1"),
     # The read profile is the CLI's own default, so the recipes name no filter and

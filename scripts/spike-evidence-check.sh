@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # The backstop for stale spike evidence: a check meeting the engine's registered-check
-# contract as `scripts/plan-attestation-check.sh` does (the loaded plan on stdin, the plan's
-# id from `ORCHESTRATOR_PLAN`, `{"refusals": [...]}` on stdout, exit 0 when it ran), and a
+# contract as `scripts/plan-attestation-check.sh` does (the loaded plan on stdin, its project
+# as the document's `project`, `{"refusals": [...]}` on stdout, exit 0 when it ran), and a
 # thin wrapper over `onetaskgraph project attestation check --tasks` and `task answers`.
 # `config/onepipeline.launch.yaml` registers it beside the launch gate, and both planning
-# flows' `check` step run it with `ORCHESTRATOR_PLAN` set to the plan they finish.
+# flows' `check` step register it over the plan they finish.
 #
 # It reads every task's `spike-evidence` record (`scripts/spike-records.sh` writes them) in
 # one listing, and refuses each task the engine loaded whose record is void as
@@ -49,9 +49,9 @@ if ! input=$(cat) || ! loaded=$(jq -ce '
     else error("malformed node") end' <<<"$input" 2>/dev/null); then
     fail "the engine handed this check no loaded plan whose every node carries a task record of a non-empty string id; run it as a check the engine registers ('onepipeline plan check --check' or a launch config's 'checks'), which hands it the plan it loaded, then retry"
 fi
-plan=${ORCHESTRATOR_PLAN:?ORCHESTRATOR_PLAN names no plan: launch it with just orchestrate <source>:<project>, or set it to the plan this check reads}
+plan=$(jq -r '.project // ""' <<<"$input")
 [[ $plan =~ ^[A-Za-z0-9._-]+:[^[:space:]]+$ ]] ||
-    fail "ORCHESTRATOR_PLAN is '$plan', not a qualified plan id '<source>:<project>'; launch the plan with just orchestrate <source>:<project>, or set it to the plan this check reads, then retry"
+    fail "the loaded plan names its project as '$plan', not a qualified plan id '<source>:<project>'; run this as a check the engine registers, which names the project it loaded, then retry"
 
 answer=0
 checks=$("$store" project attestation check "$plan" --kind spike-evidence --tasks --json --no-interactive) || answer=$?

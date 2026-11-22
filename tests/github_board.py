@@ -1123,6 +1123,28 @@ class _Board:
             }
         }
 
+    def origin_items(self, filter_: str, first: object, after: object) -> dict[str, object]:
+        """The board's own rows whose origin field ``filter_`` names, a page of ``first`` from
+        the offset ``after`` names, as a batched find's `o<n>` slot reads them."""
+        filtered = _ORIGIN_FILTER.fullmatch(filter_)
+        if filtered is None:
+            raise ValueError(f"the batched find sent no origin filter: {filter_!r}")
+        origin = _unescaped(filtered.group("origin"))
+        rows = [issue for issue in self.issues if issue.origin == origin and issue.placed]
+        start = int(after) if isinstance(after, str) else 0
+        end = start + first if isinstance(first, int) else len(rows)
+        return {
+            "projectV2": {
+                "items": {
+                    "nodes": [issue.item() for issue in rows[start:end]],
+                    "pageInfo": {
+                        "hasNextPage": end < len(rows),
+                        "endCursor": str(end) if end < len(rows) else None,
+                    },
+                }
+            }
+        }
+
     def origin_lookup_response(
         self, variables: dict[str, object], first: object = None
     ) -> dict[str, object]:
@@ -2404,6 +2426,7 @@ class _Operation(StrEnum):
     UPDATE_FIELD_WHOLE = "updateFieldWhole"
     CLEAR_FIELD_WHOLE = "clearFieldWhole"
     ORIGIN_LOOKUPS = "originLookups"
+    SEARCH_BATCH = "searchBatch"
     ORIGIN_LOOKUPS_WITH_MEMBERS = "originLookupsWithMembers"
     DOCUMENT_IN_PROJECT = "documentInProject"
     CREATED_BOARD_ITEMS = "createdBoardItems"
@@ -2432,6 +2455,10 @@ _OPERATIONS: dict[str, _Operation] = {
     # screened document copy's lookup carries the plain lookup's slots beside its project's
     # members, so it is told by those first.
     "members:node(id:$project)": _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS,
+    # Before the batched origin lookup's marker, which its search slots also carry: a batched
+    # find's searches, each an aliased `s<n>` search, beside up to five origins' board halves,
+    # each an aliased `o<n>` items read sent only while its own `$origin<n>` holds.
+    "@include(if:$origin0)": _Operation.SEARCH_BATCH,
     "@include(if:$ask0)": _Operation.ORIGIN_LOOKUPS,
     # Before the comment listing's and the issue update's markers, which a comment edit's
     # whole twin and its plain document carry inside its own: the edit of one comment, and
@@ -2684,6 +2711,31 @@ COPY_READS: dict[_Operation, _CopyRead] = {
 }
 
 
+#: The slots of the store's batched find, `SEARCH_BATCH`: its searches, then the origins' board
+#: halves, each with the count the adopted store sends (`SEARCH_BATCH` and
+#: `SEARCH_BATCH_ORIGINS` in its source).
+SEARCH_BATCH_SLOTS = (
+    _CopyRead(
+        "s{n}:search(query:$search{n},type:$type,first:$first{n},after:$after{n})"
+        " @include(if:$ask{n})",
+        20,
+    ),
+    _CopyRead("o{n}:repositoryOwner(login:$owner) @include(if:$origin{n})", 5),
+)
+
+
+def search_batch_drift(query: str) -> list[str]:
+    """How a batched find the store sent differs from :data:`SEARCH_BATCH_SLOTS`, read off the
+    document on every one, so a release that resizes or renames its slots fails the journey."""
+    drift: list[str] = []
+    for alias, count in SEARCH_BATCH_SLOTS:
+        missing = [alias.format(n=n) for n in range(count) if alias.format(n=n) not in query]
+        drift += [f"the batched find lacks `{slot}`" for slot in missing]
+        if alias.format(n=count) in query:
+            drift.append(f"the batched find carries more than {count} `{alias}` slots")
+    return drift
+
+
 def copy_read_drift(operation: _Operation, query: str) -> list[str]:
     """How a batched copy read the store sent differs from the slots modelled above.
 
@@ -2905,6 +2957,8 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 drift = copy_batch_drift(operation, request.query)
             case operation if operation in COPY_READS:
                 drift = copy_read_drift(operation, request.query)
+            case _Operation.SEARCH_BATCH:
+                drift = search_batch_drift(request.query)
             case _:
                 drift = []
         if drift:
@@ -3039,6 +3093,8 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 )(request.variables)
             case _Operation.ORIGIN_LOOKUPS | _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS:
                 return self._origin_lookups(request)
+            case _Operation.SEARCH_BATCH:
+                return self._search_batch(request)
             case _Operation.DOCUMENT_IN_PROJECT:
                 return self.board.document_in_project_response(request.variables)
             case _Operation.CREATED_BOARD_ITEMS:
@@ -3053,6 +3109,31 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 }
                 return self.board.write_batch(COPY_BATCHES[operation], writes)(request.variables)
         raise ValueError(f"no fixture answer for {operation}")
+
+    def _search_batch(self, request: _GraphQLRequest) -> dict[str, object]:
+        """A batched find: each asked `s<n>` answered as :meth:`_Board.search_response` answers
+        its own search, and each asked `o<n>` as the board's items its origin filter names, paged
+        from its own cursor; a slot not asked is not answered, as GitHub leaves out an alias its
+        `@include(if:)` excludes."""
+        variables = request.variables
+        answer: dict[str, object] = {}
+        for n in range(SEARCH_BATCH_SLOTS[0].slots):
+            if variables.get(f"ask{n}") is not True:
+                continue
+            searched = self.board.search_response(
+                request.string(f"search{n}"), variables.get(f"first{n}"), variables.get(f"after{n}")
+            )["data"]
+            assert isinstance(searched, dict)
+            answer[f"s{n}"] = searched["search"]
+        for n in range(SEARCH_BATCH_SLOTS[1].slots):
+            if variables.get(f"origin{n}") is not True:
+                continue
+            answer[f"o{n}"] = self.board.origin_items(
+                request.string(f"filter{n}"),
+                variables.get(f"itemsFirst{n}"),
+                variables.get(f"itemsAfter{n}"),
+            )
+        return {"data": answer}
 
     def _origin_lookups(self, request: _GraphQLRequest) -> dict[str, object]:
         """A copy's first read: the board's fields, its repository, and up to ten origins.
@@ -3604,7 +3685,11 @@ def _searches(request: _GraphQLRequest) -> list[str]:
     match request.operation:
         case _Operation.SEARCH | _Operation.ORIGIN_LOOKUP:
             return [request.string("search")]
-        case _Operation.ORIGIN_LOOKUPS | _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS:
+        case (
+            _Operation.ORIGIN_LOOKUPS
+            | _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS
+            | _Operation.SEARCH_BATCH
+        ):
             asked = [name[3:] for name, value in request.variables.items() if name[:3] == "ask"]
             return [
                 request.string(f"search{slot}")
@@ -3718,6 +3803,7 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.CLOSED_ITEMS: DocumentPrice("CLOSED_ITEMS", 2),
     _Operation.ORIGIN_LOOKUPS: DocumentPrice("ORIGIN_LOOKUPS", 1),
     _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS: DocumentPrice("ORIGIN_LOOKUPS_WITH_MEMBERS", 1),
+    _Operation.SEARCH_BATCH: DocumentPrice("SEARCH_BATCH", 22),
     _Operation.DOCUMENT_IN_PROJECT: DocumentPrice("DOCUMENT_IN_PROJECT", 1),
     _Operation.CREATED_BOARD_ITEMS: DocumentPrice("CREATED_BOARD_ITEMS", 1),
     _Operation.CREATE_ISSUES: DocumentPrice("CREATE_ISSUES", 1),
@@ -3777,6 +3863,7 @@ REQUEST_KINDS: dict[_Operation, RequestKind] = {
     _Operation.ISSUE_DETAILS: RequestKind.BATCHED_READ,
     _Operation.ISSUE_COPY_DETAILS: RequestKind.BATCHED_READ,
     _Operation.ORIGIN_LOOKUPS: RequestKind.BATCHED_READ,
+    _Operation.SEARCH_BATCH: RequestKind.BATCHED_READ,
     _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS: RequestKind.BATCHED_READ,
     _Operation.CREATED_BOARD_ITEMS: RequestKind.BATCHED_READ,
     _Operation.ORIGIN_LOOKUP: RequestKind.ITEM_READ,
@@ -3877,7 +3964,25 @@ def _request_points(request: _GraphQLRequest) -> int:
         first = request.variables["first"]
         assert isinstance(first, int), request.variables
         return _search_points(first)
+    if request.operation is _Operation.SEARCH_BATCH:
+        return _search_points(_search_batch_rows(request))
     return REQUEST_PRICES[request.operation].points
+
+
+def _search_batch_rows(request: _GraphQLRequest) -> int:
+    """The rows a batched find asks for: each asked search slot's page and each asked origin
+    slot's, so it is priced as one search page of them all — which keeps a first round of
+    twenty searches at three rows each at the three points the store's source states."""
+    variables = request.variables
+    rows = 0
+    for flag, page in (("ask", "first"), ("origin", "itemsFirst")):
+        for name, value in variables.items():
+            slot = name.removeprefix(flag)
+            if slot != name and slot.isdigit() and value is True:
+                first = variables[f"{page}{slot}"]
+                assert isinstance(first, int), variables
+                rows += first
+    return rows
 
 
 #: Python's audit hook records the real CLI subprocesses without replacing any command.

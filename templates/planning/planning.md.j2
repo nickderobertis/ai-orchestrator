@@ -121,12 +121,12 @@ members:
     title: "Check {{ plan }} as its launch will load it"
     template: {file: step.md.j2}
     answers:
-      description: "`onepipeline plan check` over the plan, with this host's install check and spike-evidence check registered."
+      description: "`onepipeline plan check` over the plan, whose load holds each release adoption to what this host installs, with the spike-evidence check registered."
     depends_on: ["{{ native }}-planning-spike-evidence"]
     metadata:
       onepipeline.id: check
       onepipeline.kind: command
-      onepipeline.command: [env, "ORCHESTRATOR_PLAN={{ plan }}", scripts/onepipeline.sh, plan, check, "{{ plan }}", --check, orchestrator/host_adoption_check.py, --check, scripts/spike-evidence-check.sh]
+      onepipeline.command: [scripts/onepipeline.sh, plan, check, "{{ plan }}", --check, scripts/spike-evidence-check.sh]
   - id: "{{ native }}-planning-review"
     title: "Review {{ plan }}"
     template: {file: step.md.j2}

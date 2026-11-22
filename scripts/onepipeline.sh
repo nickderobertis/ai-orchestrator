@@ -286,12 +286,12 @@ if [ "$plan_loading_words" -eq 2 ] && [ -z "${ONEPIPELINE_REQUIRE_RENDERED:-}" ]
             --require-rendered | --require-rendered=*) named_require_rendered=true ;;
         esac
     done
-    # Only the forms this host's own callers produce are read: `just check-plan`'s and the
-    # planning and finishing flows' `check` steps, each `plan check <project>` followed by
-    # one or more `--check <path>` pairs. Any other form — an option before the project,
+    # Only the forms this host's own callers produce are read: `just check-plan`'s, a bare
+    # `plan check <project>`, and the planning and finishing flows' `check` steps, the same
+    # followed by `--check <path>` pairs. Any other form — an option before the project,
     # any other option after it — leaves the project unread, which keeps `true`.
     checked_project=""
-    if [ "$#" -ge 5 ] && [ "${3#-}" = "$3" ]; then
+    if [ "$#" -ge 3 ] && [ "${3#-}" = "$3" ]; then
         recognized_form=true
         for ((check_index = 4; check_index <= $#; check_index += 2)); do
             check_value_index=$((check_index + 1))

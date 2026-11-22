@@ -30,7 +30,6 @@ from sibling_facts import (
 )
 
 from orchestrator.host_installs import (
-    AWAITING_FIRST_ADOPTION,
     CONSUMER_DEFAULTS,
     INSTALLED,
     by_producer,
@@ -95,9 +94,7 @@ def test_only_the_sibling_contradicting_the_tracked_override_is_named(tmp_path: 
     }
     defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
 
-    assert release_contradictions(
-        defaults, declarations, INSTALLED, AWAITING_FIRST_ADOPTION, CONSUMER_DEFAULTS
-    ) == [
+    assert release_contradictions(defaults, declarations, INSTALLED, CONSUMER_DEFAULTS) == [
         f"{CONTRADICTING} no longer declares the default target 'cli' "
         "config/onevcs.releases.yml names for it; it declares ['crate']"
     ]
@@ -107,7 +104,7 @@ def test_an_installed_producer_resolves_the_default_its_row_installs() -> None:
     """The resolution the next journey reads is accepted for the row's target alone."""
     defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
     row = by_producer(GROWN)
-    assert row is not None and GROWN not in AWAITING_FIRST_ADOPTION
+    assert row is not None
     assert defaults[GROWN] == row.target
 
     assert default_target_complaint(GROWN, defaults[GROWN], defaults) is None
@@ -144,7 +141,7 @@ def test_onefollowup_resolves_the_overrides_pypi_default_through_its_row() -> No
     producer = "github.com/nickderobertis/onefollowup"
     defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
     row = by_producer(producer)
-    assert row is not None and producer not in AWAITING_FIRST_ADOPTION
+    assert row is not None
     assert producer not in CONSUMER_DEFAULTS
     assert defaults[producer] == row.target == "pypi"
 

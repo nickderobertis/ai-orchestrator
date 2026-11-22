@@ -12,6 +12,8 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from github_board import (
@@ -29,6 +31,7 @@ from github_board import (
     REPOSITORY_NODE_IDS,
     REQUEST_KINDS,
     REQUEST_LATENCY_MS,
+    SEARCH_BATCH_SLOTS,
     RequestCost,
     RequestKind,
     _Board,
@@ -44,6 +47,7 @@ from github_board import (
     copy_batch_drift,
     copy_read_drift,
     request_latency_ms,
+    search_batch_drift,
     unanswered_selections,
 )
 
@@ -304,7 +308,61 @@ def test_a_project_member_listing_is_charged_as_one_items_read_and_a_batched_rea
         _Operation.ORIGIN_LOOKUPS,
         _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS,
         _Operation.CREATED_BOARD_ITEMS,
+        _Operation.SEARCH_BATCH,
     }
+
+
+def _batched_find(asked: int, rows: int) -> _GraphQLRequest:
+    """A batched find of every modelled slot, ``asked`` of its searches asked at ``rows`` rows
+    and every other slot bound to one row and not asked, as the store binds an unasked one."""
+    (searches, origins) = SEARCH_BATCH_SLOTS
+    document = " ".join(
+        alias.format(n=n) for alias, count in SEARCH_BATCH_SLOTS for n in range(count)
+    )
+    variables: dict[str, object] = {}
+    for n in range(searches.slots):
+        variables |= {f"search{n}": "is:issue", f"after{n}": None}
+        variables |= {f"first{n}": rows if n < asked else 1, f"ask{n}": n < asked}
+    for n in range(origins.slots):
+        variables |= {f"filter{n}": "", f"itemsAfter{n}": None, f"itemsFirst{n}": 1}
+        variables[f"origin{n}"] = False
+    return _GraphQLRequest(f"query{{{document}}}", variables, 0.0)
+
+
+def test_a_batched_find_is_routed_checked_and_priced_by_the_rows_it_asks() -> None:
+    """The store's batched find is its own operation, never the copy's batched origin lookup
+    whose `$ask0` slot it also carries; a document with every modelled slot shows no drift and
+    one missing a slot names it; and it costs one search page of the rows its asked slots ask,
+    so a first round of twenty searches at three rows costs the three points the store's own
+    source states."""
+    seven = _batched_find(7, 3)
+
+    assert seven.operation is _Operation.SEARCH_BATCH
+    assert search_batch_drift(seven.query) == []
+    assert _request_points(seven) == 2
+    assert _request_points(_batched_find(20, 3)) == 3
+    assert request_latency_ms(seven) == REQUEST_LATENCY_MS[RequestKind.BATCHED_READ]
+    missing = SEARCH_BATCH_SLOTS[1].alias.format(n=4)
+    assert search_batch_drift(seven.query.replace(missing, "")) == [
+        f"the batched find lacks `{missing}`"
+    ]
+
+
+def test_a_batched_find_answers_each_asked_slot_and_leaves_out_the_rest() -> None:
+    """Each asked search slot is the board's own search answer for its query, and a slot the
+    request does not ask is absent from the answer, as GitHub answers an alias its
+    `@include(if:)` leaves out."""
+    find = _batched_find(2, 3)
+    find.variables["search1"] = 'project:o/1 is:issue in:title,body "nothing matches this"'
+
+    board = _Board()
+    # The handler is read for its board alone, so a namespace holding one stands in for it.
+    handler = cast(_GitHubFixture, SimpleNamespace(board=board))
+    answer = _GitHubFixture._search_batch(handler, find)["data"]
+
+    assert isinstance(answer, dict)
+    assert sorted(answer) == ["s0", "s1"], answer
+    assert [answer[slot]["issueCount"] for slot in ("s0", "s1")] == [len(board.issues), 0]
 
 
 def test_a_selection_the_answer_omits_is_named_by_its_path() -> None:

@@ -13,21 +13,20 @@ its items carry no `onetaskgraph.origin` (manager ruling c1.0). Through the real
   `just copy-plan` afterwards leaves every run-written value on the board as it was and adds
   no item. The draft's own task tells the planner where amendments are read and that
   run-written keys stay out of the plan.
-* **A task a live `add` created on that board.** The pinned store cannot copy it back into
-  the plan from a board that withholds provenance, so `just refresh-plan` refuses before any
-  write, naming it and what a person does next (manager ruling a1).
-* **The same import where the store can make it**, onto a private board that keeps
-  provenance: the task is brought into the plan holding no run-written key, its dependency on
-  an existing task remapped onto the plan, `just check-plan` accepts the plan, and a `just
-  copy-plan` updates that same board item in place. Between the import and that copy the
-  imported task holds no copy link to the board, so the `onetaskgraph.origin` the store
-  stamped on that AUTHORING task is its only link, and a second `just refresh-plan` pairs
-  through it: the task takes the board's newer status and keeps its authored title, never
-  imported again nor copied over from the board. Ruling c1.0 forbids reading a BOARD item's
-  origin, which a public board withholds; it does not forbid this one, and the refresh never
-  reads the board's.
+* **A task a live `add` created on that board.** The copy back finds counterparts through
+  the authoring side's own copy links, so it brings the task into the plan holding no
+  run-written key, its dependency remapped onto the authoring counterpart.
+* **The same import onto a private board that keeps provenance**: the task is brought into the
+  plan holding no run-written key, its dependency on an existing task remapped onto the plan,
+  `just check-plan` accepts the plan, and a `just copy-plan` updates that same board item in
+  place. Between the import and that copy the imported task holds no copy link to the board,
+  so the `onetaskgraph.origin` the store stamped on that AUTHORING task is its only link, and
+  a second `just refresh-plan` pairs through it: the task takes the board's newer status and
+  keeps its authored title, never imported again nor copied over from the board. Ruling c1.0
+  forbids reading a BOARD item's origin, which a public board withholds; it does not forbid
+  this one, and the refresh never reads the board's.
 * **A board-copied plan whose authoring project holds `onepipeline.driver`.** The refresh
-  step fails naming the project's file and the key, and the authoring copy is byte-identical.
+  step removes it, as it removes every run-written key, and the draft runs.
 * **A plan with no board copy**, its tasks and project holding run-written keys: the refresh
   step settles done and the authoring copy is byte-identical when the draft starts.
 """
@@ -221,13 +220,14 @@ class Boarded(NamedTuple):
 
 
 class LiveAdded(NamedTuple):
-    """A refresh over a board copy holding a task a live `add` created."""
+    """A refresh over a public board copy holding a task a live `add` created."""
 
     plan: str
+    tasks: dict[str, str]
     board_task: str
     ran: subprocess.CompletedProcess[str]
-    files_before: dict[str, str]
-    files_after: dict[str, str]
+    imported: list[dict[str, Any]]
+    edges: list[dict[str, Any]]
 
 
 class Imported(NamedTuple):
@@ -250,13 +250,12 @@ class Imported(NamedTuple):
     status_after_again: list[str]
 
 
-class Refused(NamedTuple):
+class Driven(NamedTuple):
+    """A board-copied plan whose authoring project holds `onepipeline.driver`, replanned."""
+
     plan: str
-    files_before: dict[str, str]
-    files_after: dict[str, str]
-    planned: subprocess.CompletedProcess[str]
     planning: dict[str, Any]
-    refusal: str
+    project_after: dict[str, Any]
 
 
 class Unboarded(NamedTuple):
@@ -271,7 +270,7 @@ class Sequence(NamedTuple):
     boarded: Boarded
     live_added: LiveAdded
     imported: Imported
-    refused: Refused
+    driven: Driven
     unboarded: Unboarded
 
 
@@ -392,13 +391,27 @@ def _copied_to(bench_: Bench, plan: str, destination: str) -> tuple[str, dict[st
     return board, items
 
 
+def _brought_in(bench_: Bench, plan: str, known: set[str]) -> list[dict[str, Any]]:
+    """The tasks of ``plan`` that are none of ``known``: what a refresh brought in."""
+    return [one for one in _listed(bench_, "authoring", plan) if str(one["id"]) not in known]
+
+
+def _edges_from(bench_: Bench, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    edges: list[dict[str, Any]] = []
+    for one in tasks:
+        found = store_json(bench_, "task", "deps", str(one["id"]))["items"]
+        assert isinstance(found, list), found
+        edges += [edge for edge in found if edge["from"]["id"] == one["id"]]
+    return edges
+
+
 def _live_added(bench_: Bench, native: str) -> LiveAdded:
     plan, tasks = _plan(bench_, native)
     board, items = _copied_to(bench_, plan, BOARD)
     board_task = _live_add(bench_, BOARD, board, items[tasks["landed"]])
-    before = _files(bench_, plan)
     ran = just(bench_, "refresh-plan", plan, BOARD)
-    return LiveAdded(plan, board_task, ran, before, _files(bench_, plan))
+    imported = _brought_in(bench_, plan, set(tasks.values()))
+    return LiveAdded(plan, tasks, board_task, ran, imported, _edges_from(bench_, imported))
 
 
 def _imported(bench_: Bench, native: str) -> Imported:
@@ -458,16 +471,13 @@ def _imported(bench_: Bench, native: str) -> Imported:
     )
 
 
-def _refused(bench_: Bench, native: str) -> Refused:
+def _driven(bench_: Bench, native: str) -> Driven:
     plan, _ = _plan(bench_, native)
     copied = just(bench_, "copy-plan", plan, BOARD)
     assert copied.returncode == 0, copied.stdout + copied.stderr
-    _set(bench_, "project", plan, {"onepipeline.driver": None})
-    before = _files(bench_, plan)
-    planned, planning, planning_run = _planned(bench_, native)
-    return Refused(
-        plan, before, _files(bench_, plan), planned, planning, _journal(bench_, planning_run)
-    )
+    _set(bench_, "project", plan, {"onepipeline.driver": {"session": "a-manager"}})
+    _, planning, _ = _planned(bench_, native)
+    return Driven(plan, planning, _shown(bench_, "project", plan)["metadata"])
 
 
 def _journal(bench_: Bench, planning: str) -> str:
@@ -512,7 +522,7 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
             _boarded(bench_, f"refreshed-{tag}"),
             _live_added(bench_, f"live-added-{tag}"),
             _imported(bench_, f"imported-{tag}"),
-            _refused(bench_, f"driven-{tag}"),
+            _driven(bench_, f"driven-{tag}"),
             _unboarded(bench_, f"unboarded-{tag}"),
         )
     yield sequence
@@ -553,7 +563,13 @@ def test_no_authoring_task_holds_a_run_written_key_when_the_draft_starts(
     assert {str(one["id"]): _run_written(one["item"]["metadata"]) for one in tasks} == {
         str(one["id"]): {} for one in tasks
     }
-    assert project["metadata"] == sequence.boarded.project_metadata_before
+
+    # The store's own attestation records travel with a copy either way and are its to keep;
+    # what this holds is the project's authored metadata.
+    def authored(metadata: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in metadata.items() if k != "onetaskgraph.attestations"}
+
+    assert authored(project["metadata"]) == authored(sequence.boarded.project_metadata_before)
 
 
 def test_the_board_withholds_provenance_so_the_match_is_the_authoring_copy_link(
@@ -571,15 +587,18 @@ def test_a_copy_back_writes_none_of_the_runs_state_and_adds_no_item(sequence: Se
     assert boarded.board_items_after == boarded.board_items_before
 
 
-def test_a_live_added_task_the_store_cannot_bring_in_is_refused_before_any_write(
+def test_a_live_added_task_on_a_public_board_is_brought_in_and_remapped(
     sequence: Sequence,
 ) -> None:
+    """The store finds counterparts through the authoring side's own copy links, so a board
+    withholding provenance still yields the board-only task, its edge remapped onto the
+    authoring counterpart and no run-written key on it."""
     live = sequence.live_added
-    stderr = live.ran.stderr
-    assert live.ran.returncode == 1, live.ran.stdout + stderr
-    assert f"{live.board_task} (feat: probe)" in stderr, stderr
-    assert "add each to" in stderr and "drop it from the run" in stderr, stderr
-    assert live.files_after == live.files_before
+    assert live.ran.returncode == 0, live.ran.stdout + live.ran.stderr
+    (task,) = live.imported
+    assert task["item"]["metadata"].get("onepipeline.id") == "probe"
+    assert _run_written(task["item"]["metadata"]) == {}
+    assert [edge["to"]["id"] for edge in live.edges] == [live.tasks["landed"]]
 
 
 def test_where_the_store_can_bring_it_in_the_task_is_imported_and_remapped(
@@ -617,17 +636,13 @@ def test_the_draft_is_told_where_amendments_are_read_and_that_run_keys_stay_out(
         assert " ".join(phrase.split()) in flat, phrase
 
 
-def test_a_project_holding_a_run_written_key_fails_the_refresh_and_writes_nothing(
+def test_a_project_holding_a_run_written_key_has_it_stripped_by_the_refresh(
     sequence: Sequence,
 ) -> None:
-    refused = sequence.refused
-    nodes = _nodes(refused.planning)
-    assert nodes["refresh"] == "failed" and nodes["draft"] != "done", nodes
-    assert refused.files_after == refused.files_before
-    project_file = next(iter(refused.files_before))
-    assert project_file in refused.refusal and "onepipeline.driver" in refused.refusal, (
-        refused.refusal[-2000:]
-    )
+    driven = sequence.driven
+    nodes = _nodes(driven.planning)
+    assert nodes["refresh"] == "done" and nodes["draft"] == "done", nodes
+    assert "onepipeline.driver" not in driven.project_after, driven.project_after
 
 
 def test_a_plan_with_no_board_copy_is_left_byte_identical(sequence: Sequence) -> None:

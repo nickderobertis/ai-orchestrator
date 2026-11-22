@@ -473,13 +473,21 @@ def _launch_record(bench: Bench, run: str) -> str:
     return (bench.root / "runs" / run / "launch.json").read_text(encoding="utf-8")
 
 
+#: The launch record's maps keyed by the plan's node ids rather than by setting names: the
+#: engine records each node's task digest under `task_digests.<node id>` from onepipeline
+#: 0.116.0, and this journey's node is called `close`, so its id is data, not a setting.
+NODE_KEYED = frozenset({"task_digests"})
+
+
 def _keys(document: object) -> Iterator[str]:
-    """Every key of a JSON document, at any depth."""
+    """Every setting name of a JSON document, at any depth, less the node ids under
+    :data:`NODE_KEYED`."""
     match document:
         case dict():
             for key, value in document.items():
                 yield str(key)
-                yield from _keys(value)
+                if key not in NODE_KEYED:
+                    yield from _keys(value)
         case list():
             for value in document:
                 yield from _keys(value)

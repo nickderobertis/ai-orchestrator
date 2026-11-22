@@ -174,7 +174,11 @@ re-provision every checkout with `just bootstrap`.
 A plan of this repository awaits a producer's release by **depending on the producer's
 node and naming no `consumes`**: the node resolves the `published` rung from
 `config/onevcs.releases.yml`, which `just repos-apply` installs, and waits for the release
-carrying that producer's default target; no task states any of it. A held node never
+carrying that producer's default target; no task states any of it. That file's rule for
+this repository lists what the host `installs`, and the onevcs the engine links refuses a
+plan on load whose node of this repository waits on any other target (`uninstalled`), or
+whose `published` node elsewhere takes one of those defaults naming no `consumes`
+(`default-taken`). A held node never
 launches, fails or times out — `just status` reads it as `held — awaiting the published
 release of <dependency>` — so the decision is yours: keep waiting, flip it to `fast` by
 live edit, or stop the run.
@@ -828,13 +832,12 @@ may suppress.
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The one statement of which files of this host serve planning and the library verbs each calls; `tests/tree_scans/test_planning_ownership.py` parses this list and fails when a file or verb parts from it, so it restates those files on purpose. -->
 
 **What of this host serves planning.** Residue says what it computes, a thin wrapper the
-library verbs it calls.
+library verbs it calls; the host-install rules are onevcs's, from `config/onevcs.releases.yml`.
 
 - `scripts/render-diagram.sh` — renders the Planned-tasks graph PNG with mmdc; its `design-doc-dag-*` budgets stay.
-- `orchestrator/host_adoption_check.py` — the `plan check --check` executable holding the host-install rules `uninstalled` and `default-taken` against `orchestrator/host_installs.py`.
 - `scripts/budget-design-doc-summary.sh` — the root `design-doc-budget-summary-length` budget's measurement.
-- `scripts/review-plan-item.sh` — `onepipeline plan writeback-keys`, `oneagentgraph run --judge-only`, `onetaskgraph project attestation check`, `onetaskgraph task list`, `onetaskgraph project show`, `onetaskgraph task attest` and `onetaskgraph project attest`.
-- `scripts/plan-attestation-check.sh` — `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onepipeline template resolve`, `onetaskgraph project attestation check`, `onetaskgraph project show`, `onetaskgraph task list`, `onetaskgraph document list` and `onetaskgraph document attestation check`.
+- `scripts/review-plan-item.sh` — `onepipeline plan writeback-keys`, `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onetaskgraph project attestation check` (`--not-status`, `--state`), `onetaskgraph task list`, `onetaskgraph project show`, `onetaskgraph project graph`, `onetaskgraph task show`, `onetaskgraph task attest` and `onetaskgraph project attest`.
+- `scripts/plan-attestation-check.sh` — `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onepipeline template resolve`, `onetaskgraph project attestation check` (`--not-status`, `--state`), `onetaskgraph document list` and `onetaskgraph document attestation check`.
 - `scripts/spike-records.sh` — the spike records and the flows' spikes run: `onetaskgraph task attest`, `onepipeline plan writeback-keys`, `onepipeline start` and `onepipeline watch`, its wait an interim workaround its header states.
 - `scripts/spike-evidence-check.sh` — the spike-evidence check: `onetaskgraph project attestation check`.
 - `scripts/run-ended.sh` — its spike-discard lines: `onepipeline status`, `onetaskgraph project show`, `onepipeline unpublished` and `just reclaim-branch --discard`.

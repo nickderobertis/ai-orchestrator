@@ -14,9 +14,12 @@ each case's verdict is traced to the piece of configuration that states it:
   the same fixture pass.
 * **The template schemas**: a budget record or a plan-level answer of the wrong shape is
   refused while the store renders it, naming the JSON pointer.
-* **Release adoption**: the engine's loader asks `onevcs` (a scratch registry here, holding
-  this repository's identity and a releasing producer), and this host adds its one check,
-  `orchestrator/host_adoption_check.py`, for what only this host's installs can answer.
+* **Release adoption**: the engine's loader asks the `onevcs` it links (a scratch registry
+  here, holding this repository's identity, two releasing producers and one other
+  repository), whose release override declares this repository's `installs` as
+  `config/onevcs.releases.yml` does: a wait on a target this host does not install is
+  refused `uninstalled`, a `published` wait elsewhere taking a default this host installs
+  `default-taken`, and both are accepted once `consumes` names an installed target.
 """
 
 from __future__ import annotations
@@ -202,6 +205,15 @@ DECLARED = (
     ("npm", "npm:onepipeline-cli"),
 )
 PRODUCER = "library"
+#: A second releasing producer, whose override rule gives it the default target `npm` —
+#: an artifact this repository's `installs` holds — as the engine's own rule does.
+DEFAULTED = "tool"
+#: A repository other than this one, whose node may take a producer's default only by naming
+#: what it consumes.
+OTHER = "other"
+#: What the scratch override says this repository installs: the npm package alone, as
+#: `config/onevcs.releases.yml`'s `installs` holds `npm:onepipeline-cli` and no crate.
+INSTALLS = "[npm:onepipeline-cli]"
 
 
 def _declaration() -> str:
@@ -214,28 +226,44 @@ def _declaration() -> str:
     return f'schema_version = 3\nprobe = "scripts/release-probe.sh"\n{rows}'
 
 
-def _registry(root: Path) -> dict[str, str]:
-    """A scratch `onevcs` registry: this repository's identity and a releasing producer.
-
-    This repository is seeded under its own hosted origin, so a node naming it resolves to
-    the identity this checkout's `origin` resolves to; the producer is a local checkout
-    whose base declares :data:`DECLARED`. Both are registered through the real `just
-    repos-apply`, with a release override naming no rule of its own: every adoption is the
-    `fast` default unless a node states its own. Answers the environment that reaches it.
-    """
-    identity = seeded(root, origin=PLANNING_FLOW_ORIGIN)
-    origin, seed = root / f"{PRODUCER}-origin.git", root / f"{PRODUCER}-seed"
+def _local(root: Path, name: str, declared: bool) -> Path:
+    """A local checkout ``name`` cloned from a bare origin, its base declaring :data:`DECLARED`
+    when ``declared``; answers the checkout's resolved path."""
+    origin, seed = root / f"{name}-origin.git", root / f"{name}-seed"
     git("init", "-q", "--bare", "-b", "main", str(origin))
     git("init", "-q", "-b", "main", str(seed))
-    (seed / "release-targets.toml").write_text(_declaration(), encoding="utf-8")
+    if declared:
+        (seed / "release-targets.toml").write_text(_declaration(), encoding="utf-8")
+    else:
+        (seed / "README.md").write_text(f"# {name}\n", encoding="utf-8")
     git("add", "-A", cwd=seed)
     git(*GIT_IDENTITY, "commit", "-qm", "chore: seed", cwd=seed)
     git("remote", "add", "origin", str(origin), cwd=seed)
     git("push", "-q", "origin", "main", cwd=seed)
-    git("clone", "-q", str(origin), str(root / PRODUCER))
+    git("clone", "-q", str(origin), str(root / name))
+    return (root / name).resolve()
+
+
+def _registry(root: Path) -> dict[str, str]:
+    """A scratch `onevcs` registry: this repository's identity, two producers and another.
+
+    This repository is seeded under its own hosted origin, so a node naming it resolves to
+    the identity this checkout's `origin` resolves to; each producer is a local checkout
+    whose base declares :data:`DECLARED`, and :data:`OTHER` one declaring nothing. All are
+    registered through the real `just repos-apply`, with a release override declaring
+    this repository's :data:`INSTALLS` and :data:`DEFAULTED`'s default target, and no
+    adoption rung: every adoption is the `fast` default unless a node states its own.
+    Answers the environment that reaches it.
+    """
+    identity = seeded(root, origin=PLANNING_FLOW_ORIGIN)
+    checkouts = [
+        _local(root, name, declared)
+        for name, declared in ((PRODUCER, True), (DEFAULTED, True), (OTHER, False))
+    ]
     manifest = root / "all.checkouts"
     manifest.write_text(
-        f"{identity.publication}\n{identity.execution}\n{root / PRODUCER}\n", encoding="utf-8"
+        "".join(f"{one}\n" for one in (identity.publication, identity.execution, *checkouts)),
+        encoding="utf-8",
     )
     rules = root / "all.rules.yml"
     rules.write_text(
@@ -248,7 +276,12 @@ def _registry(root: Path) -> dict[str, str]:
     )
     releases = root / "all.releases.yml"
     releases.write_text(
-        "version: 1\ndefault:\n  adoption: fast\nrepositories: []\n", encoding="utf-8"
+        "version: 1\ndefault:\n  adoption: fast\nrepositories:\n"
+        "  - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}\n"
+        f"    installs: {INSTALLS}\n"
+        f'  - match: {{path: "{checkouts[1]}"}}\n'
+        "    default_target: npm\n",
+        encoding="utf-8",
     )
     config_home = root / "xdg-config"
     config_home.mkdir(exist_ok=True)
@@ -267,19 +300,27 @@ def _registry(root: Path) -> dict[str, str]:
     return environment
 
 
-def _release_plan(bench_: Bench, native: str, **consumer: object) -> str:
-    """A plan of the producer's release and a node of this repository behind it."""
+def _release_plan(
+    bench_: Bench,
+    native: str,
+    *,
+    producer: str = PRODUCER,
+    elsewhere: bool = False,
+    **consumer: object,
+) -> str:
+    """A plan of ``producer``'s release and a node behind it: of this repository, or of
+    :data:`OTHER` when ``elsewhere``."""
     plan = _project(bench_, native)
-    producer = _id(_task(bench_, plan, "producer", [PROPERTY], fields={"repo": PRODUCER}))
+    released = _id(_task(bench_, plan, "producer", [PROPERTY], fields={"repo": producer}))
     _id(
         _task(
             bench_,
             plan,
             "consumer",
             [PROPERTY],
-            repository=PLANNING_FLOW_ORIGIN,
-            depends_on=producer,
-            fields=consumer,
+            repository=None if elsewhere else PLANNING_FLOW_ORIGIN,
+            depends_on=released,
+            fields={"repo": OTHER, **consumer} if elsewhere else consumer,
         )
     )
     return plan
@@ -312,6 +353,9 @@ class Sequence(NamedTuple):
     budget_mistyped: subprocess.CompletedProcess[str]
     answer_misshapen: subprocess.CompletedProcess[str]
     crate: subprocess.CompletedProcess[str]
+    crate_consuming_npm: subprocess.CompletedProcess[str]
+    taken: subprocess.CompletedProcess[str]
+    taken_consuming_npm: subprocess.CompletedProcess[str]
     fast: subprocess.CompletedProcess[str]
     no_target: subprocess.CompletedProcess[str]
 
@@ -406,6 +450,37 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
             consumes={"producer": "crate"},
         ),
     )
+    crate_consuming_npm = just(
+        bench_,
+        "check-plan",
+        _release_plan(
+            bench_,
+            f"crate-npm-{tag}",
+            adoption="published",
+            merge_policy="change-open",
+            consumes={"producer": "npm"},
+        ),
+    )
+    taken = just(
+        bench_,
+        "check-plan",
+        _release_plan(
+            bench_, f"taken-{tag}", producer=DEFAULTED, elsewhere=True, adoption="published"
+        ),
+    )
+    taken_consuming_npm = just(
+        bench_,
+        "check-plan",
+        _release_plan(
+            bench_,
+            f"taken-npm-{tag}",
+            producer=DEFAULTED,
+            elsewhere=True,
+            adoption="published",
+            merge_policy="change-open",
+            consumes={"producer": "npm"},
+        ),
+    )
     fast = just(bench_, "check-plan", _release_plan(bench_, f"fast-{tag}", adoption="fast"))
     no_target = just(
         bench_, "check-plan", _release_plan(bench_, f"no-target-{tag}", adoption="published")
@@ -427,6 +502,9 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         budget_mistyped,
         answer_misshapen,
         crate,
+        crate_consuming_npm,
+        taken,
+        taken_consuming_npm,
         fast,
         no_target,
     )
@@ -622,8 +700,7 @@ def test_a_plan_level_answer_of_the_wrong_shape_is_refused_by_the_description_sc
     assert 'is not of type "string"' in refused.stderr, refused.stderr
 
 
-#: How `check-plan` attributes a line to this host's check, and to the `onevcs` the loader asks.
-HOST_CHECK = "orchestrator/host_adoption_check.py: "
+#: How `check-plan` attributes a line to the `onevcs` the engine's loader asks.
 ONEVCS = "onevcs: "
 
 
@@ -634,46 +711,69 @@ def _lines(answered: subprocess.CompletedProcess[str], source: str) -> list[str]
     ]
 
 
-def test_a_node_of_this_repository_consuming_a_crate_is_refused_by_the_host_install_check(
-    sequence: Sequence,
-) -> None:
-    refused = sequence.crate
-    report = refused.stdout + refused.stderr
-    assert refused.returncode == 1, report
-    lines = _lines(refused, HOST_CHECK)
-    assert len(lines) == 1, report
-    assert "consumer" in lines[0] and "uninstalled: " in lines[0], report
-    assert "`crate:onepipeline`" in lines[0], report
-    assert not _lines(refused, ONEVCS), report
-
-
-def test_a_fast_local_direct_node_behind_a_release_gets_the_pinned_engines_own_answer(
-    sequence: Sequence,
-) -> None:
-    """The pinned engine's loader accepts it, and no rule of this host's own takes part.
-
-    `local-direct` is what the scratch rules resolve for this repository, and `fast` is the
-    node's own adoption, behind a producer whose base declares release targets. The adopted
-    engine's loader, asking the `onevcs` it links, accepts that plan; this host's check reads
-    it and refuses nothing, because neither of its rules is about the adoption rung.
-    """
-    answered = sequence.fast
+def _accepted(answered: subprocess.CompletedProcess[str]) -> None:
     report = answered.stdout + answered.stderr
-    assert not _lines(answered, HOST_CHECK), report
     assert answered.returncode == 0, report
     assert answered.stdout.strip().endswith(": accepted"), report
     assert not _lines(answered, ONEVCS), report
 
 
+def test_a_node_of_this_repository_waiting_on_a_target_this_host_does_not_install_is_refused(
+    sequence: Sequence,
+) -> None:
+    """The engine's linked onevcs refuses it `uninstalled`, from the override's `installs`."""
+    refused = sequence.crate
+    report = refused.stdout + refused.stderr
+    assert refused.returncode == 1, report
+    lines = _lines(refused, ONEVCS)
+    assert len(lines) == 1, report
+    assert "consumer" in lines[0] and "uninstalled" in lines[0], report
+    assert "crate:onepipeline" in lines[0], report
+
+
+def test_the_same_node_consuming_an_installed_target_is_accepted(sequence: Sequence) -> None:
+    _accepted(sequence.crate_consuming_npm)
+
+
+def test_a_published_node_elsewhere_taking_a_default_this_host_installs_is_refused(
+    sequence: Sequence,
+) -> None:
+    """A node of another repository naming no `consumes` behind a producer whose default is
+    an artifact this repository's `installs` holds is refused `default-taken`."""
+    refused = sequence.taken
+    report = refused.stdout + refused.stderr
+    assert refused.returncode == 1, report
+    lines = _lines(refused, ONEVCS)
+    assert len(lines) == 1, report
+    assert "consumer" in lines[0] and "default-taken" in lines[0], report
+    assert "npm:onepipeline-cli" in lines[0], report
+
+
+def test_the_node_elsewhere_naming_an_installed_target_as_its_consumes_is_accepted(
+    sequence: Sequence,
+) -> None:
+    _accepted(sequence.taken_consuming_npm)
+
+
+def test_a_fast_local_direct_node_behind_a_release_gets_the_pinned_engines_own_answer(
+    sequence: Sequence,
+) -> None:
+    """The pinned engine's loader accepts it.
+
+    `local-direct` is what the scratch rules resolve for this repository, and `fast` is the
+    node's own adoption, behind a producer whose base declares release targets and whose
+    override names no default target: the adopted engine's loader, asking the `onevcs` it
+    links, accepts that plan.
+    """
+    _accepted(sequence.fast)
+
+
 def test_a_published_node_behind_a_producer_with_no_default_target_is_refused_by_onevcs(
     sequence: Sequence,
 ) -> None:
-    """The loader refuses it under `onevcs`'s rule, so this host's check is handed no plan."""
+    """The loader refuses it under `onevcs`'s rule."""
     refused = sequence.no_target
     report = refused.stdout + refused.stderr
     assert refused.returncode == 1, report
     lines = _lines(refused, ONEVCS)
     assert any("consumer" in line and "published-no-target" in line for line in lines), report
-    assert [line for line in _lines(refused, HOST_CHECK) if "could not be run" not in line] == [], (
-        report
-    )

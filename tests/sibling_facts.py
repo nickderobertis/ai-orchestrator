@@ -48,7 +48,6 @@ from registered_checkouts import (
 )
 
 from orchestrator.host_installs import (
-    AWAITING_FIRST_ADOPTION,
     CONSUMER_DEFAULTS,
     INSTALLED,
     Installed,
@@ -260,21 +259,19 @@ def override_default_targets(text: str) -> dict[RepoIdentity, str]:
 def default_target_accounting(
     defaults: Mapping[RepoIdentity, str],
     rows: Sequence[Installed],
-    awaiting: Collection[RepoIdentity],
     consumers: Collection[RepoIdentity],
 ) -> list[str]:
-    """Every producer the override gives a default that is not in exactly one of the three sets.
+    """Every producer the override gives a default that is not in exactly one of the two sets.
 
     A producer the override gives a ``default_target`` is a row of the table — this host
-    installs that wheel — or awaiting its first adoption, or in ``consumers``, whose default
-    is the artifact a consumer outside this repository waits on; and an entry of either set
-    names a producer the override gives a default. Each set decides something different
+    installs that wheel — or in ``consumers``, whose default is the artifact a consumer
+    outside this repository waits on; and an entry of ``consumers`` names a producer the
+    override gives a default. Each set decides something different
     about the default — whose artifact it is, and so whether a node elsewhere may take it —
     so a producer in two of them, or in none, is one whose default nothing decides.
     """
     sets = {
         "a row of orchestrator/host_installs.py": {row.producer for row in rows},
-        "AWAITING_FIRST_ADOPTION": set(awaiting),
         "CONSUMER_DEFAULTS": set(consumers),
     }
     found: list[str] = []
@@ -283,13 +280,13 @@ def default_target_accounting(
         if len(holding) > 1:
             found.append(
                 f"{producer} is in {' and '.join(holding)}; a producer the override gives a "
-                "default target is in exactly one of the three"
+                "default target is in exactly one of the two"
             )
         elif not holding:
             found.append(
                 f"config/onevcs.releases.yml names {producer}'s default target "
-                f"{defaults[producer]!r}, and neither a row, AWAITING_FIRST_ADOPTION nor "
-                "CONSUMER_DEFAULTS accounts for it"
+                f"{defaults[producer]!r}, and neither a row nor CONSUMER_DEFAULTS accounts "
+                "for it"
             )
         elif producer not in defaults and holding[0] != "a row of orchestrator/host_installs.py":
             found.append(
@@ -303,7 +300,6 @@ def release_contradictions(
     defaults: Mapping[RepoIdentity, str],
     declarations: Mapping[RepoIdentity, dict[str, str] | None],
     rows: Sequence[Installed],
-    awaiting: Collection[RepoIdentity],
     consumers: Collection[RepoIdentity],
 ) -> list[str]:
     """Every way the override, the table and the sets disagree, and producers contradict them.
@@ -314,22 +310,21 @@ def release_contradictions(
     Only a contradiction is named: a default target the declaration does not carry, or
     one it carries under an id other than the artifact the table says this host installs.
     A producer declaring targets the override never names, or more targets than it did, is
-    no contradiction; and a producer awaiting its first adoption may declare nothing yet.
+    no contradiction.
     A producer in ``consumers`` has no row, so its one contradiction is a base that does
     not declare its default target, declaring nothing at all among them.
     """
     installed = {row.producer: row for row in rows}
-    found = default_target_accounting(defaults, rows, awaiting, consumers)
+    found = default_target_accounting(defaults, rows, consumers)
     for producer, target in sorted(defaults.items()):
         if producer not in declarations:
             continue
         declared = declarations[producer]
         if declared is None:
-            if producer not in awaiting:
-                found.append(
-                    f"{producer} declares no release targets at its base, and "
-                    f"config/onevcs.releases.yml names {target!r} as its default target"
-                )
+            found.append(
+                f"{producer} declares no release targets at its base, and "
+                f"config/onevcs.releases.yml names {target!r} as its default target"
+            )
             continue
         if target not in declared:
             found.append(
@@ -352,9 +347,7 @@ def default_target_complaint(
 ) -> str | None:
     """Why the default target ``identity`` resolves disagrees with the table, or None.
 
-    A producer this host installs resolves its row's target; a producer awaiting its
-    first adoption resolves the override's default target with no row, which is the
-    state the override names it in on purpose; a producer in ``CONSUMER_DEFAULTS``
+    A producer this host installs resolves its row's target; a producer in ``CONSUMER_DEFAULTS``
     resolves the override's default target with no row too, the artifact a consumer
     outside this repository waits on; every other identity resolves none.
     """
@@ -362,9 +355,6 @@ def default_target_complaint(
     if row is not None:
         expected: str | None = row.target
         why = f"the wheel this host installs ({row.artifact})"
-    elif identity in AWAITING_FIRST_ADOPTION:
-        expected = defaults.get(identity)
-        why = "the target config/onevcs.releases.yml names ahead of its first adoption"
     elif identity in CONSUMER_DEFAULTS:
         expected = defaults.get(identity)
         why = (
@@ -504,7 +494,7 @@ def check_release_contradictions(
 
     Every producer the tracked override gives a default target, held here, is read at its
     fetched base; each unreadable declaration and every contradiction with the override,
-    the table and the three sets is settled by :func:`settle_drift` against the change at
+    the table and the two sets is settled by :func:`settle_drift` against the change at
     ``root``, so it refuses a change editing the registration and is reported for any
     other. The merge path runs it over this host's registry and this repository; a journey
     hands it a scratch registry and a gated clone.
@@ -517,9 +507,7 @@ def check_release_contradictions(
     settle_drift(
         [
             *read.unreadable,
-            *release_contradictions(
-                defaults, read.found, INSTALLED, AWAITING_FIRST_ADOPTION, CONSUMER_DEFAULTS
-            ),
+            *release_contradictions(defaults, read.found, INSTALLED, CONSUMER_DEFAULTS),
         ],
         root=root,
         comparison=comparison,

@@ -21,7 +21,6 @@
     "support-nx-inputs",
     "support-onejudge-bundle",
     "support-onetaskgraph-user-layer",
-    "support-onevcs-stand-in",
     "support-onevcs-state-snapshot",
     "support-persona-identifiers",
     "support-persona-recipes",

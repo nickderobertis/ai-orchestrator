@@ -127,6 +127,41 @@ def sources(host: str, repository: str, drafts: list[str]) -> str:
     )
 
 
+#: How `prepare`'s task opens the duplicate candidates its search found for one draft or input,
+#: and how it lists each, as onefollowup's shipped task template renders them.
+CANDIDATES_OPENING = re.compile(r"^Candidates on the destination for `(?P<input>[^`]+)`:$")
+CANDIDATE_LINE = re.compile(r"^- `(?P<item>[^`]+)` — ")
+
+
+def candidates(task: str) -> dict[str, list[str]]:
+    """Each draft or input's duplicate candidates, as the rendered task lists them."""
+    found: dict[str, list[str]] = {}
+    listing: list[str] | None = None
+    for line in task.splitlines():
+        opening = CANDIDATES_OPENING.match(line)
+        if opening is not None:
+            listing = found.setdefault(opening["input"], [])
+            continue
+        if listing is None or not line.strip():
+            continue
+        candidate = CANDIDATE_LINE.match(line)
+        if candidate is None:
+            listing = None
+        else:
+            listing.append(candidate["item"])
+    return found
+
+
+def dismissed(found: dict[str, list[str]], draft: str, related: str | None) -> list[object]:
+    """The answer's `dismissed`: every candidate of ``draft`` but ``related``, the one this
+    batch's evidence comment is staged on, each with why its root cause differs."""
+    return [
+        {"item": candidate, "reason": "Its root cause is a different rule from this draft's."}
+        for candidate in found.get(draft, [])
+        if candidate != related
+    ]
+
+
 def verify(checkout: Path, batch: str, new: str, evidence: str, item: str, cause: str) -> None:
     """File the first draft as a ticket, the second as evidence on ``item``, dispose the rest."""
     store = Path(os.environ["ONEFOLLOWUP_STORE"])
@@ -161,6 +196,9 @@ def verify(checkout: Path, batch: str, new: str, evidence: str, item: str, cause
     # The shipped task's step 10: after every evidence comment, a re-estimate of that item.
     _run(checkout, ["onefollowup", "ticket", "re-estimate", "--batch", batch, item])
 
+    # The task's rule for a ticket-filing answer: every candidate `prepare` listed under its
+    # draft is related, by this batch's evidence comment staged on it, or dismissed.
+    found = candidates((work / "tasks" / batch / "task.md").read_text(encoding="utf-8"))
     dispositions = [
         {
             "draft": new_draft,
@@ -168,6 +206,7 @@ def verify(checkout: Path, batch: str, new: str, evidence: str, item: str, cause
             "root_causes": [NEW_ROOT_CAUSE],
             "detail": "Verified at the basis.",
             "kind": "root-cause",
+            "dismissed": dismissed(found, new_draft, None),
         },
         {
             "draft": evidence_draft,
@@ -175,6 +214,7 @@ def verify(checkout: Path, batch: str, new: str, evidence: str, item: str, cause
             "root_causes": [cause],
             "detail": "Evidence on the existing item for the same root cause.",
             "kind": "root-cause",
+            "dismissed": dismissed(found, evidence_draft, item),
         },
     ]
     # Every other input the batch was prepared with, the budget overrun among them.

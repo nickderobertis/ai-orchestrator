@@ -183,6 +183,14 @@ RETIRED: dict[str, str] = {
         "render and acknowledge what a manager session owes in the engine, the `Stop` hook in "
         ".claude/settings.json calling the guard directly with no `--source`"
     ),
+    "orchestrator/host_adoption_check.py": (
+        "onevcs 0.68.0+'s `installs` on a consumer's rule in config/onevcs.releases.yml, "
+        "whose `uninstalled` and `default-taken` refusals the engine's plan load reports"
+    ),
+    "tests/test_host_adoption_check.py": (
+        "the `uninstalled` and `default-taken` cases of tests/e2e/planning/"
+        "test_plan_policy_e2e.py, driving `just check-plan` against the engine's own onevcs"
+    ),
     "scripts/land-branch.sh": (
         "`onepipeline publish-branch` / `repo-recover`, which the two landing recipes run "
         "through scripts/onepipeline.sh with every caller argument forwarded"

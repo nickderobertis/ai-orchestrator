@@ -11,32 +11,28 @@ the store driving it is the real installed one, the `plans` source's cache enabl
 host's `onetaskgraph.yaml` enables it. Only the paid model is doubled, as on every
 planning bench.
 
-The workload has no task a live `add` created: the pinned store cannot bring one from a
-GitHub Projects board into its authoring project (a members-only copy back finds no
-counterpart project), so importing one is not measured until the store supports it (manager
-ruling a1). The same board instead proves the refresh refuses such a task before writing
-anything, naming it and what a person does next.
+The workload has no task a live `add` created; importing one is
+`test_replan_board_statuses_e2e.py`'s subject.
 
 The replan's steps run through the real recipes and the launch gate, in order: `just
-refresh-plan`, `just review-plan` after the replan edits 3 todo tasks, `just review-plan`
-again (a retried review step), `just copy-plan`, and `scripts/plan-attestation-check.sh` over
-the board copy, handed the plan the engine's loader loads as a launch hands it. Each step's
-requests and points are what the board recorded while it ran, every document priced by
-`REQUEST_PRICES`, an unpriced one failing the journey; the setup's requests are cleared
-before each step and never counted. One `budget_telemetry` part per step is recorded, its
-requests beside its points, for the planning project's `budgets` target to read.
+refresh-plan`, `just review-plan` (which refreshes first) after the replan edits 3 todo tasks,
+`just review-plan` again (a retried review step), `just copy-plan`, and
+`scripts/plan-attestation-check.sh` over the board copy, handed the plan the engine's loader
+loads as a launch hands it. Each step's requests and points are what the board recorded while
+it ran, every document priced by `REQUEST_PRICES`, an unpriced one failing the journey; the
+setup's requests are cleared before each step and never counted. One `budget_telemetry` part
+per step is recorded, its requests beside its points, for the planning project's `budgets`
+target to read.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shlex
 import shutil
 import subprocess
 from collections.abc import Callable, Iterator
-from pathlib import Path
 from typing import Any, NamedTuple
 
 import budget_telemetry
@@ -190,58 +186,12 @@ def _loaded_plan(bench_: Bench, board: str) -> str:
     return loaded.read_text(encoding="utf-8")
 
 
-def _files(bench_: Bench, plan: str) -> dict[str, str]:
-    """The digest of every file the plan store keeps ``plan`` and its tasks in."""
-    paths = [str(_shown(bench_, "project", plan)["location"]["path"])]
-    paths += [str(one["item"]["location"]["path"]) for one in _listed(bench_, "authoring", plan)]
-    return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths}
-
-
-class RefusedImport(NamedTuple):
-    """A refresh over a plan whose board copy holds a task a live `add` created."""
-
-    ran: subprocess.CompletedProcess[str]
-    files_before: dict[str, str]
-    files_after: dict[str, str]
-    board_id: str
-    title: str
-
-
-def _refused_import(bench_: Bench, native: str) -> RefusedImport:
-    """A two-task plan copied to the board, a task a live `add` created there, and a refresh."""
-    plan = f"authoring:{native}"
-    _sh(
-        bench_,
-        f"printf '## What\\n\\nPrint.\\n\\n## Acceptance criteria\\n\\n- It prints.\\n' "
-        f"> .live.md && {STORE} project create authoring --id {native} --title {native} "
-        "--body-file .live.md --no-interactive > /dev/null && for n in 1 2; do "
-        f'{STORE} task create authoring --project {plan} --title "feat: step $n" '
-        '--body-file .live.md --metadata "onepipeline.id=\\"step-$n\\"" --no-interactive '
-        "> /dev/null; done",
-    )
-    copied = just(bench_, "copy-plan", plan)
-    assert copied.returncode == 0, copied.stdout + copied.stderr
-    board = str(_metadata(bench_, "project", plan)["onetaskgraph.copies"][PLANS])
-    title = "feat: print the run id"
-    added = _sh(
-        bench_,
-        f"{STORE} task create {PLANS} --project {board} --title {shlex.quote(title)} "
-        "--body-file .live.md --metadata 'onepipeline.id=\"added\"' --no-interactive --json; "
-        "rm -f .live.md",
-    )
-    board_only = str(json.loads(added)["items"][0]["id"])
-    before = _files(bench_, plan)
-    refused = just(bench_, "refresh-plan", plan)
-    return RefusedImport(refused, before, _files(bench_, plan), board_only, title)
-
-
 class Replan(NamedTuple):
     steps: list[Step]
     judged: list[str]
     board_items_before: int
     board_items_after: int
     refusals: list[str]
-    refused: RefusedImport
 
 
 @pytest.fixture(scope="module")
@@ -305,15 +255,13 @@ def replan(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Ite
         steps.append(_measured("review again", lambda: just(bench_, "review-plan", plan)))
         steps.append(_measured("copy", lambda: just(bench_, "copy-plan", plan)))
         loaded = _loaded_plan(bench_, board)
-        gated = bench_._replace(environment={**bench_.environment, "ORCHESTRATOR_PLAN": board})
         steps.append(
             _measured(
                 "launch gate",
-                lambda: run(gated, "scripts/plan-attestation-check.sh", input_text=loaded),
+                lambda: run(bench_, "scripts/plan-attestation-check.sh", input_text=loaded),
             )
         )
         board_items_after = len(_listed(bench_, PLANS, board))
-        refused = _refused_import(bench_, f"live-add-{os.getpid()}")
     gate = steps[-1].ran
     refusals = (
         [str(one["reason"]) for one in json.loads(gate.stdout)["refusals"]]
@@ -326,7 +274,6 @@ def replan(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Ite
         board_items_before,
         board_items_after,
         refusals,
-        refused,
     )
 
 
@@ -348,18 +295,6 @@ def test_the_review_judges_the_edited_tasks(replan: Replan) -> None:
         prompt for prompt in replan.judged if "Print the improvement, replanned." in prompt
     ]
     assert len(replanned) == EDITED, len(replanned)
-
-
-def test_a_board_only_task_the_store_cannot_import_is_refused_before_any_write(
-    replan: Replan,
-) -> None:
-    refused = replan.refused
-    stderr = refused.ran.stderr
-    assert refused.ran.returncode == 1, refused.ran.stdout + stderr
-    assert f"{refused.board_id} ({refused.title})" in stderr, stderr
-    assert "has no counterpart in authoring" in stderr, stderr
-    assert "add each to" in stderr and "drop it from the run" in stderr, stderr
-    assert refused.files_after == refused.files_before
 
 
 def test_each_step_records_its_points_and_requests_for_the_budget(replan: Replan) -> None:

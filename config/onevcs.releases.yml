@@ -19,6 +19,12 @@
 #     refuses by name, since it opens no change request and would land the pin the
 #     draft exists to hold back. So a `fast` node of this repository behind a release
 #     could never land; a `published` one waits, then lands the released version.
+#     Its `installs` lists the one artifact this host installs from each producer — exactly
+#     the `INSTALLED` rows of `orchestrator/host_installs.py`, which
+#     `tests/test_host_installs.py` holds equal — and the onevcs the engine links holds every
+#     plan's release waits against it on load: a node of this repository waiting on a target
+#     none of them is refused `uninstalled`, and a `published` node of another repository
+#     naming no `consumes` behind a producer whose default is one of them `default-taken`.
 #
 #   - Every other rule names a producer and says which of its targets a consumer naming
 #     no `consumes` gets, spelled as that producer's own `release-targets.toml` names it.
@@ -43,10 +49,6 @@
 #         component package `onepipeline-ui` installs; it releases with semantic-release
 #         and opens no release change request, so its rule names no `release_change`.
 #
-#   - A producer this host will install but has not yet adopted may carry its rule
-#     ahead of its first release, so a node adopting that release waits for the right
-#     artifact from the start. `orchestrator/host_installs.py` names each such producer
-#     in `AWAITING_FIRST_ADOPTION` until the node adopting it adds its row and pin.
 # `release_change.head` finds the producer's open release change request by its
 # release-plz head-branch prefix, so `release holdup` can name its failing checks.
 version: 1
@@ -55,6 +57,18 @@ default:
 repositories:
   - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}
     adoption: published
+    installs:
+    - npm:onepipeline-cli
+    - pypi:onevcs-cli
+    - pypi:oneagentgraph-cli
+    - pypi:onejudge-cli
+    - pypi:oneharness-cli
+    - pypi:onetaskgraph-cli
+    - npm:onepipeline-api-cli
+    - pypi:onemessagebus-cli
+    - pypi:onebudgetspec-cli
+    - pypi:llmlint-cli
+    - pypi:onefollowup-cli
   - match: {host: github.com, owner: nickderobertis, name: onepipeline}
     release_change: {head: "release-plz-*"}
     declaration: merge

@@ -184,12 +184,12 @@ def answering_this_checkouts_origin(destination: Path) -> None:
     """Give a copied tree the one thing of `.git` a review reads: this checkout's `origin`.
 
     `copy_working_tree` copies what git would commit and no `.git`, so a copy answers
-    `git remote get-url origin` with nothing — and `orchestrator/host_adoption_check.py`
-    reads this host's own repository off that remote to decide which nodes of a plan are
-    its own. A copy that could not answer would have that check decide nothing, so a plan
-    check run in it would pass a node the same check refuses in this checkout. So the copy
-    is made a repository with no history at all and exactly this checkout's remote: what it
-    then answers is what this checkout answers, and nothing else of git is there to read.
+    `git remote get-url origin` with nothing — and a plan check reads this host's own
+    repository off that remote to decide which nodes of a plan are its own. A copy that
+    could not answer would have that check decide nothing, so a plan check run in it
+    would pass a node the same check refuses in this checkout. So the copy is made a
+    repository with no history at all and exactly this checkout's remote: what it then
+    answers is what this checkout answers, and nothing else of git is there to read.
     """
     url = subprocess.run(
         ["git", "remote", "get-url", "origin"],

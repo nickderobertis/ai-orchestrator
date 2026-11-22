@@ -2,7 +2,7 @@
 
 This host's planning is configuration: `templates/planning/`'s plan graphs, the judged rules
 of `config/plan-checklist.llmlint.yml`, and the launch config's check and plan-edit hook. The
-host code left serving it is a short named list — three residue files computing something
+host code left serving it is a short named list — two residue files computing something
 no library holds, and thin wrappers composing library verbs — stated once under
 `AGENTS.md`'s **What of this host serves planning.** This gate reconciles that list with
 the tree:
@@ -105,7 +105,6 @@ RECORDED = ("tests/fixtures/",)
 #: The residue: host code computing something no library holds.
 RESIDUE = (
     "scripts/render-diagram.sh",
-    "orchestrator/host_adoption_check.py",
     "scripts/budget-design-doc-summary.sh",
 )
 #: The thin wrappers, as `AGENTS.md` names them.
@@ -173,11 +172,11 @@ SHARED: dict[str, Shared] = {
     "scripts/preserved-log.sh": Shared("keeps a stage's redacted log"),
     "scripts/setup-llmlint.sh": Shared("installs the judged lint tier"),
     "orchestrator/host_installs.py": Shared(
-        "the table of what this host installs, read by `host_adoption_check.py` and the "
-        "release-pin tests"
+        "the table of what this host installs, which the release-pin tests and "
+        "`config/onevcs.releases.yml`'s `installs` are held to"
     ),
     "orchestrator/record_shapes.py": Shared(
-        "a plan node's id type and the normalized-origin parser `host_adoption_check.py` reads"
+        "a plan node's id type and the normalized-origin parser"
     ),
     "orchestrator/run_reading.py": Shared("reads a run's settlement, as the engine publishes it"),
     "orchestrator/npm_installs.py": Shared("the engine's npm install, every verb's binary"),
@@ -388,10 +387,9 @@ def test_a_thin_wrapper_composes_only_library_verbs(where: str, body: str) -> No
     code = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
     foreign = sorted({found.group(1) for found in FOREIGN.finditer(code)})
     assert not foreign, f"{where} runs {foreign}, which is neither a library verb nor plumbing"
-    assert not re.search(
-        r"-m orchestrator|orchestrator/\w+\.py",
-        code.replace("orchestrator/host_adoption_check.py", ""),
-    ), f"{where} runs host Python other than the residue"
+    assert not re.search(r"-m orchestrator|orchestrator/\w+\.py", code), (
+        f"{where} runs host Python, which no planning wrapper does"
+    )
     named = {*RESIDUE, *WRAPPERS, *SHARED, *LIBRARY_PATHS}
     paths = set(re.findall(r"(?:\.venv/bin/\w+|scripts/[\w.-]+\.sh)", code))
     paths |= {f"scripts/{one}" for one in re.findall(r"\$script_dir/([\w.-]+\.sh)", code)}

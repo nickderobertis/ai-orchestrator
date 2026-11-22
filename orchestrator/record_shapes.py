@@ -1,8 +1,8 @@
 """The two shapes this package's own readers name a plan node and a repository by.
 
-`orchestrator/host_adoption_check.py` and `orchestrator/budgets/design_doc_dag.py` read a
-plan the engine loaded, never the plan store itself, so what they share is a node's id and
-the normalized origin a task record's `repositories` list holds — and nothing else.
+`orchestrator/budgets/design_doc_dag.py` names a plan node by its id, and
+`tests/sibling_facts.py` reads a repository by the normalized origin a task record's
+`repositories` list holds — and nothing else.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def hosted_origin(repo: str) -> str | None:
     engine reads a node's ``repo`` from that list's first entry and reserves the
     ``onepipeline.repo`` key for an identity a normalized origin cannot name, which is a
     local checkout `onevcs` knows by its path. This is the one place that shape is
-    decided, and `orchestrator/host_adoption_check.py` asks it of what `onevcs` answers.
+    decided.
     """
     normalized = _CLONE_SCHEME.sub("", repo).removesuffix(".git")
     return normalized if _HOSTED_ORIGIN.fullmatch(normalized) else None

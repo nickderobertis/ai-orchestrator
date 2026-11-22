@@ -1,4 +1,4 @@
-"""The normalized-origin shape `orchestrator/host_adoption_check.py` reads a repository by."""
+"""The normalized-origin shape `orchestrator/record_shapes.py` reads a repository by."""
 
 from __future__ import annotations
 
