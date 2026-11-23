@@ -1,0 +1,51 @@
+---
+onetaskgraph_template: 1
+description: >-
+  The plan that grooms the follow-ups board through onefollowup: prepare the open tickets to
+  verify, run one verifying dispatch per shard, check every verdict, and publish what the
+  check planned, reading back every changed ticket and writing the report. `just groom`
+  creates it and runs it in a flow.
+variables:
+  project:
+    description: The plan's native id, which every member's own id is prefixed with.
+    type: string
+    required: true
+members:
+  - id: "{{ project }}-prepare"
+    title: "Prepare the open follow-up tickets to verify"
+    template: {file: follow-up-step.md.j2}
+    answers: {step: "List the destination's open tickets, fetch their repositories and write one task per shard of the tickets to verify with `onefollowup groom prepare`."}
+    metadata:
+      onepipeline.id: prepare
+      onepipeline.kind: command
+      onepipeline.command: [just, groom, --prepare]
+  - id: "{{ project }}-verify"
+    title: "Verify the prepared tickets, one verifying run per shard"
+    template: {file: follow-up-step.md.j2}
+    answers: {step: "For each shard `onefollowup groom prepare` named, create its verifying plan from the shard's task and run it attached in this flow."}
+    depends_on: ["{{ project }}-prepare"]
+    metadata:
+      onepipeline.id: verify
+      onepipeline.kind: command
+      onepipeline.command: [just, groom, --verify]
+  - id: "{{ project }}-check"
+    title: "Check every shard's verdicts"
+    template: {file: follow-up-step.md.j2}
+    answers: {step: "Hold every verdict to the rules and plan what publish sends with `onefollowup groom check`."}
+    depends_on: ["{{ project }}-verify"]
+    metadata:
+      onepipeline.id: check
+      onepipeline.kind: command
+      onepipeline.command: [just, groom, --check]
+  - id: "{{ project }}-publish"
+    title: "Publish the checked plan and write the report"
+    template: {file: follow-up-step.md.j2}
+    answers: {step: "Send what the check planned, read back every changed ticket and write the batch's report with `onefollowup groom publish`."}
+    depends_on: ["{{ project }}-check"]
+    metadata:
+      onepipeline.id: publish
+      onepipeline.kind: command
+      onepipeline.command: [just, groom, --publish]
+---
+Groom this host's follow-ups board through onefollowup: close what is fixed, obsolete or a
+duplicate, and record what every verified ticket was verified against.

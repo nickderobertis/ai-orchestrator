@@ -1007,9 +1007,19 @@ def test_a_workspace_pin_names_the_one_release_its_linked_family_resolved(
         f"{ENGINE_DISTRIBUTION} links no {prefix}* crate any more; remove {pin} from "
         "RECONCILED_FAMILIES, since the pin now names a separately spawned executable only"
     )
-    assert {version for versions in family.values() for version in versions} == {pinned}, (
-        f"config/{pin}.version adopts {pinned} while the adopted engine links {family}. "
-        f"Move the pin to the one release the family resolves"
+    resolved = {version for versions in family.values() for version in versions}
+    declared = DECLARED_DIVERGENCES.get(pin)
+    if declared is None:
+        assert resolved == {pinned}, (
+            f"config/{pin}.version adopts {pinned} while the adopted engine links {family}. "
+            f"Move the pin to the one release the family resolves"
+        )
+        return
+    assert (resolved, pinned) == ({declared.linked}, declared.pinned), (
+        f"the declared {pin} divergence was written against linked {declared.linked} / "
+        f"pinned {declared.pinned}, and this host measures {family} / {pinned}. Re-read "
+        f"whether it still holds — {declared.because} — and reconcile the pin or "
+        "re-declare it against the pair that is really there"
     )
 
 

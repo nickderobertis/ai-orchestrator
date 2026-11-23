@@ -357,8 +357,8 @@ keep the slug and timestamp. Each step's task and command are the template's; no
 `scripts/` or `orchestrator/` composes them. `tests/e2e/planning/` drives both recipes end to
 end.
 
-**The whole flow is one watch.** `just plan`, `just finish-plan` and `just
-follow-ups-answer-comments` each run inside the engine's `onepipeline flow run`, owned
+**The whole flow is one watch.** `just plan`, `just finish-plan`, `just
+follow-ups-answer-comments` and `just groom` each run inside the engine's `onepipeline flow run`, owned
 by the launching session from the launcher's start to its exit, so the session is held
 through every run the flow starts — a planning run's spikes run included. Each prints its
 flow first, beside `just watch --flow <ID>`: arm that, and re-arm from its cursor on every
@@ -1369,6 +1369,8 @@ just channel-continue RUN "apply the edit and continue"
 just follow-ups RUN
 just follow-ups-answer-comments --dry-run
 just follow-ups-answer-comments
+just groom --dry-run
+just groom
 ```
 
 `just follow-ups` creates the plan that verifies a finished run's follow-ups through
@@ -2128,6 +2130,11 @@ naming any batch that failed. That recipe creates the batch's one-node feedback 
 `templates/follow-up-feedback.md.j2` — the follow-up agent pointed at that batch's feedback
 file — and runs it attached, joining the same flow. A run of each feedback plan is
 supervised like any run, its questions on its own channel. `--dry-run` prints what `onefollowup comments gather --dry-run` prints.
+
+**Grooming the board.** `just groom` runs `templates/follow-up-groom.md.j2` in a flow —
+`onefollowup groom prepare`, one attached verifying run per shard, `groom check`, then `groom
+publish`, which reads back every changed ticket and writes the report the recipe names;
+`--dry-run` runs only `groom prepare --dry-run`.
 
 **A brief to pick up "accepted" follow-up tickets** means the items at the role
 onefollowup marks `selected` — `Todo` on the board — and nothing else; each node working
@@ -3174,7 +3181,7 @@ sidebar groups a plan's runs and its kind filter tells them apart:
 | `just orchestrate` | `main` | none named: the engine groups a launch from a board copy through the copy's origin, and any other by its own project |
 | `just plan` and `just finish-plan` | `planning` | none named: the planning project, whose id begins with the plan's native id |
 | a planning run's spikes run | `spikes` | none named: the plan's `<plan>-spikes` project |
-| `just follow-ups`, `just follow-ups-answer-comments` and each feedback plan | `follow-ups` | none named: the engine groups each by its own project |
+| `just follow-ups`, `just follow-ups-answer-comments`, `just groom` and each feedback or shard plan | `follow-ups` | none named: the engine groups each by its own project |
 
 A caller's own `kind` label to `just orchestrate`, as `--label kind=<value>` or
 `--label=kind=<value>`, replaces the default, because the engine refuses a key named

@@ -811,6 +811,104 @@ follow-ups-answer-comments *args:
             ;;
     esac
 
+# Groom the follow-ups board through onefollowup: `just groom [--dry-run]`.
+#
+# Every step of `templates/follow-up-groom.md.j2` is this recipe again, so each shard's
+# verifying run starts inside the flow the bare call opened and the manager's one watch on
+# that flow covers all of them.
+[doc("Groom the follow-ups board through onefollowup; `--dry-run` reports only.")]
+groom *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="{{repo_root}}/node_modules/.bin:{{repo_root}}/.venv/bin:$PATH"
+    export ONEPIPELINE_TEMPLATE_ROOT="{{repo_root}}/templates"
+    # The owner `onefollowup.yaml`'s review sink names: a launch's, else this manager session's.
+    if [ -z "${ONEFOLLOWUP_HOOKS__OWNER__SESSION:-}" ]; then
+        . "{{repo_root}}/scripts/launcher-session.sh"
+        export ONEFOLLOWUP_HOOKS__OWNER__SESSION="${ONEPIPELINE_LAUNCHER_SESSION:-}"
+    fi
+    prepared="${ONEPIPELINE_RUN_ROOT:-}/grooming.json"
+    refused() {
+        echo "groom: onefollowup groom prepare answered $1 this step cannot read; adopt the release config/onefollowup.version names with 'just bootstrap', then rerun 'just groom'" >&2
+        exit 2
+    }
+    # The batch prepare answered, or nothing when it named no shard.
+    batch() {
+        jq -e '.shards | type == "array"' "$prepared" >/dev/null || refused "no shard list"
+        if jq -e '.shards == []' "$prepared" >/dev/null; then return 0; fi
+        jq -er '.batch' "$prepared" || refused "no batch"
+    }
+    case "${1:-}" in
+        --dry-run)
+            exec onefollowup groom prepare --dry-run
+            ;;
+        --prepare)
+            onefollowup groom prepare | tee "$prepared"
+            ;;
+        --verify)
+            batch=$(batch)
+            [ -n "$batch" ] || exit 0
+            # Parsed before the loop, so a shard list jq cannot read fails the step rather than
+            # leaving the loop below nothing to run.
+            listed=$(jq -er '.shards[] | [.shard, .task] | @tsv' "$prepared") || refused "a shard list"
+            loader=$(mktemp)
+            trap 'rm -f "$loader"' EXIT
+            onepipeline template resolve follow-up-task --json >"$loader"
+            failed=()
+            while IFS=$'\t' read -r shard task; do
+                [ -n "$shard" ] || continue
+                onetaskgraph project create follow-up-runs --id "$shard" --title "$shard" \
+                    --template "{{repo_root}}/templates/follow-up-groom-shard.md.j2" --search-path "{{repo_root}}/templates" \
+                    --var "project=$shard" --var "batch=$batch" --var "shard=$shard" --var "checkout={{repo_root}}" \
+                    --var "task=$task" --var "task_loader=$loader" --no-interactive \
+                    --metadata 'onepipeline.schema_version=3' \
+                    --metadata "onepipeline.goal={\"text\": \"Verify grooming shard $shard\"}" >/dev/null
+                ./scripts/onepipeline.sh start "follow-up-runs:$shard" --dag-graph off \
+                    --label kind=follow-ups --launch-config config/onepipeline.workflows.yaml || failed+=("$shard")
+            done <<<"$listed"
+            if [ "${#failed[@]}" -gt 0 ]; then
+                for shard in "${failed[@]}"; do
+                    echo "groom: the verifying run of shard $shard failed; read it with 'just status $shard', then rerun 'just groom'" >&2
+                done
+                exit 1
+            fi
+            ;;
+        --check)
+            batch=$(batch)
+            [ -n "$batch" ] || exit 0
+            exec onefollowup groom check --batch "$batch"
+            ;;
+        --publish)
+            batch=$(batch)
+            [ -n "$batch" ] || exit 0
+            onefollowup groom publish --batch "$batch" | tee "${ONEPIPELINE_RUN_ROOT:-}/published.json"
+            ;;
+        "")
+            project="follow-up-groom-$(date -u +%Y%m%dT%H%M%SZ | tr 'TZ' 'tz')"
+            onetaskgraph project create follow-up-runs --id "$project" --title "$project" \
+                --template "{{repo_root}}/templates/follow-up-groom.md.j2" --search-path "{{repo_root}}/templates" \
+                --var "project=$project" --no-interactive \
+                --metadata 'onepipeline.schema_version=3' \
+                --metadata 'onepipeline.goal={"text": "Groom the follow-ups board"}' >/dev/null
+            ./scripts/onepipeline.sh flow run --name "$project" -- \
+                ./scripts/onepipeline.sh start "follow-up-runs:$project" --dag-graph off \
+                --label kind=follow-ups --launch-config config/onepipeline.workflows.yaml
+            published="${ONEPIPELINE_RUNS_DIR:-{{repo_root}}/runs}/$project/published.json"
+            if [ ! -f "$published" ]; then
+                echo "groom: prepare selected no ticket to verify; no report was written"
+            elif report=$(jq -er '.report' "$published"); then
+                printf 'groom report: %s\n' "$report"
+            else
+                echo "groom: onefollowup groom publish answered no report in $published; adopt the release config/onefollowup.version names with 'just bootstrap', then rerun 'just groom'" >&2
+                exit 2
+            fi
+            ;;
+        *)
+            echo "groom: '$1' is not an option; usage: just groom [--dry-run]" >&2
+            exit 2
+            ;;
+    esac
+
 # Run one owning batch's feedback plan, attached: `just follow-ups-answer-batch <batch>
 # <feedback file>`, the `comments.launch_command` `onefollowup comments answer` runs once per
 # batch. It creates the plan from `templates/follow-up-feedback.md.j2`, its answering task

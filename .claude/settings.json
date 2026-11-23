@@ -118,6 +118,7 @@
       "Bash(just follow-up:*)",
       "Bash(just follow-ups:*)",
       "Bash(just follow-ups-answer-comments:*)",
+      "Bash(just groom:*)",
       "Bash(node_modules/.bin/onepipeline supersessions:*)",
       "Bash(node_modules/.bin/onepipeline scratch discard:*)",
       "Bash(git status)",

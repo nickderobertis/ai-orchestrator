@@ -1,0 +1,45 @@
+---
+onetaskgraph_template: 1
+description: >-
+  One grooming shard's verifying plan: the follow-up agent judging the tickets of one shard
+  `onefollowup groom prepare` wrote. The grooming plan's `verify` step creates one per shard.
+variables:
+  project:
+    description: The plan's native id, which its one member's id is prefixed with.
+    type: string
+    required: true
+  batch:
+    description: The grooming batch the shard belongs to.
+    type: string
+    required: true
+  shard:
+    description: The shard whose tickets are verified.
+    type: string
+    required: true
+  checkout:
+    description: The absolute path of the checkout every onefollowup command is run from.
+    type: string
+    required: true
+  task:
+    description: The absolute path of the task `onefollowup groom prepare` wrote for the shard.
+    type: string
+    required: true
+  task_loader:
+    description: The loader document `onepipeline template resolve follow-up-task --json` stated.
+    type: string
+    required: true
+members:
+  - id: "{{ project }}-verify"
+    title: "Verify grooming shard {{ shard }}'s follow-up tickets"
+    template: {loader: "{{ task_loader }}"}
+    answers:
+      mode: groom
+      batch: "{{ batch }}"
+      checkout: "{{ checkout }}"
+      task_file: "{{ task }}"
+    metadata:
+      onepipeline.id: verify
+      onepipeline.persona: ../personas/follow-up.yaml
+      onepipeline.agent_graph: graphs/follow-up.yaml
+---
+Verify the tickets of grooming shard `{{ shard }}` of batch `{{ batch }}`.

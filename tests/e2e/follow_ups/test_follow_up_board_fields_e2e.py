@@ -21,8 +21,9 @@ owner's repositories to. That store is this checkout's `followups` source with i
   evidence and re-estimate under a route that moves its priority and assignee. Every field
   holds its value from #4039's record and every visible body part holds through both, the
   one-unit fix's opening and the estimate line apart, and the priority and assignee read back
-  as the re-estimate set them. A known gap is pinned beside it: #4039's real card has no such
-  receipt, so its owning run's re-copy lands as a second card.
+  as the re-estimate set them, on both wires: Linear's bound re-copy lands though the card was
+  written since onefollowup's receipt. One known gap is pinned beside it: #4039's real card has
+  no such receipt, so its owning run's re-copy lands as a second card.
 
 Hooks are switched off with onefollowup's own `--set`; the verifying journey beside this one
 drives the configuration unmodified.
@@ -460,7 +461,7 @@ def _new_ticket(wired: Wired, config: Path) -> tuple[dict[str, object], str]:
             stdin=DRAFT_BODY,
         )["draft"]
     )
-    _onefollowup(wired, config, "prepare", "--batch", NEW_BATCH)
+    prepared = _onefollowup(wired, config, "prepare", "--batch", NEW_BATCH)
     tickets = wired.store.work / "tasks" / NEW_BATCH / "tickets"
     tickets.mkdir(parents=True, exist_ok=True)
     (tickets / f"{scripted_agent.NEW_ROOT_CAUSE}.md").write_text(
@@ -469,7 +470,7 @@ def _new_ticket(wired: Wired, config: Path) -> tuple[dict[str, object], str]:
     _onefollowup(
         wired, config, "ticket", "copy", "--batch", NEW_BATCH, scripted_agent.NEW_ROOT_CAUSE
     )
-    _dispose(wired, NEW_BATCH, [(draft, scripted_agent.NEW_ROOT_CAUSE)])
+    _dispose(wired, NEW_BATCH, [(draft, scripted_agent.NEW_ROOT_CAUSE)], prepared)
     _publish(wired, config, NEW_BATCH)
     (card,) = _cards(wired, NEW_BATCH)
     return _record_of(wired, card), card
@@ -492,36 +493,53 @@ def _record_of(wired: Wired, item: str) -> dict[str, object]:
 
 
 def _dispose(
-    wired: Wired, batch: str, filed: list[tuple[str, str]], related: str | None = None
+    wired: Wired,
+    batch: str,
+    filed: list[tuple[str, str]],
+    prepared: Mapping[str, object],
+    related: frozenset[str] = frozenset(),
 ) -> None:
-    """Answer each draft ``filed`` as its root cause, accounting for every duplicate candidate
-    `prepare` listed for it: ``related``, the item this batch's evidence is staged on, and every
-    other one dismissed, as the shipped task requires of a ticket-filing answer. A draft an
-    earlier pass answered keeps that carried answer as it stands, as the task also requires."""
+    """File each draft under its root cause, dismissing every duplicate candidate prepare
+    found for it that is not ``related``, as the shipped task asks of the agent. A draft an
+    earlier pass of the batch answered is carried forward as it stands and not answered again."""
     answers = wired.store.work / "dispositions" / f"{batch}.json"
     held = json.loads(answers.read_text(encoding="utf-8"))
     carried_file = answers.with_name(f"{batch}.carried.json")
     carried = (
         {
-            str(entry["draft"]): entry
+            str(entry["draft"])
             for entry in json.loads(carried_file.read_text(encoding="utf-8"))["dispositions"]
         }
         if carried_file.is_file()
-        else {}
+        else set()
     )
-    task = wired.store.work / "tasks" / batch / "task.md"
-    found = scripted_agent.candidates(task.read_text(encoding="utf-8"))
+    searches = prepared.get("duplicate_searches") or []
+    assert isinstance(searches, list), prepared
+    candidates = {
+        str(search["input"]): [str(candidate["item"]) for candidate in search["candidates"]]
+        for search in searches
+    }
     held["dispositions"] = [
-        carried.get(draft)
-        or {
+        {
             "draft": draft,
             "disposition": "filed",
             "root_causes": [cause],
             "detail": "Verified at the basis.",
             "kind": "root-cause",
-            "dismissed": scripted_agent.dismissed(found, draft, related),
         }
+        | (
+            {"dismissed": dismissed}
+            if (
+                dismissed := [
+                    {"item": item, "reason": "A different root cause from this draft's."}
+                    for item in candidates.get(draft, [])
+                    if item not in related
+                ]
+            )
+            else {}
+        )
         for draft, cause in filed
+        if draft not in carried
     ]
     answers.write_text(json.dumps(held, indent=2) + "\n", encoding="utf-8")
 
@@ -581,7 +599,7 @@ def _file(
         for key, value in metadata["orchestrator.follow-up"].items()
         if key not in WRITTEN_BY_ONEFOLLOWUP
     }
-    _onefollowup(wired, config, "prepare", "--batch", run)
+    prepared = _onefollowup(wired, config, "prepare", "--batch", run)
     tickets = wired.store.work / "tasks" / run / "tickets"
     tickets.mkdir(parents=True, exist_ok=True)
     (tickets / f"{cause}.md").write_text(
@@ -591,7 +609,7 @@ def _file(
     )
     _onefollowup(wired, config, "ticket", "copy", "--batch", run, cause)
     (draft,) = record["drafts"]
-    _dispose(wired, run, [(str(draft), cause)])
+    _dispose(wired, run, [(str(draft), cause)], prepared)
     return _publish(wired, config, run, expected)
 
 
@@ -638,7 +656,7 @@ def _reestimate(wired: Wired, config: Path, item: str, cause: str) -> None:
             stdin=DRAFT_BODY,
         )["draft"]
     )
-    _onefollowup(wired, config, "prepare", "--batch", LATER)
+    prepared = _onefollowup(wired, config, "prepare", "--batch", LATER)
     # The agent finds the earlier ticket for its root cause and reads it.
     found = _onefollowup(
         wired, config, "ticket", "search", "--batch", LATER, "--ticket", cause, "projections"
@@ -666,7 +684,7 @@ def _reestimate(wired: Wired, config: Path, item: str, cause: str) -> None:
         stdin="A metadata write with no transcript read the board's fields again.\n",
     )
     _onefollowup(wired, config, "ticket", "re-estimate", "--batch", LATER, item)
-    _dispose(wired, LATER, [(draft, cause)], item)
+    _dispose(wired, LATER, [(draft, cause)], prepared, frozenset({item}))
     _publish(wired, config, LATER)
 
 

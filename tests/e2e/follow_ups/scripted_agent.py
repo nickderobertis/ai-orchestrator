@@ -5,15 +5,16 @@
 a scripted marker, the argument vectors a journey keys to that marker. This is the one those
 journeys key: it decides what a model would — which draft becomes a ticket, which goes as
 evidence onto a ticket already on the board, what the budget input is disposed as, what each
-person's comment is answered with — and does it with the real programs a model would run:
-`onefollowup ticket validate|copy|comment` and `onefollowup check`, the plan store's own
-`task comment add`, and the files onefollowup's task says the agent writes. Every record any
-of it leaves is those programs'.
+person's comment is answered with, what each groomed ticket's verdict is — and does it with
+the real programs a model would run: `onefollowup ticket validate|copy|comment`, `onefollowup
+check` and `onefollowup groom check`, the plan store's own `task comment add`, and the files
+onefollowup's task says the agent writes. Every record any of it leaves is those programs'.
 
     scripted_agent.py verify <checkout> <batch> <new-draft-title> <evidence-draft-title> \
         <existing-item> <existing-root-cause>
     scripted_agent.py feedback <checkout> <batch>
     scripted_agent.py file <checkout> <batch> <root-cause>
+    scripted_agent.py groom <checkout> <verdicts-by-title.json>
 
 It reads onefollowup's store from `ONEFOLLOWUP_STORE`, which the journey's launch exported
 and the dispatch inherited.
@@ -335,6 +336,39 @@ def feedback(checkout: Path, batch: str) -> None:
         _run(checkout, ["onefollowup", "comments", "check", "--feedback", str(quoted_file)])
 
 
+def groom(checkout: Path, verdicts: Path) -> None:
+    """Answer each ticket of every unanswered grooming shard with the verdict its title keys.
+
+    ``verdicts`` maps a ticket's title to its verdict record less `schema_version` and
+    `ticket`, its `duplicate_of` naming the other ticket by title; the shard's task names each
+    ticket's id beside its title, and the agent writes the ids it read there.
+    """
+    store = Path(os.environ["ONEFOLLOWUP_STORE"])
+    by_title = json.loads(verdicts.read_text(encoding="utf-8"))
+    for task in sorted((store / ".onefollowup" / "groom").glob("*/*/task.md")):
+        answer = task.with_name("verdicts.jsonl")
+        if answer.is_file() and answer.read_text(encoding="utf-8").strip():
+            continue
+        text = task.read_text(encoding="utf-8")
+        listed = dict(
+            (title, ticket) for ticket, title in re.findall(r"^### (\S+): (.+)$", text, re.M)
+        )
+        snapshot = re.search(r"^ {4}(\S*snapshot\.json)$", text, re.M)
+        assert snapshot is not None, text
+        ids = {
+            str(ticket["title"]): str(ticket["ticket"])
+            for ticket in json.loads(Path(snapshot.group(1)).read_text(encoding="utf-8"))["tickets"]
+        }
+        lines = []
+        for title, ticket in listed.items():
+            verdict = dict(by_title[title])
+            if verdict["duplicate_of"] is not None:
+                verdict["duplicate_of"] = ids[verdict["duplicate_of"]]
+            lines.append(json.dumps({"schema_version": 1, "ticket": ticket} | verdict))
+        answer.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _run(checkout, ["onefollowup", "groom", "check", "--batch", task.parent.parent.name])
+
+
 def _reply_id(answer: object) -> str:
     """The id the store gave the comment it added."""
     if isinstance(answer, dict) and isinstance(answer.get("id"), str):
@@ -348,6 +382,8 @@ def main(argv: list[str]) -> None:
             verify(Path(checkout), *rest[:5])
         case ["file", checkout, batch, cause]:
             file(Path(checkout), batch, cause)
+        case ["groom", checkout, verdicts]:
+            groom(Path(checkout), Path(verdicts))
         case [_, checkout, batch, *_]:
             feedback(Path(checkout), batch)
         case _:

@@ -172,6 +172,10 @@ _FOLLOW_UPS = "asking the user whether to verify its drafts by hand with `just f
 _COMMENTS = (
     "People's board comments are answered by `just follow-ups-answer-comments`, which reads the"
 )
+_GROOM = (
+    "`just groom` grooms the follow-ups board as onefollowup's own flow, and `--dry-run` only "
+    "reads it and reports the counts"
+)
 _WORKTREE_READ = (
     "When a dispatch looks silent, read its worktree — its commits, its tree, the "
     "`.logs/` its innermost stage writes"
@@ -378,6 +382,8 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _allow("follow-ups", "just follow-ups {run}", _FOLLOW_UPS),
     _allow("follow-ups-comments", "just follow-ups-answer-comments", _COMMENTS),
     _allow("follow-ups-comments-dry-run", "just follow-ups-answer-comments --dry-run", _COMMENTS),
+    _allow("groom", "just groom", _GROOM),
+    _allow("groom-dry-run", "just groom --dry-run", _GROOM),
     _allow(
         "supersessions",
         "node_modules/.bin/onepipeline supersessions {run} --record",

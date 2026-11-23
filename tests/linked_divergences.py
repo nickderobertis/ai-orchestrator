@@ -31,6 +31,18 @@ class Divergence(NamedTuple):
 #: declared against. A divergence is permitted where the linked release is not
 #: installable from PyPI at all, or where this host's own verbs must run a later release
 #: than any engine links — never as a convenience, and never as "not yet looked at",
-#: because both read identically from here a release cycle later. None is declared on
-#: the adopted engine 0.118.0: every crate it links has a published release its pin names.
-DECLARED_DIVERGENCES: dict[str, Divergence] = {}
+#: because both read identically from here a release cycle later. A linked crate family
+#: is declared under its pin's name, as `tests/test_linked_libraries.py`'s
+#: `RECONCILED_FAMILIES` keys it.
+DECLARED_DIVERGENCES: dict[str, Divergence] = {
+    "onetaskgraph": Divergence(
+        linked="0.15.0",
+        pinned="0.15.1",
+        because=(
+            "this host's follow-up verbs run onefollowup 0.13.2, whose quota governor needs "
+            "onetaskgraph#4080's request-ended signal, first released in 0.15.1, and the "
+            "adopted engine 0.118.0 links 0.15.0, which no dispatch needs past; an onepipeline "
+            "release linking onetaskgraph 0.15.1 or later, adopted between runs, retires it"
+        ),
+    ),
+}

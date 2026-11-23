@@ -3,13 +3,14 @@ onetaskgraph_template: 1
 description: >-
   This host's layer over the follow-up agent's task. onefollowup renders the task itself from
   its shipped template — `onefollowup prepare` for a batch's verification, `onefollowup
-  comments launches` for answering people's comments — and this layer points the agent at
-  that rendering and states only what this host does differently.
+  comments launches` for answering people's comments, `onefollowup groom prepare` for a
+  grooming shard — and this layer points the agent at that rendering and states only what
+  this host does differently.
 variables:
   mode:
     description: >-
       `initial` verifies a batch's drafts and inputs; `feedback` answers the comments one
-      gathering quoted.
+      gathering quoted; `groom` judges the tickets of one grooming shard.
     type: string
     required: true
   batch:
@@ -23,7 +24,8 @@ variables:
   task_file:
     description: >-
       The task onefollowup rendered from its shipped template: the batch's `task.md` in
-      `initial` mode, the batch's feedback file in `feedback` mode.
+      `initial` mode, the batch's feedback file in `feedback` mode, the shard's `task.md` in
+      `groom` mode.
     type: string
     required: true
   acceptance_criteria:
@@ -39,6 +41,9 @@ variables:
 {% if mode == "feedback" -%}
 Answer the people's comments on batch `{{ batch }}`'s follow-up tickets that one gathering
 quoted, as the task at `{{ task_file }}` states.
+{%- elif mode == "groom" -%}
+Verify one shard of grooming batch `{{ batch }}`'s open follow-up tickets against the code
+they are about, answering one verdict per ticket, as the task at `{{ task_file }}` states.
 {%- else -%}
 Verify the follow-up drafts and inputs of batch `{{ batch }}`, and stage one verified ticket
 per root cause for the destination, as the task at `{{ task_file }}` states.
@@ -52,20 +57,29 @@ differs:
   reads this host's `onefollowup.yaml` and plan store; your own working directory is a
   scratch directory that holds neither.
 - **Write nothing to the destination yourself.** Every write is staged through `onefollowup`
-  and sent by the plan's own `publish` and `settle` steps{% if mode == "feedback" %}, except the
+  and sent by the plan's own {% if mode == "groom" %}`publish` step{% else %}`publish` and `settle` steps{% endif %}{% if mode == "feedback" %}, except the
   replies the task tells you to post{% endif %}; never edit a board, an issue or a ticket record
   by any other route.
 
 ## Why
 
+{% if mode == "groom" -%}
+The board drifts as tickets are fixed, superseded or filed twice. Each open ticket needs a
+verdict resting on the code it is about, so that the board holds only what still stands, one
+ticket per real root cause.
+{% else -%}
 The run's people and agents drafted what they noticed outside their own scope, and people
 comment on the tickets filed from it. Each needs a verified answer so that the follow-up board
 holds one ticket per real root cause, and every question on it is answered once.
+{% endif %}
 {% endblock %}
 {% block more_criteria %}
 {% if mode == "feedback" -%}
 - `onefollowup comments check --feedback {{ task_file }}`, run from `{{ checkout }}`, reports
   the response account sound.
+{%- elif mode == "groom" -%}
+- `onefollowup groom check --batch {{ batch }}`, run from `{{ checkout }}` after the final edit
+  to the verdicts, names no problem with a ticket the task at `{{ task_file }}` lists.
 {%- else -%}
 - `onefollowup check --batch {{ batch }}`, run from `{{ checkout }}` after the final edit to the
   answers, reports the batch sound.

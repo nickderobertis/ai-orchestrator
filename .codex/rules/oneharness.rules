@@ -172,6 +172,9 @@ prefix_rule(pattern=["just", "follow-ups"], decision="allow")
 # allowed_tools: Bash(just follow-ups-answer-comments:*)
 prefix_rule(pattern=["just", "follow-ups-answer-comments"], decision="allow")
 
+# allowed_tools: Bash(just groom:*)
+prefix_rule(pattern=["just", "groom"], decision="allow")
+
 # allowed_tools: Bash(node_modules/.bin/onepipeline supersessions:*)
 prefix_rule(pattern=["node_modules/.bin/onepipeline", "supersessions"], decision="allow")
 

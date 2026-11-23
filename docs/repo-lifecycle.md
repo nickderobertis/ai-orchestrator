@@ -264,6 +264,12 @@ and CLI to 0.15.0 and onefollowup to 0.11.0, the release all three link, carryin
 reads a board once per project rather than once per task, a status write that ends an item
 closes its issue, a board listing holds only open items, and a duplicate item is closed.
 onevcs stays at 0.68.0, which the engine still links.
+The adoption after that moves onefollowup to 0.13.2 and the store CLI to 0.15.1: the store
+reads quota, and onefollowup adds `groom`, which verifies each repository at its own default
+branch, and its quota governor. The engine stays at 0.118.0, linking store crates 0.15.0, one
+patch behind the CLI, because the governor needs 0.15.1's request-ended signal and no engine
+links it yet; `tests/linked_divergences.py` declares that gap and an engine linking 0.15.1
+retires it.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole

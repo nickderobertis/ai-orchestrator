@@ -5,3 +5,10 @@ hooks:
   batch_settled: [onepipeline, human-items, raise, --phase, follow-up-review, --context, "{context_file}"]
 comments:
   launch_command: [just, follow-ups-answer-batch, "{batch}", "{feedback}"]
+# Every onefollowup run on this host is paced against the GitHub quota it shares with every
+# other run here, keeping a 20% floor; every other governor key is the shipped default.
+governor:
+  floor_percent: 20
+# `just groom`'s blob-less repository clones, under the store's gitignored `.onefollowup/`.
+groom:
+  clones: .onefollowup/groom/clones
