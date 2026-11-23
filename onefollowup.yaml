@@ -6,9 +6,14 @@ hooks:
 comments:
   launch_command: [just, follow-ups-answer-batch, "{batch}", "{feedback}"]
 # Every onefollowup run on this host is paced against the GitHub quota it shares with every
-# other run here, keeping a 20% floor; every other governor key is the shipped default.
+# other run here, keeping a 20% floor. The reserve kept for the others is their peak burn
+# times the time left to the window's reset, so the peak is measured over the hour GitHub's
+# windows span: the shipped five-minute peak projects one burst across the whole hour,
+# reserving more than the others have spent in any hour here and holding work for most of
+# each window. Every other governor key is the shipped default.
 governor:
   floor_percent: 20
+  peak_window_seconds: 3600
 # `just groom`'s blob-less repository clones, under the store's gitignored `.onefollowup/`.
 groom:
   clones: .onefollowup/groom/clones

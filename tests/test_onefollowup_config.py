@@ -3,10 +3,10 @@
 onefollowup carries the loop — drafts, verification, tickets, comment answers — and this
 repository states only its store, destination, budget inputs, review sink, the command
 `onefollowup comments answer` launches each batch's feedback run with, the quota governor's
-floor and grooming's clone directory, in the root `onefollowup.yaml`. Everything else is
-onefollowup's shipped default, so a key added here is a decision about triage this host has
-deliberately not taken. Read twice: as the file says it, and as the installed `onefollowup
-config show --sources` resolves it.
+floor and peak window, and grooming's clone directory, in the root `onefollowup.yaml`.
+Everything else is onefollowup's shipped default, so a key added here is a decision about
+triage this host has deliberately not taken. Read twice: as the file says it, and as the
+installed `onefollowup config show --sources` resolves it.
 
 The review sink hands the engine the context file onefollowup writes, which names an owner,
 so onefollowup refuses every verb until `hooks.owner.session` is set. That is the launching
@@ -45,7 +45,7 @@ STATED: dict[str, object] = {
         ],
     },
     "comments": {"launch_command": ["just", "follow-ups-answer-batch", "{batch}", "{feedback}"]},
-    "governor": {"floor_percent": 20},
+    "governor": {"floor_percent": 20, "peak_window_seconds": 3600},
     "groom": {"clones": ".onefollowup/groom/clones"},
 }
 
