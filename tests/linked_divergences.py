@@ -41,7 +41,7 @@ DECLARED_DIVERGENCES: dict[str, Divergence] = {
         because=(
             "this host's follow-up verbs run onefollowup 0.13.2, whose quota governor needs "
             "onetaskgraph#4080's request-ended signal, first released in 0.15.1, and the "
-            "adopted engine 0.118.0 links 0.15.0, which no dispatch needs past; an onepipeline "
+            "adopted engine 0.118.1 links 0.15.0, which no dispatch needs past; an onepipeline "
             "release linking onetaskgraph 0.15.1 or later, adopted between runs, retires it"
         ),
     ),
