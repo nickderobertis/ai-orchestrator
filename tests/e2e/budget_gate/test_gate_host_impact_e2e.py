@@ -56,7 +56,7 @@ import yaml
 from waits import end_carrying
 from waits import timeout as e2e_timeout
 
-from orchestrator.gate_impact import Leaked, PeakEntry, Record, StoppedBy
+from orchestrator.gate_impact import Leaked, Record, StoppedBy
 from orchestrator.root import REPO_ROOT
 
 STEP = REPO_ROOT / "scripts" / "gate-budgets.sh"
@@ -437,6 +437,11 @@ def test_files_a_leaked_process_removes_when_stopped_are_still_counted(host: Hos
     host.assert_clean()
 
 
+#: The allocation unit `du` counts in: a planted file can hold one block beyond its size
+#: for the filesystem's own extent metadata, so its measured entry is its size or a block more.
+FILESYSTEM_BLOCK = 4096
+
+
 def _held(host: Host, mebibytes: int) -> str:
     """A stand-in holding a planted file across a sample, measuring it with `du` itself."""
     return (
@@ -455,7 +460,8 @@ def test_the_peak_is_no_smaller_than_what_the_gate_itself_measured(host: Host) -
     assert pushed.verdict("gate-peak-temp-disk") == "within", pushed.stdout
     assert pushed.value("gate-peak-temp-disk") * 1024**3 >= measured, pushed.stdout
     assert pushed.record.peak_bytes >= measured, pushed.record
-    assert PeakEntry("held", 8 * 1024**2) in pushed.record.peak_top, pushed.record
+    held = [entry.bytes for entry in pushed.record.peak_top if entry.path == "held"]
+    assert held and 8 * 1024**2 <= held[0] <= 8 * 1024**2 + FILESYSTEM_BLOCK, pushed.record
     host.assert_clean()
 
 
