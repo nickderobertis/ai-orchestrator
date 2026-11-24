@@ -12,9 +12,14 @@ What it answers is the calls opening a change request makes: who is authenticate
 changes already exist for a head and base, the `pr create` itself, the head commit of
 what was just created, whether it is a draft, which checks its base requires, the `pr
 ready` that lifts one, and each repository's visibility — public, so no repository's
-name is a term another one's publication must keep out of what it writes. The base is
+name is a term another one's publication must keep out of what it writes. The reads
+onevcs makes over GitHub's REST API with `gh api --include` are answered in that API's
+shape, behind a status line, and one it does not answer is a 404 rather than no response,
+which onevcs would wait out as a host it never reached. The base is
 unprotected unless `FAKE_GH_STATE/checks.json` scripts a watch.
-That file contains one `statusCheckRollup` list per poll, with the last repeated;
+That file contains one list of check runs per poll of the head's checks — the
+`statusCheckRollup` of a `pr view`, or a `/commits/{sha}/check-runs` REST read — with the
+last repeated;
 classic protection then requires `aggregate`. The draft journeys model a workflow
 whose aggregate waits on other jobs and which has no `ready_for_review` trigger:
 lifting changes only the draft flag and never starts another run. Workflow-runs
@@ -60,6 +65,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Literal, NamedTuple, NotRequired, TypedDict, cast, get_args
+from urllib.parse import parse_qs
 
 #: Where each call's argv is appended, one JSON list per line.
 CALLS_ENV = "FAKE_GH_CALLS"
@@ -109,6 +115,54 @@ class MergeCommit(TypedDict):
     """The commit GitHub names when it reports a merged change."""
 
     oid: str
+
+
+class RestHead(TypedDict):
+    """The branch and commit a REST change request is opened from."""
+
+    ref: str
+    sha: str
+
+
+class RestBase(TypedDict):
+    """The branch a REST change request is opened onto."""
+
+    ref: str
+
+
+class RestPull(TypedDict):
+    """One change request as GitHub's REST API (`/pulls`) gives it, in the fields read here."""
+
+    number: int
+    html_url: str
+    #: `open` or `closed`; a merged change request is `closed` with `merged` true.
+    state: Literal["open", "closed"]
+    draft: bool
+    title: str
+    #: GitHub answers an empty description as null.
+    body: str | None
+    head: RestHead
+    base: RestBase
+    merged: bool
+    merged_at: str | None
+    merge_commit_sha: str | None
+    #: Null while GitHub has not computed it; this host always has.
+    mergeable: bool
+    mergeable_state: str
+
+
+class RestCheckRun(TypedDict):
+    """One check run on a commit, as `/commits/{sha}/check-runs` lists it."""
+
+    name: str
+    #: `queued`, `in_progress` or `completed`, lower-cased as REST words it.
+    status: str
+    #: Null until the run completes.
+    conclusion: str | None
+    #: Null until the run starts.
+    started_at: str | None
+    head_sha: str
+    details_url: str
 
 
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
@@ -445,23 +499,151 @@ def _view(number: str, call: Call) -> int:
         "mergeStateStatus": "CLEAN",
         "closingIssuesReferences": _closing_references(record),
     }
-    script = _state() / "checks.json"
-    if script.exists() and "statusCheckRollup" in call.fields:
-        # The journey writes these typed fixtures; only their JSON round trip loses the type.
-        stages = cast(list[list[CheckRun]], json.loads(script.read_text(encoding="utf-8")))
-        counter = _state() / "poll"
-        poll = int(counter.read_text()) if counter.exists() else 0
-        remembered["statusCheckRollup"] = stages[min(poll, len(stages) - 1)]
-        counter.write_text(str(poll + 1), encoding="utf-8")
-        observation: Poll = {
-            "time": time.monotonic(),
-            "draft": record["isDraft"],
-            "checks": stages[min(poll, len(stages) - 1)],
-        }
-        with (_state() / "polls.jsonl").open("a", encoding="utf-8") as log:
-            log.write(json.dumps(observation) + "\n")
+    if (_state() / "checks.json").exists() and "statusCheckRollup" in call.fields:
+        remembered["statusCheckRollup"] = _scripted_poll(draft=record["isDraft"])
     sys.stdout.write(json.dumps({field: remembered.get(field) for field in call.fields}) + "\n")
     return 0
+
+
+def _scripted_poll(*, draft: bool) -> list[CheckRun]:
+    """The `checks.json` stage this poll reads, recorded as the host's observation of it."""
+    script = _state() / "checks.json"
+    # The journey writes these typed fixtures; only their JSON round trip loses the type.
+    stages = cast(list[list[CheckRun]], json.loads(script.read_text(encoding="utf-8")))
+    counter = _state() / "poll"
+    poll = int(counter.read_text()) if counter.exists() else 0
+    counter.write_text(str(poll + 1), encoding="utf-8")
+    stage = stages[min(poll, len(stages) - 1)]
+    observation: Poll = {"time": time.monotonic(), "draft": draft, "checks": stage}
+    with (_state() / "polls.jsonl").open("a", encoding="utf-8") as log:
+        log.write(json.dumps(observation) + "\n")
+    return stage
+
+
+#: The reason phrase `gh api --include` prints beside each status this host answers with.
+HTTP_REASONS = {200: "OK", 404: "Not Found"}
+
+
+def _rest(argv: list[str], body: object, *, status: int = 200) -> int:
+    """One REST answer as `gh api` prints it: behind its status line under `--include`.
+
+    `gh` exits non-zero for any status of 400 or more, printing the body all the same.
+    """
+    if "--include" in argv:
+        sys.stdout.write(
+            f"HTTP/2.0 {status} {HTTP_REASONS[status]}\r\n"
+            "Content-Type: application/json; charset=utf-8\r\n\r\n"
+        )
+    sys.stdout.write(json.dumps(body) + "\n")
+    return 0 if status < 400 else 1
+
+
+def _pull(record: Change, repository: Repository) -> RestPull:
+    """One change request in the shape GitHub's REST API (`/pulls`) gives it."""
+    body = records(_state(), repository) / f"pr-{record['number']}.body"
+    merge_commit = record["mergeCommit"]
+    pull: RestPull = {
+        "number": record["number"],
+        "html_url": record["url"],
+        "state": "open" if record["state"] == "OPEN" else "closed",
+        "draft": record["isDraft"],
+        "title": record["title"],
+        "body": (body.read_text(encoding="utf-8") or None) if body.exists() else None,
+        "head": {"ref": record["head"], "sha": record["headRefOid"]},
+        "base": {"ref": record["base"]},
+        "merged": record["state"] == "MERGED",
+        "merged_at": record["mergedAt"],
+        "merge_commit_sha": merge_commit["oid"] if merge_commit else None,
+        "mergeable": True,
+        "mergeable_state": "clean",
+    }
+    return pull
+
+
+def _rest_pulls(argv: list[str], path: str, call: Call) -> int:
+    """`GET /repos/{r}/pulls?head=<owner>:<branch>&base=…&state=…`, filtered as GitHub does."""
+    query = parse_qs(path.split("?", 1)[1])
+    head = query.get("head", [""])[0].split(":", 1)[-1]
+    base = query.get("base", [""])[0]
+    state = query.get("state", ["open"])[0]
+    listed = [
+        _pull(change, call.repository)
+        for change in _remembered(call.repository)
+        if change["head"] == head
+        and (not base or change["base"] == base)
+        and state in ("all", "open" if change["state"] == "OPEN" else "closed")
+    ]
+    return _rest(argv, listed)
+
+
+def _rest_pull(argv: list[str], number: str, call: Call) -> int:
+    """`GET /repos/{r}/pulls/{n}`, merging what the host armed once it may, as `pr view` does."""
+    path = records(_state(), call.repository) / f"pr-{number}.json"
+    if not path.exists():
+        return _rest(argv, {"message": "Not Found"}, status=404)
+    # `cast` for the same reason as in `_remembered`: `hold` wrote this file.
+    record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
+    if record["armed"] and record["state"] == "OPEN" and (_state() / MERGE_PERMIT).exists():
+        record = _merge_now(path, record, call.repository)
+    return _rest(argv, _pull(record, call.repository))
+
+
+def _rest_check_runs(argv: list[str], sha: Commit, query: str, call: Call) -> int:
+    """`GET /repos/{r}/commits/{sha}/check-runs`: the scripted checks, as REST words them.
+
+    A listing filtered by `check_name` asks where one check ran, so it reads the script
+    without counting as a poll of the checks.
+    """
+    named = parse_qs(query).get("check_name", [None])[0]
+    draft = any(
+        change["isDraft"]
+        for change in _remembered(call.repository)
+        if change["headRefOid"] == sha and change["state"] == "OPEN"
+    )
+
+    def run(
+        index: int, name: str, status: str, conclusion: str | None, started: str | None
+    ) -> RestCheckRun:
+        return {
+            "name": name,
+            "status": status.lower(),
+            "conclusion": conclusion.lower() if conclusion else None,
+            "started_at": started,
+            "head_sha": sha,
+            "details_url": f"https://github.com/{call.repository}/actions/runs/1/job/{index}",
+        }
+
+    runs: list[RestCheckRun]
+    if (_state() / "checks.json").exists():
+        if named is None:
+            stage = _scripted_poll(draft=draft)
+        else:
+            # The journey writes these typed fixtures; only their JSON round trip loses it.
+            stages = cast(
+                list[list[CheckRun]],
+                json.loads((_state() / "checks.json").read_text(encoding="utf-8")),
+            )
+            stage = [each for polled in stages for each in polled]
+        runs = [
+            # A scripted run states no start, as its `statusCheckRollup` entry does not.
+            run(index, entry["name"], entry["status"], entry["conclusion"], None)
+            for index, entry in enumerate(stage, start=1)
+        ]
+    else:
+        runs = [
+            run(
+                index,
+                check.name,
+                check.status,
+                None if check.conclusion == "-" else check.conclusion,
+                None
+                if check.status == "queued"
+                else (CHECK_STARTED if draft else CHECK_RERUN_STARTED),
+            )
+            for index, check in enumerate(_checks(), start=1)
+        ]
+    runs = [each for each in runs if named is None or each["name"] == named]
+    return _rest(argv, {"total_count": len(runs), "check_runs": runs})
 
 
 def _ready(number: str, call: Call) -> int:
@@ -680,14 +862,33 @@ def main(argv: list[str]) -> int:
     match argv:
         case ["api", "graphql", *_] if "pullRequest(number:" in _field(argv, "query"):
             return _standings(argv)
-        case ["api", "user", *_]:
+        case ["api", "user", *_] if "--jq" in argv:
             sys.stdout.write("tester\n")
             return 0
+        case ["api", "user", *_]:
+            return _rest(argv, {"login": "tester"})
         case ["api", path, *_] if path == f"repos/{call.repository}":
             # Every repository here is public, so no repository's name is a term another
             # one's publication must keep out of what it writes.
-            sys.stdout.write(json.dumps({"visibility": "public", "private": False}) + "\n")
-            return 0
+            return _rest(argv, {"visibility": "public", "private": False})
+        case ["api", path, *_] if path.startswith(f"repos/{call.repository}/pulls?"):
+            return _rest_pulls(argv, path, call)
+        case ["api", path, *_] if pulled := re.fullmatch(
+            rf"repos/{re.escape(call.repository)}/pulls/(\d+)", path
+        ):
+            return _rest_pull(argv, pulled.group(1), call)
+        case ["api", path, *_] if runs := re.fullmatch(
+            rf"repos/{re.escape(call.repository)}/commits/([0-9a-f]+)/check-runs\?(.*)", path
+        ):
+            return _rest_check_runs(argv, runs.group(1), runs.group(2), call)
+        case ["api", path, *_] if status := re.fullmatch(
+            rf"repos/{re.escape(call.repository)}/commits/([0-9a-f]+)/status\?.*", path
+        ):
+            # No integration posts a commit status here; every check is a check run.
+            return _rest(
+                argv,
+                {"state": "pending", "sha": status.group(1), "total_count": 0, "statuses": []},
+            )
         case ["api", path, *_] if path.startswith(f"repos/{call.repository}/rules/branches/"):
             # Unscripted, no ruleset applies to the base, so none of its rules requires a check.
             return _rules()
@@ -729,6 +930,10 @@ def main(argv: list[str]) -> int:
         case ["pr", "merge", number, *_] if "--squash" in argv:
             return _merge(number, call, auto="--auto" in argv)
     sys.stderr.write(f"fake gh: nothing here answers {argv}\n")
+    if argv[:1] == ["api"] and "--include" in argv:
+        # With a status line, so onevcs reads a refusal rather than a host it never reached,
+        # which it would wait out to its bound instead of failing the journey by name.
+        return _rest(argv, {"message": "Not Found"}, status=404)
     return 1
 
 

@@ -296,7 +296,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.90.0**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.90.1**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, question cards answered by choice or in a
 person's own words, the per-run **Stop** with the owner-naming refusal, and the
