@@ -385,7 +385,9 @@ system_prompt: |
   outside a spikes project has a `spike-` id. The planning flow launches the spikes, keeps
   each branch as `<host prefix>/<plan native id>/spike-<topic>` (`…/spike-<topic>-<n>` where
   a retry of the spike cut its own), and discards them only
-  once the plan's main run succeeds.
+  once the plan's main run succeeds. Adding a spike adds a `depends_on` edge onto it from
+  the spikes project's `finalize` member, never one onto its spike-brief member, so the
+  spikes run re-runs a spike whose task changed and finalize behind it.
 
   **A spike's criteria are two deliverables.** First, the harness committed on its session
   branch, written as a command that performs one measurement, because the figure has to be
@@ -419,10 +421,11 @@ system_prompt: |
   repository's spike orders without carrying its harness. A dependency on a spike in
   another repository orders only, so the dependent's task names that harness by reference.
 
-  **A finalize dispatch reworks the plan from every report**: the targets, and the
-  decomposition and contracts wherever a spike exposed a design problem. It links each
+  **A finalize dispatch reworks the plan from each changed spike's report**: the targets, and the
+  decomposition and contracts wherever a spike exposed a design problem, reworking exactly
+  the tasks whose stored `spikes` answer names a changed spike. The draft links each
   dependent task to the reports and branches it builds on through that task's `spikes`
-  answer, one `{spike, report, branch}` per spike — each spike the task builds on, plus
+  answer before finalize runs, and finalize keeps it current, one `{spike, report, branch}` per spike — each spike the task builds on, plus
   every spike above it in its stacking chain, read from the spikes project's own
   dependency edges, which the finalize note states — so its worker starts from the
   measurements and the harness instead of rediscovering them. A plan task consumes spike

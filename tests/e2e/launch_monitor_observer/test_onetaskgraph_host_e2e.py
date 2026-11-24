@@ -4030,14 +4030,13 @@ def test_a_project_only_named_like_a_spikes_project_is_checked_strictly(
     _refused_naming(_recipe(environment, "check-plan", named), UNRENDERED_RULES[how])
 
 
-#: The rest of the planning and finishing flows' `check` step after its project, the second
-#: form of `plan check` this host's own callers produce beside `just check-plan`'s bare one.
-FLOW_CHECK_STEP = ("--check", "scripts/spike-evidence-check.sh")
 #: `plan check` forms no caller of this host produces, each spelled around ``{project}``:
-#: an option before the project, and an option after it that is no `--check`.
+#: an option before the project, and options after it, which the flows' `check` steps no
+#: longer name since their spike-evidence check was retired.
 UNRECOGNIZED_FORMS = {
     "option-first": ("--json", "{project}"),
-    "other-option-after": ("{project}", "--check", "scripts/spike-evidence-check.sh", "--json"),
+    "check-after": ("{project}", "--check", "scripts/plan-attestation-check.sh"),
+    "other-option-after": ("{project}", "--json"),
 }
 
 
@@ -4060,7 +4059,8 @@ def test_the_flows_check_step_form_relaxes_a_spikes_project_as_check_plan_does(
     tmp_path: Path,
 ) -> None:
     """With `ONEPIPELINE_REQUIRE_RENDERED` absent, the planning flow's `check` step, as its
-    template spells it, accepts a spikes project and refuses a plan's hand-written task."""
+    template spells it — the bare form `just check-plan` runs — accepts a spikes project and
+    refuses a plan's hand-written task."""
     root = tmp_path / "authoring"
     root.mkdir()
     environment = _rendering_environment(root)
@@ -4070,8 +4070,8 @@ def test_the_flows_check_step_form_relaxes_a_spikes_project_as_check_plan_does(
     plan = _described_project(environment, "ordinary")
     _unrendered_task(tmp_path, root, environment, plan, _Unrendered.HAND_WRITTEN)
 
-    accepted = _plan_check(environment, spikes, *FLOW_CHECK_STEP)
-    refused = _plan_check(environment, plan, *FLOW_CHECK_STEP)
+    accepted = _plan_check(environment, spikes)
+    refused = _plan_check(environment, plan)
 
     assert _requires_rendered(WORKFLOWS_LAUNCH_CONFIG) is False, WORKFLOWS_LAUNCH_CONFIG
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr

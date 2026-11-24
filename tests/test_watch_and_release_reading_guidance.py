@@ -53,10 +53,9 @@ LIVE_WATCHERS = shutil.ignore_patterns("watchers", "watch-terms")
 #: Where a planning run's observer is stated, and the words it is stated in.
 PLANNING_OBSERVER_DOCUMENT = "docs/orchestration.md"
 PLANNING_OBSERVER_CLAIM = "`just plan` and `just finish-plan` name `off` instead"
-#: The launchers that claim is about: the two recipes, and the planning flow's step that
-#: launches a plan's spikes.
-PLANNING_RECIPES = ("plan", "finish-plan")
-SPIKES_LAUNCHER = "scripts/spike-records.sh"
+#: The launchers that claim is about: the two recipes, and `spikes`, the planning flows' step
+#: that launches a plan's spikes.
+PLANNING_RECIPES = ("plan", "finish-plan", "spikes")
 #: The flag each names its observer by, quoted with its value so another `off` elsewhere in
 #: the file cannot satisfy it.
 PLANNING_OBSERVER = "--dag-graph off"
@@ -157,9 +156,6 @@ def test_the_planning_launch_really_attaches_no_monitor_of_its_own() -> None:
             f"{PLANNING_OBSERVER_DOCUMENT} tells a supervisor that a planning run attaches "
             "no monitor of its own. Either the recipe changed or the passage did"
         )
-    assert PLANNING_OBSERVER in _flat(_text(SPIKES_LAUNCHER)), (
-        f"{SPIKES_LAUNCHER} no longer launches a plan's spikes with {PLANNING_OBSERVER!r}"
-    )
 
 
 @pytest.mark.reads_checkouts

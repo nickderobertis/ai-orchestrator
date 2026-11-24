@@ -1,8 +1,8 @@
 """The plan-store metadata keys a run writes and no plan authors, as the engine answers them.
 
 The installed engine's `plan writeback-keys --json` is the one source, read through
-`scripts/onepipeline.sh` exactly as `scripts/review-plan-item.sh`, the `refresh-plan` recipe
-and `scripts/spike-records.sh` read it — the union of its `task` and `project` lists — so no
+`scripts/onepipeline.sh` exactly as `scripts/review-plan-item.sh` and the `refresh-plan` recipe
+read it — the union of its `task` and `project` lists — so no
 test restates a key and none can drift from the write-back that owns them.
 """
 

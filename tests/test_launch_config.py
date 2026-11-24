@@ -84,12 +84,9 @@ def test_every_path_a_launch_config_names_is_in_this_checkout(config: Path) -> N
 
 
 def test_only_orchestrates_config_gates_a_launch_and_judges_live_edits() -> None:
-    """The plan's own launch carries its two registered checks and the plan-edit hook."""
+    """The plan's own launch carries its registered check and the plan-edit hook."""
     launch, workflows = _stated(LAUNCH_CONFIG), _stated(WORKFLOWS_CONFIG)
-    assert launch["checks"] == [
-        ["scripts/plan-attestation-check.sh"],
-        ["scripts/spike-evidence-check.sh"],
-    ]
+    assert launch["checks"] == [["scripts/plan-attestation-check.sh"]]
     assert launch["plan_edit_hook"] == {"command": ["scripts/review-plan-item.sh"]}
     for key in ("checks", "plan_edit_hook", "success_hook", "failure_hook", "pr_author_graph"):
         assert key not in workflows, f"{WORKFLOWS_CONFIG.name} states {key}"

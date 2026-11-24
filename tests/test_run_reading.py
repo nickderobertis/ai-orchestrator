@@ -25,7 +25,7 @@ RUN = RunId("run-1")
 ENDED = {
     "labels": {"onepipeline.project": "plans:1"},
     "group": "plans:1",
-    "schema_version": 3,
+    "schema_version": 4,
     "run_id": RUN,
     "public_id": "run-0123456789ab",
     "word": "ENDED failed",
@@ -34,7 +34,14 @@ ENDED = {
     "ending": {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "outcome": None}]},
     "paused": None,
     "nodes": [
-        {"id": "a", "status": "failed", "outcome": "checks-failed", "detail": "red"},
+        {
+            "id": "a",
+            "status": "failed",
+            "outcome": "checks-failed",
+            "detail": "red",
+            "provenance": {"settled": "run", "run": RUN},
+            "changed_dependencies": ["b"],
+        },
         {
             "id": "b",
             "status": "complete-but-held",
@@ -141,7 +148,7 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
         ("", "the answer is not one JSON document"),
         ("[]", "the reading does not carry exactly"),
         (json.dumps(ENDED | {"extra": 1}), "the reading does not carry exactly"),
-        (json.dumps(ENDED | {"schema_version": 1}), "it is schema 1, not 3"),
+        (json.dumps(ENDED | {"schema_version": 1}), "it is schema 1, not 4"),
         (json.dumps(ENDED | {"labels": {"a": 1}}), "its labels are not an object of strings"),
         (json.dumps(ENDED | {"labels": []}), "its labels are not an object of strings"),
         (json.dumps(ENDED | {"group": 3}), "its group is neither a string nor null"),
@@ -228,7 +235,7 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
             json.dumps(DRIVEN | {"unanswered": [{"envelope": "7", "delivery": "held"}]}),
             "an unanswered envelope's delivery is not an object",
         ),
-        (json.dumps(ENDED | {"schema_version": True}), "it is schema true, not 3"),
+        (json.dumps(ENDED | {"schema_version": True}), "it is schema true, not 4"),
         (json.dumps(ENDED | {"run_id": "run-2"}), 'it reads run "run-2", not run-1'),
         (json.dumps(ENDED | {"word": ["SETTLED"]}), 'its word is ["SETTLED"], which'),
         (json.dumps(ENDED | {"liveness": "GONE"}), 'its liveness is "GONE", which'),
@@ -325,6 +332,57 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
                 }
             ),
             "a node awaits releases that are not a list",
+        ),
+        (
+            json.dumps(
+                ENDED
+                | {
+                    "nodes": [
+                        {
+                            "id": "a",
+                            "status": "done",
+                            "outcome": None,
+                            "detail": None,
+                            "provenance": "run",
+                        }
+                    ]
+                }
+            ),
+            "a node's provenance is not an object",
+        ),
+        (
+            json.dumps(
+                ENDED
+                | {
+                    "nodes": [
+                        {
+                            "id": "a",
+                            "status": "done",
+                            "outcome": None,
+                            "detail": None,
+                            "changed_dependencies": [3],
+                        }
+                    ]
+                }
+            ),
+            "a node's changed dependencies are not a list of node ids",
+        ),
+        (
+            json.dumps(
+                ENDED
+                | {
+                    "nodes": [
+                        {
+                            "id": "a",
+                            "status": "done",
+                            "outcome": None,
+                            "detail": None,
+                            "changed_dependencies": "b",
+                        }
+                    ]
+                }
+            ),
+            "a node's changed dependencies are not a list of node ids",
         ),
         (json.dumps(ENDED | {"paused": PAUSED["paused"]}), "it reads both ended and paused"),
         (json.dumps(ENDED | {"driven": True}), "it reads driven and yet ended"),

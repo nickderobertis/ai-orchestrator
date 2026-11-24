@@ -2,9 +2,9 @@
 onetaskgraph_template: 1
 description: >-
   The tail of the planning workflow, for a plan already drafted or edited since: the refresh
-  from its run's current state, the spikes
-  whose definitions changed, the spike evidence, check, review, design document, copy onto
-  the board, and the user's approval. `just finish-plan
+  from its run's current state, the spikes run, which re-runs the spikes whose tasks changed
+  and finalize behind them, check, review, design document, copy onto the board, and the
+  user's approval. `just finish-plan
   <plan>` creates it and launches it in one flow.
 variables:
   plan:
@@ -38,35 +38,25 @@ members:
       onepipeline.kind: command
       onepipeline.command: [just, refresh-plan, "{{ plan }}", "{{ destination }}"]
   - id: "{{ native }}-finishing-spikes"
-    title: "Run the spikes of {{ plan }} whose definitions changed"
+    title: "Run the spikes of {{ plan }} whose tasks changed"
     template: {file: step.md.j2}
     answers:
-      description: "`scripts/spike-records.sh run` runs the spikes of `{{ plan }}-spikes` whose definitions changed since they last ran, attached in this flow, and settles done at once when there are none."
+      description: "`just spikes` runs `{{ plan }}-spikes` to its ending in this flow, whose launch redoes each spike whose task changed since it ran and `finalize` behind it, and settles done at once when there is no spikes project."
     depends_on: ["{{ native }}-finishing-refresh"]
     metadata:
       onepipeline.id: spikes
       onepipeline.kind: command
-      onepipeline.command: [scripts/spike-records.sh, run, "{{ plan }}"]
-  - id: "{{ native }}-finishing-spike-evidence"
-    title: "Record the spike evidence of {{ plan }}"
-    template: {file: step.md.j2}
-    answers:
-      description: "`scripts/spike-records.sh record` records, on each task built on spikes, the spike definitions its evidence now reflects."
-    depends_on: ["{{ native }}-finishing-spikes"]
-    metadata:
-      onepipeline.id: spike-evidence
-      onepipeline.kind: command
-      onepipeline.command: [scripts/spike-records.sh, record, "{{ plan }}"]
+      onepipeline.command: [just, spikes, "{{ plan }}"]
   - id: "{{ native }}-finishing-check"
     title: "Check {{ plan }} as its launch will load it"
     template: {file: step.md.j2}
     answers:
-      description: "`onepipeline plan check` over the plan, whose load holds each release adoption to what this host installs, with the spike-evidence check registered."
-    depends_on: ["{{ native }}-finishing-spike-evidence"]
+      description: "`onepipeline plan check` over the plan, whose load holds each release adoption to what this host installs."
+    depends_on: ["{{ native }}-finishing-spikes"]
     metadata:
       onepipeline.id: check
       onepipeline.kind: command
-      onepipeline.command: [scripts/onepipeline.sh, plan, check, "{{ plan }}", --check, scripts/spike-evidence-check.sh]
+      onepipeline.command: [scripts/onepipeline.sh, plan, check, "{{ plan }}"]
   - id: "{{ native }}-finishing-review"
     title: "Review {{ plan }}"
     template: {file: step.md.j2}
@@ -121,4 +111,4 @@ members:
             title: Approve
             description: The design is right as written, and the plan may run.
 ---
-The finishing run of `{{ plan }}`: refresh, changed spikes, spike evidence, check, review, design document, copy to `{{ destination }}`, and the user's approval.
+The finishing run of `{{ plan }}`: refresh, changed spikes, check, review, design document, copy to `{{ destination }}`, and the user's approval.

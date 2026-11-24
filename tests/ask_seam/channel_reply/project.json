@@ -46,8 +46,6 @@
       "{workspaceRoot}/scripts/decline-ruling-env.sh",
       "{workspaceRoot}/scripts/decline-ruling.sh",
       "{workspaceRoot}/scripts/plan-attestation-check.sh",
-      "{workspaceRoot}/scripts/spike-evidence-check.sh",
-      "{workspaceRoot}/scripts/spike-records.sh",
       "{workspaceRoot}/scripts/review-plan-item.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/templates/templates.yaml",

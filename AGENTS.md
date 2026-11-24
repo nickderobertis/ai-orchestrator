@@ -822,7 +822,7 @@ brief writer is yours: `retry` or `drop` it while spikes run; once the spikes ru
 retrying that step. Acknowledge spike branches until the main run succeeds; a plan
 changing what a user sees gets a `spike-visual`. **A design review changing what a user sees
 regenerates the affected spike in `<plan>-spikes` with the tasks before `just finish-plan`**;
-an edit with no visual effect is `just spike-unaffected <task> --reason "<why>"`.
+an edit with no visual effect needs nothing.
 
 Every live correction carrying task prose is judged by the engine's `plan_edit_hook`
 (`scripts/review-plan-item.sh`); a `note`'s text is not. `templates/dispatch-appendix.md` is
@@ -838,10 +838,8 @@ library verbs it calls; the host-install rules are onevcs's, from `config/onevcs
 - `scripts/budget-design-doc-summary.sh` — the root `design-doc-budget-summary-length` budget's measurement.
 - `scripts/review-plan-item.sh` — `onepipeline plan writeback-keys`, `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onetaskgraph project attestation check` (`--not-status`, `--state`), `onetaskgraph task list`, `onetaskgraph project show`, `onetaskgraph project graph`, `onetaskgraph task show`, `onetaskgraph task attest` and `onetaskgraph project attest`.
 - `scripts/plan-attestation-check.sh` — `oneagentgraph run --judge-only` (`--bar-fingerprint`), `onepipeline template resolve`, `onetaskgraph project attestation check` (`--not-status`, `--state`), `onetaskgraph document list` and `onetaskgraph document attestation check`.
-- `scripts/spike-records.sh` — the spike records and the flows' spikes run: `onetaskgraph task attest`, `onepipeline plan writeback-keys`, `onepipeline start` and `onepipeline watch`, its wait an interim workaround its header states.
-- `scripts/spike-evidence-check.sh` — the spike-evidence check: `onetaskgraph project attestation check`.
 - `scripts/run-ended.sh` — its spike-discard lines: `onepipeline status` and `onepipeline unpublished --project --discard`.
-- `justfile` — the recipes `plan`, `refresh-plan`, `finish-plan`, `check-plan`, `review-plan`, `copy-plan`, `approve-design` and `spike-unaffected`: `onetaskgraph project create`, `project show`, `project copy`, `task list`, `task update-many`, `task deps`, `task update`, `document list` and `document attest`, `llmlint rules`, and `onepipeline flow run`, `start`, `plan check`, `plan writeback-keys`, `template resolve`, `attest` and `adopt`, and `scripts/review-plan-item.sh` and `scripts/spike-records.sh`.
+- `justfile` — the recipes `plan`, `refresh-plan`, `finish-plan`, `spikes`, `check-plan`, `review-plan`, `copy-plan` and `approve-design`: `onetaskgraph project create`, `project show`, `project copy`, `task list`, `task update-many`, `task deps`, `task update`, `document list` and `document attest`, `llmlint rules`, and `onepipeline flow run`, `start`, `plan check`, `plan writeback-keys`, `template resolve`, `attest`, `adopt`, `watch` and `status`, and `scripts/review-plan-item.sh`.
 
 Nothing else under `orchestrator/` or `scripts/` serves planning, and
 `tests/tree_scans/test_planning_ownership.py` holds it.

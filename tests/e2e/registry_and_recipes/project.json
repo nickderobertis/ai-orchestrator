@@ -90,8 +90,6 @@
       "{projectRoot}/**/*",
       "{workspaceRoot}/scripts/review-plan-item.sh",
       "{workspaceRoot}/scripts/plan-attestation-check.sh",
-      "{workspaceRoot}/scripts/spike-evidence-check.sh",
-      "{workspaceRoot}/scripts/spike-records.sh",
       "{workspaceRoot}/config/onepipeline.workflows.yaml"
     ]
   },

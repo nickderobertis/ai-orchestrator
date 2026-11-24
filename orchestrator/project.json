@@ -87,7 +87,6 @@
       "!{workspaceRoot}/tests/e2e/review_drafting/test_*.py",
       "!{workspaceRoot}/tests/e2e/workspace_copies/test_*.py",
       "!{workspaceRoot}/tests/e2e/planning/test_*.py",
-      "!{workspaceRoot}/tests/e2e/finalize_guard/test_*.py",
       "!{workspaceRoot}/tests/e2e/launch_monitor_observer/oneharness_resolved/**/*"
     ]
   },

@@ -44,7 +44,7 @@ __all__ = [
 RunId = NewType("RunId", str)
 
 #: The version of the document this reader reads.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 #: The JSON type of every field of each object the document carries, keyed by the name
 #: the schema gives the object (`RunReading` for the document itself). A type is a JSON
 #: type name, another object's name, or `array[<item type>]`. Every field is present
@@ -71,6 +71,8 @@ FIELD_TYPES: dict[str, dict[str, frozenset[str]]] = {
         "outcome": frozenset({"string", "null"}),
         "detail": frozenset({"string", "null"}),
         "awaiting": frozenset({"array", "null"}),
+        "provenance": frozenset({"Provenance", "null"}),
+        "changed_dependencies": frozenset({"array[string]"}),
     },
     "Ending": {"kind": frozenset({"EndingKind"}), "nodes": frozenset({"array[EndedNode]"})},
     "EndedNode": {
@@ -96,7 +98,7 @@ OPTIONAL_FIELDS: dict[str, frozenset[str]] = {
     "RunReading": frozenset({"unanswered", "inbox"}),
     "UnansweredEnvelope": frozenset({"delivery"}),
     "InboxNote": frozenset(),
-    "ReadingNode": frozenset({"awaiting"}),
+    "ReadingNode": frozenset({"awaiting", "provenance", "changed_dependencies"}),
 }
 #: Every field the document always carries.
 READING_FIELDS = frozenset(FIELD_TYPES["RunReading"]) - OPTIONAL_FIELDS["RunReading"]
@@ -250,6 +252,12 @@ def _nodes(value: object) -> None:
                 )
         if not isinstance(node.get("awaiting"), list | None):
             raise Unreadable("a node awaits releases that are not a list")
+        if not isinstance(node.get("provenance"), dict | None):
+            raise Unreadable("a node's provenance is not an object")
+        changed = node.get("changed_dependencies", [])
+        items = _item(types["changed_dependencies"])
+        if not isinstance(changed, list) or not all(_is(each, items) for each in changed):
+            raise Unreadable("a node's changed dependencies are not a list of node ids")
 
 
 def _unanswered(value: object) -> None:

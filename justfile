@@ -296,16 +296,13 @@ refresh-plan plan destination="plans":
     scripts/plan-store.sh .venv/bin/onetaskgraph project copy "$board" --to "${plan%%:*}" --update-fields status \
         "${strip[@]}" --no-interactive >&2
 
-# `just finish-plan <source>:<project> [destination]` runs the planning road from `check`
+# `just finish-plan <source>:<project> [destination]` runs the planning road from `refresh`
 # onward over a plan already drafted, or edited since: `templates/planning/finishing.md.j2`,
 # created in `authoring` and launched in its own flow under the board credential, since the
 # plan it finishes may be a board copy; its design document is written from the plan's own
 # description. Project and flow are named as `just plan` names them, from the plan's stored
-# title followed by `finishing`. When `scripts/spike-records.sh stale` names a spike, the flow
-# first re-runs the stale spikes, then runs a one-task `<native>-refinalize-<timestamp>`
-# project rendered from `templates/planning/finalize.md.j2`, before the finishing project runs.
-# A planning project's own `finalize` cannot be redone instead: it is a direct node, settled on
-# no branch, which `onepipeline start --redo` refuses.
+# title followed by `finishing`. Its `spikes` step re-runs the spikes whose tasks changed and
+# the spikes project's `finalize` behind them, through the engine's redo of changed work.
 [group("planning")]
 [doc("Check, review, document and copy an already drafted plan, in one flow.")]
 finish-plan plan destination="plans":
@@ -318,39 +315,49 @@ finish-plan plan destination="plans":
         { echo "finish-plan: $plan could not be read from the plan store (its diagnostic is above); name a plan the store holds, then retry" >&2; exit 2; }
     title=$(jq -r '.items[0].item.title // ""' <<<"$shown")
     [ -n "$title" ] || { echo "finish-plan: $plan has no title in the plan store; give it the brief's title, whose first words name what the work changes, then retry" >&2; exit 2; }
-    stale=$(scripts/plan-store.sh scripts/spike-records.sh stale "$plan") ||
-        { echo "finish-plan: could not read which spikes of $plan are stale (the diagnostic is above); repair what it names, then retry" >&2; exit 2; }
-    refinalize=""
-    if [ -n "$stale" ]; then
-        refinalize="authoring:$native-refinalize-${id##*-}"
-        scripts/plan-store.sh .venv/bin/onetaskgraph project create authoring --id "${refinalize#*:}" --title "$title finalize" \
-            --metadata onepipeline.schema_version=3 --no-interactive >&2
-        scripts/plan-store.sh .venv/bin/onetaskgraph task create authoring --project "$refinalize" --title "Finalize $plan from its re-run spikes" \
-            --template templates/planning/finalize.md.j2 --var "plan=$plan" --var "native=$native" \
-            --metadata 'onepipeline.id="finalize"' --metadata 'onepipeline.persona="../personas/planner.yaml"' \
-            --metadata 'onepipeline.agent_graph="graphs/planner.yaml"' --no-interactive >&2
-    fi
     scripts/plan-store.sh .venv/bin/onetaskgraph project create authoring --id "$id" --title "$title finishing" \
         --template templates/planning/finishing.md.j2 --metadata onepipeline.schema_version=3 \
         --var "plan=$plan" --var "native=$native" --var "plan_title=$title" --var destination={{ quote(destination) }} \
         --var "brief_text=$brief_text" \
         --no-interactive >&2
-    exec scripts/plan-store.sh scripts/onepipeline.sh flow run --name "${title//[^A-Za-z0-9._-]/-}-finishing" -- bash -c '
-        set -euo pipefail
-        if [ -n "$3" ]; then
-            scripts/spike-records.sh run "$1"
-            scripts/onepipeline.sh start "$3" --launch-config config/onepipeline.workflows.yaml \
-                --dag-graph off --label kind=planning
-        fi
-        exec scripts/onepipeline.sh start "$2" --launch-config config/onepipeline.workflows.yaml \
-            --dag-graph off --label kind=planning' finish-plan "$plan" "authoring:$id" "$refinalize"
+    exec scripts/plan-store.sh scripts/onepipeline.sh flow run --name "${title//[^A-Za-z0-9._-]/-}-finishing" -- scripts/onepipeline.sh start "authoring:$id" \
+        --launch-config config/onepipeline.workflows.yaml --dag-graph off --label kind=planning
+
+# `just spikes <source>:<plan>` is the planning and finishing runs' `spikes` step: it starts
+# `<plan>-spikes` detached, under the workflows' launch config and the `<native>/<node id>`
+# branch template, and waits on the engine's own `watch --until settled`, which waits through a
+# spike's question to its manager and returns at the run's ending. The launch redoes each spike
+# whose task changed since it ran, and `finalize` behind it, so a re-finish with nothing
+# changed dispatches nothing. Exit 0 when the run settled with every node done, or when the
+# plan has no spikes project; 1 when it ended otherwise; 2 when a read or the launch failed.
+[group("planning")]
+[doc("Run a plan's spikes project to its ending, re-running the spikes whose tasks changed.")]
+spikes plan:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plan={{ quote(plan) }}
+    said=$(mktemp) || { echo "spikes: no temporary file could be made for the plan store's diagnostics; make TMPDIR (or /tmp) a writable directory with free space, then retry" >&2; exit 2; }
+    trap 'rm -f "$said"' EXIT
+    shown=$(.venv/bin/onetaskgraph project show "$plan-spikes" --json --no-interactive 2>"$said") || {
+        [ "$(jq -r '.failure.kind // empty' <<<"$shown" 2>/dev/null)" = no-such-item ] ||
+            { echo "spikes: the plan store could not show $plan-spikes: ${shown:-nothing on stdout} $(cat "$said"); repair what it names, then retry" >&2; exit 2; }
+        echo "no spikes project: $plan-spikes does not exist, so nothing runs"; exit 0; }
+    run=$(scripts/onepipeline.sh start "$plan-spikes" --detach --launch-config config/onepipeline.workflows.yaml --dag-graph off \
+        --label kind=spikes --branch-template "${plan#*:}/{{{{ node.id }}" | tail -n 1 | jq -er '.run_id') ||
+        { echo "spikes: the spikes run of $plan-spikes did not start (the engine's diagnostic is above); repair what it names, then rerun the flow's spikes step" >&2; exit 2; }
+    # The watch's exit 0 is the run settled, and every node `done` in `status` says it
+    # completed; status's `ending` can trail the watch's return, so that field is not read.
+    watched=0
+    scripts/onepipeline.sh watch "$run" --until settled --timeout none || watched=$?
+    [ "$watched" -eq 0 ] && scripts/onepipeline.sh status "$run" --json | jq -e 'all(.nodes[]; .status == "done")' >/dev/null ||
+        { echo "spikes: spikes run $run of $plan-spikes did not settle with every node done (watch exit $watched); read why with 'just results $run', repair or edit the spike in $plan-spikes, then run 'just finish-plan $plan'" >&2; exit 1; }
 
 # `just check-plan <source>:<project>` is the engine's own plan loader, the planning road's
-# `check` step less its spike-evidence check: `onepipeline plan check`, whose load asks the
-# onevcs it links whether each release adoption can complete on this host — refusing a wait
-# on a target `config/onevcs.releases.yml` does not install (`uninstalled`) and a `published`
-# adoption naming no `consumes` behind a producer this host installs (`default-taken`). Exit 1
-# is a refusal.
+# `check` step: `onepipeline plan check`, whose load asks the onevcs it links whether each
+# release adoption can complete on this host — refusing a wait on a target
+# `config/onevcs.releases.yml` does not install (`uninstalled`) and a `published` adoption
+# naming no `consumes` behind a producer this host installs (`default-taken`). Exit 1 is a
+# refusal.
 [group("planning")]
 [doc("Load a plan as its launch will, holding each release adoption to what this host installs.")]
 check-plan plan:
@@ -367,16 +374,6 @@ check-plan plan:
 review-plan plan destination="plans":
     @just refresh-plan {{ quote(plan) }} {{ quote(destination) }}
     @scripts/plan-store.sh scripts/review-plan-item.sh {{ quote(plan) }}
-
-# `just spike-unaffected <task> --reason TEXT` records that an edit to an authoring task built
-# on spikes leaves their evidence true, so the spike-evidence check stops refusing it:
-# `scripts/spike-records.sh unaffected`, attesting the task's `spike-evidence` at its spikes'
-# current fingerprint with the reason as its note. Exit 1 refuses an empty reason or a task
-# naming no spike.
-[group("planning")]
-[doc("Record that an edit to a task built on spikes leaves their evidence true, with the reason.")]
-spike-unaffected task *args:
-    @scripts/plan-store.sh scripts/spike-records.sh unaffected "$@"
 
 # `just approve-design <source>:<project> [run]` records the user's approval on the board
 # copy's design document — `onetaskgraph document attest --kind design-approval`, under the

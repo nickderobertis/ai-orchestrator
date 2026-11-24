@@ -3,13 +3,13 @@
 One sequence on one bench (`planning_bench`), each step through the real recipe:
 
 1. `just plan <brief> board` drafts a two-task plan with no spikes project. Its `spikes` step
-   settles `done` at once — no spikes run is started and no person is asked to approve
-   spikes — and its `finalize` guard settles `finalize` `done (not-needed)` with no planner
-   or judge dispatched for it, so the run goes on to check, review, design and copy and waits
-   at `approve-design` with the plan and its design document on the board copy. Its
-   `approve-design` item is a question to the user quoting the plan's title, offering one
-   Approve choice, and linking the design document through the `copy` step's published
-   `design_url`, which the engine substitutes with where the board copy holds it.
+   settles `done` at once — no spikes run is started, no person is asked to approve
+   spikes, and no finalize planner or judge is dispatched — so the run goes on to check,
+   review, design and copy and waits at `approve-design` with the plan and its design
+   document on the board copy. Its `approve-design` item is a question to the user quoting
+   the plan's title, offering one Approve choice, and linking the design document through
+   the `copy` step's published `design_url`, which the engine substitutes with where the
+   board copy holds it.
 2. `just finish-plan` over the same plan, whose draft is done, creates the `finishing`
    template's members alone and runs them, rewriting the design document. Each of the two
    planning projects loads under the engine's own `plan check`.
@@ -52,8 +52,6 @@ PLANNING_NODES = [
     "refresh",
     "draft",
     "spikes",
-    "finalize",
-    "spike-evidence",
     "check",
     "review",
     "design",
@@ -64,7 +62,6 @@ PLANNING_NODES = [
 FINISHING_NODES = [
     "refresh",
     "spikes",
-    "spike-evidence",
     "check",
     "review",
     "design",
@@ -93,7 +90,6 @@ class Sequence(NamedTuple):
     planned: subprocess.CompletedProcess[str]
     planning_run: str
     planning: dict[str, object]
-    journal: list[dict[str, object]]
     items: list[dict[str, Any]]
     finished: subprocess.CompletedProcess[str]
     finishing_run: str
@@ -197,12 +193,6 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     assert_reviewed_on_codex(judge_inputs(bench_), planned)
     planning_run = _only_run(bench_, "-planning")
     planning = status(bench_, planning_run)
-    journal = [
-        json.loads(line)
-        for line in (bench_.runs / planning_run / "events.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
     items = _items(bench_, planning_run)
     planning_approval = _approval(bench_, f"{native}-planning-")
 
@@ -255,7 +245,6 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         planned,
         planning_run,
         planning,
-        journal,
         items,
         finished,
         finishing_run,
@@ -310,45 +299,11 @@ def test_a_plan_with_no_spikes_runs_no_spikes_and_asks_nobody_about_them(
     assert [title for title in titles if "design" in title.lower()], titles
 
 
-def _node(answer: dict[str, object], node_id: str) -> dict[str, object]:
-    nodes = answer.get("nodes")
-    assert isinstance(nodes, list), answer
-    (found,) = [node for node in nodes if isinstance(node, dict) and node.get("id") == node_id]
-    return found
-
-
-def _finalize_events(journal: list[dict[str, object]]) -> list[dict[str, object]]:
-    """Every journal record labelled with the `finalize` node, the engine's and any graph's."""
-    return [
-        event
-        for event in journal
-        if isinstance(labels := event.get("labels"), dict)
-        and "finalize" in (labels.get("node"), labels.get("onepipeline.node"))
-    ]
-
-
-def test_finalize_is_not_needed_and_settles_without_a_dispatch(sequence: Sequence) -> None:
-    """The guard reads the plan's empty spikes project and settles finalize `not-needed`.
-
-    Read three ways, so none of them stands alone: the run's status, the journal holding the
-    guard's verdict and no dispatch of the node, and the doubled model's turn log holding no
-    turn — planner or judge — for the finalize task.
-    """
-    finalize = _node(sequence.planning, "finalize")
-    assert finalize.get("status") == "done", finalize
-    assert finalize.get("outcome") == "not-needed", finalize
-    assert "no spikes" in str(finalize.get("detail")), finalize
-
-    events = _finalize_events(sequence.journal)
-    kinds = [str(event.get("kind")) for event in events]
-    (evaluated,) = [event for event in events if event.get("kind") == "guard-evaluated"]
-    payload = evaluated.get("payload")
-    assert isinstance(payload, dict), evaluated
-    assert payload.get("verdict") == "not-needed", evaluated
-    assert payload.get("exit_code") == 3, evaluated
-    assert "node-dispatched" not in kinds, kinds
-    assert all(event.get("source") == "pipeline" for event in events), kinds
-
+def test_a_plan_with_no_spikes_dispatches_no_finalize(sequence: Sequence) -> None:
+    """Finalize is a member of a spikes project alone, so a plan with none holds no
+    `finalize` node and the doubled model's turn log holds no turn — planner or judge — for
+    the finalize task."""
+    assert "finalize" not in _nodes(sequence.planning), sequence.planning
     turns = [
         json.loads(line)
         for line in sequence.bench.turn_log.read_text(encoding="utf-8").splitlines()

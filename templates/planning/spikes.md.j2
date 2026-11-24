@@ -2,12 +2,11 @@
 onetaskgraph_template: 1
 description: >-
   The spikes of one plan, as a plan graph: the writer of the brief of what they will
-  measure, and the spikes the draft adds, which run beside it and never wait on it. The
-  draft creates it as `<plan>-spikes` only when the plan needs a measurement; the planning
-  run's `spikes` step launches it in the same flow, and its `finalize` step reworks the
-  plan from their reports. Finalize is
-  not a member here because the engine refuses any node depending on a `publish:
-  "preserve"` node, and every spike is one.
+  measure, which never waits on them, the spikes the draft adds, and `finalize`, which
+  reworks the plan from their reports and depends on every spike, as the draft adds each
+  with its edge. The draft creates it as `<plan>-spikes` only when the plan needs a
+  measurement, and the planning and finishing runs' `spikes` step launches it in the same
+  flow. A launch redoes each spike whose task changed since it ran, and finalize behind it.
 variables:
   plan:
     description: The qualified id of the plan whose spikes these are, `authoring:<native id>`.
@@ -28,5 +27,16 @@ members:
       onepipeline.id: spike-brief
       onepipeline.persona: ../personas/spike-brief.yaml
       onepipeline.agent_graph: graphs/spike-brief.yaml
+  - id: "{{ native }}-spikes-finalize"
+    title: "Finalize {{ plan }} from its spikes"
+    template: {file: finalize.md.j2}
+    answers:
+      plan: "{{ plan }}"
+      native: "{{ native }}"
+    metadata:
+      onepipeline.id: finalize
+      onepipeline.persona: ../personas/planner.yaml
+      onepipeline.agent_graph: graphs/planner.yaml
 ---
-The spikes of `{{ plan }}`: the spike brief's writer and each spike, run side by side.
+The spikes of `{{ plan }}`: the spike brief's writer and each spike, run side by side, and
+`finalize` behind every spike.

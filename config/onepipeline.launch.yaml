@@ -40,11 +40,8 @@ pr_author_graph: graphs/pr-author.yaml
 # `plan-review` attestation valid under the planner's current bar and
 # its design document a valid `design-approval`, each read with `onetaskgraph ...
 # attestation check`, the plan read from the check document's `project`.
-# `scripts/spike-evidence-check.sh`, reading the same `project`, refuses a task built on spikes
-# that changed after its spike evidence was recorded while those spikes did not.
 checks:
   - [scripts/plan-attestation-check.sh]
-  - [scripts/spike-evidence-check.sh]
 # Every live edit that introduces or changes a node's task — `amend`, `retry`, `requeue`,
 # `add` — is judged by the same judge-only review as authoring before any of it applies; a
 # `note` never reaches it.

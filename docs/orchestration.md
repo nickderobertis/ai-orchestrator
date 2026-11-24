@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.118.1. The whole of that reasoning —
+onepipeline 0.119.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -302,7 +302,7 @@ Linear's Triage is never written, because it has its own meaning in Linear.
 board**, and `just plan` performs everything down to the approval as one planning run:
 
 ```sh
-just plan brief.md                       # draft → spikes → finalize → check → review →
+just plan brief.md                       # draft → spikes (and finalize) → check → review →
                                          # design → copy, then waits at approve-design
 just approve-design plans:<project> <run> # the user's approval of the copy they read
 just orchestrate plans:<project>
@@ -323,9 +323,8 @@ which is the point of it. Its members, in order:
 | --- | --- | --- |
 | `refresh` | command | `just refresh-plan <plan> <destination>`: a replan starts from its run's current state |
 | `draft` | planner, `graphs/planner.yaml` | writes the plan into `authoring`, and `<plan>-spikes` when it needs a measurement |
-| `spikes` | command | starts the spikes run in the same flow when the draft created one; `done` at once otherwise |
-| `finalize` | planner, guarded | reworks the plan from the spike reports; its guard settles it `done (not-needed)` without a dispatch when the plan has no spikes |
-| `check` | command | `onepipeline plan check <plan> --check scripts/spike-evidence-check.sh` |
+| `spikes` | command | `just spikes <plan>`: runs `<plan>-spikes`, its spikes and then its `finalize`, to its ending in the same flow when the draft created one; `done` at once otherwise |
+| `check` | command | `onepipeline plan check <plan>` |
 | `review` | command | `scripts/review-plan-item.sh <plan>` |
 | `design` | design-doc writer, `graphs/design-doc.yaml` | renders the design document as a document of the plan |
 | `copy` | command | `just copy-plan <plan> <destination>`, publishing the step output `design_url` |
@@ -513,7 +512,7 @@ It never writes the project's title, description or labels, and on an item it na
 the fields a projection changed — the status word, the engine's own `onepipeline.*` keys,
 and, where the node's definition moved, its title, body, `delivers` and `depends_on` — so
 a body somebody authored on the board survives every settlement of every run launched from
-it, re-read on the adopted onepipeline 0.118.1, and a person's edit to any field stands
+it, re-read on the adopted onepipeline 0.119.0, and a person's edit to any field stands
 until the run next changes that same field. Below the 0.16.3 that fixed it, it did not:
 the shadow project a copy wrote over the board was built with the body hardcoded to an
 empty string and the copy is a total replacement by contract, so every destination
@@ -535,7 +534,7 @@ is written, and the destination is left exactly as it was. A read that could fal
 a default is a read that can delete, so this is the property that makes the preservation
 above worth anything. It is held in onepipeline's own suite rather than here: since
 https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted onepipeline
-0.118.1 among them — reads and projects plans through the linked onetaskgraph crates and
+0.119.0 among them — reads and projects plans through the linked onetaskgraph crates and
 ignores `ONETASKGRAPH_BIN`, so no host seam can
 inject a refused read into the store in process any more, and
 `store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
@@ -548,7 +547,7 @@ prompt first retry to a one-minute ceiling instead of retrying about four times 
 resets that schedule once it recovers, and retries until the projection lands; stopping or
 settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.118.1, that schedule answers only the failures a retry can change. A projection the store
+0.119.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. A
@@ -765,23 +764,27 @@ single design rendering rule is `templates/design-doc.md.j2`'s `budgets_guidance
 
 **A draft that cannot know a budget's number without measuring, or is unsure of an
 approach, writes spikes.** It creates `<plan project>-spikes` from
-[`templates/planning/spikes.md.j2`](../templates/planning/spikes.md.j2) — whose one member is
-the `spike-brief` writer — and adds one lifecycle node `spike-<topic>` per spike, keeping its
-branch (`onepipeline.publish: "preserve"`) and depending on no member of the template: its
-only dependency is a harness spike it builds on, where it has one. The planning run's
-`spikes` step starts that run in the same flow with a branch template naming the plan, so
-each branch is `<host prefix>/<plan native id>/spike-<topic>`, and the spikes start at once,
-beside the brief writer, with nobody approving them. Each spike writes its report as the
-document `<plan native id>-<spike id>-report` of the **plan's** project, from
-`templates/spike-report.md.j2`, so it travels to the board with the plan. The planning run's
-`finalize` planner then reworks the plan from the reports. A draft with no spikes creates no
-spikes project, and the `spikes` step settles `done` at once. `finalize` is guarded: its
-`onepipeline.guard`, which the engine runs with no shell of its own before dispatching it,
-lists `<plan>-spikes` through `.venv/bin/onetaskgraph task list` and counts its tasks. None
-exits 3, so `finalize` settles `done (not-needed)` without a dispatch, a planner or a judge,
-and check, review, design and copy follow at once; one or more exits 0 and dispatches the
-planner. A lookup that fails exits 2, never 3, so the node settles `failed` with outcome
-`guard-failed` and the run stops rather than skipping a finalize the plan needed.
+[`templates/planning/spikes.md.j2`](../templates/planning/spikes.md.j2) — whose members are
+the `spike-brief` writer and `finalize`, a planner rendered from
+[`templates/planning/finalize.md.j2`](../templates/planning/finalize.md.j2) — and adds one
+lifecycle node `spike-<topic>` per spike, keeping its branch (`onepipeline.publish:
+"preserve"`), depending on no member of the template, its only dependency a harness spike it
+builds on where it has one, and with each spike a `depends_on` edge from `finalize` onto it.
+The planning run's `spikes` step, `just spikes <plan>`, starts that project detached in the
+same flow with a branch template naming the plan, so each branch is `<host prefix>/<plan
+native id>/spike-<topic>`, and the spikes start at once, beside the brief writer, with nobody
+approving them. Each spike writes its report as the document `<plan native id>-<spike
+id>-report` of the **plan's** project, from `templates/spike-report.md.j2`, so it travels to
+the board with the plan. `finalize`, a direct node depending on every spike as an ordering
+edge, then reworks the plan from the reports of the spikes its own entry of `onepipeline
+status --json` lists in `changed_dependencies` — every spike on its first run — reworking
+exactly the tasks whose stored `spikes` answer names one of them, which the draft answered
+with the spikes each task builds on, and no other task, all of them when none names a listed
+spike. The step
+waits with the engine's own `onepipeline watch <run> --until settled`, which waits through a
+spike worker's `ORCHESTRATOR_ASK_MANAGER` question until the manager answers it, and fails
+unless the run settled with every node done. A draft with no spikes creates no spikes project, and the
+`spikes` step settles `done` at once.
 
 **The spike brief is information, and nothing waits on it.** The brief writer writes the
 document `<plan native id>-spike-brief` and raises one non-blocking `check-in` surface on
@@ -799,36 +802,26 @@ brief writer in the spikes run with a reason — an edit carrying a failed endin
 complete one starts a new epoch — then `settle`s the planning run's failed `spikes` node
 `done`, with evidence that its spikes completed, and never retries that step.
 
-**Both flows' `spikes` step re-runs exactly the spikes whose definitions changed.** It is
-`scripts/spike-records.sh run`, which keeps two records in the plan store, each attested
-excluding every task key `onepipeline plan writeback-keys` prints, so the engine's write-back
-never voids one. A `spike-definition` record on each spike is attested `launched` as its run
-starts and `ran` once the run settled it `done` with its task unmoved; a spike is current
-while that record checks `valid` under `ran`. Stale spikes run on a fresh continuing run of
-`<plan>-spikes`, with `start --redo` for each that settled `done` before, so its session
-continues the branch it kept and its worker, told so by `templates/dispatch-appendix.md`,
-updates the report it already wrote — for `spike-visual`, only the entries its definition
-changed; every other spike is continued without a dispatch. A spike that settled `done` and
-holds no record ran before these records were kept: the step backfills it to `ran`, naming
-it, and never re-runs it. A spike edited while its run was under way stays at `launched`, and
-the step fails naming it. The step waits on its run with `onepipeline status` and
-`onepipeline watch` after the attached `start` returns — an interim workaround, because the
-pinned engine's attached `start` also returns when a spike worker's
-`ORCHESTRATOR_ASK_MANAGER` question waits, retired by an onepipeline follow-up keeping it
-waiting across a blocking surface — and fails unless the run ended `complete`. When a spike
-is stale, `just finish-plan` re-runs it first, then runs a one-task finalize project rendered
-from `templates/planning/finalize.md.j2`, which reworks the tasks `scripts/spike-records.sh
-rework` lists from the refreshed reports, before the finishing run; the finishing project
-holds no `finalize` of its own. A planning project's `finalize` is not redone instead: it is a
-direct node, settled on no branch, which `start --redo` refuses.
+**Both flows' `spikes` step re-runs exactly the spikes whose tasks changed.** Staleness is
+an ordinary dependency: each launch of `<plan>-spikes` redoes every node settled `done` whose
+task changed since the dispatch it settled on, and each `done` dependent of one, which the
+engine's `start` does unless told `--keep-changed`. So a changed spike runs again, its
+session continuing the branch it kept and its worker, told so by
+`templates/dispatch-appendix.md`, updating the report it already wrote — for `spike-visual`,
+only the entries its definition changed — and `finalize` runs afresh behind it, reworking
+exactly the tasks built on the spikes that changed. A re-finish with no spike changed, the
+first after a plan's first run included, dispatches nothing in the spikes project and reworks
+nothing; a spike edited while its run was under way runs again on the next re-finish; and a
+spikes run that ended before `finalize` settled `done` leaves the spikes it re-ran listed, so
+the next re-finish runs `finalize` over them. An edit to a task built on spikes is never
+refused for it: an edit with a visual effect regenerates the affected spike in
+`<plan>-spikes` before `just finish-plan`, and one without needs nothing.
 
-**A `spike-evidence` record holds each task to the spikes it builds on.** The flows'
-`spike-evidence` step attests it on each task whose `spikes` answer names a spike, its bar a
-digest of those spikes' `spike-definition` records, and leaves alone a task edited since
-while its spikes were not. `scripts/spike-evidence-check.sh`, registered on both flows'
-`check` step and in the launch config, refuses such a task naming its spikes and the two ways
-on: edit those spikes in `<plan>-spikes` to match and run `just finish-plan`, or record that
-the edit leaves their evidence true with `just spike-unaffected <task> --reason "<why>"`.
+**A spikes plan drafted before `finalize` joined the spikes project behaves differently
+once**, and nothing here compensates. Its `finalize` member and edges were added to the
+host's authoring projects once; its first re-finish reworks every task built on spikes
+once, and an edit to one of its spikes is not detected until that spike has re-run once.
+Redrafting the plan avoids both.
 
 **A spike may build on a shared harness spike.** Spikes needing one measurement harness
 depend on a spike that builds it, and the engine starts each one's session from the branch
@@ -858,7 +851,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.118.1 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.119.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -1037,7 +1030,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.118.1 by dumping both sides of a monitor member's whole
+  against onepipeline 0.119.0 by dumping both sides of a monitor member's whole
   environment on the suite's real launches, their paid model doubled: the judge side by
   the probe `tests/e2e/observer_environment.py` stands in for the judge command with, the
   agent side by the stand-in harness's monitor turn recording all of it.
@@ -1441,7 +1434,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.118.1 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.119.0 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1612,7 +1605,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.118.1**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.119.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -1888,7 +1881,7 @@ events stay the record of what an edit became, and are where a `queued` one is r
 **A `queued` receipt resolves even across a driver's death.** A driver claims an
 envelope — moves the channel's command cursor past it — before it answers it, so one
 that died between the two used to take the claimed edits and notes with it. On the
-adopted onepipeline 0.118.1 every record an envelope's effects leave — `edit-committed`,
+adopted onepipeline 0.119.0 every record an envelope's effects leave — `edit-committed`,
 `command-accepted`, `edit-rejected` and `note-shown` — names that `envelope`, and `just
 orchestrate --adopt` replays each envelope the dead driver claimed and never answered
 exactly once: one the journal already shows applied is answered from that record rather
@@ -3521,7 +3514,7 @@ the contract.
 
 **A landing a manager starts is owed the same way, from before it acts until it closes.**
 `just publish-branch`, `just repo-recover` and `just integrate` run the engine's own landing
-verbs, which on the adopted onepipeline 0.118.1 register each landing as supervised work of the
+verbs, which on the adopted onepipeline 0.119.0 register each landing as supervised work of the
 session that started it — in the live flow of that session the verb runs inside, or in a
 flow registered for that landing alone — before drafting, preparing or pushing anything,
 and print it:
@@ -4195,7 +4188,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.118.1 rather than restating it independently.
+declaration as it stands in onepipeline 0.119.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and four optional fields: a `criterion`; a `deliver` of `live`, `turn-end` or
@@ -4353,7 +4346,7 @@ outcome` — is answered by that next driver before anything it claims itself, s
 lost.
 
 **A `cancel` does not wait behind a note its node never answers.** On the adopted
-onepipeline 0.118.1 a `cancel` its envelope would apply refuses, in its node's
+onepipeline 0.119.0 a `cancel` its envelope would apply refuses, in its node's
 conversation's place, each note to that node still outstanding — offered or waiting
 behind another — with a reason naming the cancelling envelope, so no turn is presented
 with it; each such refusal is the note's own `edit-rejected` record, and the notes'

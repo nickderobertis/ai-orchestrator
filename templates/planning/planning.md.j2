@@ -3,8 +3,8 @@ onetaskgraph_template: 1
 description: >-
   The planning workflow for one brief, as a plan graph: a plan its run has started is first
   refreshed from the run's current state, the planner drafts the plan, any
-  spikes it needs run and a planner finalizes the plan from their reports, the plan is
-  checked and reviewed, its design document is written,
+  spikes it needs run and the spikes project's `finalize` reworks the plan from their
+  reports, the plan is checked and reviewed, its design document is written,
   plan and document are copied onto the board, and the run waits for the user's approval.
   `just plan <brief>` creates it and launches it in one flow.
 variables:
@@ -65,68 +65,22 @@ members:
     title: "Run the spikes of {{ plan }}, if it has any"
     template: {file: step.md.j2}
     answers:
-      description: "`scripts/spike-records.sh run` runs the spikes of `{{ plan }}-spikes` whose definitions changed since they last ran, attached in this flow, and settles done at once when there are none."
+      description: "`just spikes` runs `{{ plan }}-spikes` to its ending in this flow — its spikes, then its `finalize`, which reworks the plan from their reports — and settles done at once when there is no spikes project."
     depends_on: ["{{ native }}-planning-draft"]
     metadata:
       onepipeline.id: spikes
       onepipeline.kind: command
-      onepipeline.command: [scripts/spike-records.sh, run, "{{ plan }}"]
-  - id: "{{ native }}-planning-finalize"
-    title: "Finalize {{ plan }} from its spikes, if it has any"
-    template: {file: finalize.md.j2}
-    answers:
-      plan: "{{ plan }}"
-      native: "{{ native }}"
-    depends_on: ["{{ native }}-planning-spikes"]
-    metadata:
-      onepipeline.id: finalize
-      onepipeline.persona: ../personas/planner.yaml
-      onepipeline.agent_graph: graphs/planner.yaml
-      # The engine runs this guard, with no shell of its own, before dispatching finalize: exit 3
-      # settles it `done (not-needed)` with no dispatch, 0 dispatches it, and anything else fails
-      # it `guard-failed`. Only the script's own decision exits 3; a failed lookup exits 2.
-      onepipeline.guard:
-        - bash
-        - -c
-        - |
-          set -o pipefail
-          plan=$1
-          if ! listed=$(.venv/bin/onetaskgraph task list --source "${plan%%:*}" --project "$plan-spikes" --json --no-interactive); then
-            echo "the plan store could not list $plan-spikes, so whether $plan has spikes cannot be told" >&2
-            exit 2
-          fi
-          if ! count=$(jq -er 'if (.errors // []) == [] and (.items | type) == "array" then .items | length else error("not a whole listing") end' <<<"$listed") ||
-            ! [[ $count =~ ^[0-9]+$ ]]; then
-            echo "the plan store's listing of $plan-spikes could not be counted: $listed" >&2
-            exit 2
-          fi
-          if [ "$count" -eq 0 ]; then
-            echo "$plan has no spikes project, so there is nothing to finalize" >&2
-            exit 3
-          fi
-          exit 0
-        - finalize-guard
-        - "{{ plan }}"
-  - id: "{{ native }}-planning-spike-evidence"
-    title: "Record the spike evidence of {{ plan }}"
-    template: {file: step.md.j2}
-    answers:
-      description: "`scripts/spike-records.sh record` records, on each task built on spikes, the spike definitions its evidence now reflects."
-    depends_on: ["{{ native }}-planning-finalize"]
-    metadata:
-      onepipeline.id: spike-evidence
-      onepipeline.kind: command
-      onepipeline.command: [scripts/spike-records.sh, record, "{{ plan }}"]
+      onepipeline.command: [just, spikes, "{{ plan }}"]
   - id: "{{ native }}-planning-check"
     title: "Check {{ plan }} as its launch will load it"
     template: {file: step.md.j2}
     answers:
-      description: "`onepipeline plan check` over the plan, whose load holds each release adoption to what this host installs, with the spike-evidence check registered."
-    depends_on: ["{{ native }}-planning-spike-evidence"]
+      description: "`onepipeline plan check` over the plan, whose load holds each release adoption to what this host installs."
+    depends_on: ["{{ native }}-planning-spikes"]
     metadata:
       onepipeline.id: check
       onepipeline.kind: command
-      onepipeline.command: [scripts/onepipeline.sh, plan, check, "{{ plan }}", --check, scripts/spike-evidence-check.sh]
+      onepipeline.command: [scripts/onepipeline.sh, plan, check, "{{ plan }}"]
   - id: "{{ native }}-planning-review"
     title: "Review {{ plan }}"
     template: {file: step.md.j2}
@@ -181,5 +135,5 @@ members:
             title: Approve
             description: The design is right as written, and the plan may run.
 ---
-The planning run of `{{ plan }}`, from the brief `{{ brief }}`: refresh, draft, spikes, finalize, spike evidence, check, review,
+The planning run of `{{ plan }}`, from the brief `{{ brief }}`: refresh, draft, spikes, check, review,
 design document, copy to `{{ destination }}`, and the user's approval.

@@ -1,9 +1,10 @@
-"""A spikes run that ends unsuccessfully stops the planning run before it finalizes anything.
+"""A spikes run that ends unsuccessfully finalizes nothing and stops the planning run.
 
 `just plan` drafts a plan whose one spike names an execution checkout nothing registered, so
 the spike cannot be dispatched and the spikes run — which nothing approves or attests — ends
-without completing. The planning run's `spikes` step then fails, and nothing
-after it runs: no finalize, check, review, design document or board copy.
+without completing, its `finalize` never dispatched behind the spike. The planning run's
+`spikes` step then fails, and nothing after it runs: no check, review, design document or
+board copy.
 
 Human items, plans and follow-up drafts stay in the bench's own local sources, and every
 `onevcs` record in the scratch identity's registry.
@@ -32,7 +33,7 @@ pytestmark = [
 #: How long the plan recipe may take to return.
 SETTLE_SECONDS = 900.0
 #: The steps after `spikes`, none of which may run once it fails.
-AFTER_SPIKES = ("finalize", "spike-evidence", "check", "review", "design", "copy", "approve-design")
+AFTER_SPIKES = ("check", "review", "design", "copy", "approve-design")
 
 
 class Failed(NamedTuple):
@@ -95,9 +96,12 @@ def failed(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Ite
 def test_the_spikes_run_ends_without_completing(failed: Failed) -> None:
     ending = failed.spikes.get("ending")
     assert isinstance(ending, dict) and ending.get("kind") != "complete", failed.spikes
-    assert _nodes(failed.spikes)["spike-health"] != "done", failed.spikes
-    # No approval step held the spike: the template's one member is the brief writer.
-    assert sorted(_nodes(failed.spikes)) == ["spike-brief", "spike-health"], failed.spikes
+    nodes = _nodes(failed.spikes)
+    assert nodes["spike-health"] != "done", failed.spikes
+    # No approval step held the spike: the template's members are the brief writer and
+    # finalize, which waits on the spike and so never ran.
+    assert sorted(nodes) == ["finalize", "spike-brief", "spike-health"], failed.spikes
+    assert nodes["finalize"] not in ("done", "running"), failed.spikes
 
 
 def test_the_spikes_step_fails_and_nothing_after_it_runs(failed: Failed) -> None:

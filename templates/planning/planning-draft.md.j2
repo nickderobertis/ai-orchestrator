@@ -47,9 +47,17 @@ title plus ` spikes`, `{{ plan_title }} spikes`, and give it
 `--metadata onepipeline.schema_version=3`), then add one lifecycle task per spike to it, with the node id
 `spike-<topic>`, `onepipeline.publish: "preserve"`, its `repo` and `execution_checkout`, and
 no dependency on any member of the spikes template: its only dependency inside the spikes
-project is a harness spike it builds on, where it has one. The planning run's `finalize` step
-reworks the plan from their reports once the spikes run completes. Each spike writes its report as the document `<native id>-<spike id>-report` of
-`{{ plan }}` from the `spike-report` template. A plan that needs no measurement creates no
+project is a harness spike it builds on, where it has one. With each spike, add a
+`depends_on` edge from that project's `finalize` member onto it (`onetaskgraph task update`
+with every spike's `--depends-on`), and none onto the spike-brief member: `finalize` reworks
+the plan from the spikes' reports once they have all run, and the spikes run re-runs it
+behind any spike whose task changes. Each spike writes its report as the document `<native id>-<spike id>-report` of
+`{{ plan }}` from the `spike-report` template. Answer each task of `{{ plan }}` that builds on
+a spike with its `spikes` entries now, one `{spike, report, branch}` per spike: the report
+that document's id, and the branch the spikes step's branch template names,
+`<native id>/<spike id>`. `finalize` reworks exactly the tasks whose stored `spikes` answer
+names a spike that changed and never infers which tasks build on one, so a task answered
+with no spike is never reworked from a report. A plan that needs no measurement creates no
 spikes project, and a plan with no spikes project runs no spikes.
 
 **Replanning a plan its run has started.** When `{{ plan }}` already holds a copy in
@@ -80,7 +88,7 @@ rules, so write them to these rules on the first draft:
 
 - `{{ plan }}` is titled `{{ plan_title }}` and holds the plan the brief asks for: its description rendered from `plan-description` and every task rendered from `plan-task`, each with its `orchestrator.unit` and its budget record.
 - Every task and the description are written to the plan checklist's rules above.
-- Where the plan needs a measurement, `{{ plan }}-spikes`, titled `{{ plan_title }} spikes`, holds a spike task for it from the spikes template; otherwise no spikes project exists.
+- Where the plan needs a measurement, `{{ plan }}-spikes`, titled `{{ plan_title }} spikes`, holds a spike task for it from the spikes template, and that project's `finalize` depends on every spike, and every task that builds on a spike names it in its `spikes` answer; otherwise no spikes project exists.
 
 ## Additional info
 

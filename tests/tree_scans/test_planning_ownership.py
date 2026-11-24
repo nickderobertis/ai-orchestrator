@@ -7,9 +7,11 @@ no library holds, and thin wrappers composing library verbs — stated once unde
 `AGENTS.md`'s **What of this host serves planning.** This gate reconciles that list with
 the tree:
 
-* **Retired means gone.** No tracked file names a module or script the cutover deleted
-  (`RETIRED_MODULES`, `RETIRED_SCRIPTS`, `RETIRED_FILES`), outside recorded fixtures. No
-  recipe was retired: every planning recipe kept its name and became a thin wrapper.
+* **Retired means gone.** No tracked file names a module, script or recipe the cutover
+  deleted (`RETIRED_MODULES`, `RETIRED_SCRIPTS`, `RETIRED_FILES`, `RETIRED_RECIPES`),
+  outside recorded fixtures. Spike staleness went with `scripts/spike-records.sh`: no
+  tracked script, recipe or template reads or writes a spike attestation
+  (`RETIRED_ATTESTATIONS`) or waits on a run by polling its status or watch in a loop.
 * **Only the named files speak planning.** Every tracked file under `orchestrator/` or
   `scripts/` that invokes a planning verb of the engine, store or graph runner
   (`PLANNING_VERB`) or reads or writes task, project or document records (`RECORD_VERB`),
@@ -90,7 +92,14 @@ RETIRED_SCRIPTS = (
     "plan-root-env",
     "review-plan",
     "spike-brief-ready",
+    "spike-evidence-check",
+    "spike-records",
 )
+#: The planning recipes the cutover deleted, as `just <name>` invokes them.
+RETIRED_RECIPES = ("spike-unaffected",)
+#: The attestation kinds spike staleness kept, which nothing reads or writes since the engine's
+#: redo of changed work carries it; records already in a store stay as inert metadata.
+RETIRED_ATTESTATIONS = ("spike-definition", "spike-evidence")
 #: Other files the cutover deleted, by path.
 RETIRED_FILES = (
     "config/budgets-migration.yaml",
@@ -111,8 +120,6 @@ RESIDUE = (
 WRAPPERS = (
     "scripts/review-plan-item.sh",
     "scripts/plan-attestation-check.sh",
-    "scripts/spike-records.sh",
-    "scripts/spike-evidence-check.sh",
     "scripts/run-ended.sh",
     "justfile",
 )
@@ -121,11 +128,11 @@ RECIPES = (
     "plan",
     "refresh-plan",
     "finish-plan",
+    "spikes",
     "check-plan",
     "review-plan",
     "copy-plan",
     "approve-design",
-    "spike-unaffected",
 )
 
 
@@ -252,11 +259,13 @@ def _retired_pattern() -> re.Pattern[str]:
     names = "|".join(RETIRED_MODULES)
     stems = "|".join(re.escape(stem) for stem in RETIRED_SCRIPTS)
     files = "|".join(re.escape(path) for path in RETIRED_FILES)
+    recipes = "|".join(re.escape(name) for name in RETIRED_RECIPES)
     return re.compile(
         rf"orchestrator[./](?:{names})\b"
         rf"|from orchestrator import [^\n]*\b(?:{names})\b"
         rf"|(?<![\w-])scripts/(?:{stems})\.sh\b"
         rf"|{files}"
+        rf"|\bjust (?:{recipes})\b"
     )
 
 
@@ -311,6 +320,53 @@ def test_every_retired_file_is_gone() -> None:
         if (REPO_ROOT / path).exists()
     ]
     assert not present, present
+
+
+def test_every_retired_recipe_is_gone() -> None:
+    justfile = _text("justfile")
+    present = [
+        name
+        for name in RETIRED_RECIPES
+        if re.search(rf"^{re.escape(name)}(?: [^:]*)?:", justfile, re.MULTILINE)
+    ]
+    assert not present, f"the justfile still defines {present}"
+
+
+def _staleness_sources() -> list[str]:
+    """Every tracked script, the justfile and every template: what could keep spike staleness."""
+    return [
+        path
+        for path in _tracked()
+        if path == "justfile" or path.startswith(("scripts/", "templates/"))
+    ]
+
+
+def test_nothing_reads_or_writes_a_spike_attestation() -> None:
+    kinds = re.compile(rf"(?<![\w-])(?:{'|'.join(map(re.escape, RETIRED_ATTESTATIONS))})(?![\w-])")
+    found = [
+        f"{path}: {hit.group(0)}"
+        for path in _staleness_sources()
+        if (REPO_ROOT / path).is_file()
+        for hit in kinds.finditer(_code(path) if path.endswith((".sh", ".py")) else _text(path))
+    ]
+    assert not found, "these still name a retired spike attestation:\n" + "\n".join(found)
+
+
+#: A shell loop whose body reads a run's status or watches it, up to the loop's `done`.
+POLLING_LOOP = re.compile(
+    r"^\s*(?:while|until)\b(?:(?!^\s*done\b).)*?\bonepipeline(?:\.sh)? (?:status|watch)\b",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def test_nothing_waits_on_a_run_by_polling_its_status_or_watch() -> None:
+    found = [
+        path
+        for path in _staleness_sources()
+        if (REPO_ROOT / path).is_file()
+        and POLLING_LOOP.search(_code(path) if path.endswith((".sh", ".py")) else _text(path))
+    ]
+    assert not found, f"these wait on a run in a loop of their own: {found}"
 
 
 def _speaks_planning(path: str) -> str | None:
@@ -373,8 +429,6 @@ def _wrapper_bodies() -> Iterator[tuple[str, str]]:
     for path in (
         "scripts/review-plan-item.sh",
         "scripts/plan-attestation-check.sh",
-        "scripts/spike-records.sh",
-        "scripts/spike-evidence-check.sh",
     ):
         yield path, _text(path)
     yield "scripts/run-ended.sh (spike discard)", _discard_lines()

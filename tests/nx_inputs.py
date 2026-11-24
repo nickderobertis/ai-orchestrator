@@ -814,9 +814,6 @@ E2E_JOURNEYS: tuple[JourneyProject, ...] = (
         "pooled-server-session", f"{E2E_ROOT}/pooled_server_session", "pooledServerSessionWorkspace"
     ),
     JourneyProject("planning", f"{E2E_ROOT}/planning", "planningWorkspace"),
-    # The planning run's `finalize` guard, rendered from the planning templates by the locked
-    # plan store and run against it, keyed on those two alone so no other change re-runs it.
-    JourneyProject("finalize-guard", f"{E2E_ROOT}/finalize_guard", "finalizeGuardWorkspace"),
     JourneyProject("review-drafting", f"{E2E_ROOT}/review_drafting", "reviewDraftingWorkspace"),
     JourneyProject(
         "publish-and-landing", f"{E2E_ROOT}/publish_and_landing", "publishAndLandingWorkspace"

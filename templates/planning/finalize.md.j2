@@ -13,23 +13,27 @@ variables:
     required: true
 ---
 {# llmlint: ignore-block[changed_behavior_has_e2e] A planner or design writer carries this out by its own reading of the store, which the suite never scripts a verdict for: it doubles the model's turn, so a journey could only assert what its own script chose. What the host decides around it is driven: the planning journeys hold that this step runs with this task, at its place in the flow, over the records the store holds. #}
-Every spike of `{{ plan }}-spikes` has settled. **Which tasks to rework**: when no
-task of `{{ plan }}` names a spike in its `spikes` answer yet, this is the plan's first
-finalize, and every task a report bears on is reworked. Otherwise rework exactly the tasks
-`scripts/spike-records.sh rework {{ plan }}` lists, from the refreshed reports of the spikes
-it names for each. Read each such spike's report — the document
+You run in `{{ plan }}-spikes` behind every spike. **Which tasks to rework**: read your own
+entry of `onepipeline status "$ONEPIPELINE_RUN_ID" --json`, the node whose `id` is
+`$ONEPIPELINE_NODE_ID`; its `changed_dependencies` lists the spikes whose result changed since
+you last settled `done`, every spike on your first run, and is absent when none did. Rework
+exactly the tasks of `{{ plan }}` whose stored `spikes` answer names a listed spike, and no
+other: the draft answered each task's `spikes` with the spikes it builds on, so a task whose
+answer names none of them is left as it is, even when no task names a spike at all.
+Read each listed spike's report — the document
 `{{ native }}-<spike id>-report` of `{{ plan }}` — and rework those tasks from what it
 measured: regenerate each task a report changes from its template (`onetaskgraph task
 answers` prints what it was answered, `onetaskgraph task render` regenerates it), keep every
 budget on the task that owns it and the plan-level answers in the description current with
-the findings, and answer each task that builds on a spike with its `spikes` entry naming the
-spike, its report and the branch it preserved (`onepipeline unpublished --format json` lists
-it). Spike branches stay until the plan's own run succeeds.
+the findings, and keep each reworked task's `spikes` entries naming the spike, its report and
+the branch it preserved (`onepipeline unpublished --format json` lists it). Spike branches
+stay until the plan's own run succeeds.
 {# llmlint: ignore-end[changed_behavior_has_e2e] #}
 
 ## Acceptance criteria
 
-- Every task this finalize reworks — on a first finalize every task a spike report bears on; on the finalize `just finish-plan` runs after re-running stale spikes, each task `scripts/spike-records.sh rework {{ plan }}` listed — states what the report measured, and names that spike in its `spikes` answer.
+- Every task this finalize reworks is one whose stored `spikes` answer names a spike its `changed_dependencies` lists, and states what those spikes' current reports measured.
+- Every other task of `{{ plan }}` is left as it was, every task when none names a listed spike.
 - Every task is the rendering of its template its provenance records.
 
 ## Additional info

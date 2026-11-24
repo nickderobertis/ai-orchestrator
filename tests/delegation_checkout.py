@@ -52,10 +52,6 @@ WRAPPER_SCRIPTS = (
     # plan-edit hook run, and the launch check `just orchestrate`'s launch config registers.
     "review-plan-item.sh",
     "plan-attestation-check.sh",
-    # The spike records `just finish-plan` reads stale spikes through and `just
-    # spike-unaffected` attests through, and the spike-evidence check the launch config registers.
-    "spike-records.sh",
-    "spike-evidence-check.sh",
     "credentials-env.sh",
     # Every board command goes through this one, which is where this checkout's own
     # credential file is read for a command that is not a launch.

@@ -1,30 +1,37 @@
-"""A plan's spikes re-run exactly when their definitions change, and stale evidence is refused.
+"""A plan's spikes re-run exactly when their tasks change, and finalize behind them.
 
 One sequence on one bench (`planning_bench`), every step through the real recipe, only the
 paid model doubled:
 
 1. `just plan <brief> board` drafts a two-task plan and its spikes project with two lifecycle
    spikes against a scratch identity, `spike-health` and `spike-visual`, whose definition
-   names three visual entries. Each spike runs once; the visual one writes its report with an
-   image per entry. The doubled finalize names a spike in each task's `spikes` answer, and the
+   names three visual entries, and the edge from the spikes project's `finalize` onto each.
+   Each spike runs once, the visual one writing its report with an image per entry, and then
+   `finalize` runs in the same spikes run: every spike is among its `changed_dependencies`,
+   so the doubled finalize reworks every task whose drafted `spikes` answer names one. The
    doubled design writer restates the visual report in the design document copied to the
-   board.
+   board. The first `just finish-plan` after it, with nothing edited,
+   dispatches nothing in the spikes project at all.
 2. The manager regenerates `spike-visual` — one entry changed, one added, one removed — and
-   the task built on it, then runs `just finish-plan`. A fresh spikes run dispatches only
-   that spike, continuing its preserved branch; its worker, told so by the dispatch appendix,
-   re-renders its report giving only the changed images. `finalize` runs in its own run, and
-   the board's design document carries the refreshed entries beside the unchanged ones, byte
-   for byte.
-3. `just finish-plan` with nothing edited starts no spikes run and holds no `finalize`.
-4. Only the task built on `spike-visual` is regenerated: the flow's `check` step refuses it
-   naming the spike and both next steps, until `just spike-unaffected` records why.
-5. The orchestrate recipe on the board copy is not refused by the spike-evidence check while
-   the records are valid, and is refused, naming the same next steps, once the board copy's
-   task is edited.
-6. `spike-health` is regenerated and, while its re-run is under way, regenerated again: the
-   `spikes` step fails naming it and leaves its record at `launched`.
-7. A second plan whose spike ran the way spikes ran before these records were kept — settled
-   `done` with no record — is re-finished: the spike is backfilled, named, and not run again.
+   the task built on it, then runs `just finish-plan`. Its `spikes` step launches the spikes
+   project again; the engine redoes that spike alone among the spikes, continuing its
+   preserved branch, and its worker, told so by the dispatch appendix, re-renders its report
+   giving only the changed images. `finalize` is redone behind it, reads that spike alone in
+   its `changed_dependencies` and reworks exactly the task built on it, leaving the other
+   task's content as it was, and the board's design document carries the refreshed entries
+   beside the unchanged ones, byte for byte.
+3. A task built on a spike is reworded and nothing in the spikes project is edited: `just
+   finish-plan` dispatches nothing in the spikes project, reworks nothing, and its `check`
+   passes — an edit to a task is never refused for its spikes.
+4. `spike-health` is regenerated and, while its re-run is under way, regenerated again: the
+   re-finish completes on the run it started.
+5. The next `just finish-plan` re-runs `spike-health` for the edit made while it ran, and its
+   worker asks its manager a blocking question: the `spikes` step waits through the answer,
+   the run continues with no `adopt`, and `finalize` is redone behind it.
+6. `spike-visual` is regenerated again and the re-finish is interrupted: the spikes run is
+   stopped while `finalize` runs, after the spike re-ran. The next `just finish-plan` runs
+   `finalize` alone, which still reads that spike as changed and reworks exactly the task
+   built on it.
 
 Plans go to the bench's `authoring` and `board` local sources, human items to its `humans`
 source, and every `onevcs` record to the scratch identity's own registry.
@@ -48,18 +55,18 @@ from typing import NamedTuple
 import pytest
 from conftest import git
 from drafting import (
-    DESIGN_MARKER,
     FINALIZE_MARKER,
     RESOLVE,
+    SPIKE_BRIEF_MARKER,
     SPIKE_CRITERIA,
     SPIKE_WHY,
     SPIKES,
     STORE,
     brief,
-    design_commands,
     drafting,
-    plan_title,
+    finalize_commands,
     spike_what,
+    spikes_answer,
 )
 from planning_bench import (
     BOARD,
@@ -70,7 +77,6 @@ from planning_bench import (
     run,
     runs_of,
     status,
-    store,
     store_json,
 )
 from scratch_identity import Identity, seeded
@@ -81,13 +87,17 @@ pytestmark = [pytest.mark.usefixtures("module_tmpdir"), pytest.mark.xdist_group(
 #: The alias the scratch identity's execution checkout is registered under.
 EXECUTION_ALIAS = "execution"
 HEALTH, VISUAL = "spike-health", "spike-visual"
-#: The docs task builds on both spikes, so a re-finish editing one shows `rework` naming only it.
-DOCS_SPIKES = (HEALTH, VISUAL)
+#: The spikes each plan task builds on, as the draft answers them before finalize runs: the
+#: route task names the health spike, and the docs task names both.
+TASK_SPIKES = {"route": (HEALTH,), "docs": (HEALTH, VISUAL)}
 #: The dispatch appendix's report-update rule, as a re-run spike's task must carry it.
 REPORT_RULE = "A spike whose report already exists updates that report."
 PRESERVE_RULE = "keep every other entry's answers and images exactly as they are"
 #: How long a recipe returning at the design approval may take.
 SETTLE_SECONDS = 1500.0
+#: What the health spike's worker asks its manager, and what the manager rules.
+QUESTION = "Should the health spike measure p999 as well as p99?"
+ANSWER = "Measure p999 as well."
 
 
 class Entry(NamedTuple):
@@ -106,13 +116,12 @@ LEGEND = Entry("Legend", "A legend explains the badge.", "legend.png")
 #: The visual spike's definition before and after the design review changed it.
 FIRST_DEFINITION = "Capture the header, a green badge and the footer."
 SECOND_DEFINITION = "Capture the header, a blue badge and a legend."
+THIRD_DEFINITION = "Capture the header, a blue badge, a legend and the badge's hover."
 FIRST_ENTRIES = (HEADER, GREEN_BADGE, FOOTER)
 SECOND_ENTRIES = (HEADER, BLUE_BADGE, LEGEND)
 #: The docs task's `what` after each of the manager's regenerations of it.
 DOCS_WITH_BLUE = "Do docs, showing the blue badge."
 DOCS_REWORDED = "Do docs, showing the blue badge and its legend."
-DOCS_ON_BOARD = "docs: document every badge"
-UNAFFECTED_REASON = "Only the wording changed; the page it documents is the same."
 
 
 def _png(seed: int) -> bytes:
@@ -151,9 +160,9 @@ def _changes(entries: tuple[Entry, ...]) -> str:
     )
 
 
-def _counting(bench: Bench, spike: str) -> str:
-    """A command recording, in the bench, that ``spike``'s worker was dispatched in this run."""
-    return f'echo "$ONEPIPELINE_RUN_ID" >> {shlex.quote(str(bench.tmp / f"dispatched-{spike}"))}'
+def _counting(bench: Bench, worker: str) -> str:
+    """A command recording, in the bench, that ``worker`` was dispatched in this run."""
+    return f'echo "$ONEPIPELINE_RUN_ID" >> {shlex.quote(str(bench.tmp / f"dispatched-{worker}"))}'
 
 
 def _commit(spike: str) -> str:
@@ -190,18 +199,13 @@ def _visual_commands(
     ]
 
 
-def _health_commands(bench: Bench, hold: Path | None = None) -> list[str]:
+def _health_commands(bench: Bench, hold: Path | None = None, *, asks: bool = False) -> list[str]:
+    """The health spike worker: commit, after ``hold`` exists where given, and after asking
+    its manager ``QUESTION`` through `$ORCHESTRATOR_ASK_MANAGER` where ``asks``."""
     held = [] if hold is None else [f"until [ -e {shlex.quote(str(hold))} ]; do sleep 1; done"]
-    return [_counting(bench, HEALTH), *held, _commit(HEALTH)]
-
-
-def _spikes_answer(native: str, *spikes: str) -> str:
-    return json.dumps(
-        [
-            {"spike": spike, "report": f"{native}-{spike}-report", "branch": f"{native}/{spike}"}
-            for spike in spikes
-        ]
-    )
+    answered = shlex.quote(str(bench.tmp / "answered"))
+    asked = [f'"$ORCHESTRATOR_ASK_MANAGER" {shlex.quote(QUESTION)} > {answered}'] if asks else []
+    return [_counting(bench, HEALTH), *held, *asked, _commit(HEALTH)]
 
 
 def _task_answers(node: str, what: str, native: str, *spikes: str) -> list[str]:
@@ -210,32 +214,13 @@ def _task_answers(node: str, what: str, native: str, *spikes: str) -> list[str]:
         f"what={what}",
         "why=Operators need it.",
         f'acceptance_criteria=["A request-level test drives {node} end to end."]',
-        f"spikes={_spikes_answer(native, *spikes)}",
+        f"spikes={spikes_answer(native, *spikes)}",
     ]
 
 
 def _spike_answers(definition: str) -> list[str]:
     """Every answer of the visual or health spike task, none of which mentions a report."""
     return [f"what={definition}", f"why={SPIKE_WHY}", f"acceptance_criteria={SPIKE_CRITERIA}"]
-
-
-def _finalize_commands(native: str) -> list[str]:
-    """The first finalize: regenerate each task naming the spike its report bears on."""
-    plan = f"authoring:{native}"
-    commands = []
-    for node, spikes in (("route", (HEALTH,)), ("docs", DOCS_SPIKES)):
-        answers = " ".join(
-            f"--var {shlex.quote(one)}"
-            for one in _task_answers(node, f"Do {node}.", native, *spikes)
-        )
-        commands.append(
-            f"id=$({STORE} task list --source authoring --project {plan} --json --no-interactive "
-            f'| jq -r \'.items[] | select(.item.metadata["onepipeline.id"] == "{node}")'
-            " | .id'); "
-            f'{RESOLVE} plan-task --json | {STORE} task render "$id" --template-loader - '
-            f"{answers} --no-interactive"
-        )
-    return commands
 
 
 def _render(bench: Bench, template: str, verb: str, record: str, *answers: str) -> None:
@@ -277,27 +262,40 @@ def _task_id(bench: Bench, project: str, node: str) -> str:
     return found[0]
 
 
-def _settlement(bench: Bench, task: str) -> object:
-    return _metadata(_items(store_json(bench, "task", "show", task))[0]).get(
-        "onepipeline.settlement"
-    )
+def _content(bench: Bench, task: str) -> str:
+    """``task``'s content as the store shows it."""
+    shown = store_json(bench, "task", "show", task)
+    items = _items(shown)
+    assert len(items) == 1, shown
+    inner = items[0]["item"]
+    assert isinstance(inner, dict), shown
+    return str(inner["content"])
 
 
-def _record(bench: Bench, task: str, kind: str, bar: str | None = None) -> dict[str, object]:
-    flags = ["--bar", bar] if bar else []
-    return store_json(bench, "task", "attestation", "check", task, "--kind", kind, *flags)
+def _turns(bench: Bench) -> int:
+    return len(bench.turn_log.read_text(encoding="utf-8").splitlines())
+
+
+def _prompts_since(bench: Bench, turns: int) -> list[str]:
+    """The prompt of every turn the doubled model answered after the first ``turns``."""
+    return [
+        str(json.loads(line).get("prompt"))
+        for line in bench.turn_log.read_text(encoding="utf-8").splitlines()[turns:]
+    ]
+
+
+def _spikes_named(bench: Bench, task: str) -> list[str]:
+    """The spike of each entry of ``task``'s `spikes` answer, as the store prints it."""
+    answers = store_json(bench, "task", "answers", task)
+    entries = answers.get("spikes")
+    assert isinstance(entries, list), answers
+    return [str(entry["spike"]) for entry in entries if isinstance(entry, dict)]
 
 
 def _nodes(answer: dict[str, object]) -> dict[str, str]:
     nodes = answer.get("nodes")
     assert isinstance(nodes, list), answer
     return {str(node["id"]): str(node.get("status")) for node in nodes if isinstance(node, dict)}
-
-
-def _command_log(bench: Bench, run_id: str, node: str) -> str:
-    """What a command step printed, as the engine keeps it under the run."""
-    path = bench.runs / run_id / "commands" / f"{node}.log"
-    return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 
 def _of_kind(run_id: str, suffix: str) -> bool:
@@ -310,10 +308,20 @@ def _new_runs(bench: Bench, before: set[str], suffix: str) -> list[str]:
     return sorted(one for one in runs_of(bench) if one not in before and _of_kind(one, suffix))
 
 
-def _dispatched(bench: Bench, spike: str) -> list[str]:
-    """The run of each dispatch the doubled worker of ``spike`` recorded, in order."""
-    path = bench.tmp / f"dispatched-{spike}"
+def _dispatched(bench: Bench, worker: str) -> list[str]:
+    """The run of each dispatch the doubled ``worker`` recorded, in order."""
+    path = bench.tmp / f"dispatched-{worker}"
     return path.read_text(encoding="utf-8").split() if path.is_file() else []
+
+
+def _by_run(bench: Bench, name: str) -> dict[str, list[str]]:
+    """The doubled finalize's ``name`` record: what it wrote in each run, by run."""
+    path = bench.tmp / name
+    found: dict[str, list[str]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines() if path.is_file() else []:
+        run_id, written = line.split(" ", 1)
+        found.setdefault(run_id, []).append(written)
+    return found
 
 
 class Branch(NamedTuple):
@@ -406,8 +414,9 @@ class Refinish(NamedTuple):
     run: str
     finishing: dict[str, str]
     members: list[str]
-    spikes_runs: list[str]
-    finalize_runs: list[str]
+    spikes_run: str
+    spikes: dict[str, str]
+    spikes_launch: dict[str, object]
 
 
 def _refinished(
@@ -415,13 +424,16 @@ def _refinished(
 ) -> Refinish:
     started = _new_runs(bench, before, "-finishing")
     assert len(started) == 1, (runs_of(bench), result.stdout, result.stderr)
+    spikes_runs = _new_runs(bench, before, "-spikes")
+    assert len(spikes_runs) == 1, (spikes_runs, result.stdout, result.stderr)
     return Refinish(
         result,
         started[0],
         _nodes(status(bench, started[0])),
         _finishing_members(bench, native),
-        _new_runs(bench, before, "-spikes"),
-        _new_runs(bench, before, "-finalize"),
+        spikes_runs[0],
+        _nodes(status(bench, spikes_runs[0])),
+        json.loads((bench.runs / spikes_runs[0] / "launch.json").read_text(encoding="utf-8")),
     )
 
 
@@ -432,104 +444,128 @@ def _refinish(bench: Bench, native: str) -> Refinish:
     return _refinished(bench, native, before, result)
 
 
-def _legacy_plan(bench: Bench, identity: Identity, native: str) -> list[str]:
-    """A plan whose one spike ran the way spikes ran before these records were kept: its
-    spikes project started directly, settling the spike `done` with no record. Answers the
-    spikes run it started."""
-    plan = f"authoring:{native}"
-    goal = json.dumps({"text": "Poll the legacy route"})
-    task_answers = " ".join(
-        f"--var {shlex.quote(one)}" for one in _task_answers("route", "Do route.", native, HEALTH)
+class Started(NamedTuple):
+    """A recipe started beside the journey, and the files its two streams go to."""
+
+    process: subprocess.Popen[str]
+    out: Path
+    err: Path
+
+
+def _popen(bench: Bench, name: str, *argv: str) -> Started:
+    """One recipe started beside the journey, its streams going to files of the bench's."""
+    out, err = bench.tmp / f"{name}.out", bench.tmp / f"{name}.err"
+    process = subprocess.Popen(  # noqa: S603 - the copy's own recipe
+        list(argv),
+        cwd=bench.checkout,
+        env=bench.environment,
+        stdout=out.open("w"),
+        stderr=err.open("w"),
+        text=True,
     )
-    spike_answers = " ".join(
-        f"--var {shlex.quote(one)}" for one in _spike_answers(spike_what(HEALTH))
+    return Started(process, out, err)
+
+
+def _finished(started: Started) -> subprocess.CompletedProcess[str]:
+    process = started.process
+    try:
+        process.wait(timeout=e2e_timeout(SETTLE_SECONDS))
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    return subprocess.CompletedProcess(
+        process.args, process.returncode, started.out.read_text(), started.err.read_text()
     )
-    for command in (
-        f"{RESOLVE} plan-description --json | {STORE} project create authoring --id {native} "
-        f"--title {shlex.quote(plan_title(native))} --template-loader - "
-        "--var 'overview=A plan whose spike ran before spike records.' "
-        "--metadata onepipeline.schema_version=3 "
-        f"--metadata {shlex.quote('onepipeline.goal=' + goal)} --no-interactive",
-        f"{RESOLVE} plan-task --json | {STORE} task create authoring --project {plan} "
-        f"--title 'feat: add the legacy route' --template-loader - {task_answers} "
-        "--metadata 'onepipeline.id=\"route\"' --metadata 'onepipeline.persona=\"engineer\"' "
-        "--metadata 'orchestrator.unit=\"API\"' --no-interactive",
-        f"{STORE} project create authoring --id {native}-spikes "
-        f"--title {shlex.quote(plan_title(native) + ' spikes')} "
-        "--metadata onepipeline.schema_version=3 --no-interactive",
-        f"{RESOLVE} plan-task --json | {STORE} task create authoring --project {plan}-spikes "
-        f"--title 'spike: {HEALTH}' --template-loader - {spike_answers} "
-        f"--metadata 'onepipeline.id=\"{HEALTH}\"' --metadata 'onepipeline.persona=\"engineer\"' "
-        f"--metadata 'onepipeline.repo={json.dumps(str(identity.publication))}' "
-        f"--metadata 'onepipeline.execution_checkout={json.dumps(EXECUTION_ALIAS)}' "
-        "--metadata 'onepipeline.publish=\"preserve\"' --no-interactive",
-    ):
-        created = run(bench, "bash", "-c", command)
-        assert created.returncode == 0, command + created.stdout + created.stderr
-    before = set(runs_of(bench))
-    started = run(
+
+
+def _spikes_run_started(bench: Bench, before: set[str]) -> str | None:
+    """The spikes run a recipe started since ``before``, once its launch record exists."""
+    found = _new_runs(bench, before, "-spikes")
+    # A run's directory exists before its launch record, which status reads.
+    if not found or not (bench.runs / found[0] / "launch.json").is_file():
+        return None
+    return found[0]
+
+
+class Answered(NamedTuple):
+    """The manager's side of the health spike's question: what it read and what it sent."""
+
+    question: str
+    reply: subprocess.CompletedProcess[str]
+
+
+def _answer_the_question(
+    bench: Bench, process: subprocess.Popen[str], before: set[str]
+) -> Answered:
+    """Play the manager: read the spikes run's channel until its blocking question waits,
+    then answer it bound by its correlation, as `just channel-next` and `just channel-reply
+    --correlation` do."""
+    asked: dict[str, object] = {}
+
+    def waiting() -> bool:
+        spikes_run = _spikes_run_started(bench, before)
+        if spikes_run is None:
+            return False
+        handed = just(bench, "channel-next", spikes_run, seconds=120)
+        assert handed.returncode == 0, handed.stdout + handed.stderr
+        if not handed.stdout.strip():
+            return False
+        surface = json.loads(handed.stdout).get("surface")
+        if isinstance(surface, dict) and surface.get("blocking") and surface.get("correlation"):
+            asked.update(surface, run=spikes_run)
+            return True
+        return False
+
+    _until(process, "the health spike's blocking question", waiting)
+    envelope = json.dumps({"version": 4, "completion": True, "message": ANSWER})
+    reply = run(
         bench,
-        "scripts/onepipeline.sh",
-        "start",
-        f"{plan}-spikes",
-        "--launch-config",
-        "config/onepipeline.workflows.yaml",
-        "--dag-graph",
-        "off",
-        "--label",
-        "kind=spikes",
-        "--branch-template",
-        f"{native}/{{{{ node.id }}}}",
-        seconds=SETTLE_SECONDS,
+        "just",
+        "channel-reply",
+        str(asked["run"]),
+        "--correlation",
+        str(asked["correlation"]),
+        input_text=envelope,
+        seconds=120,
     )
-    assert started.returncode == 0, started.stdout + started.stderr
-    spikes_runs = _new_runs(bench, before, "-spikes")
-    assert len(spikes_runs) == 1, runs_of(bench)
-    assert _nodes(status(bench, spikes_runs[0])) == {HEALTH: "done"}, status(bench, spikes_runs[0])
-    return spikes_runs
+    return Answered(str(asked.get("message")), reply)
 
 
 class Sequence(NamedTuple):
     """Everything the sequence did, read back before the bench goes."""
 
     native: str
+    tasks: dict[str, str]
     planned: subprocess.CompletedProcess[str]
     first_spikes_run: str
     first_spikes: dict[str, str]
-    first_records: dict[str, dict[str, object]]
-    first_evidence: dict[str, object]
+    spike_tasks: dict[str, str]
+    first_answers: dict[str, list[str]]
     first_branch: Branch
     first_design: Shown
-    visual_settlement_before: object
+    finalize_edges: dict[str, object]
+    fresh: Refinish
+    fresh_prompts: list[str]
     edited: Refinish
-    second_spikes: dict[str, str]
-    rework: str
-    finalize_run: dict[str, str]
+    route_before_edit: str
+    route_after_edit: str
+    docs_before_edit: str
+    docs_after_edit: str
     second_branch: Branch
     branch_descends: bool
-    second_records: dict[str, dict[str, object]]
-    visual_settlement_after: object
     visual_prompts: list[str]
     second_design: Shown
     unchanged: Refinish
-    unchanged_spikes_log: str
-    refused: Refinish
-    refused_check_log: str
-    docs_task: str
-    unaffected: subprocess.CompletedProcess[str]
-    accepted: Refinish
-    docs_evidence: dict[str, object]
-    launch_valid: subprocess.CompletedProcess[str]
-    launch_edited: subprocess.CompletedProcess[str]
-    board_answers: subprocess.CompletedProcess[str]
-    midrun: subprocess.CompletedProcess[str]
-    midrun_finishing: list[str]
-    midrun_record: dict[str, object]
-    legacy: Refinish
-    legacy_spikes_log: str
-    legacy_record: dict[str, object]
-    legacy_spikes_runs: list[str]
-    legacy_rework: subprocess.CompletedProcess[str]
+    midrun: Refinish
+    midrun_running: str
+    asked: Refinish
+    answered: Answered
+    answer_received: str
+    interrupted: Refinish
+    resumed: Refinish
+    rework: dict[str, list[str]]
+    changed: dict[str, list[str]]
     dispatched_health: list[str]
     dispatched_visual: list[str]
     dispatched_finalize: list[str]
@@ -554,13 +590,14 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     first_images = _images(tmp / "images" / "first", FIRST_ENTRIES, 1)
     second_images = _images(tmp / "images" / "second", (BLUE_BADGE, LEGEND), 50)
 
-    # 1. The first plan: each spike runs once, and finalize names them on the tasks.
+    # 1. The first plan, drafted with each task's spikes: each spike runs once, then finalize.
     drafting(
         bench_,
         native,
         spikes=(str(identity.publication), EXECUTION_ALIAS),
         spike_ids=(HEALTH, VISUAL),
         definitions={VISUAL: FIRST_DEFINITION},
+        task_spikes=TASK_SPIKES,
     )
     mark(bench_, SPIKES[HEALTH].marker, *_health_commands(bench_))
     mark(
@@ -568,24 +605,22 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         SPIKES[VISUAL].marker,
         *_visual_commands(bench_, native, FIRST_ENTRIES, first_images),
     )
-    mark(bench_, FINALIZE_MARKER, *_finalize_commands(native))
     before = set(runs_of(bench_))
     planned = just(bench_, "plan", brief(bench_, native), BOARD, seconds=SETTLE_SECONDS)
     first_spikes_run = _new_runs(bench_, before, "-spikes")
     assert len(first_spikes_run) == 1, (runs_of(bench_), planned.stdout, planned.stderr)
+    tasks = {node: _task_id(bench_, plan, node) for node in TASK_SPIKES}
+    first_answers = {node: _spikes_named(bench_, task) for node, task in tasks.items()}
     health = _task_id(bench_, f"{plan}-spikes", HEALTH)
     visual = _task_id(bench_, f"{plan}-spikes", VISUAL)
-    docs = _task_id(bench_, plan, "docs")
-    first_records = {
-        HEALTH: _record(bench_, health, "spike-definition", "ran"),
-        VISUAL: _record(bench_, visual, "spike-definition", "ran"),
-    }
-    first_evidence = store_json(
-        bench_, "project", "attestation", "check", plan, "--kind", "spike-evidence", "--tasks"
-    )
+    finalize_edges = store_json(bench_, "task", "deps", f"{plan}-spikes-finalize")
     first_branch = _branch_head(identity, VISUAL)
     first_design = _design_on_board(bench_, native)
-    visual_settlement_before = _settlement(bench_, visual)
+
+    # 1b. The first re-finish, with nothing edited, dispatches nothing in the spikes project.
+    turns_before = _turns(bench_)
+    fresh = _refinish(bench_, native)
+    fresh_prompts = _prompts_since(bench_, turns_before)
 
     # 2. The design review changed what the user sees: the manager regenerates the visual
     # spike and the task built on it, then re-finishes the plan.
@@ -594,14 +629,6 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         SPIKES[VISUAL].marker,
         *_visual_commands(bench_, native, SECOND_ENTRIES, second_images),
     )
-    # The re-finish's finalize reads which tasks to rework as its task tells a planner to.
-    rework = tmp / "rework.txt"
-    mark(
-        bench_,
-        FINALIZE_MARKER,
-        _counting(bench_, "finalize"),
-        f"scripts/spike-records.sh rework {plan} > {shlex.quote(str(rework))}",
-    )
     _render(
         bench_, "plan-task", "task", visual, *_spike_answers(spike_what(VISUAL, SECOND_DEFINITION))
     )
@@ -609,15 +636,15 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         bench_,
         "plan-task",
         "task",
-        docs,
-        *_task_answers("docs", DOCS_WITH_BLUE, native, *DOCS_SPIKES),
+        tasks["docs"],
+        *_task_answers("docs", DOCS_WITH_BLUE, native, *TASK_SPIKES["docs"]),
     )
-    turns_before = len(bench_.turn_log.read_text(encoding="utf-8").splitlines())
+    route_before_edit = _content(bench_, tasks["route"])
+    docs_before_edit = _content(bench_, tasks["docs"])
+    turns_before = _turns(bench_)
     edited = _refinish(bench_, native)
-    assert len(edited.spikes_runs) == 1, (edited.spikes_runs, edited.result.stderr)
-    assert len(edited.finalize_runs) == 1, (edited.finalize_runs, edited.result.stderr)
-    finalize_run = _nodes(status(bench_, edited.finalize_runs[0]))
-    second_spikes = _nodes(status(bench_, edited.spikes_runs[0]))
+    route_after_edit = _content(bench_, tasks["route"])
+    docs_after_edit = _content(bench_, tasks["docs"])
     second_branch = _branch_head(identity, VISUAL)
     git("fetch", "-q", "origin", cwd=identity.publication)
     ancestry = ["git", "merge-base", "--is-ancestor", first_branch.head, second_branch.head]
@@ -625,160 +652,121 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         # Exit 1 is the answer "not an ancestor", which the conftest `git` helper would raise on.
         subprocess.run(ancestry, cwd=identity.publication, check=False).returncode == 0
     )
-    second_records = {
-        HEALTH: _record(bench_, health, "spike-definition", "ran"),
-        VISUAL: _record(bench_, visual, "spike-definition", "ran"),
-    }
-    visual_settlement_after = _settlement(bench_, visual)
-    prompts = [
-        str(json.loads(line).get("prompt"))
-        for line in bench_.turn_log.read_text(encoding="utf-8").splitlines()[turns_before:]
+    visual_prompts = [
+        one for one in _prompts_since(bench_, turns_before) if SECOND_DEFINITION in one
     ]
-    visual_prompts = [one for one in prompts if SECOND_DEFINITION in one]
     second_design = _design_on_board(bench_, native)
 
-    # 3. Nothing edited: no spikes run, no finalize.
-    unchanged = _refinish(bench_, native)
-    unchanged_spikes_log = _command_log(bench_, unchanged.run, "spikes")
-
-    # 4. Only the task built on the visual spike changes: the check refuses it until the
-    # manager records why its spike's evidence still holds.
+    # 3. Only a task built on a spike is reworded: nothing runs in the spikes project.
     _render(
         bench_,
         "plan-task",
         "task",
-        docs,
-        *_task_answers("docs", DOCS_REWORDED, native, *DOCS_SPIKES),
+        tasks["docs"],
+        *_task_answers("docs", DOCS_REWORDED, native, *TASK_SPIKES["docs"]),
     )
-    refused = _refinish(bench_, native)
-    refused_check_log = _command_log(bench_, refused.run, "check")
-    unaffected = just(bench_, "spike-unaffected", docs, "--reason", UNAFFECTED_REASON)
-    accepted = _refinish(bench_, native)
-    docs_evidence = _record(bench_, docs, "spike-evidence")
+    unchanged = _refinish(bench_, native)
 
-    # 5. The launch gate over the board copy: valid records pass the spike-evidence check, and
-    # an edit to the copy's task built on a spike is refused by it.
-    copy = f"{BOARD}:{native}"
-    launch_valid = just(bench_, "orchestrate", copy, "--dag-graph", "off")
-    # Retitled rather than regenerated, so the copy keeps no template answers of its own, as a
-    # board copy keeps none, and the check names the spikes from its authoring origin's.
-    board_docs = _task_id(bench_, copy, "docs")
-    retitled = store(bench_, "task", "update", board_docs, "--title", DOCS_ON_BOARD)
-    assert retitled.returncode == 0, retitled.stdout + retitled.stderr
-    board_answers = store(bench_, "task", "answers", board_docs, "--json")
-    launch_edited = just(bench_, "orchestrate", copy, "--dag-graph", "off")
-
-    # 6. A spike edited while its re-run is under way.
+    # 4. A spike edited while its re-run is under way.
     hold = tmp / "release-health"
     mark(bench_, SPIKES[HEALTH].marker, *_health_commands(bench_, hold))
     _render(
-        bench_,
-        "plan-task",
-        "task",
-        health,
-        *_spike_answers(spike_what(HEALTH, "Measure p99 as well.")),
+        bench_, "plan-task", "task", health, *_spike_answers(spike_what(HEALTH, "Measure p99."))
     )
     before = set(runs_of(bench_))
-    out, err = tmp / "midrun.out", tmp / "midrun.err"
-    with out.open("w") as stdout, err.open("w") as stderr:
-        process = subprocess.Popen(  # noqa: S603 - the copy's own recipe
-            ["just", "finish-plan", plan, BOARD],  # noqa: S607 - `just` as an operator types it
-            cwd=bench_.checkout,
-            env=bench_.environment,
-            stdout=stdout,
-            stderr=stderr,
-            text=True,
+    started = _popen(bench_, "midrun", "just", "finish-plan", plan, BOARD)
+    running: dict[str, str] = {}
+
+    def health_running() -> bool:
+        spikes_run = _spikes_run_started(bench_, before)
+        if spikes_run is None or _nodes(status(bench_, spikes_run)).get(HEALTH) != "running":
+            return False
+        running["run"] = spikes_run
+        return True
+
+    try:
+        _until(started.process, "the edited spike running", health_running)
+        _render(
+            bench_,
+            "plan-task",
+            "task",
+            health,
+            *_spike_answers(spike_what(HEALTH, "Measure p99 and p999.")),
         )
-        try:
+        hold.touch()
+    finally:
+        midrun = _refinished(bench_, native, before, _finished(started))
 
-            def running() -> bool:
-                found = _new_runs(bench_, before, "-spikes")
-                # A run's directory exists before its launch record, which status reads.
-                if not found or not (bench_.runs / found[0] / "launch.json").is_file():
-                    return False
-                return _nodes(status(bench_, found[0])).get(HEALTH) == "running"
+    # 5. The next re-finish re-runs that spike, whose worker asks its manager a question.
+    mark(bench_, SPIKES[HEALTH].marker, *_health_commands(bench_, asks=True))
+    before = set(runs_of(bench_))
+    started = _popen(bench_, "asked", "just", "finish-plan", plan, BOARD)
+    try:
+        answered = _answer_the_question(bench_, started.process, before)
+    finally:
+        asked = _refinished(bench_, native, before, _finished(started))
+    received = tmp / "answered"
 
-            _until(process, "the edited spike running", running)
-            _render(
-                bench_,
-                "plan-task",
-                "task",
-                health,
-                *_spike_answers(spike_what(HEALTH, "Measure p99 and p999.")),
-            )
-            hold.touch()
-            process.wait(timeout=e2e_timeout(SETTLE_SECONDS))
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
-    midrun = subprocess.CompletedProcess(
-        process.args, process.returncode, out.read_text(), err.read_text()
+    # 6. The visual spike is regenerated and its re-finish is interrupted: the spikes run is
+    # stopped while finalize runs, after the spike re-ran; the next re-finish runs finalize.
+    finalize_hold = tmp / "release-finalize"
+    mark(bench_, FINALIZE_MARKER, *finalize_commands(bench_, native, finalize_hold))
+    _render(
+        bench_, "plan-task", "task", visual, *_spike_answers(spike_what(VISUAL, THIRD_DEFINITION))
     )
-    midrun_finishing = _new_runs(bench_, before, "-finishing")
-    midrun_record = _record(bench_, health, "spike-definition")
+    before = set(runs_of(bench_))
+    started = _popen(bench_, "interrupted", "just", "finish-plan", plan, BOARD)
+    stopping: dict[str, str] = {}
 
-    # 7. A plan whose spike ran before spike records were kept.
-    legacy_native = f"plan-lg-{os.getpid()}"
-    mark(bench_, SPIKES[HEALTH].marker, *_health_commands(bench_))
-    mark(bench_, DESIGN_MARKER, *design_commands(legacy_native))
-    legacy_spikes_runs = _legacy_plan(bench_, identity, legacy_native)
-    # Its task names the spike and holds no evidence yet, so `rework` lists it as unrecorded.
-    legacy_rework = run(
-        bench_,
-        "scripts/plan-store.sh",
-        "scripts/spike-records.sh",
-        "rework",
-        f"authoring:{legacy_native}",
-    )
-    legacy = _refinish(bench_, legacy_native)
-    legacy_spikes_log = _command_log(bench_, legacy.run, "spikes")
-    legacy_record = _record(
-        bench_,
-        _task_id(bench_, f"authoring:{legacy_native}-spikes", HEALTH),
-        "spike-definition",
-        "ran",
-    )
+    def finalize_running() -> bool:
+        spikes_run = _spikes_run_started(bench_, before)
+        if spikes_run is None or spikes_run not in _dispatched(bench_, "finalize"):
+            return False
+        stopping["run"] = spikes_run
+        return True
+
+    try:
+        _until(started.process, "finalize running behind the edited spike", finalize_running)
+        stopped = just(bench_, "stop", stopping["run"], seconds=120)
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+    finally:
+        finalize_hold.touch()
+        interrupted = _refinished(bench_, native, before, _finished(started))
+    mark(bench_, FINALIZE_MARKER, *finalize_commands(bench_, native))
+    resumed = _refinish(bench_, native)
 
     yield Sequence(
         native,
+        tasks,
         planned,
         first_spikes_run[0],
         _nodes(status(bench_, first_spikes_run[0])),
-        first_records,
-        first_evidence,
+        {HEALTH: health, VISUAL: visual},
+        first_answers,
         first_branch,
         first_design,
-        visual_settlement_before,
+        finalize_edges,
+        fresh,
+        fresh_prompts,
         edited,
-        second_spikes,
-        rework.read_text(encoding="utf-8") if rework.is_file() else "",
-        finalize_run,
+        route_before_edit,
+        route_after_edit,
+        docs_before_edit,
+        docs_after_edit,
         second_branch,
         descends,
-        second_records,
-        visual_settlement_after,
         visual_prompts,
         second_design,
         unchanged,
-        unchanged_spikes_log,
-        refused,
-        refused_check_log,
-        docs,
-        unaffected,
-        accepted,
-        docs_evidence,
-        launch_valid,
-        launch_edited,
-        board_answers,
         midrun,
-        midrun_finishing,
-        midrun_record,
-        legacy,
-        legacy_spikes_log,
-        legacy_record,
-        legacy_spikes_runs,
-        legacy_rework,
+        running.get("run", ""),
+        asked,
+        answered,
+        received.read_text(encoding="utf-8") if received.is_file() else "",
+        interrupted,
+        resumed,
+        _by_run(bench_, "rework"),
+        _by_run(bench_, "changed"),
         _dispatched(bench_, HEALTH),
         _dispatched(bench_, VISUAL),
         _dispatched(bench_, "finalize"),
@@ -788,78 +776,103 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
             just(bench_, "stop", one, seconds=120)
 
 
-def _valid(record: dict[str, object], bar: str | None = None) -> None:
-    assert record.get("state") == "valid", record
-    held = record.get("record")
-    assert isinstance(held, dict), record
-    if bar is not None:
-        assert held["bar"] == bar, record
+#: Every node a spikes run of this plan holds.
+SPIKES_NODES = {"spike-brief": "done", "finalize": "done", HEALTH: "done", VISUAL: "done"}
 
 
-def _held(record: dict[str, object], key: str) -> object:
-    held = record.get("record")
-    assert isinstance(held, dict), record
-    return held.get(key)
-
-
-def test_a_first_plan_runs_each_spike_once_and_records_it(sequence: Sequence) -> None:
+def test_a_first_plan_runs_each_spike_once_then_finalize(sequence: Sequence) -> None:
     assert sequence.planned.returncode == 0, sequence.planned.stdout + sequence.planned.stderr
-    assert sequence.first_spikes == {"spike-brief": "done", HEALTH: "done", VISUAL: "done"}
-    for record in sequence.first_records.values():
-        _valid(record, "ran")
+    assert sequence.first_spikes == SPIKES_NODES, sequence.first_spikes
+    first = sequence.first_spikes_run
     for dispatched in (sequence.dispatched_health, sequence.dispatched_visual):
-        assert dispatched.count(sequence.first_spikes_run) == 1, dispatched
+        assert dispatched.count(first) == 1, dispatched
+    assert sequence.dispatched_finalize.count(first) == 1, sequence.dispatched_finalize
+    assert _changed(sequence, first) == [HEALTH, VISUAL], sequence.changed
 
 
-def test_every_task_built_on_a_spike_holds_valid_evidence(sequence: Sequence) -> None:
-    tasks = sequence.first_evidence.get("tasks")
-    assert isinstance(tasks, list) and len(tasks) == 2, sequence.first_evidence
-    assert all(task["state"] == "valid" for task in tasks), tasks
+def _changed(sequence: Sequence, run_id: str) -> list[str]:
+    """The `changed_dependencies` the doubled finalize read in ``run_id``, sorted."""
+    read = sequence.changed.get(run_id, [])
+    assert len(read) == 1, (run_id, sequence.changed)
+    found = json.loads(read[0])
+    assert isinstance(found, list), read
+    return sorted(str(one) for one in found)
 
 
-def test_a_later_engine_write_back_leaves_a_spike_record_valid(sequence: Sequence) -> None:
-    """The re-run spike's `launched` record is written before its run, whose settlement the
-    engine then writes back onto the task; the step promotes it to `ran` only while it is
-    still valid, which the note naming that run shows it was."""
-    assert sequence.visual_settlement_before != sequence.visual_settlement_after, (
-        "the second spikes run wrote no new settlement back onto spike-visual"
-    )
-    record = sequence.second_records[VISUAL]
-    _valid(record, "ran")
-    assert _held(record, "note") == f"spikes run {sequence.edited.spikes_runs[0]}", record
+def _redone(refinish: Refinish) -> list[object]:
+    redone = refinish.spikes_launch.get("redone") or []
+    assert isinstance(redone, list), refinish.spikes_launch
+    return sorted(redone, key=lambda one: str(one.get("node")) if isinstance(one, dict) else "")
+
+
+def test_the_first_refinish_with_nothing_edited_dispatches_nothing(sequence: Sequence) -> None:
+    fresh = sequence.fresh
+    assert fresh.result.returncode == 0, fresh.result.stdout + fresh.result.stderr
+    assert fresh.spikes == SPIKES_NODES, fresh.spikes
+    assert _redone(fresh) == [], fresh.spikes_launch
+    for dispatched in (
+        sequence.dispatched_health,
+        sequence.dispatched_visual,
+        sequence.dispatched_finalize,
+    ):
+        assert fresh.spikes_run not in dispatched, (fresh.spikes_run, dispatched)
+    assert not [one for one in sequence.fresh_prompts if SPIKE_BRIEF_MARKER in one]
+    assert fresh.spikes_run not in sequence.rework, sequence.rework
+
+
+def test_finalize_depends_on_every_spike_and_not_on_the_brief_writer(sequence: Sequence) -> None:
+    edges = json.dumps(sequence.finalize_edges)
+    for spike in sequence.spike_tasks.values():
+        assert f'"{spike}"' in edges, (spike, edges)
+    assert f"authoring:{sequence.native}-spikes-brief" not in edges, edges
+
+
+def test_the_first_finalize_reworks_every_task_the_draft_built_on_a_spike(
+    sequence: Sequence,
+) -> None:
+    # Every spike ran, and the draft answered both tasks as built on one, so both were reworked.
+    reworked = sorted(sequence.rework.get(sequence.first_spikes_run, []))
+    assert reworked == sorted(TASK_SPIKES), sequence.rework
+    named = {node: list(spikes) for node, spikes in TASK_SPIKES.items()}
+    assert sequence.first_answers == named, sequence.first_answers
 
 
 def test_a_refinish_reruns_only_the_edited_spike_on_its_branch(sequence: Sequence) -> None:
     edited = sequence.edited
     assert edited.result.returncode == 0, edited.result.stdout + edited.result.stderr
-    assert sequence.second_spikes == {"spike-brief": "done", HEALTH: "done", VISUAL: "done"}
-    second_run = edited.spikes_runs[0]
+    assert edited.spikes == SPIKES_NODES, edited.spikes
+    second_run = edited.spikes_run
     assert sequence.dispatched_visual.count(second_run) == 1, sequence.dispatched_visual
     assert second_run not in sequence.dispatched_health, sequence.dispatched_health
+    assert _redone(edited) == [
+        {"node": "finalize", "reason": "dependent", "of": VISUAL},
+        {"node": VISUAL, "reason": "changed"},
+    ], edited.spikes_launch
     assert sequence.second_branch.name == sequence.first_branch.name, (
         sequence.first_branch,
         sequence.second_branch,
     )
     assert sequence.second_branch.head != sequence.first_branch.head, sequence.second_branch
     assert sequence.branch_descends, (sequence.first_branch, sequence.second_branch)
-    _valid(sequence.second_records[VISUAL], "ran")
 
 
-def test_a_refinish_with_an_edited_spike_finalizes_and_reaches_the_approval(
+def test_finalize_runs_behind_the_rerun_spike_and_reworks_exactly_the_task_built_on_it(
     sequence: Sequence,
 ) -> None:
-    """Finalize runs once, in its own run before the finishing run, which holds none."""
+    second_run = sequence.edited.spikes_run
+    assert sequence.dispatched_finalize.count(second_run) == 1, sequence.dispatched_finalize
+    assert _changed(sequence, second_run) == [VISUAL], sequence.changed
+    assert sequence.rework.get(second_run) == ["docs"], sequence.rework
+    assert second_run in sequence.docs_after_edit, sequence.docs_after_edit
+    assert second_run not in sequence.docs_before_edit, sequence.docs_before_edit
+    assert sequence.route_after_edit == sequence.route_before_edit
+
+
+def test_the_finishing_run_holds_no_finalize_and_reaches_the_approval(sequence: Sequence) -> None:
     edited = sequence.edited
-    finalized = edited.finalize_runs[0]
-    assert sequence.dispatched_finalize == [finalized], sequence.dispatched_finalize
-    assert sequence.finalize_run == {"finalize": "done"}, sequence.finalize_run
-    reworked = sequence.rework.splitlines()
-    assert len(reworked) == 1, sequence.rework
-    # The docs task names both spikes; only the edited one is behind its fingerprint moving.
-    assert reworked[0].startswith(f"{sequence.docs_task} (docs): its spikes {VISUAL} changed"), (
-        sequence.rework
+    assert "finalize" not in edited.members and "spike-evidence" not in edited.members, (
+        edited.members
     )
-    assert "finalize" not in edited.members, edited.members
     waiting = {node: state for node, state in edited.finishing.items() if state != "done"}
     assert waiting == {"approve-design": "waiting"}, edited.finishing
 
@@ -885,86 +898,82 @@ def test_the_board_design_document_reads_the_refreshed_report(sequence: Sequence
     assert FOOTER.description not in second.content and FOOTER.image not in second.assets
 
 
-def test_a_refinish_with_nothing_edited_starts_no_spikes_and_no_finalize(
+def test_a_refinish_with_no_spike_edited_runs_nothing_and_reworks_nothing(
     sequence: Sequence,
 ) -> None:
     unchanged = sequence.unchanged
     assert unchanged.result.returncode == 0, unchanged.result.stdout + unchanged.result.stderr
-    assert unchanged.spikes_runs == [], unchanged.spikes_runs
-    assert unchanged.finalize_runs == [], unchanged.finalize_runs
-    assert "finalize" not in unchanged.members, unchanged.members
-    assert "no stale spike" in sequence.unchanged_spikes_log, sequence.unchanged_spikes_log
-
-
-def test_an_edit_to_a_task_alone_is_refused_by_the_check_naming_both_next_steps(
-    sequence: Sequence,
-) -> None:
-    refused = sequence.refused
-    assert refused.finishing.get("check") == "failed", refused.finishing
-    log = re.sub(r"\s+", " ", sequence.refused_check_log)
-    for named in (
-        sequence.docs_task,
-        VISUAL,
-        f"just finish-plan authoring:{sequence.native}",
-        f"just spike-unaffected {sequence.docs_task}",
+    assert unchanged.spikes == SPIKES_NODES, unchanged.spikes
+    quiet = unchanged.spikes_run
+    for dispatched in (
+        sequence.dispatched_health,
+        sequence.dispatched_visual,
+        sequence.dispatched_finalize,
     ):
-        assert named in log, (named, sequence.refused_check_log)
+        assert quiet not in dispatched, (quiet, dispatched)
+    assert quiet not in sequence.rework, sequence.rework
+    assert not unchanged.spikes_launch.get("redone"), unchanged.spikes_launch
 
 
-def test_spike_unaffected_records_the_reason_and_the_check_passes(sequence: Sequence) -> None:
-    unaffected = sequence.unaffected
-    assert unaffected.returncode == 0, unaffected.stdout + unaffected.stderr
-    assert sequence.accepted.finishing.get("check") == "done", sequence.accepted.finishing
-    _valid(sequence.docs_evidence)
-    assert _held(sequence.docs_evidence, "note") == UNAFFECTED_REASON, sequence.docs_evidence
+def test_an_edit_to_a_task_built_on_spikes_is_not_refused(sequence: Sequence) -> None:
+    assert sequence.unchanged.finishing.get("check") == "done", sequence.unchanged.finishing
 
 
-def test_the_launch_gate_refuses_an_edited_board_task_and_passes_a_valid_one(
-    sequence: Sequence,
-) -> None:
-    valid = sequence.launch_valid
-    assert "spike-evidence-check" not in valid.stdout + valid.stderr, valid.stdout + valid.stderr
-    edited = sequence.launch_edited
-    assert edited.returncode != 0, edited.stdout + edited.stderr
-    # The copy holds no answers, so the spike the refusal names came from its origin's.
-    assert "no-stored-answers" in sequence.board_answers.stdout, sequence.board_answers
-    text = re.sub(r"\s+", " ", edited.stdout + edited.stderr)
-    for named in (
-        sequence.docs_task,
-        VISUAL,
-        f"just finish-plan authoring:{sequence.native}",
-        f"just spike-unaffected {sequence.docs_task}",
-    ):
-        assert named in text, (named, edited.stdout + edited.stderr)
-
-
-def test_a_spike_edited_while_it_runs_fails_the_step_and_stays_launched(
-    sequence: Sequence,
-) -> None:
-    """The stale spikes re-run first in the flow, so their failure stops it before any
-    finishing run starts."""
+def test_a_spike_edited_while_it_runs_finishes_that_run(sequence: Sequence) -> None:
     midrun = sequence.midrun
-    output = midrun.stdout + midrun.stderr
-    assert midrun.returncode != 0, output
-    assert f"edited while it ran: {HEALTH}" in output, output
-    assert sequence.midrun_finishing == [], sequence.midrun_finishing
-    assert _held(sequence.midrun_record, "bar") == "launched", sequence.midrun_record
-    assert sequence.midrun_record["reason"] == "content-moved", sequence.midrun_record
+    assert midrun.result.returncode == 0, midrun.result.stdout + midrun.result.stderr
+    assert sequence.midrun_running == midrun.spikes_run, (sequence.midrun_running, midrun)
+    assert midrun.spikes == SPIKES_NODES, midrun.spikes
+    assert sequence.dispatched_health.count(midrun.spikes_run) == 1, sequence.dispatched_health
+    assert midrun.spikes_run not in sequence.dispatched_visual, sequence.dispatched_visual
 
 
-def test_a_legacy_spike_is_backfilled_and_not_run_again(sequence: Sequence) -> None:
-    legacy = sequence.legacy
-    assert f"backfilled {HEALTH}" in sequence.legacy_spikes_log, sequence.legacy_spikes_log
-    assert legacy.spikes_runs == [], legacy.spikes_runs
-    assert len(sequence.legacy_spikes_runs) == 1, sequence.legacy_spikes_runs
-    _valid(sequence.legacy_record, "ran")
+def test_a_spike_edited_while_it_ran_reruns_on_the_next_refinish(sequence: Sequence) -> None:
+    asked = sequence.asked
+    assert asked.result.returncode == 0, asked.result.stdout + asked.result.stderr
+    assert asked.spikes == SPIKES_NODES, asked.spikes
+    assert sequence.dispatched_health.count(asked.spikes_run) == 1, sequence.dispatched_health
+    assert asked.spikes_run not in sequence.dispatched_visual, sequence.dispatched_visual
+    redone = asked.spikes_launch.get("redone")
+    assert redone == [
+        {"node": "finalize", "reason": "dependent", "of": HEALTH},
+        {"node": HEALTH, "reason": "changed"},
+    ], redone
+    assert sequence.dispatched_finalize.count(asked.spikes_run) == 1, sequence.dispatched_finalize
+    assert _changed(sequence, asked.spikes_run) == [HEALTH], sequence.changed
+    assert sorted(sequence.rework.get(asked.spikes_run, [])) == ["docs", "route"], sequence.rework
 
 
-def test_rework_lists_a_task_with_no_evidence_from_the_spikes_it_names(
+def test_the_spikes_step_waits_through_a_spikes_question_with_no_adopt(
     sequence: Sequence,
 ) -> None:
-    listed = sequence.legacy_rework
-    assert listed.returncode == 0, listed.stdout + listed.stderr
-    lines = listed.stdout.splitlines()
-    assert len(lines) == 1, listed.stdout
-    assert lines[0].endswith(f" (route): no evidence is recorded from its spikes {HEALTH}"), lines
+    """The health worker's blocking question held its run until the manager answered it; the
+    step's one engine watch waited through it, and the run went on with nobody adopting it."""
+    answered = sequence.answered
+    assert QUESTION in answered.question, answered.question
+    assert answered.reply.returncode == 0, answered.reply.stdout + answered.reply.stderr
+    assert ANSWER in sequence.answer_received, sequence.answer_received
+    assert sequence.asked.spikes_launch.get("adoptions") == 0, sequence.asked.spikes_launch
+    assert sequence.asked.finishing.get("spikes") == "done", sequence.asked.finishing
+
+
+def test_an_interrupted_refinish_ends_before_finalize_settles(sequence: Sequence) -> None:
+    interrupted = sequence.interrupted
+    assert interrupted.result.returncode != 0, interrupted.result.stdout
+    assert sequence.dispatched_visual.count(interrupted.spikes_run) == 1
+    assert interrupted.spikes.get(VISUAL) == "done", interrupted.spikes
+    assert interrupted.spikes.get("finalize") != "done", interrupted.spikes
+    assert interrupted.finishing.get("spikes") != "done", interrupted.finishing
+
+
+def test_the_next_refinish_runs_finalize_over_the_spike_the_interrupted_one_reran(
+    sequence: Sequence,
+) -> None:
+    resumed = sequence.resumed
+    assert resumed.result.returncode == 0, resumed.result.stdout + resumed.result.stderr
+    assert resumed.spikes == SPIKES_NODES, resumed.spikes
+    for dispatched in (sequence.dispatched_health, sequence.dispatched_visual):
+        assert resumed.spikes_run not in dispatched, dispatched
+    assert sequence.dispatched_finalize.count(resumed.spikes_run) == 1
+    assert _changed(sequence, resumed.spikes_run) == [VISUAL], sequence.changed
+    assert sequence.rework.get(resumed.spikes_run) == ["docs"], sequence.rework

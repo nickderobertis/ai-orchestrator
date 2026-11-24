@@ -10,9 +10,11 @@ One sequence on one bench (`planning_bench`), every step through the real recipe
    spikes dispatch while the brief writer, held unfinished, still runs. Released, the
    writer raises one `check-in` naming the brief, the plan and each spike, and no human
    item, while the second spike, still held, runs. Each spike preserves its branch on the
-   identity's origin; the spikes run completes on its own, and the planning run goes on to finalize,
-   check, review (attesting every task and the project), write the design document, copy
-   it all to the bench's `board` source, and wait at `approve-design`.
+   identity's origin; the spikes project's `finalize` runs behind every spike, and since no
+   task's `spikes` answer names one, reworks nothing and leaves every task as drafted; the
+   spikes run completes on its own, and the planning run goes on to check, review (attesting
+   every task and the project), write the design document, copy it all to the bench's
+   `board` source, and wait at `approve-design`.
 2. The orchestrate recipe on the board copy is refused by the registered launch check
    naming the missing `design-approval`, and accepted once `just approve-design` records it.
 3. Three more launch-gate cases on that copy: its description edited after review, the
@@ -35,6 +37,7 @@ record to the scratch identity's own registry — none of them the host's.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import shlex
@@ -53,7 +56,10 @@ from drafting import (
     SPIKE_MARKER,
     SPIKES,
     brief,
+    changed_record,
+    drafted_record,
     drafting,
+    rework_record,
     spikes_check_record,
 )
 from planning_bench import (
@@ -78,14 +84,12 @@ EXECUTION_ALIAS = "execution"
 #: The spikes the draft adds: the first runs unheld, the second is held until released.
 SPIKE_IDS = ("spike-health", "spike-load")
 #: Every member the spikes template declares, with the spikes the draft adds.
-SPIKES_NODES = ["spike-brief", *SPIKE_IDS]
+SPIKES_NODES = ["spike-brief", "finalize", *SPIKE_IDS]
 #: Every member the planning template declares.
 PLANNING_NODES = [
     "refresh",
     "draft",
     "spikes",
-    "finalize",
-    "spike-evidence",
     "check",
     "review",
     "design",
@@ -124,6 +128,12 @@ class Sequence(NamedTuple):
     spikes_surfaces: list[dict[str, object]]
     planning_items: list[dict[str, object]]
     spikes: dict[str, object]
+    #: Each plan task's content as the draft wrote it, and as it stood once planning ended.
+    drafted: dict[str, str]
+    planned_content: dict[str, str]
+    #: What the doubled finalize recorded: the `changed_dependencies` it read, and its rework.
+    finalize_changed: str
+    finalize_rework: str
     spikes_launch: dict[str, object]
     planning: dict[str, object]
     flow: str
@@ -437,6 +447,10 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     spikes_checked = checked_record.read_text("utf-8") if checked_record.exists() else ""
     planning_run = _only_run(bench_, "-planning")
     spikes = status(bench_, spikes_run)
+    drafted = {node: _read(drafted_record(bench_, node)) for node in ("route", "docs")}
+    planned_content = {node: _content(bench_, f"authoring:{native}", node) for node in drafted}
+    finalize_changed = _read(changed_record(bench_))
+    finalize_rework = _read(rework_record(bench_))
     spikes_items = _items(bench_, spikes_run)
     spikes_surfaces = surfaces + _surfaces(bench_, spikes_run)
     planning_items = _items(bench_, planning_run)
@@ -547,6 +561,10 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         spikes_surfaces,
         planning_items,
         spikes,
+        drafted,
+        planned_content,
+        finalize_changed,
+        finalize_rework,
         spikes_launch,
         planning,
         flow,
@@ -574,6 +592,25 @@ def sequence(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     for one in runs_of(bench_):
         if not one.startswith("."):
             just(bench_, "stop", one, seconds=120)
+
+
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+
+def _content(bench: Bench, plan: str, node: str) -> str:
+    """The content of ``plan``'s task ``node``, as the store shows it, newline-terminated as
+    the draft's record of it is."""
+    listed = store_json(bench, "task", "list", "--source", "authoring", "--project", plan)
+    items = listed.get("items")
+    assert isinstance(items, list), listed
+    found = [
+        one["item"]["content"]
+        for one in items
+        if isinstance(one, dict) and one["item"]["metadata"].get("onepipeline.id") == node
+    ]
+    assert len(found) == 1, (node, listed)
+    return f"{found[0]}\n"
 
 
 def _refused(result: subprocess.CompletedProcess[str], *named: str) -> None:
@@ -662,10 +699,10 @@ def test_approve_design_is_the_planning_runs_one_human_wait(sequence: Sequence) 
     assert len(sequence.planning_items) == 1, sequence.planning_items
 
 
-def test_finalize_runs_after_the_spikes_run_completes(sequence: Sequence) -> None:
+def test_finalize_runs_in_the_spikes_run_after_every_spike(sequence: Sequence) -> None:
     ending = sequence.spikes.get("ending")
     assert isinstance(ending, dict) and ending.get("kind") == "complete", sequence.spikes
-    assert _nodes(sequence.planning)["finalize"] == "done", sequence.planning
+    assert _nodes(sequence.spikes)["finalize"] == "done", sequence.spikes
     prompts = [
         str(json.loads(line).get("prompt"))
         for line in sequence.bench.turn_log.read_text(encoding="utf-8").splitlines()
@@ -674,6 +711,23 @@ def test_finalize_runs_after_the_spikes_run_completes(sequence: Sequence) -> Non
     finalized = [index for index, prompt in enumerate(prompts) if FINALIZE_MARKER in prompt]
     assert spiked and finalized, (len(spiked), len(finalized))
     assert min(finalized) > max(spiked), (spiked, finalized)
+
+
+def test_finalize_reworks_no_task_when_no_task_names_a_spike(sequence: Sequence) -> None:
+    """Finalize read every spike as changed, and with no task's `spikes` answer naming one it
+    reworked nothing: an empty set of spike answers is never read as a first finalize."""
+    changed = sequence.finalize_changed.split()
+    assert changed[0] == sequence.spikes_run, sequence.finalize_changed
+    assert sorted(json.loads(changed[1])) == sorted(SPIKE_IDS), sequence.finalize_changed
+    assert sequence.finalize_rework == "", sequence.finalize_rework
+    assert all(sequence.drafted.values()), sequence.drafted
+    for node, drafted in sequence.drafted.items():
+        planned = sequence.planned_content[node]
+        assert "## Spike evidence" not in planned, (node, planned)
+        changed_lines = "".join(
+            difflib.unified_diff(drafted.splitlines(True), planned.splitlines(True), n=0)
+        )
+        assert planned == drafted, (node, changed_lines)
 
 
 def test_the_spike_preserved_its_branch_on_the_origin(sequence: Sequence) -> None:
