@@ -169,7 +169,7 @@ QUESTION_RULE = (
     "**Every question to the user is a question item.** In the engine's words:",
     "Raise it with `just human-items raise`, its `--input` file the engine's item shape, and "
     "never ask it only as a line of chat",
-    "Keep supervising while it waits, your watches armed and unrelated nodes moving",
+    "Keep supervising what still moves while it waits",
     "Claude Code's built-in question tool is one such harness tool, and its answer is recorded "
     "on the item with `just human-items answer`, acting for the user.",
     "When the user answers in chat, record it with `just human-items answer <item> --choice "

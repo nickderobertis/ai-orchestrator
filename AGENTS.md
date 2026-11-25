@@ -434,8 +434,8 @@ item, acting for the person, so the item store stays the record of every questio
 it with `just human-items raise`, its `--input` file the engine's item shape, and never
 ask it only as a line of chat, because the item is what a person running several managers
 reads, on the **Action items** page from a phone as much as anywhere, and what every
-other manager sees. Keep supervising while it waits, your watches armed and unrelated
-nodes moving; where a default is reasonable, state it in the item and proceed on it.
+other manager sees. Keep supervising what still moves while it waits; where a default
+is reasonable, state it in the item and proceed on it.
 Claude Code's built-in question tool is one such harness tool, and its answer is recorded
 on the item with `just human-items answer`, acting for the user.
 
@@ -652,6 +652,8 @@ do not just re-arm.
    reclaim a superseded one with the reclaim line its row prints, or acknowledge work deliberately kept with `just unpublished --acknowledge
    <branch> --reason "<why>"`, until `just unfinished` answers `0`. A run is owed until
    it is closed, not until it settles; a settled run needs closure rather than a watch.
+   A run or flow whose only remaining work waits on a person's open item, with nothing
+   dispatched and no surface unread, is owed nothing: end the turn there, never re-arm.
 2. **The watch emits on every terminal state**, not just the happy path. Silence must
    never be indistinguishable from progress — a watch that greps only for success is
    silent through a crashloop.
@@ -694,9 +696,10 @@ do not just re-arm.
    launcher's start to its exit, its runs and the steps between them alike, so a turn
    cannot end in a review step while the flow's next run and questions wait. Each prints
    its flow first; arm `just watch --flow <ID>` on it, read each ending as a run watch's
-   is read, and re-arm from its cursor on every one, a new run joining included. While
-   the flow lives that watch covers its runs; once it has exited, a run still open is
-   owed on its own, as is a `--detach` launch's run.
+   is read, and re-arm from its cursor on every one, a new run joining included, until
+   it waits only on the user's design approval. While the flow lives that watch covers
+   its runs; once it has exited, a run still open is owed on its own, as is a
+   `--detach` launch's run.
 8. **A landing you start is a flow too.** `just publish-branch`, `just repo-recover` and
    `just integrate` register in this session's flow before they act and print it; arm
    `just watch --flow <ID>` on it. Its default wakes on milestones and blockers only;
@@ -705,8 +708,8 @@ do not just re-arm.
    before; close a refused or dead one with `just unwatched --acknowledge-flow`.
 
 Supervising several runs still requires a qualifying watch for each owed run and flow.
-Every run this session launched stays owed until closed: the `complete` verdict, `just
-stop`, or `just unwatched --acknowledge <run> --reason "<why>"`. A flow that ended
+Every run this session launched, but for that wait on a person, stays owed until
+closed: the `complete` verdict, `just stop`, or `just unwatched --acknowledge <run> --reason "<why>"`. A flow that ended
 non-zero or died is owed closure: `just unwatched --acknowledge-flow <ID> --reason
 "<why>"`, once you have reported it. Both are deliberate, reasoned escape hatches,
 mirroring `just unpublished --acknowledge`. Any other process you must supervise that is

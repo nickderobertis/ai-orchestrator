@@ -37,6 +37,7 @@
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/.gitignore",
+      "{workspaceRoot}/.claude/settings.json",
       "{workspaceRoot}/onetaskgraph.yaml",
       "{workspaceRoot}/.onepipeline/config.yaml",
       "{workspaceRoot}/oneharness*.toml",

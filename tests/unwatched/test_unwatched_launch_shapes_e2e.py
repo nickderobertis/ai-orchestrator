@@ -13,10 +13,10 @@ read back through the installed engine: the run root it created, the session its
 record names, and the verb's own answer while that run is unsettled and unwatched.
 
 **The launch journeys keep a dispatch working** so they can verify each launch shape
-while its driver is still alive. Convergence no longer excuses supervision: the adoption
-journey also asks the verb after the original driver converges on a human action, before
-the stop that lets an adoption take the run over. That run remains owed until explicitly
-closed.
+while its driver is still alive. The adoption journey also asks the verb after the
+original driver converges on a human action, before the stop that lets an adoption take
+the run over: everything left in that run waits on a person's open item, so the verb owes
+it no watch and says what it waits on, and attesting the action makes the run owed again.
 
 `--dag-graph off` for the same reason the `just plan` recipe names it: an observer watches
 a run for its whole life and every turn it takes is another dispatch, which is real cost
@@ -263,6 +263,35 @@ def _until_named(launch: Launch, *, seconds: float = 300) -> str:
     )
 
 
+def _until_waiting_on_a_person(launch: Launch, *, seconds: float = 300) -> None:
+    """Wait for the verb to owe this run nothing because it waits only on a person.
+
+    The run's every unsettled node is the open human action or waits behind it, nothing is
+    dispatched and no surface is unread, so the engine reports the run waiting with the
+    item it waits on and exits as it does for a session that owes nothing. Polled for the
+    reason `_until_named` is: the item and the driver's convergence land a moment apart.
+    """
+    limit = time.monotonic() + e2e_timeout(seconds)
+    said: list[str] = []
+    while time.monotonic() < limit:
+        answered = _unwatched(launch)
+        waiting = [
+            line
+            for line in (answered.stdout + answered.stderr).splitlines()
+            if line.startswith(launch.run) and "WAITING" in line
+        ]
+        if answered.returncode == 0 and waiting and "'approve'" in waiting[0]:
+            return
+        seen = f"exit {answered.returncode}: {answered.stdout!r} {answered.stderr!r}"
+        if seen not in said:
+            said.append(seen)
+        time.sleep(1)
+    raise AssertionError(
+        f"the verb never reported run {launch.run} waiting only on its human action, "
+        "owing no watch. What it answered:\n" + "\n".join(f"  - {one}" for one in said)
+    )
+
+
 def _owned(launch: Launch, *, seconds: float = 300) -> None:
     """The run's own launch record names the launching session.
 
@@ -373,10 +402,11 @@ def _adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
     Reachable only from the state a stop produces: the detached launch converges on a
     human action nobody has attested, and its driver — retained over that decision rather
     than letting go — holds the run until `just stop` ends it, leaving a run nothing is
-    driving with an intact ledger. The converged run is owed before it is stopped. The
-    adoption hands the run back at the same human action to the driver it retains, so
-    attesting the action is what gives that driver something to do, and the agent node
-    behind it is what is still working while the verb is asked.
+    driving with an intact ledger. The converged run waits only on a person, so before it
+    is stopped the verb owes it no watch. The adoption hands the run back at the same
+    human action to the driver it retains, so attesting the action is what gives that
+    driver something to do, and the agent node behind it is what is still working — and
+    owed a watch again — while the verb is asked.
 
     **The order is the whole of this fixture, and getting it wrong measures nothing.** The
     engine refuses `--adopt` while a driver holds the run, and a retained driver holds it
@@ -398,7 +428,7 @@ def _adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
         )
         assert started.returncode == 0, f"the launch failed:\n{started.stdout}{started.stderr}"
         _until_paused(launch)
-        assert launch.run in _until_named(launch), "convergence must not close an owed run"
+        _until_waiting_on_a_person(launch)
         stopped = _just("stop", launch.run, environment=launch.environment, seconds=120)
         assert stopped.returncode == 0, f"the stop failed:\n{stopped.stdout}{stopped.stderr}"
         _until_the_driver_lets_go(launch)

@@ -221,3 +221,42 @@ def test_a_watch_given_a_log_writes_its_human_form_there_through_the_recipe(
         f"the engine's standard output carries a line that is not a machine record:\n"
         f"{watched.stdout}"
     )
+
+
+#: Where the engine states that a run waiting only on a person is owed no watch, and the
+#: words this host's two documents restate it in.
+HUMAN_WAIT_ENGINE = "A run waiting only on a person is owed none"
+HUMAN_WAIT_MANAGER = (
+    "A run or flow whose only remaining work waits on a person's open item, with nothing "
+    "dispatched and no surface unread, is owed nothing: end the turn there, never re-arm."
+)
+HUMAN_WAIT_ORCHESTRATION = "**A run waiting only on a person is owed no watch.**"
+
+
+@pytest.mark.reads_checkouts
+def test_the_documents_owe_no_watch_on_a_wait_for_a_person_as_the_installed_engine_does() -> None:
+    """The rule a manager ends its turn on, and the engine that decides it, reconciled.
+
+    A manager told to keep re-arming on a run waiting only on the user's review wakes every
+    35 minutes to find it still waiting; told to stop where the engine still owed a watch, its
+    turn would be refused. So the watch section and `docs/orchestration.md` state the rule
+    while the installed `unwatched` states it too.
+    """
+    helped = subprocess.run(
+        [str(ENGINE), "unwatched", "--help"],
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert helped.returncode == 0, helped.stderr
+    assert HUMAN_WAIT_ENGINE in _flat(helped.stdout), (
+        f"the installed engine's `unwatched` no longer says {HUMAN_WAIT_ENGINE!r}; re-read "
+        f"when it owes a watch and restate {MANAGER} and {PLANNING_OBSERVER_DOCUMENT}"
+    )
+    assert HUMAN_WAIT_MANAGER in _flat(_region(WATCH_SECTION)), (
+        f"{MANAGER}'s watch section no longer says a wait on a person is owed no watch"
+    )
+    assert HUMAN_WAIT_ORCHESTRATION in _text(PLANNING_OBSERVER_DOCUMENT), (
+        f"{PLANNING_OBSERVER_DOCUMENT} no longer says a wait on a person is owed no watch"
+    )
