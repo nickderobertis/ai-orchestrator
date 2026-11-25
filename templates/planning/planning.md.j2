@@ -90,7 +90,7 @@ members:
     metadata:
       onepipeline.id: review
       onepipeline.kind: command
-      onepipeline.command: [scripts/review-plan-item.sh, "{{ plan }}"]
+      onepipeline.command: [scripts/review-plan-item.sh, "{{ plan }}", "{{ destination }}"]
   - id: "{{ native }}-planning-design"
     title: "Write the design document of {{ plan }}"
     template: {file: design.md.j2}

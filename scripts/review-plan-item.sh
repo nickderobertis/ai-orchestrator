@@ -13,7 +13,7 @@
 # everything a judge reads and out of every attestation's digest, so a run settling, landing
 # or amending a task neither reaches the judge as metadata nor voids a pass.
 #
-#   review-plan-item.sh <source>:<project>
+#   review-plan-item.sh <source>:<project> [destination]
 #       Reviews what is not yet reviewed, as a query and a loop: the bar is the planner
 #       member's fingerprint (`--bar-fingerprint`); the store's filtered check
 #       (`onetaskgraph project attestation check --tasks --not-status "done" --not-status
@@ -24,6 +24,10 @@
 #       under `delivered/` as context and a `cancelled` (withdrawn) one is left out. Then, when
 #       no task was refused and the project's own attestation is not valid, the project's
 #       description is judged, its tasks beside it, and attested on a pass.
+#       `destination` names the configured source the review is run for, the key of each
+#       task's `onetaskgraph.copies` that `just refresh-plan <plan> <destination>` reads the
+#       project's copy by; it decides only which copy's amendment a task copied to several
+#       destinations is judged with (below).
 #       Exit 0 when everything is reviewed, 1 when a judge refused something (nothing is
 #       recorded for it), 2 when something could not be read or judged.
 #
@@ -46,7 +50,12 @@
 # task's `onepipeline.amendment` — its own, or its board copy's, read through its
 # `onetaskgraph.copies` link, because the refresh copies status alone — is rendered after its
 # body as the run's applied record: criteria the run added by a live edit, part of its bar,
-# with no ruling reference expected and no restatement expected of the task's own text.
+# with no ruling reference expected and no restatement expected of the task's own text. A
+# link naming one copy is read whatever destination is named. A link naming several is read
+# at the named destination's key exactly, refused at exit 2 when it holds no such key; with
+# no destination named every copy is read, and the one amendment text they hold is the
+# amendment, a copy holding none never disagreeing, while two distinct texts refuse at exit 2
+# naming the copies, for the review to be run for the destination whose run binds.
 set -euo pipefail
 
 if ! script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) ||
@@ -236,6 +245,7 @@ if [ "$#" -eq 0 ]; then
 fi
 
 plan=$1
+destination=${2:-}
 described=$(native_file "$plan" "$scratch/projects") || exit 2
 bar=$("${judge[@]}" --bar-fingerprint) && [ -n "$bar" ] || {
     echo "review-plan-item: could not read the planner graph's review bar (its diagnostic is above); repair graphs/planner.yaml until 'oneagentgraph run graphs/planner.yaml --judge-only --member worker --bar-fingerprint' answers, then retry" >&2
@@ -310,9 +320,27 @@ not_text() {
     echo "review-plan-item: $1 holds an amendment that is not text, so nothing more was judged; set its onepipeline.amendment to the criteria's text, then retry" >&2
     exit 2
 }
-# A task's copy link is an object naming its one destination's copy by a qualified id, where
-# its run writes; a link of any other shape, or naming several, says no one copy holds it.
-copy_of='.item.metadata | if has("onetaskgraph.copies") then .["onetaskgraph.copies"] else {} end | if type == "object" and length <= 1 and all(.[]; type == "string" and test("^[^:\\s]+:\\S+$")) then (to_entries[0].value // "") else error("malformed") end'
+# A task's copy link is an object naming each destination's copy by a qualified id, keyed by
+# the destination's source name, where that destination's run writes; a link of any other
+# shape is refused.
+copy_of='.item.metadata | if has("onetaskgraph.copies") then .["onetaskgraph.copies"] else {} end | if type == "object" and all(.[]; type == "string" and test("^[^:\\s]+:\\S+$")) then . else error("malformed") end'
+# The copies whose amendment is read: the one a link names, whatever destination is named; of
+# several, the named destination's exactly, or every one when no destination is named. Each
+# id is a validated qualified id, so one per line is unambiguous.
+# shellcheck disable=SC2016 # jq's own variable, expanded by jq rather than the shell.
+copies_read='if length > 1 and $destination != "" then [.[$destination] // empty] else [.[]] end | .[]'
+# A copy is trusted only when the store answers it as exactly the one record asked for, so a
+# copy deleted or re-homed on its board refuses rather than reading as holding no amendment.
+# It runs in a command substitution, whose exit ends only that subshell: callers `|| exit 2`.
+copy_amendment() {
+    local id=$1 copy=$2 copied
+    if ! copied=$("$store" task show "$copy" --json --no-interactive) ||
+        ! jq -e --arg copy "$copy" '(.errors // []) == [] and (.items | length) == 1 and .items[0].id == $copy' >/dev/null <<<"$copied" 2>/dev/null; then
+        echo "review-plan-item: the plan store could not show $id's board copy $copy as one record to read its amendment (its diagnostic is above), so nothing more was judged; repair what it names, then retry" >&2
+        exit 2
+    fi
+    jq -r ".items[0] | $amendment_of" <<<"$copied" || not_text "$copy"
+}
 
 
 # The tasks to judge are the store's answer: open, and without a valid record under the bar.
@@ -332,17 +360,34 @@ for id in ${stale[@]+"${stale[@]}"}; do
     # The amendment is the task's own, or else its board copy's, read through its copy link.
     # Only text is rendered: anything else is no amendment a judge could read as criteria.
     amendment=$(jq -r "$amendment_of" <<<"$task") || not_text "$id"
-    copy=$(jq -r "$copy_of" <<<"$task") || {
-        echo "review-plan-item: $id holds an onetaskgraph.copies that is not an object naming one destination's copy by a qualified id, so no one board copy holds its amendment and nothing more was judged; repair its copy link with the plan store, then retry" >&2
+    links=$(jq -c "$copy_of" <<<"$task") || {
+        echo "review-plan-item: $id holds an onetaskgraph.copies that is not an object naming each destination's copy by a qualified id, so no one board copy holds its amendment and nothing more was judged; repair its copy link with the plan store, then retry" >&2
         exit 2
     }
-    if [ -z "$amendment" ] && [ -n "$copy" ]; then
-        if ! copied=$("$store" task show "$copy" --json --no-interactive) ||
-            ! jq -e --arg copy "$copy" '(.errors // []) == [] and (.items | length) == 1 and .items[0].id == $copy' >/dev/null <<<"$copied" 2>/dev/null; then
-            echo "review-plan-item: the plan store could not show $id's board copy $copy as one record to read its amendment (its diagnostic is above), so nothing more was judged; repair what it names, then retry" >&2
+    # A task holding its own amendment keeps it.
+    if [ -z "$amendment" ]; then
+        listed=$(jq -r --arg destination "$destination" "$copies_read" <<<"$links") ||
+            read_failed "read which of $id's copies to read"
+        copies=()
+        [ -z "$listed" ] || mapfile -t copies <<<"$listed"
+        held=$(jq -c 'keys' <<<"$links") || read_failed "read the destinations $id's copy link names"
+        if [ "${#copies[@]}" -eq 0 ] && [ "$held" != "[]" ]; then
+            echo "review-plan-item: $id is copied to the destinations $held, and its copy link holds no copy under '$destination', the destination this review was run for, so nothing more was judged; run the review for one of those destinations ('just review-plan $plan <destination>'), then retry" >&2
             exit 2
         fi
-        amendment=$(jq -r ".items[0] | $amendment_of" <<<"$copied") || not_text "$copy"
+        # A copy holding no amendment never disagrees; two distinct texts do.
+        holders=() differ=0
+        for copy in ${copies[@]+"${copies[@]}"}; do
+            text=$(copy_amendment "$id" "$copy") || exit 2
+            [ -n "$text" ] || continue
+            [ -n "$amendment" ] || amendment=$text
+            [ "$text" = "$amendment" ] || differ=1
+            holders+=("$copy")
+        done
+        if [ "$differ" -ne 0 ]; then
+            echo "review-plan-item: $id's board copies ${holders[*]} hold different amendments, so no one amendment binds a review run for no destination and nothing more was judged; run the review for the destination whose run binds ('just review-plan $plan <destination>'), then retry" >&2
+            exit 2
+        fi
     fi
     file=$(native_file "$id" "$scratch/tasks") || exit 2
     [ -z "$amendment" ] || write_record "$task" "$file" "$amendment"

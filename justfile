@@ -367,13 +367,14 @@ check-plan plan:
 # every task and the project whose `plan-review` attestation is not valid under the current
 # bar, and attests each pass: an edited plan is re-reviewed by running it again, judging only
 # what changed. `just refresh-plan` runs first, so a task its board copy holds done or
-# withdrawn is skipped by its own status. `scripts/review-plan-item.sh` is the command; exit 1
-# is a judged refusal.
+# withdrawn is skipped by its own status. `scripts/review-plan-item.sh <plan> <destination>` is
+# the command, and a task copied to several destinations is judged with the amendment of its
+# copy on `destination`, refused at exit 2 when it has no copy there; exit 1 is a judged refusal.
 [group("planning")]
 [doc("Judge every unreviewed task and the project of a plan, attesting each pass.")]
 review-plan plan destination="plans":
     @just refresh-plan {{ quote(plan) }} {{ quote(destination) }}
-    @scripts/plan-store.sh scripts/review-plan-item.sh {{ quote(plan) }}
+    @scripts/plan-store.sh scripts/review-plan-item.sh {{ quote(plan) }} {{ quote(destination) }}
 
 # `just approve-design <source>:<project> [run]` records the user's approval on the board
 # copy's design document — `onetaskgraph document attest --kind design-approval`, under the

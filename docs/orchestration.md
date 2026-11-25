@@ -325,7 +325,7 @@ which is the point of it. Its members, in order:
 | `draft` | planner, `graphs/planner.yaml` | writes the plan into `authoring`, and `<plan>-spikes` when it needs a measurement |
 | `spikes` | command | `just spikes <plan>`: runs `<plan>-spikes`, its spikes and then its `finalize`, to its ending in the same flow when the draft created one; `done` at once otherwise |
 | `check` | command | `onepipeline plan check <plan>` |
-| `review` | command | `scripts/review-plan-item.sh <plan>` |
+| `review` | command | `scripts/review-plan-item.sh <plan> <destination>` |
 | `design` | design-doc writer, `graphs/design-doc.yaml` | renders the design document as a document of the plan |
 | `copy` | command | `just copy-plan <plan> <destination>`, publishing the step output `design_url` |
 | `approve-design` | `kind: human` | raises the question asking the user to approve the board copy's design, linking `design_url` |
@@ -389,7 +389,16 @@ presenting it as the run's applied record — criteria the run added by a live e
 task's bar, and not a ruling the plan records, so no ruling reference is expected of it — and
 every judge is told that a task's own text is not expected to restate its amendment, which
 binds where the two differ, and that a task is judged alone, the plan's other files context, so
-a sibling's defect is refused in the sibling's own judgment. The judge panel is
+a sibling's defect is refused in the sibling's own judgment. Which copy's amendment that is
+turns on the review's optional `destination`, the second argument of
+`scripts/review-plan-item.sh <plan> [destination]` and the key of the task's
+`onetaskgraph.copies` that `just refresh-plan` reads: a link naming one copy is read whatever is
+named; of a link naming several, the copy under that exact key is read alone, and a key the link
+lacks refuses at exit 2 naming the key asked for and the keys present; with no destination named
+every copy is read, the one amendment text they hold binds, a copy holding none never disagrees,
+and two different texts refuse at exit 2 naming the copies, for the review to be run for the
+destination whose run binds. `just review-plan` and the planning runs' `review` step pass the
+destination they were given. The judge panel is
 `graphs/planner.yaml`'s: the planner's `reviewer` and the `plan-checklist` llmlint judge
 under `config/plan-checklist.llmlint.yml`, whose rules read each record's metadata — budget
 records, the unit — as well as its body. Each judged record's front matter carries its title,
