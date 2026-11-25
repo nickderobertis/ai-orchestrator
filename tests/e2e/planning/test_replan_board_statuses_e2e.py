@@ -24,6 +24,7 @@ import shlex
 import shutil
 import subprocess
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, NamedTuple
 
 import engine_writeback_keys
@@ -258,6 +259,19 @@ def _gate(bench_: Bench, plan: str) -> list[str]:
     return [str(one["reason"]) for one in json.loads(gated.stdout)["refusals"]]
 
 
+def _board_bench(tmp: Path, oneharness_bin: str, session: str, remote: dict[str, str]) -> Bench:
+    """A planning bench in ``tmp`` whose `plans` source is the loopback board ``remote``."""
+    home = onetaskgraph_user_layer.installed(tmp / "config-home", {"sources": {}})
+    return bench(
+        tmp,
+        oneharness_bin,
+        session,
+        **remote,
+        XDG_CONFIG_HOME=str(home),
+        ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS="0",
+    )
+
+
 class Journey(NamedTuple):
     reviewed: Setup
     review: subprocess.CompletedProcess[str]
@@ -275,16 +289,8 @@ def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     tmp = tmp_path_factory.mktemp("replan-board")
-    home = onetaskgraph_user_layer.installed(tmp / "config-home", {"sources": {}})
     with _serving_board() as remote:
-        bench_ = bench(
-            tmp,
-            oneharness_bin,
-            "e2e-replan-board",
-            **remote,
-            XDG_CONFIG_HOME=str(home),
-            ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS="0",
-        )
+        bench_ = _board_bench(tmp, oneharness_bin, "e2e-replan-board", remote)
         bar = _bar(bench_)
         tag = os.getpid()
         reviewed = _setup(bench_, f"board-reviewed-{tag}", bar)
@@ -363,3 +369,86 @@ def test_finish_plans_refresh_step_leaves_the_same_authoring_copy(journey: Journ
     assert normalized(journey.after_finish, journey.finished.plan.split(":", 1)[1]) == (
         normalized(journey.after_review, journey.reviewed.plan.split(":", 1)[1])
     ), journey.finish.stdout[-2000:] + journey.finish.stderr[-2000:]
+
+
+class Successive(NamedTuple):
+    """What a board-status journey saw after an earlier journey in its process planned `route`."""
+
+    route_copies: dict[str, str]
+    base_copies: dict[str, str]
+    refresh: subprocess.CompletedProcess[str]
+    tasks: dict[str, TaskCopy]
+    refusals: list[str]
+    earlier_plan_shown: subprocess.CompletedProcess[str]
+
+
+@pytest.fixture(scope="module")
+def successive(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Successive:
+    """An earlier journey copies a `route` plan onto its board; a later one then refreshes.
+
+    The loopback board numbers its issues afresh for every journey, so the earlier journey's
+    `route` task and the later journey's `base` task are copied onto their boards under the
+    same issue id. Both journeys run in this one process, through the benches every journey
+    here uses.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    tmp = tmp_path_factory.mktemp("replan-board-successive")
+    tag = os.getpid()
+    route = f"authoring:earlier-{tag}"
+    with _serving_board() as remote:
+        earlier = _board_bench(tmp / "earlier", oneharness_bin, "e2e-earlier", remote)
+        bar = _bar(earlier)
+        _sh(
+            earlier,
+            f"{RESOLVE} plan-description --json | {STORE} project create authoring "
+            f"--id earlier-{tag} --title 'Health route' --template-loader - "
+            "--var 'overview=Add a health route.' --metadata onepipeline.schema_version=3 "
+            f"--no-interactive >/dev/null; {RESOLVE} plan-task --json | {STORE} task create "
+            f"authoring --project {route} --title 'feat: add the health route' "
+            "--template-loader - --var 'what=Do route.' --var 'why=Operators need it.' "
+            "--var 'acceptance_criteria=[\"A request-level test drives the route.\"]' "
+            "--metadata 'onepipeline.id=\"route\"' "
+            "--metadata 'onepipeline.persona=\"engineer\"' "
+            "--metadata 'orchestrator.unit=\"API\"' --no-interactive >/dev/null",
+        )
+        (routed,) = _listed(earlier, "authoring", route)
+        _attest(earlier, "task", str(routed["id"]), bar)
+        _attest(earlier, "project", route, bar)
+        _ok(just(earlier, "copy-plan", route))
+        route_copies = _shown(earlier, "task", str(routed["id"]))["metadata"]
+    with _serving_board() as remote:
+        later = _board_bench(tmp / "later", oneharness_bin, "e2e-later", remote)
+        setup = _setup(later, f"later-{tag}", bar)
+        base_copies = _shown(later, "task", setup.tasks["base"])["metadata"]
+        refresh = just(later, "refresh-plan", setup.plan)
+        tasks = _copy(later, setup.plan).tasks
+        refusals = _gate(later, setup.plan)
+        shown = store(later, "project", "show", route, "--json")
+    return Successive(
+        route_copies["onetaskgraph.copies"],
+        base_copies["onetaskgraph.copies"],
+        refresh,
+        tasks,
+        refusals,
+        shown,
+    )
+
+
+def test_a_journey_reads_no_plan_an_earlier_journey_in_its_process_left(
+    successive: Successive,
+) -> None:
+    """Had both journeys' authoring copies shared one root, the refresh would resolve each
+    board id to whichever authoring record copied there first — the earlier journey's: its
+    project, filing `probe` in the earlier plan, or its `route` task, so the launch gate
+    refuses `probe` as depending on a `route` its plan does not hold."""
+    # The precondition that makes a shared root leak: one board id on both journeys' tasks.
+    assert successive.base_copies == successive.route_copies, successive
+    unseen = successive.earlier_plan_shown
+    assert unseen.returncode != 0, "the later journey's store holds the earlier one's plan"
+    assert json.loads(unseen.stdout)["failure"]["kind"] == "no-such-item", unseen.stdout
+    _ok(successive.refresh)
+    tasks = successive.tasks
+    assert sorted(tasks) == sorted((*NODES, "probe")), tasks
+    assert tasks["probe"].depends_on == ["base"], tasks["probe"]
+    assert not [r for r in successive.refusals if "route" in r], successive.refusals

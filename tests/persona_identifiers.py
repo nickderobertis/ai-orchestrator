@@ -69,10 +69,12 @@ FIELD = re.compile(r"^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?P<field>[a-z_][A-Za-z0
 #: How a declaration of a type opens, in the brace-delimited languages this parses.
 DECLARATION = r"\b(?:struct|class|interface|enum|type)\s+{type}\b[^\n{{]*\{{"
 
-#: The same opening, in the POSIX syntax `git grep` takes, used only to narrow which files
-#: are read. `\b` and `\s` are GNU extensions this deliberately avoids so the search means
-#: the same thing wherever the suite runs.
-DECLARATION_SEARCH = r"(struct|class|interface|enum|type)[[:space:]]+{type}([^A-Za-z0-9_]|$)"
+#: How `git grep` narrows which files are read: every tracked text file naming the type as
+#: a whole word, a fixed string rather than a pattern. A POSIX extended expression of the
+#: opening took two minutes of a loaded host over a corpus repository's 119k tracked files
+#: where this takes under one second, and it was killed at `sibling_git`'s timeout. The
+#: candidates are a superset of the declaring files, so the parse is what decides.
+DECLARATION_SEARCH = ("grep", "-lI", "--fixed-strings", "--word-regexp", "-e")
 
 #: Every YAML comment line, which states how a persona is wired into *this* repository —
 #: the base config it deltas over, a lint directive — rather than anything about the
@@ -245,8 +247,7 @@ def declarations_of(checkout: Path, type_name: str) -> Declarations:
     ``unreadable`` whatever the others declare. Raises :class:`UnreadableSibling` where
     `checkout` cannot be read at all.
     """
-    pattern = DECLARATION_SEARCH.format(type=re.escape(type_name))
-    found = sibling_git(checkout, "grep", "-lIE", pattern)
+    found = sibling_git(checkout, *DECLARATION_SEARCH, type_name)
     unreadable: list[str] = []
     # git skips a tracked file it cannot read, says so on stderr, and still exits 0 when
     # another file matched, so its diagnostics are findings rather than noise.

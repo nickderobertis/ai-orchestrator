@@ -168,6 +168,36 @@ def test_the_inverted_corpus_field_is_reported_before_the_corrected_file_passes(
     assert undefined_identifiers(identifiers_at(CROZIER_PERSONA), crozier_stand_in) is None
 
 
+def test_a_declaration_is_found_by_its_name_alone_whatever_line_its_keyword_sits_on(
+    tmp_path: Path,
+) -> None:
+    """The search narrows files by the type's name as a fixed word, and the parse decides.
+
+    A search for the whole opening, keyword then name, as a POSIX expression took longer
+    than `sibling_git`'s two-minute timeout over crozier's 119k tracked files on a loaded
+    host, failing the push gate for branches that never touched it. Because `git grep`
+    matches one line at a time, that search also missed a declaration whose keyword and
+    name sit on different lines, which the parse accepts. So this stand-in splits them:
+    the corrected persona passes only when the file was found by name, and the drifted one
+    is reported against the field that declaration holds.
+    """
+    split = CORPUS_DECLARATION.replace("pub struct Corpus {", "pub struct\nCorpus {")
+    assert split != CORPUS_DECLARATION
+    stand_in = stand_in_for(CROZIER_PERSONA, tmp_path / "stand-in", {CORPUS_REGISTRY: split})
+
+    assert undefined_identifiers(identifiers_at(CROZIER_PERSONA), stand_in) is None
+
+    drifted = tmp_path / "personas" / CROZIER_PERSONA.parent.name / CROZIER_PERSONA.name
+    drifted.parent.mkdir(parents=True)
+    drifted.write_text(
+        CROZIER_PERSONA.read_text(encoding="utf-8").replace(CORRECT_FIELD, DRIFTED_FIELD),
+        encoding="utf-8",
+    )
+    report = undefined_identifiers(identifiers_at(drifted), stand_in)
+    assert report is not None and f"{CORPUS_REGISTRY}:1" in report, report
+    assert CORRECT_FIELD in report, report
+
+
 def test_a_persona_naming_a_path_its_repository_dropped_is_reported(
     tmp_path: Path, crozier_stand_in: Path
 ) -> None:

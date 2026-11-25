@@ -19,10 +19,12 @@ the real chain down to the Codex binary, which refuses a directory git places in
 as the real provider does.
 
 Every store a journey writes is its own: the runs root, the harness history, the authoring
-root (the checkout copy's `.plans`), a private `board` local Markdown source standing in for
-the plans board, a `humans` local source the engine's human items are filed in, an empty
-follow-up drafts root, and — for a journey that preserves a spike branch — a scratch `onevcs`
-registry holding a seeded identity. No tracker credential reaches any process.
+and follow-up-runs roots (the checkout copy's `.plans` and `.follow-ups/runs`, stated over
+the ones `tests/conftest.py` gives the whole test process), a private `board` local Markdown
+source standing in for the plans board, a `humans` local source the engine's human items
+are filed in, an empty follow-up drafts root, and — for a journey that preserves a spike
+branch — a scratch `onevcs` registry holding a seeded identity. No tracker credential
+reaches any process.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import follow_up_variables
+import plan_root_variable
 import short_state
 from fake_backend import PANEL_JUDGE_AT_PROVIDER_ENV, PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from harness_indirections import established_indirections
@@ -83,8 +86,10 @@ INHERITED = (
 
 def store_setting(source: str, path: str) -> str:
     """The variable the plan store reads `sources.<source>.<path>` from, at its environment
-    layer: each dotted part upper-cased behind the store's prefix."""
-    return "__".join(["ONETASKGRAPH_SOURCES", source.upper(), *path.upper().split(".")])
+    layer: each dotted part upper-cased behind the store's prefix, a dash in the source's
+    name read as an underscore."""
+    name = source.upper().replace("-", "_")
+    return "__".join(["ONETASKGRAPH_SOURCES", name, *path.upper().split(".")])
 
 
 def local_source(source: str, root: Path) -> dict[str, str]:
@@ -167,6 +172,15 @@ def bench(
     environment[PROMPT_LOG_ENV] = str(tmp / "turns.jsonl")
     environment[RUN_ON_MARKER_ENV] = str(tmp / "markers.json")
     environment.update(local_source(BOARD, board))
+    # The plan roots are the checkout copy's own. `tests/conftest.py` roots `authoring` and
+    # `follow-up-runs` once per test process, so without this every journey a process runs
+    # stores into one root, and the loopback board numbers its issues afresh per journey: a
+    # refresh would then remap a board-only task's edge onto another journey's task copied
+    # under the same issue id.
+    environment[plan_root_variable.name()] = str(checkout / ".plans")
+    environment[store_setting("follow-up-runs", "config.root")] = str(
+        checkout / ".follow-ups" / "runs"
+    )
     # Human items stay on, as this host runs them, but their tasks go to a local source of the
     # bench's, through the host-local layer `ONEPIPELINE_CONFIG` names, and no tracker
     # credential reaches any process here.
