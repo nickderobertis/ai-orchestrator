@@ -134,13 +134,14 @@ HUMAN_BOARDS = {
 }
 #: The `Status` option each category is written to on both human-task boards: every category
 #: stated, a projected task's `todo`, `done` and `cancelled` and a person's `in-progress` mapped,
-#: and the four no human task reaches disabled.
+#: and the five no human task reaches disabled.
 HUMAN_STATUSES: dict[str, str | None] = {
     "backlog": None,
     "draft": None,
     "todo": "Todo",
     "queued": None,
     "in-progress": "In Progress",
+    "in-review": None,
     "unknown": None,
     "done": "Done",
     "cancelled": "Cancelled",
@@ -310,6 +311,7 @@ MAPPED_OPTIONS = {
     "plans": {
         "unknown": "Needs attention",
         "queued": "Queued",
+        "in-review": "In review",
         "done": "Done",
         "cancelled": "Cancelled",
     },
@@ -618,6 +620,7 @@ ORGANIZATION_STATES = {
     "todo": "Todo",
     "queued": "Queued",
     "in-progress": "In Progress",
+    "in-review": "In Review",
     "unknown": "Needs Attention",
     "done": "Done",
     "cancelled": "Canceled",
@@ -629,6 +632,7 @@ ORGANIZATION_PROJECT_STATUSES = {
     "todo": "Planned",
     "queued": "Accepted",
     "in-progress": "In Progress",
+    "in-review": "In Review",
     "unknown": "Blocked",
     "done": "Completed",
     "cancelled": "Canceled",

@@ -42,9 +42,9 @@ requires-dist = [
     { name = "onefollowup-cli", specifier = "==0.14.0" },
     { name = "oneharness-cli", specifier = "==0.31.0" },
     { name = "onejudge", specifier = "==0.23.5" },
-    { name = "onemessagebus-cli", specifier = "==0.11.1" },
+    { name = "onemessagebus-cli", specifier = "==0.11.2" },
     { name = "onetaskgraph-sdk", specifier = "==0.17.0" },
-    { name = "onevcs-cli", specifier = "==0.69.0" },
+    { name = "onevcs-cli", specifier = "==0.69.1" },
     { name = "pyyaml", specifier = "==6.0.3" },
 ]
 
@@ -410,13 +410,13 @@ wheels = [
 
 [[package]]
 name = "onemessagebus-cli"
-version = "0.11.1"
+version = "0.11.2"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/36/68/5704387f382ed135319cb6a6b487d2df73a2a03af6da95a6db6cb0564062/onemessagebus_cli-0.11.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:940aa98df09476234ec5b279d1da88aeb94b4c9fbe3da77bdc7ce962cc71d044", size = 4501054, upload-time = "2026-11-10T13:57:54.194Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/7f/0c5190fb1a48d1a076fa3f50311a7e436554f2fce38929609dbf2ce32ef2/onemessagebus_cli-0.11.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5e45c45c9683f53c531b362233ac73f0a28e93f55d7601126a4fa201c26938af", size = 4624086, upload-time = "2026-11-10T13:57:55.575Z" },
-    { url = "https://files.pythonhosted.org/packages/79/7e/7d3cb6e1df4f5b35e7c0f590f1c436f0e7fbc92fef832bf911afad0ee844/onemessagebus_cli-0.11.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:42a06e7c8c6c5f4371956e3dd0b8f5ebf2f78d4f94b1f9414fe4a7898554a539", size = 5001334, upload-time = "2026-11-10T13:57:56.814Z" },
-    { url = "https://files.pythonhosted.org/packages/3f/d3/ede9c58291dbf9dacd2071b89b17db43fcdf2ad6aff90df3423a3112ea97/onemessagebus_cli-0.11.1-py3-none-win_amd64.whl", hash = "sha256:f641770b87d73345038083c0a7dc4c5f0e0a6f4ace8eeb7da940b37fb9fcf379", size = 4857967, upload-time = "2026-11-10T13:57:58.208Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/15/3e7344a30d05fe9810c5a78fafda7787d9c9dd94e471f2069c3109812f69/onemessagebus_cli-0.11.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:edae79a33442e8f69c401f6f6d0e91662e7a7eaaf8acf83fe09550a83405d2af", size = 4516375, upload-time = "2026-11-25T22:58:10.572Z" },
+    { url = "https://files.pythonhosted.org/packages/11/be/bf904671cdf4fb5c810006acddfa99e3e6c12489070ee798a3c9e9b5581c/onemessagebus_cli-0.11.2-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:4a663037dfbd9367afe11c24c2b2a0b9dad2239ed30fb0afe23c179b300236d6", size = 4637581, upload-time = "2026-11-25T22:58:12.057Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/19/3531d53add65e938748006ab45b709753059cb90afd65d735fd20a28948a/onemessagebus_cli-0.11.2-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:28d5484cb19e564d950c41338a4e23c12533ca5a1df786a2bc754b8820b9253f", size = 5014112, upload-time = "2026-11-25T22:58:13.616Z" },
+    { url = "https://files.pythonhosted.org/packages/50/61/38745df3ec74f06b86af853d0cad907610dcbf82f2d0a940b82b240ae8b2/onemessagebus_cli-0.11.2-py3-none-win_amd64.whl", hash = "sha256:c39ecf8158f5d3356cc190d7d8e52b888f6c3da3b6032c6eeec43f8370bfb747", size = 4867822, upload-time = "2026-11-25T22:58:14.826Z" },
 ]
 
 [[package]]
@@ -445,13 +445,13 @@ wheels = [
 
 [[package]]
 name = "onevcs-cli"
-version = "0.69.0"
+version = "0.69.1"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/86/148ca46e31394c751ff48acc2957fb5e09b8702edced46b236cec28108cc/onevcs_cli-0.69.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:c5d2931b8f4a167de9b268ae786299fc093ddea21f064521963164dc73ec6d2a", size = 6185526, upload-time = "2026-11-24T02:07:02.038Z" },
-    { url = "https://files.pythonhosted.org/packages/5b/46/7e55424ce147bbe6bac5bb4d1663720df933f6c1cb89ca9a000041f5eee5/onevcs_cli-0.69.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b04d29c193073d4cb6a4c28c2f7a56b199265dd2a911e264db302b9e2b58ef1f", size = 6336151, upload-time = "2026-11-24T02:07:03.808Z" },
-    { url = "https://files.pythonhosted.org/packages/9e/3d/1801ca5a31a10a154a88c2539afa961330a25711b6dcdc1db8b7b09367f1/onevcs_cli-0.69.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e633f88dc9bbc291c6b73753e241fbde39b920b54abdf0acbb606f3cf019d034", size = 6800153, upload-time = "2026-11-24T02:07:05.289Z" },
-    { url = "https://files.pythonhosted.org/packages/73/7f/a2c875c66f25e5198a55d84d5e2b5c859165c24a80e7fef4b5150d9a596a/onevcs_cli-0.69.0-py3-none-win_amd64.whl", hash = "sha256:85e0e2f9114b9e53ef58f9a75037b4846019b5fda7d4e5e36ae74a637db07547", size = 7153442, upload-time = "2026-11-24T02:07:06.671Z" },
+    { url = "https://files.pythonhosted.org/packages/66/0c/22c22575ac196d1e5e4c01bb184c41aff171a7f45b886e3320c3c611ac33/onevcs_cli-0.69.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:b8ed573249208de78a320d038f97dc38ba6b3e9cc106e4303df43b789662bc54", size = 6225590, upload-time = "2026-11-26T01:09:04.207Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/60/3de4930d45fc96363d2eabdc9d58d9c2531d673d1877b54e3ea6e7a28500/onevcs_cli-0.69.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2b32cb1b0e22eaf440fdd25ff65279101f4f0c3de74f80dcf31e018673ed8633", size = 6374238, upload-time = "2026-11-26T01:09:05.582Z" },
+    { url = "https://files.pythonhosted.org/packages/04/31/1746e46da7c96a8eec66d9b11ea0ff5c74f4ac2705544c143822cc582b1a/onevcs_cli-0.69.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:58e10afb18598b7745a5eca64dd084f10f872e2e0458e4a5fdcc9dab0a1390fd", size = 6839462, upload-time = "2026-11-26T01:09:06.863Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/d4/818e9c087ba341f857209ecc3c9357fa961ef1531c3a6c4aa064ee36ded3/onevcs_cli-0.69.1-py3-none-win_amd64.whl", hash = "sha256:6a0f291fb58a637ba2e9a2a841d8b6708a5f1c8756a8505ca103eda3be163445", size = 7204288, upload-time = "2026-11-26T01:09:08.261Z" },
 ]
 
 [[package]]

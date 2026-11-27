@@ -284,10 +284,19 @@ CANCELLED = _StatusOption(id=_FieldOptionId("OPT_cancelled"), name="Cancelled")
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The option
+# `onetaskgraph.yaml` maps `in-review` to on `plans`, answered by the stand-in so the journeys
+# can assert that a node stopped for review reaches it rather than `Done`. Reconciling it
+# against the live board would take the board credential no test may use.
+IN_REVIEW = _StatusOption(id=_FieldOptionId("OPT_review"), name="In review")
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+
 STATUS_OPTIONS: tuple[_StatusOption, ...] = (
     _StatusOption(id=_FieldOptionId("OPT_todo"), name="Todo"),
     QUEUED,
     _StatusOption(id=_FieldOptionId("OPT_progress"), name="In Progress"),
+    IN_REVIEW,
     DONE,
     CANCELLED,
     _StatusOption(id=_FieldOptionId("OPT_backlog"), name="Backlog"),

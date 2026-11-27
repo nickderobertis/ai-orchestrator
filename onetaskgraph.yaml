@@ -76,9 +76,13 @@ sources:
         # and closes the issue, as completed for `done` and as not planned for `cancelled`,
         # with no closure-only fallback when the option is absent. `queued`, `done` and
         # `cancelled` are the shipped defaults and this states them, because a default that
-        # moves upstream would move this board silently.
+        # moves upstream would move this board silently. `in-review` is a node that stopped for
+        # review: its work is done and waits on a reviewer, so it sits in its own `In review`
+        # column rather than reading `Done`. It has no shipped default, and a board without the
+        # option refuses that write by name the same way.
         unknown: Needs attention
         queued: Queued
+        in-review: In review
         done: Done
         cancelled: Cancelled
         # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
@@ -116,7 +120,8 @@ sources:
         # through a node's `delivers`, and it, `done` and `cancelled` are stated rather than
         # left to the shipped `Queued`, `Done` and `Cancelled` for the same reason `plans`
         # states them: a default that moved upstream would move this board without a change
-        # here saying so.
+        # here saying so. `in-review` is left unmapped: no follow-up run writes it, and a
+        # ticket whose deliverer stopped for review reads `in-progress` here instead.
         backlog: Proposal
         draft: Deferred
         queued: Queued
@@ -200,13 +205,14 @@ sources:
       status_mapping:
         # Every category is stated: a projected task is created at `todo` and settles at
         # `done` (closed as completed) or `cancelled` (closed as not planned); a person may
-        # move one to `in-progress`; and the categories no human task reaches are disabled, so
-        # the board carries no option nothing writes.
+        # move one to `in-progress`; and the categories no human task reaches, `in-review`
+        # among them, are disabled, so the board carries no option nothing writes.
         backlog: null
         draft: null
         todo: Todo
         queued: null
         in-progress: In Progress
+        in-review: null
         unknown: null
         done: Done
         cancelled: Cancelled
@@ -230,6 +236,7 @@ sources:
         todo: Todo
         queued: null
         in-progress: In Progress
+        in-review: null
         unknown: null
         done: Done
         cancelled: Cancelled

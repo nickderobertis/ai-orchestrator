@@ -36,13 +36,14 @@ class Divergence(NamedTuple):
 #: `RECONCILED_FAMILIES` keys it.
 DECLARED_DIVERGENCES: dict[str, Divergence] = {
     "onetaskgraph": Divergence(
-        linked="0.15.0",
+        linked="0.16.0",
         pinned="0.17.0",
         because=(
-            "this host's follow-up verbs run onefollowup 0.14.0, whose routed duplicate search "
-            "needs onetaskgraph's find limit, first released in 0.17.0, and the adopted engine "
-            "0.120.0 links 0.15.0, which no dispatch needs past; an onepipeline release linking "
-            "onetaskgraph 0.17.0 or later, adopted between runs, retires it"
+            "this host's follow-up verbs run onefollowup 0.14.0, which links onetaskgraph 0.17.0 "
+            "for its routed duplicate search's find limit, first released in 0.17.0, and the "
+            "adopted engine 0.121.0 links 0.16.0, which already carries the in-review status and "
+            "the Linear details-block conversion every dispatch needs; an onepipeline release "
+            "linking onetaskgraph 0.17.0 or later, adopted between runs, retires it"
         ),
     ),
 }

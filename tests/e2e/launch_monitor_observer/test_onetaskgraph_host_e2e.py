@@ -37,6 +37,7 @@ from github_board import (
     FOLLOWUPS_ENV_PREFIX,
     FOLLOWUPS_OPTIONS,
     FOLLOWUPS_PROJECT_NUMBER,
+    IN_REVIEW,
     LARGEST_PAGE,
     MEASURED_SEARCH_PAGE_PRICES,
     NEEDS_ATTENTION,
@@ -1730,6 +1731,7 @@ class _ProjectedStatus(StrEnum):
     TODO = "todo"
     QUEUED = "queued"
     IN_PROGRESS = "in progress"
+    IN_REVIEW = "in review"
     DONE = "done"
     CANCELLED = "cancelled"
     FAILED = "failed"
@@ -1794,7 +1796,9 @@ def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_b
     `queued` — the word a launched run writes every node it has not dispatched — rides
     along as the sharpest case of the control below: it is a category word like `todo`
     and `in progress`, so it has to reach an option of its own rather than the one the
-    words outside the vocabulary share.
+    words outside the vocabulary share. `in review`, the word a node stopped for review is
+    written as, is the same case: it reaches the `In review` option `plans` maps it to,
+    never `Done` beside finished work.
 
     The committed `onetaskgraph.yaml` is what is exercised: the copy runs from this
     checkout with only the endpoint and credential pointed at the fixture, and any
@@ -1854,6 +1858,10 @@ def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_b
     assert reached.get(("queued", QUEUED.name), set()) == {_ProjectedStatus.QUEUED}, (
         f"`queued` has to sit at the {QUEUED.name!r} option and nothing else has to sit there; "
         f"the store reports {reached}"
+    )
+    assert reached.get(("in-review", IN_REVIEW.name), set()) == {_ProjectedStatus.IN_REVIEW}, (
+        f"`in review` — a node stopped for review — has to sit at the {IN_REVIEW.name!r} option "
+        f"and nothing else has to sit there; the store reports {reached}"
     )
     shared = {placed: words for placed, words in reached.items() if len(words) > 1}
     assert shared.keys() == {("unknown", NEEDS_ATTENTION.name)}, (

@@ -92,13 +92,15 @@ sources:
       team: ENG
       # Categories describe both a plan task and its member project: backlog is proposed,
       # draft deferred, todo accepted but unclaimed, queued claimed but not started,
-      # in-progress working, unknown needing attention, done finished, cancelled withdrawn.
+      # in-progress working, in-review done and waiting on a reviewer, unknown needing
+      # attention, done finished, cancelled withdrawn.
       status_mapping:
         backlog: { task: Proposed, project: Proposal }
         draft: { task: Backlog, project: Idea }
         todo: { task: Todo, project: Planned }
         queued: { task: Queued, project: Accepted }
         in-progress: In Progress
+        in-review: In Review
         unknown: { task: Needs Attention, project: Blocked }
         done: { task: Done, project: Completed }
         cancelled: Canceled
@@ -121,15 +123,16 @@ sources:
       api_key_env: HIDDENCO_LINEAR_API_KEY
       team: ENG
       project: 0f3c9d2a-5b1e-4c7a-9e21-6d8b4a1f2c03
-      # `Triage` and the review states — `Ready for Review`, `In Review`, `Reviewed`,
-      # `Ready To Merge`, `Blocked`, `Duplicate` and `Cannot Reproduce` — are people's, and no
-      # follow-up run writes them.
+      # `In Review` is `in-review`, the state a ticket waits on a reviewer in. `Triage` and the
+      # other review states — `Ready for Review`, `Reviewed`, `Ready To Merge`, `Blocked`,
+      # `Duplicate` and `Cannot Reproduce` — are people's, and no follow-up run writes them.
       status_mapping:
         backlog: Proposed
         draft: Backlog
         todo: Todo
         queued: Queued
         in-progress: In Progress
+        in-review: In Review
         unknown: Needs Attention
         done: Done
         cancelled: Canceled
