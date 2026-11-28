@@ -329,18 +329,17 @@ def _batched_find(asked: int, rows: int) -> _GraphQLRequest:
     return _GraphQLRequest(f"query{{{document}}}", variables, 0.0)
 
 
-def test_a_batched_find_is_routed_checked_and_priced_by_the_rows_it_asks() -> None:
+def test_a_batched_find_is_routed_checked_and_priced_at_one_point_whatever_rows_it_asks() -> None:
     """The store's batched find is its own operation, never the copy's batched origin lookup
     whose `$ask0` slot it also carries; a document with every modelled slot shows no drift and
-    one missing a slot names it; and it costs one search page of the rows its asked slots ask,
-    so a first round of twenty searches at three rows costs the three points the store's own
-    source states."""
+    one missing a slot names it; and it costs the one point the store's own source states at
+    any page, because from onetaskgraph 0.17.3 its slots read each hit's scalar fields alone."""
     seven = _batched_find(7, 3)
 
     assert seven.operation is _Operation.SEARCH_BATCH
     assert search_batch_drift(seven.query) == []
-    assert _request_points(seven) == 2
-    assert _request_points(_batched_find(20, 3)) == 3
+    assert _request_points(seven) == 1
+    assert _request_points(_batched_find(20, 100)) == 1
     assert request_latency_ms(seven) == REQUEST_LATENCY_MS[RequestKind.BATCHED_READ]
     missing = SEARCH_BATCH_SLOTS[1].alias.format(n=4)
     assert search_batch_drift(seven.query.replace(missing, "")) == [

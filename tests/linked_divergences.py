@@ -37,14 +37,16 @@ class Divergence(NamedTuple):
 DECLARED_DIVERGENCES: dict[str, Divergence] = {
     "onetaskgraph": Divergence(
         linked="0.16.0",
-        pinned="0.17.2",
+        pinned="0.17.3",
         because=(
-            "this host's copies of plans and documents need onetaskgraph 0.17.2's nested Linear "
+            "this host's follow-up verbs run onefollowup 0.15.0, whose prepare counts and "
+            "spends only its own duplicate-search points on the real board, and which links "
+            "onetaskgraph 0.17.3, the release whose find asks the board for less; the host's "
+            "own plan-store commands need that leaner find and 0.17.2's nested Linear "
             "sections, which carry a design document's collapsed Before block inside its "
-            "visual change, and its follow-up verbs run onefollowup 0.14.1, which links that "
-            "release; the adopted engine 0.121.0 links 0.16.0, which already carries the "
+            "visual change; the adopted engine 0.121.0 links 0.16.0, which already carries the "
             "in-review status and the Linear details-block conversion every dispatch needs; an "
-            "onepipeline release linking onetaskgraph 0.17.2 or later, adopted between runs, "
+            "onepipeline release linking onetaskgraph 0.17.3 or later, adopted between runs, "
             "retires it"
         ),
     ),

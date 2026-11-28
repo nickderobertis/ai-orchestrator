@@ -2528,7 +2528,8 @@ _OPERATIONS: dict[str, _Operation] = {
     "node(id:$id){__typename ...BoardIssue ... on Issue{comments(": _Operation.ISSUE_DETAIL,
     "comments(first:": _Operation.COMMENTS,
     "orderBy:{field:CREATED_AT,direction:DESC}": _Operation.ISSUES_BY_CREATION,
-    "{repository(owner:": _Operation.REPOSITORY,
+    # The lone repository read, which from onetaskgraph 0.17.3 asks its own cost beside it.
+    "repository(owner:$owner,name:$name)": _Operation.REPOSITORY,
     "blockedBy(first:": _Operation.DEPENDENCIES,
     "createIssue(": _Operation.CREATE_ISSUE,
     "addProjectV2ItemById(": _Operation.ADD_TO_BOARD,
@@ -3035,7 +3036,13 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             case _Operation.CLEAR_FIELD:
                 return self.board.clear_field(request.variables)
             case _Operation.REPOSITORY:
-                return self._repository(request.repository)
+                answer = self._repository(request.repository)
+                if "actualCost:rateLimit" in request.query:
+                    data = answer["data"]
+                    assert isinstance(data, dict)
+                    # What GitHub charges one repository read, as its `rateLimit` answers it.
+                    data["actualCost"] = {"cost": 1}
+                return answer
             case _Operation.ISSUES_BY_CREATION:
                 return self.board.issues_by_creation(request.variables)
             case _Operation.USER_IDS:
@@ -3812,7 +3819,7 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.CLOSED_ITEMS: DocumentPrice("CLOSED_ITEMS", 2),
     _Operation.ORIGIN_LOOKUPS: DocumentPrice("ORIGIN_LOOKUPS", 1),
     _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS: DocumentPrice("ORIGIN_LOOKUPS_WITH_MEMBERS", 1),
-    _Operation.SEARCH_BATCH: DocumentPrice("SEARCH_BATCH", 22),
+    _Operation.SEARCH_BATCH: DocumentPrice("SEARCH_BATCH", 1),
     _Operation.DOCUMENT_IN_PROJECT: DocumentPrice("DOCUMENT_IN_PROJECT", 1),
     _Operation.CREATED_BOARD_ITEMS: DocumentPrice("CREATED_BOARD_ITEMS", 1),
     _Operation.CREATE_ISSUES: DocumentPrice("CREATE_ISSUES", 1),
@@ -3973,25 +3980,7 @@ def _request_points(request: _GraphQLRequest) -> int:
         first = request.variables["first"]
         assert isinstance(first, int), request.variables
         return _search_points(first)
-    if request.operation is _Operation.SEARCH_BATCH:
-        return _search_points(_search_batch_rows(request))
     return REQUEST_PRICES[request.operation].points
-
-
-def _search_batch_rows(request: _GraphQLRequest) -> int:
-    """The rows a batched find asks for: each asked search slot's page and each asked origin
-    slot's, so it is priced as one search page of them all — which keeps a first round of
-    twenty searches at three rows each at the three points the store's source states."""
-    variables = request.variables
-    rows = 0
-    for flag, page in (("ask", "first"), ("origin", "itemsFirst")):
-        for name, value in variables.items():
-            slot = name.removeprefix(flag)
-            if slot != name and slot.isdigit() and value is True:
-                first = variables[f"{page}{slot}"]
-                assert isinstance(first, int), variables
-                rows += first
-    return rows
 
 
 #: Python's audit hook records the real CLI subprocesses without replacing any command.
