@@ -277,6 +277,59 @@ def test_a_create_is_filed_under_the_id_it_names_and_a_held_id_is_refused(
         assert kept["title"] == "first"
 
 
+#: onetaskgraph's recording of what real Linear stored for a section nested in a section,
+#: in each spelling, beside its control of one section (`fixtures/linear_nested_sections.json`,
+#: an excerpt of the file its `source` names).
+NESTED_RECORDING = json.loads(
+    (Path(__file__).parent / "fixtures" / "linear_nested_sections.json").read_text("utf-8")
+)
+#: The long-form field each recorded kind of record keeps its Markdown in.
+LONG_FORM = {"issue": "description", "document": "content"}
+
+
+@pytest.mark.parametrize(
+    "record",
+    NESTED_RECORDING["records"],
+    ids=[f"{one['kind']}-{one['form']}" for one in NESTED_RECORDING["records"]],
+)
+def test_a_nested_section_is_stored_as_the_recording_holds_real_linear_storing_it(
+    record: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each recorded write through the wire answers the bytes real Linear stored, and keeps them.
+
+    The `+++` section inside a `+++` section, which the plan store writes for a nested block, is
+    stored byte for byte; Linear's editor shortcut `>>>` is stored as that same `+++` form.
+    """
+    kind, field = record["kind"], LONG_FORM[record["kind"]]
+    layer = onetaskgraph_user_layer.example()
+    monkeypatch.setenv(
+        "XDG_CONFIG_HOME", str(onetaskgraph_user_layer.installed(tmp_path / "config", layer))
+    )
+    with linear_board() as board:
+        board.environment(onetaskgraph_user_layer.ORGANIZATION_PLANS)
+
+        def write(operation: str, content: str, native: str | None = None) -> object:
+            variables: dict[str, object] = {"input": {field: content, "title": record["form"]}}
+            if native:
+                variables["id"] = native
+            request = urllib.request.Request(
+                board.endpoint,
+                data=json.dumps(
+                    {"query": "mutation { " + operation + " { success } }", "variables": variables}
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.load(response)["data"][operation][kind]
+
+        created = write(kind + "Create", record["sent"])
+        assert isinstance(created, dict)
+        assert created[field] == record["stored"]
+        again = write(kind + "Update", record["stored"], str(created["id"]))
+        assert isinstance(again, dict)
+        assert again[field] == record["stored"]
+
+
 @pytest.mark.parametrize(
     "kind,field", [("issue", "description"), ("project", "content"), ("document", "content")]
 )

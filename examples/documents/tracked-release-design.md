@@ -3,7 +3,7 @@ title: 'Design: tracked-release'
 project: tracked-release
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:f9a181fad4a495bf5f9042f736a807665321e8f64d5e8eb0eceae56c9c56a6a8
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:e08d5eeda54543870c508592120fab854db332c447346a1397a8fcb34a488c16","answers_digest":"sha256:7cb6361b21a24692beb57d04edeac145abe27a44f9d23e92a417fba2bf1d4dcc"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:ff54a57adaf34a907e3ae341d854d4b7bcd7ed66db852a7d989c64b43b2d401e","body_digest":"sha256:909c31816e1bef10ba4d37887616994388358fbb91c79fa55c691ee5f497dc76","answers_digest":"sha256:174a01f00c026fd5f2e7da6ff028df3f852970ad19de66f9bac1385c986fc84f"}
 ---
 ## What
 
@@ -29,11 +29,16 @@ The service implements the API and rollout the approved design states, and is ap
 
 #### The API and rollout contract
 
-**Reversibility: high cost** — once released, callers we cannot list depend on the API, and the rollout cannot be taken back from them.
-
 Written into the design and approved by a person before anything is built; everything after restates it rather than deciding it again.
 
-**Reversible:**
+<details>
+<summary><strong>High cost to undo</strong></summary>
+
+once released, callers we cannot list depend on the API, and the rollout cannot be taken back from them.
+
+</details>
+
+**Reversible decisions (1):**
 
 <details>
 <summary>Readiness handoff</summary>
@@ -159,24 +164,28 @@ planned_tasks:
   task: announce
   unit: Documentation
 units:
-- decisions:
-  - artifact: ''
-    justification: once released, callers we cannot list depend on the API, and the rollout cannot be taken back from them.
-    name: The API and rollout contract
-    summary: Written into the design and approved by a person before anything is built; everything after restates it rather than deciding it again.
-  name: Service
-  part: ''
+- name: Service
   repository: some-service
-  reversible:
-  - text: One node records that the readiness handoff produced no repository change, rather than pretending to.
-    title: Readiness handoff
-  summary: The service implements the API and rollout the approved design states, and is approved in staging.
-- decisions: []
-  name: Documentation
   part: ''
+  summary: The service implements the API and rollout the approved design states, and is approved in staging.
+  reversible:
+  - group: ''
+    gist: ''
+    items:
+    - text: One node records that the readiness handoff produced no repository change, rather than pretending to.
+      title: Readiness handoff
+  decisions:
+  - name: The API and rollout contract
+    justification: once released, callers we cannot list depend on the API, and the rollout cannot be taken back from them.
+    gist: Written into the design and approved by a person before anything is built; everything after restates it rather than deciding it again.
+    show: []
+    details: []
+- name: Documentation
   repository: some-docs
-  reversible: []
+  part: ''
   summary: The documentation describes the approved API and rollout, and the announcement follows the second approval.
+  reversible: []
+  decisions: []
 visual_changes: []
 what: |-
   One release carried from a written design, through a person's approval of it, into the

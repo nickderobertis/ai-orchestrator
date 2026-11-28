@@ -3,7 +3,7 @@ title: 'Design: plan-example'
 project: plan-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:7543864a301acea3a06b63a9cda7d47b585511926f55b6d379566db4530ee0a8
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:edf138252993822cf098b693624ff3030b31a3ce069c60308bb43030f4b67769","answers_digest":"sha256:9efa3635ebbc6f3ee56bf080c358f91af3c6f1a99bdbcc26ce07ad22d2c36bb1"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:ff54a57adaf34a907e3ae341d854d4b7bcd7ed66db852a7d989c64b43b2d401e","body_digest":"sha256:f695c310c98e8708c1ebfae2d7f89959240a4c8c979dd666649b7acafd3effcd","answers_digest":"sha256:6a7b954355ec119f5b451a45a139f5639d0bdbfccdf14d8f1aa414c72a8df84b"}
 ---
 ## What
 
@@ -27,9 +27,14 @@ The API creates short links, stores them, and resolves them back.
 
 #### The storage schema
 
-**Reversibility: high cost** — stored links outlive every version of the code that writes them, and that data cannot be rewritten once people have shared the links.
-
 A stored link is its short code and the long URL it points at.
+
+<details>
+<summary><strong>High cost to undo</strong></summary>
+
+stored links outlive every version of the code that writes them, and that data cannot be rewritten once people have shared the links.
+
+</details>
 
 ```sql
 CREATE TABLE links (
@@ -38,7 +43,7 @@ CREATE TABLE links (
 );
 ```
 
-**Reversible:**
+**Reversible decisions (1):**
 
 <details>
 <summary>The HTTP API</summary>
@@ -160,36 +165,41 @@ planned_tasks:
   task: review
   unit: API
 units:
-- decisions:
-  - artifact: |-
-      ```sql
-      CREATE TABLE links (
-        code TEXT PRIMARY KEY,
-        url  TEXT NOT NULL
-      );
-      ```
-    justification: stored links outlive every version of the code that writes them, and that data cannot be rewritten once people have shared the links.
-    name: The storage schema
-    summary: A stored link is its short code and the long URL it points at.
-  name: API
+- name: API
+  repository: shortener
   part: api
-  repository: shortener
-  reversible:
-  - text: Two operations, `POST /links` to create a short link and `GET /<code>` to follow one, called only by this plan's UI.
-    title: The HTTP API
   summary: The API creates short links, stores them, and resolves them back.
-- decisions: []
-  name: Web UI
+  reversible:
+  - group: ''
+    gist: ''
+    items:
+    - text: Two operations, `POST /links` to create a short link and `GET /<code>` to follow one, called only by this plan's UI.
+      title: The HTTP API
+  decisions:
+  - name: The storage schema
+    justification: stored links outlive every version of the code that writes them, and that data cannot be rewritten once people have shared the links.
+    gist: A stored link is its short code and the long URL it points at.
+    show:
+    - type: code
+      language: sql
+      text: |-
+        CREATE TABLE links (
+          code TEXT PRIMARY KEY,
+          url  TEXT NOT NULL
+        );
+    details: []
+- name: Web UI
+  repository: shortener
   part: ui
-  repository: shortener
-  reversible: []
   summary: One page creates a link through the API and shows the short form.
-- decisions: []
-  name: Documentation
-  part: README.md
-  repository: shortener
   reversible: []
+  decisions: []
+- name: Documentation
+  repository: shortener
+  part: README.md
   summary: The README says what the service is, how to run it, and what its API is.
+  reversible: []
+  decisions: []
 visual_changes: []
 what: |-
   A URL shortener: somewhere to turn a long link into a short one, and somewhere to follow

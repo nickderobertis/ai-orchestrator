@@ -3,7 +3,7 @@ title: 'Design: repo-plan-example'
 project: repo-plan-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:102de0e7ec9d17f43c286db96673ed970aa1e0b2d444f9ee5085351344f8eee5
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:e22ecb360280150f10dcb65b35a5d646929cba5d6b5efc807288dc380ae62fcd","answers_digest":"sha256:4a1ada9a2207fbe04d715d6c1fe6e66e8ad8636705ba87a57643a0bce996095a"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:ff54a57adaf34a907e3ae341d854d4b7bcd7ed66db852a7d989c64b43b2d401e","body_digest":"sha256:caa6a47cfa9a8df17f93e66c61a356a32221f19acde1768cb913a3aa54712b6b","answers_digest":"sha256:7ab8a4153ebfe067511a3a4226e7dc8cbc0e4daa63396f4e89be287e4af40ce2"}
 ---
 ## What
 
@@ -30,15 +30,20 @@ The service gains the health endpoint, and its admin dashboard shows what that e
 
 #### The health response
 
-**Reversibility: high cost** — the client library, the dashboard and the documentation all read it, and the client library's own users are people we cannot list.
-
 One response shape, published by the service and read by every other unit.
+
+<details>
+<summary><strong>High cost to undo</strong></summary>
+
+the client library, the dashboard and the documentation all read it, and the client library's own users are people we cannot list.
+
+</details>
 
 ```json
 {"status": "ok", "version": "1.4.2"}
 ```
 
-**Reversible:**
+**Reversible decisions (1):**
 
 <details>
 <summary>Dashboard access</summary>
@@ -53,9 +58,14 @@ The client library gains a method that calls the endpoint.
 
 #### The `health()` method
 
-**Reversibility: high cost** — the library is released, and every caller of a released method would have to change.
-
 A new public method returning the parsed health response.
+
+<details>
+<summary><strong>High cost to undo</strong></summary>
+
+the library is released, and every caller of a released method would have to change.
+
+</details>
 
 ```diff
  class Client:
@@ -201,41 +211,47 @@ planned_tasks:
   task: 'docs(api): document /health'
   unit: Documentation
 units:
-- decisions:
-  - artifact: |-
-      ```json
-      {"status": "ok", "version": "1.4.2"}
-      ```
-    justification: the client library, the dashboard and the documentation all read it, and the client library's own users are people we cannot list.
-    name: The health response
-    summary: One response shape, published by the service and read by every other unit.
-  name: Service
-  part: ''
+- name: Service
   repository: some-service
-  reversible:
-  - text: The admin page refuses a viewer without the `admin` role.
-    title: Dashboard access
+  part: ''
   summary: The service gains the health endpoint, and its admin dashboard shows what that endpoint returns to viewers allowed to see it.
-- decisions:
-  - artifact: |-
-      ```diff
-       class Client:
-      +    def health(self) -> Health: ...
-      ```
-    justification: the library is released, and every caller of a released method would have to change.
-    name: The `health()` method
-    summary: A new public method returning the parsed health response.
-  name: Client library
-  part: ''
+  reversible:
+  - group: ''
+    gist: ''
+    items:
+    - text: The admin page refuses a viewer without the `admin` role.
+      title: Dashboard access
+  decisions:
+  - name: The health response
+    justification: the client library, the dashboard and the documentation all read it, and the client library's own users are people we cannot list.
+    gist: One response shape, published by the service and read by every other unit.
+    show:
+    - type: code
+      language: json
+      text: '{"status": "ok", "version": "1.4.2"}'
+    details: []
+- name: Client library
   repository: some-client
-  reversible: []
-  summary: The client library gains a method that calls the endpoint.
-- decisions: []
-  name: Documentation
   part: ''
-  repository: some-docs
+  summary: The client library gains a method that calls the endpoint.
   reversible: []
+  decisions:
+  - name: The `health()` method
+    justification: the library is released, and every caller of a released method would have to change.
+    gist: A new public method returning the parsed health response.
+    show:
+    - type: code
+      language: diff
+      text: |2-
+         class Client:
+        +    def health(self) -> Health: ...
+    details: []
+- name: Documentation
+  repository: some-docs
+  part: ''
   summary: The published documentation describes the endpoint that actually exists.
+  reversible: []
+  decisions: []
 visual_changes: []
 what: |-
   A health endpoint on the service, the client method that calls it, an admin page that

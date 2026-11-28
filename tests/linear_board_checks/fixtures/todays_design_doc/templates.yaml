@@ -1,0 +1,7 @@
+# A host root holding only the design-doc template as it stood before the design document
+# began showing first, so a journey renders the same answers through it beside today's.
+onepipeline_templates: 1
+templates:
+  design-doc:
+    role: document
+    description: The design document as it rendered before it showed first.

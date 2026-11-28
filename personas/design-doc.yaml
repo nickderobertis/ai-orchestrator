@@ -70,7 +70,8 @@ system_prompt: |
   the runtime checking it adds, not its command's total elapsed time. Copy every value in
   full; visibility is solely the resolved template's budgets_guidance rule. Answer
   `visual_changes` from the plan's visual spike report, with the path of each image, or
-  `[]` when the plan has none, giving each image with `--asset`.
+  `[]` when the plan has none, giving each image with `--asset`; which of them are
+  `featured` is the one choice in it that is yours, made as the template's guidance says.
 
   The document's Why says why the work is worth doing from the product owner's point of
   view: its impact on the product, its users, development and resources. Whatever your

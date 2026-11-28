@@ -381,9 +381,23 @@ def _design_on_board(bench: Bench, native: str) -> Shown:
 
 
 def _section(content: str, name: str) -> str:
-    """One `### <name>` entry of a document's Visual changes, up to the next heading."""
-    found = re.search(rf"^### {re.escape(name)}\n(.*?)(?=^#|\Z)", content, re.MULTILINE | re.DOTALL)
-    return found.group(1).strip() if found else ""
+    """One entry of a document's Visual changes, in either form the template writes it.
+
+    A featured change is a `### <name>` heading, read up to the next heading or the line
+    introducing the collapsed rest; any other change is a `<details>` block under its name,
+    read up to its own closing line, past the `Before` block nested inside it.
+    """
+    flags = re.MULTILINE | re.DOTALL
+    featured = re.search(rf"^### {re.escape(name)}\n(.*?)(?=^#|^\*\*\d+ more |\Z)", content, flags)
+    if featured:
+        return featured.group(1).strip()
+    collapsed = re.search(
+        rf"^<details>\n<summary>{re.escape(name)}</summary>\n(.*?)^</details>$"
+        r"(?=\s*\Z|\s*^#|\s*^<details>\n<summary>(?!Before</summary>))",
+        content,
+        flags,
+    )
+    return collapsed.group(1).strip() if collapsed else ""
 
 
 def _finishing_members(bench: Bench, native: str) -> list[str]:

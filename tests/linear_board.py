@@ -37,7 +37,8 @@ import plan_store_client
 class Rewrite:
     """One change Linear makes to a long form it stores, with an example of it.
 
-    ``written`` is what a write sends and ``stored`` what Linear keeps of it. A ``block``
+    ``written`` is what a write sends and ``stored`` what Linear keeps of it. A ``whole``
+    rewrite reads the long form entire, fenced code included, after every other; a ``block``
     rewrite reads whole stretches of text between fenced code blocks; any other reads one
     line at a time, outside code spans, fenced code and Markdown links.
     """
@@ -47,6 +48,7 @@ class Rewrite:
     written: str = ""
     stored: str = ""
     block: bool = False
+    whole: bool = False
 
 
 def _autolink(text: str) -> str:
@@ -121,6 +123,43 @@ def _indented_code(text: str) -> str:
     )
 
 
+def _arrow_sections(text: str) -> str:
+    """Linear's editor shortcut for a collapsible section, `>>>`, stored as its `+++` form.
+
+    As onetaskgraph's recording `spike-linear-nested-blocks` holds it, nesting included: a
+    `>>> SUMMARY` line opens a section; a bare `>>>` closes every section open, one `+++` line
+    each set apart by a blank line, and with none open opens one whose summary is empty; and a
+    section left open is closed after the last line.
+    """
+    opened = 0
+    lines = text.split("\n")
+    for at, line in enumerate(lines):
+        match line.split(" ", 1):
+            case [">>>", summary]:
+                lines[at] = "+++ " + summary
+                opened += 1
+            case [">>>"]:
+                lines[at] = "+++ " if opened == 0 else "\n\n".join(["+++"] * opened)
+                opened = 1 if opened == 0 else 0
+            case _:
+                pass
+    stored = "\n".join(lines)
+    return stored.rstrip("\n") + "\n\n+++" * opened if opened else stored
+
+
+def _trailing_breaks(text: str) -> str:
+    """The long form ending at its last line holding anything, but a table's last row.
+
+    Every line break and blank line after the last line goes, as the recording
+    `spike-linear-nested-blocks` holds; a table's last row keeps its line break, as spike
+    `spike-linear-stored-content` measured.
+    """
+    trimmed = re.sub(r"(?:\r?\n[ \t]*)+\Z", "", text)
+    last = trimmed.rsplit("\n", 1)[-1].strip()
+    table_row = len(last) > 1 and last.startswith("|") and last.endswith("|")
+    return trimmed + "\n" if table_row and trimmed != text else trimmed
+
+
 #: Where the store's own trailing block opens: the collapsed metadata block, the `Fields`
 #: section a source writes before it, or the HTML-comment slot of releases before 0.14.19.
 _STORE_BLOCK = r"\+\+\+ onetaskgraph metadata\n|\+\+\+ Fields\n|<!-- onetaskgraph.metadata "
@@ -191,6 +230,17 @@ MEASURED_REWRITES: tuple[Rewrite, ...] = (
         "| one |\n\n+++ onetaskgraph metadata\n\n`{}`\n\n+++",
         block=True,
     ),
+    # Linear's editor shortcut, which the store never writes, and the line breaks ending a long
+    # form, as onetaskgraph's committed recording of spike `spike-linear-nested-blocks` holds
+    # them (`tests/linear_board_checks/fixtures/linear_nested_sections.json` is its excerpt).
+    Rewrite(
+        "arrow-section",
+        _arrow_sections,
+        ">>> Outer\n\nOne.\n\n>>> Before\n\nTwo.\n\n>>>",
+        "+++ Outer\n\nOne.\n\n+++ Before\n\nTwo.\n\n+++\n\n+++",
+        block=True,
+    ),
+    Rewrite("trailing-breaks", _trailing_breaks, "Ends here.\n\n", "Ends here.", whole=True),
     Rewrite("bullet", lambda s: re.sub(r"^(\s*)- ", r"\1* ", s, flags=re.M), "- one", "* one"),
     Rewrite("table", _table, "| --- |", "| -- |"),
     Rewrite("brackets", lambda s: re.sub(r"(?<!\\)([\[\]])", r"\\\1", s), "[x]", r"\[x\]"),
@@ -210,7 +260,7 @@ _FENCED = re.compile(r"(^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\2[^\n]*(?:\n|$))"
 def linear_stored(content: str, rewrites: Sequence[Rewrite]) -> str:
     """What Linear keeps of a long form ``content`` written to it, under ``rewrites``."""
     for rule in rewrites:
-        if not rule.block:
+        if not rule.block or rule.whole:
             continue
         # The split alternates text, a fenced block, and that block's fence characters.
         chunks = _FENCED.split(content)
@@ -245,14 +295,18 @@ def linear_stored(content: str, rewrites: Sequence[Rewrite]) -> str:
 
         rewritten = protected.sub(protect, line)
         for rule in rewrites:
-            if not rule.block:
+            if not rule.block and not rule.whole:
                 rewritten = rule.apply(rewritten)
 
         def restore(match: re.Match[str], held: list[str] = spans) -> str:
             return held[int(match[1])]
 
         result.append(re.sub(re.escape(marker) + r"(\d+)" + re.escape(marker), restore, rewritten))
-    return "".join(result)
+    stored = "".join(result)
+    for rule in rewrites:
+        if rule.whole:
+            stored = rule.apply(stored)
+    return stored
 
 
 def _connection(nodes: list[dict[str, Any]]) -> dict[str, Any]:

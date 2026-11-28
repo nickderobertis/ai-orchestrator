@@ -37,25 +37,35 @@ variables:
       the unit's label, which a planned task's `unit` names); `repository` (string, the
       repository's short name, such as `onepipeline`); `part` (string, the package or path
       within that repository, or `""` when the unit is the whole repository); `summary`
-      (text, the unit's one paragraph, which may show a diagram as an image reference
-      `![<alt text>](./<name>.png)` to an asset of this document); `reversible` (a list of objects, the unit's trivial and
-      low-cost decisions in reading order, or `[]` when it has none), each with the string
-      keys `title` (its one-line summary) and `text` (its one sentence); and `decisions` (a
-      list of objects, the unit's high-cost decisions, or `[]` when it has none). Each decision has the keys `name`
-      (string, its heading), `justification` (string, naming who would have to act to undo
-      it), `content` (a nonempty ordered list of parts) and, only when it has examples,
-      `examples` (a nonempty ordered list of parts of the same shape, omitted otherwise).
-      Each part is exactly either
-      {type: "prose", text: string} or {type: "code", language: string, text: string}.
-      Prose is nonblank Markdown explanation without fenced-code blocks; inline code and
-      an image reference `![<alt text>](./<name>.png)` to an asset of this document are
-      allowed. Code is nonblank literal text, never a pre-fenced block. Language is a
-      nonempty single-line fence info token: letters, digits, underscore, plus or hyphen;
-      use `text` for untyped output. No extra keys beyond `examples`, no mixed shapes and
-      no unknown tags. Exact legacy decisions instead retain `name`, `justification`,
-      `summary` and `artifact`, all strings, rendered historically without classification,
-      and take no `examples`. Decisions
-      may use either exact shape while deliberately regenerating a document.
+      (text, one or two sentences, which may show a diagram as an image reference
+      `![<alt text>](./<name>.png)` to an asset of this document); optionally `show` (a list
+      of parts, the unit's canonical change seen from outside, rendered open after its
+      summary); optionally `cost_reason` (string, the one reason every high-cost decision of
+      the unit is high cost); `reversible` (a list of groups, the unit's trivial and
+      low-cost decisions in reading order, or `[]` when it has none); and `decisions` (a list
+      of objects, the unit's high-cost decisions, or `[]` when it has none). A group has
+      `group` (string, its name in plain words, or `""` for one ungrouped run of items),
+      `gist` (string, what its decisions amount to, in a few words; `""` when `group` is) and
+      `items` (a nonempty list of objects, each with the string keys `title`, its one-line
+      summary, and `text`, its one sentence). A decision has `name` (string, its heading),
+      `justification` (string, who would have to act to undo it; omitted when the unit's
+      `cost_reason` covers it), `gist` (string, one sentence), `show` (a list of parts, shown
+      open: the canonical change, with at most one short concrete example beside it) and
+      `details` (a list of at most three collapsed blocks, each with `summary`, a string
+      stating the block's main idea, and `parts`, a list of parts; a block whose summary says
+      all there is answers `[]` for `parts` and renders as a plain bullet, not a collapsed
+      block). Each part is exactly either {type: "prose", text: string} or {type: "code",
+      language: string, text: string}. Prose is nonblank Markdown without fenced-code
+      blocks; inline code and an image reference `![<alt text>](./<name>.png)` to an asset of
+      this document are allowed. Code is nonblank literal text, never a pre-fenced block.
+      Language is a nonempty single-line fence info token: letters, digits, underscore, plus
+      or hyphen; use `text` for untyped output. No extra keys and no unknown tags. A unit
+      answered in an earlier shape is still accepted and renders exactly as it did: a flat
+      `reversible` list of objects with the string keys `title` and `text`; decisions of
+      `name`, `justification`, `content` (a nonempty ordered list of parts) and, only when it
+      has examples, `examples` (a nonempty ordered list of parts); and legacy decisions of
+      `name`, `justification`, `summary` and `artifact`, all strings. Decisions may use any
+      of these exact shapes while deliberately regenerating a document.
     type: list
     items: object
     required: true
@@ -121,12 +131,14 @@ variables:
     default: []
   visual_changes:
     description: >-
-      One object per visual change the plan expects, in the order the plan's
-      visual spike's report lists them, with required non-empty string keys: `name` (the change's short
-      heading), `description` (what is changing, in plain words), `after` and optional `before` (each
-      the bare file name of an image asset of this document, as its content references it
-      with `./<name>`). Only absence of `before` selects a single image; null, empty
-      and non-string values are invalid. `after` is always required. `[]` for a plan with no visual change.
+      One object per visual change the plan expects, in the order the plan's visual spike's
+      report lists them, with required non-empty string keys: `name` (a heading that says what
+      changes), `description` (one or two sentences saying what the image cannot), `after`
+      and optional `before` (each the bare file name of an image asset of this document, as
+      its content references it with `./<name>`), and an optional boolean `featured` (shown
+      open; at most three changes are featured, and a plan marking none features its first).
+      Only absence of `before` selects a single image; null, empty and non-string values are
+      invalid. `after` is always required. `[]` for a plan with no visual change.
     type: list
     items: object
     required: false
@@ -171,12 +183,24 @@ variables:
   PROSE. Plain, simple, terse and precise, and no more technical than the plan's own goal
   statement. A term that cannot be avoided is defined once, in passing.
 
+  SHOW, THEN TELL. What, Why and Goals are read closely and stay prose. Past them a reader
+  scans for examples and for the literal shapes that change, so the rest of the document
+  shows first: a diff, a record, a command and what it prints, an image. Telling is kept to
+  one sentence wherever it is shown by default, and anything longer goes into a collapsed
+  block whose summary already says its main idea.
+
+  WHAT IS SHOWN IS THE PLAN'S OWN. Every example, shape and image comes from the plan's own
+  contracts, tasks and spike reports: a diff of a shape a task states, a command and the
+  output its contract names, a record the spike measured, a capture the visual spike took.
+  None shows invented behaviour; where the plan states no concrete case, the document says
+  the rule in one sentence rather than making a case up.
+
   LENGTH. A document is about as long as the design document this template replaces would
   be for the same plan. Exactness is spent on what is hard to undo, and everything else is
-  said in a sentence. A high-cost decision's content is about 1,200 characters or less,
-  examples excluded. The whole document's composed issue body, as `onetaskgraph document
-  copy --dry-run` sizes it, is under 45,000 characters, reached
-  through terser writing and never by dropping what the approver needs. A plan that cannot
+  said in a sentence. A high-cost decision shows about 600 characters of prose or less by
+  default, its code excluded; the rest is in its collapsed details. The whole document's
+  composed issue body, as `onetaskgraph document copy --dry-run` sizes it, is under 45,000
+  characters, reached through terser writing and never by dropping what the approver needs. A plan that cannot
   be documented under 45,000 characters without losing needed content stays under GitHub's
   65,536-character refusal, and its writer reports the measured figure rather than
   truncating.
@@ -195,12 +219,24 @@ variables:
   section may show one the same way where a picture explains better than prose.
 
   HIGHLIGHTING. No GitHub alert blocks (`> [!CAUTION]` and the like) anywhere. The bold
-  reversibility line is the whole of the highlighting.
+  "High cost to undo" summary, a reversible group's bold name and a visual change's heading are the
+  whole of the highlighting.
 
-  EXPANDABLE BLOCKS. What is only sometimes needed — a reversible decision's sentence, a
-  decision's examples, the planned-tasks table — is collapsed, and the template alone writes
-  each block, in the authored form onetaskgraph's README states under "Expandable blocks".
-  No answer writes a `<details>` block of its own.
+  EXPANDABLE BLOCKS. What is only sometimes needed — a high-cost decision's details and why
+  it is high cost, a group of reversible decisions, a visual change past the featured ones,
+  a featured change's before image, the planned-tasks table — is collapsed, and the template
+  alone writes each block, in the authored form onetaskgraph's README states under
+  "Expandable blocks". A block's summary carries the main idea, so a reader who never opens
+  it still has the short version. A summary's only markup is `<code>` and `<strong>`, never
+  one inside the other, because those are the only tags the plan store translates to a
+  Linear section's heading; the template writes both, so an answer writes backtick code and
+  never a tag. No answer writes a `<details>` block of its own.
+
+  NESTING. One block nests in another, and only one: the `Before` block inside a visual
+  change that is not featured, holding its before image, written in the authored form
+  onetaskgraph's README states for a nested block (its own `<details>` and `<summary>`
+  lines and the blank lines around its body, on lines of the outer block's body, not
+  indented). No other block opens inside another anywhere in the document.
 
   THIS TEMPLATE. Each section renders inside its own block: `what`, `why`, `goals`,
   `visual_changes`, `architecture`, `budgets`, `acceptance_criteria` and `planned_tasks`. Each section's guidance is a Jinja comment in a
@@ -265,74 +301,128 @@ variables:
 {% endblock %}
 {% block visual_changes_guidance %}
 {#
-  VISUAL CHANGES. One `### <name>` subsection per change the plan expects to make to what a
-  user sees: a web page or component, a TUI, or a CLI's printed output. Each says in the
-  user's terms what changes, then shows the required after image and optional before image.
-  The images are illustrative captures from a throwaway, mocked spike, not a preview of the
-  finished work, which may differ where production concerns require.
+  VISUAL CHANGES. The section shows; it does not describe. One entry per change the plan
+  expects to make to what a user sees: a web page or component, a TUI, or a CLI's printed
+  output. Its `name` is a heading that already says what changes ("`po slice` refuses an STL
+  that is suspiciously small", not "Slice refusal"), and its `description` is one sentence,
+  two at most, saying only what the image cannot.
 
-  The `visual_changes` answer restates the plan's visual spike report, answer for answer,
-  and each image it names is an asset of this document; the writer invents none. A plan
-  with no visual change answers `[]` and this document has no Visual changes section.
+  At most three changes are `featured`: the ones an approver most needs to see, shown open
+  with the after image visible and the before image collapsed beneath it, because most
+  readers already know it. Every other change is one collapsed block under its name holding
+  its description and the after image, with the before image in a collapsed `Before` block
+  nested inside it, so a reader opens only the ones they care about. A plan with three
+  changes or fewer may feature all of them; a plan that marks none features its first, and
+  past three the template features only the first three marked.
+
+  The images are illustrative captures from a throwaway, mocked spike, not a preview of the
+  finished work, which may differ where production concerns require. The `visual_changes`
+  answer restates the plan's visual spike report, answer for answer, and each image it names
+  is an asset of this document; the writer invents none. A plan with no visual change
+  answers `[]` and this document has no Visual changes section.
 #}
 {% endblock %}
+{% macro images(change) %}
+![{{ change.name }}](./{{ change.after }})
+
+{% if change.before is defined %}
+<details>
+<summary>Before</summary>
+
+![Before: {{ change.name }}](./{{ change.before }})
+
+</details>
+
+{% endif %}
+{% endmacro %}
 {% block visual_changes %}
 {% if visual_changes %}
+{% set chosen = visual_changes | selectattr("featured", "defined") | selectattr("featured") | list %}
+{% set chosen = chosen[:3] if chosen else visual_changes[:1] %}
 ## Visual changes
 
-{% for change in visual_changes %}
+{% for change in chosen %}
 ### {{ change.name }}
 
 {{ change.description }}
 
-{% if change.before is defined %}
-**Before**
+{{ images(change) -}}
+{% endfor %}
+{% set rest = visual_changes | reject("in", chosen) | list %}
+{% if rest %}
+**{{ rest | length }} more {% if rest | length == 1 %}change{% else %}changes{% endif %}:**
 
-![Before: {{ change.name }}](./{{ change.before }})
+{% for change in rest %}
+<details>
+<summary>{{ summary(change.name) }}</summary>
 
-**After**
+{{ change.description }}
 
-![After: {{ change.name }}](./{{ change.after }})
-{% else %}
-![{{ change.name }}](./{{ change.after }})
-{% endif %}
+{{ images(change) -}}
+</details>
 
 {% endfor %}
+{% endif %}
 {% endif %}
 {% endblock %}
 {% block architecture_guidance %}
 {#
-  ARCHITECTURE. The `architecture` answer is a short overview, two to four sentences saying
-  how the units fit. A unit is a repository, or a part of a project. Every unit that changes
-  gets one subsection, headed `### <unit> — `<repository>` (`<package or path>`)`; the
-  parenthesis appears only when the unit is part of a repository.
+  ARCHITECTURE. Show the change; keep telling short. A reader scans this section for the
+  shapes that change — a diff, a record, a command and what it prints — and opens prose only
+  where they have an opinion. So everything shown by default is either a one-line statement
+  or a literal artifact, and every paragraph of explanation sits in a collapsed block whose
+  summary already says its main idea.
+
+  The `architecture` answer is the overview: one or two sentences saying how the units fit,
+  and the diagram when DIAGRAMS below calls for one. A unit is a repository, or a part of a
+  project. Every unit that changes gets one subsection, headed
+  `### <unit> — `<repository>` (`<package or path>`)`; the parenthesis appears only when the
+  unit is part of a repository.
 
   Under each unit heading:
-    - One paragraph. It says in plain words what the unit is and what changes in it. It
-      does not list the unit's individual decisions; those follow.
-    - One `#### <decision>` per high-cost decision the unit owns, and only for those, so a
-      unit with none has no `####`. Each opens with `**Reversibility: high cost** —` and a
-      justification naming who would have to act to undo it. Then one or two plain
-      sentences say what the decision means. Supply ordered prose/code parts, interleaving
-      explanations and literal artifacts as needed. The template owns every language label
-      and safe backtick fence. Never author fences, and never disguise explanation as code.
-      A prose-only behavioural decision is valid. For literal artifacts use: a `diff` block for
-      a changed shape, the full shape for a new one, a `--help` diff for a CLI, a text
-      sketch for a UI. A behavioural decision with no artifact says so in one sentence.
-    - Optionally, `examples` after a decision's content, rendered collapsed under the
-      summary Examples. Examples are given only where the abstract contract is hard to
-      follow without them: a concrete, illustrative call, record, input and output, or
-      before and after. Keep them to about 800 characters per decision.
-    - Then, after the high-cost subsections, a `**Reversible:**` line followed by one
-      expandable block per trivial or low-cost decision the unit makes: an interface, a
-      stored shape, a flag, a behaviour. Its `title` is the block's summary and its `text`
-      the body. A title says what the decision changes in that area, not only the area:
-      "Adds a `--dry-run` flag to `copy`", not "Flag name". It fits on one line of about 90
-      characters and ends with no period; the template writes its backtick code as the
-      summary's HTML. The text stays one sentence naming the thing exactly (the flag, key,
-      field, route or command). An item carries no level label, no artifact and no
-      justification, because trivial and low cost read the same here. A unit with no such
-      decision has no `**Reversible:**` line.
+    - `summary`: one or two sentences saying what the unit is and what changes in it.
+    - `show`, optionally: the unit's canonical change seen from outside, as `show` parts
+      below — a command run and what it prints, a record before and after. A unit with no
+      high-cost decision has nothing else to show, so it shows this whenever its change has
+      a face a reader could look at.
+    - `cost_reason`, when every high-cost decision of the unit is high cost for the same
+      reason: that reason, once, in place of each decision's `justification`. A reason
+      repeated word for word under every decision is one the reader learns to skip.
+    - One `#### <decision>` per high-cost decision the unit owns, and only for those. Its
+      `name` says what changes ("Copy status back without replacing authored content").
+      Then:
+        - `justification`, unless the unit's `cost_reason` covers it: who would have to act
+          to undo it, in one short clause. It renders collapsed under "High cost to undo",
+          as `cost_reason` does, because the heading already says the decision is costly.
+        - `gist`: one sentence a reader could stop at.
+        - `show`: the canonical change itself, open. A `diff` block for a changed shape, the
+          full shape for a new one, a `--help` diff for a CLI, a text sketch for a UI, and,
+          where the shape alone is hard to follow, one short concrete example beside it: a
+          call and what it prints, a record before and after. Prose here is a one-line
+          caption, never a paragraph. A behavioural decision with no artifact shows its one
+          example — the situation and what now happens — rather than describing the rule.
+        - `details`: everything else, as collapsed blocks — edge cases, exit statuses,
+          compatibility, what was rejected and why, further examples. Each block's
+          `summary` states its main idea as a plain-words claim a non-specialist follows
+          ("With no filter, nothing changes"), never only a topic ("Exit codes"), so the
+          collapsed line is itself the short version. A summary names no flag, field, file,
+          command, code or number, and is about 70 characters at most; those exact names are
+          what the block holds. A block whose summary says all there is answers `[]` for its
+          `parts` and renders as a plain bullet. At most three blocks; a decision needing
+          more is two decisions.
+      The template owns every language label and safe backtick fence. Never author fences,
+      and never disguise explanation as code.
+    - `reversible`: the unit's trivial and low-cost decisions, grouped by what they touch.
+      Each group has a `group` name in plain words with no code, rendered bold with its
+      count, a `gist` saying in a few words what its decisions amount to, and `items`, each
+      a `title` that says what the decision changes ("Adds a `--dry-run` flag to `copy`",
+      not "Flag name", one line of about 70 characters, no final period) and a `text` of
+      one sentence naming the thing exactly (the flag, key, field, route or command). A
+      unit with four or fewer such decisions answers one group with an empty `group`, whose
+      items render one block each; otherwise two to five groups, merging decisions that are
+      one choice, each rendered as one collapsed line holding one bullet per decision. An
+      item carries no level label, no artifact and no justification, because trivial and
+      low cost read the same here.
     - Nothing else: no Kind, Owner or Status line, no Owes or May-assume bullets, and no
       links between sections.
 
@@ -341,7 +431,7 @@ variables:
   paragraph to convey. A single unit, or anything one sentence says, gets no diagram, and a
   document holds a few diagrams at most. Write it as a Mermaid source, render it with `just
   render-diagram <source.mmd> <name>.png`, show it from the `architecture` overview, a
-  unit's `summary`, or the prose part of a decision as `![<alt text saying what it
+  unit's `summary`, or a decision's `show` caption as `![<alt text saying what it
   shows>](./<name>.png)`, and give the file to the store with `--asset` when the document is
   stored.
 
@@ -368,12 +458,59 @@ variables:
 
 {{ unit.summary }}
 
+{% for one in unit.show | default([]) %}
+{{ part(one) -}}
+{% endfor %}
+{% if unit.cost_reason is defined and unit.cost_reason and unit.decisions %}
+<details>
+<summary><strong>High cost to undo</strong>: {% if unit.decisions | length > 1 %}all {{ unit.decisions | length }} decisions below{% else %}the 1 decision below{% endif %}</summary>
+
+{{ unit.cost_reason }}
+
+</details>
+
+{% endif %}
 {% for decision in unit.decisions %}
 #### {{ decision.name }}
 
+{% if decision.gist is defined %}
+{{ decision.gist }}
+
+{% if decision.justification is defined and decision.justification %}
+<details>
+<summary><strong>High cost to undo</strong></summary>
+
+{{ decision.justification }}
+
+</details>
+
+{% endif %}
+{% for one in decision.show | default([]) %}
+{{ part(one) -}}
+{% endfor %}
+{% set plain = namespace(lines=[]) %}
+{% for block in decision.details | default([]) if not (block.parts | default([])) %}
+{% set plain.lines = plain.lines + [block.summary] %}
+{% endfor %}
+{% for line in plain.lines %}
+- {{ line }}
+{% endfor %}
+{% if plain.lines %}
+
+{% endif %}
+{% for block in decision.details | default([]) if block.parts | default([]) %}
+<details>
+<summary>{{ summary(block.summary) }}</summary>
+
+{% for one in block.parts %}
+{{ part(one) -}}
+{% endfor %}
+</details>
+
+{% endfor %}
+{% elif decision.content is defined %}
 **Reversibility: high cost** — {{ decision.justification }}
 
-{% if decision.content is defined %}
 {% for one in decision.content %}
 {{ part(one) -}}
 {% endfor %}
@@ -388,6 +525,8 @@ variables:
 
 {% endif %}
 {% else %}
+**Reversibility: high cost** — {{ decision.justification }}
+
 {{ decision.summary }}
 
 {% if decision.artifact %}
@@ -397,9 +536,28 @@ variables:
 {% endif %}
 {% endfor %}
 {% if unit.reversible %}
+{#- A unit answered before groups lists its items flat, under the line it always had. -#}
+{% set count = namespace(n=0, grouped=false) %}
+{% for entry in unit.reversible %}{% if entry["items"] is defined %}{% set count.grouped = true %}{% set count.n = count.n + (entry["items"] | length) %}{% else %}{% set count.n = count.n + 1 %}{% endif %}{% endfor %}
+{% if count.grouped %}
+**{% if unit.decisions %}Reversible decisions{% else %}Decisions, all reversible{% endif %} ({{ count.n }}):**
+{% else %}
 **Reversible:**
+{% endif %}
 
-{% for item in unit.reversible %}
+{% for entry in unit.reversible %}
+{% if entry["items"] is defined and entry.group %}
+<details>
+<summary><strong>{{ summary(entry.group) }}</strong> ({{ entry["items"] | length }}) — {{ summary(entry.gist) }}</summary>
+
+{% for item in entry["items"] %}
+- **{{ item.title }}.** {{ item.text }}
+{% endfor %}
+
+</details>
+
+{% else %}
+{% for item in (entry["items"] if entry["items"] is defined else [entry]) %}
 <details>
 <summary>{{ summary(item.title) }}</summary>
 
@@ -407,6 +565,8 @@ variables:
 
 </details>
 
+{% endfor %}
+{% endif %}
 {% endfor %}
 {% endif %}
 {% endfor %}

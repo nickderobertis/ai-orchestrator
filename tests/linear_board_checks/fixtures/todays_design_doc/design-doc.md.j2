@@ -1,0 +1,678 @@
+---
+onetaskgraph_template: 1
+description: >-
+  The design document a plan is read and approved as. The variables below are its data; how
+  to write each answer is stated in this template's guidance comments, which no rendering
+  carries.
+variables:
+  what:
+    description: >-
+      The What section's prose.
+    type: text
+    required: true
+  why:
+    description: >-
+      The Why section's prose: why the work is worth doing, as its impact on the product,
+      its users, development and resources, never an account of who asked for it.
+    type: text
+    required: true
+  goals:
+    description: >-
+      The Goals section's entries, one string per goal, or `[]` for a plan whose tasks state
+      none.
+    type: list
+    items: string
+    required: false
+    default: []
+  architecture:
+    description: >-
+      The Architecture section's overview only, which may show a diagram as an image
+      reference `![<alt text>](./<name>.png)` to an asset of this document. Each unit's
+      subsection is rendered from `units`.
+    type: text
+    required: true
+  units:
+    description: >-
+      One object per unit that changes, in reading order, with these keys: `name` (string,
+      the unit's label, which a planned task's `unit` names); `repository` (string, the
+      repository's short name, such as `onepipeline`); `part` (string, the package or path
+      within that repository, or `""` when the unit is the whole repository); `summary`
+      (text, the unit's one paragraph, which may show a diagram as an image reference
+      `![<alt text>](./<name>.png)` to an asset of this document); `reversible` (a list of objects, the unit's trivial and
+      low-cost decisions in reading order, or `[]` when it has none), each with the string
+      keys `title` (its one-line summary) and `text` (its one sentence); and `decisions` (a
+      list of objects, the unit's high-cost decisions, or `[]` when it has none). Each decision has the keys `name`
+      (string, its heading), `justification` (string, naming who would have to act to undo
+      it), `content` (a nonempty ordered list of parts) and, only when it has examples,
+      `examples` (a nonempty ordered list of parts of the same shape, omitted otherwise).
+      Each part is exactly either
+      {type: "prose", text: string} or {type: "code", language: string, text: string}.
+      Prose is nonblank Markdown explanation without fenced-code blocks; inline code and
+      an image reference `![<alt text>](./<name>.png)` to an asset of this document are
+      allowed. Code is nonblank literal text, never a pre-fenced block. Language is a
+      nonempty single-line fence info token: letters, digits, underscore, plus or hyphen;
+      use `text` for untyped output. No extra keys beyond `examples`, no mixed shapes and
+      no unknown tags. Exact legacy decisions instead retain `name`, `justification`,
+      `summary` and `artifact`, all strings, rendered historically without classification,
+      and take no `examples`. Decisions
+      may use either exact shape while deliberately regenerating a document.
+    type: list
+    items: object
+    required: true
+  acceptance_criteria:
+    description: >-
+      One criterion per entry, each a string.
+    type: list
+    items: string
+    required: true
+  graph:
+    description: >-
+      The plan's tasks and their dependencies exactly as `onetaskgraph project graph
+      <project> --format json --group-by orchestrator.unit` prints them: the Planned tasks
+      table lists every node, its unit (`group`) and the titles it depends on, from this.
+    type: object
+    required: false
+    default: {}
+  delivers:
+    description: >-
+      What each task delivers, as a short phrase on one line, keyed by the task's qualified
+      id as `graph` names it.
+    type: object
+    required: false
+    default: {}
+  planned_tasks:
+    description: >-
+      Kept for documents written before `graph`: one object per task with five string keys,
+      `task`, `unit`, `delivers`, `depends_on` and `location`. A new document answers `graph`
+      and `delivers` instead and leaves this `[]`.
+    type: list
+    items: object
+    required: false
+    default: []
+  dag_image:
+    description: >-
+      The bare file name of the image asset of this document that draws the plan's tasks
+      and their dependencies, each inside the unit it changes, as its content references it
+      with `./<name>`; `""` for a plan that shows no such image.
+    type: text
+    required: false
+    default: ""
+  plan_budgets:
+    description: >-
+      The plan's plan-level budget answers, its project's `orchestrator.plan-budgets`
+      metadata as the plan store holds it, or `{}` for a plan with no project analysis: the
+      shape the `plan-description` template's `plan_budgets` schema declares.
+    type: object
+    required: false
+    default: {}
+  budgets:
+    description: >-
+      Every budget of every task of the plan, read from the tasks' `orchestrator.budgets`
+      metadata, or `[]`: each object is the budget as its task's `orchestrator.budgets`
+      record holds it, the shape the `plan-task-budgets` template's schema declares, with
+      four keys added, `node` (the id of the task
+      that owns it), `location` (where the plan store reports that task), `anchor` (the
+      anchor of the budget's heading in that task, or `""` for a legacy budget) and `link`
+      (the destination of the budget's reference link: a local task's file relative to this
+      document's directory, any other location as it stands, then `#` and the anchor).
+    type: list
+    items: object
+    required: false
+    default: []
+  visual_changes:
+    description: >-
+      One object per visual change the plan expects, in the order the plan's
+      visual spike's report lists them, with required non-empty string keys: `name` (the change's short
+      heading), `description` (what is changing, in plain words), `after` and optional `before` (each
+      the bare file name of an image asset of this document, as its content references it
+      with `./<name>`). Only absence of `before` selects a single image; null, empty
+      and non-string values are invalid. `after` is always required. `[]` for a plan with no visual change.
+    type: list
+    items: object
+    required: false
+    default: []
+  accepted_opaque:
+    description: >-
+      Copy verbatim from the project's `onepipeline.export_edges` metadata: ordered export edges,
+      each with `source`, `to` and `accepted_opaque` (an ordered list of opaque pattern strings).
+    type: list
+    items: object
+    required: false
+    default: []
+---
+{#- A table cell is one line holding no bare column delimiter, whatever an answer says. -#}
+{% macro cell(value) %}{{ value | replace("|", "\\|") | replace("\r\n", " ") | replace("\n", " ") | replace("\r", " ") }}{% endmacro %}
+{#- Where the plan store reports a graph node: its `url` or `path`, or `""` for a node it reports none for. -#}
+{% macro located(node) %}{% if node.location is defined and node.location %}{{ node.location.url if node.location.url is defined else node.location.path }}{% endif %}{% endmacro %}
+{#- An expandable block's summary is HTML: `&`, `<` and `>` as entities, each backtick span as `<code>`. -#}
+{% macro summary(title) %}{% for piece in title | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") | split("`") %}{% if loop.index0 is odd and not loop.last %}<code>{{ piece }}</code>{% elif loop.index0 is odd %}`{{ piece }}{% else %}{{ piece }}{% endif %}{% endfor %}{% endmacro %}
+{#- One prose or code part of a decision, a code part fenced longer than any backtick run it holds. -#}
+{% macro part(one) %}
+{% if one.type == "prose" %}
+{{ one.text }}
+
+{% else %}
+{% set fence = namespace(value="```") %}
+{% for unused in range((one.text | length) - (one.text | replace("`", "") | length)) %}
+{% set fence.value = fence.value + "`" %}
+{% endfor %}
+{{ fence.value }}{{ one.language }}
+{{ one.text }}
+{{ fence.value }}
+
+{% endif %}
+{% endmacro %}
+{% block document_guidance %}
+{#
+  THE READER. A technical product manager with no depth in this domain. They read this
+  document instead of the plan, and must be able to accept a hard-to-reverse decision, argue
+  with the architecture, or say the acceptance criteria do not describe what was asked.
+
+  PROSE. Plain, simple, terse and precise, and no more technical than the plan's own goal
+  statement. A term that cannot be avoided is defined once, in passing.
+
+  LENGTH. A document is about as long as the design document this template replaces would
+  be for the same plan. Exactness is spent on what is hard to undo, and everything else is
+  said in a sentence. A high-cost decision's content is about 1,200 characters or less,
+  examples excluded. The whole document's composed issue body, as `onetaskgraph document
+  copy --dry-run` sizes it, is under 45,000 characters, reached
+  through terser writing and never by dropping what the approver needs. A plan that cannot
+  be documented under 45,000 characters without losing needed content stays under GitHub's
+  65,536-character refusal, and its writer reports the measured figure rather than
+  truncating.
+
+  SECTIONS. In this order: What, Why, Goals, Visual changes, Architecture, Budgets,
+  Acceptance criteria and Planned tasks. Goals appears only for a plan whose tasks state
+  goals, and Visual changes only for a plan with a visual change. A
+  Budgets visibility follows `budgets_guidance` below. Planned tasks opens with an image of the plan's tasks and their dependencies only for a plan of
+  more than one task with at least one dependency edge, and that image is generated by the
+  flow from the plan, never drawn by the writer.
+  There is no separate Contracts section, and no answer adds a heading of its own.
+
+  IMAGES. A picture is an image asset of this document, never a Mermaid code block, which a
+  Linear board does not render. Architecture is where a diagram is most often worth it, and
+  the ARCHITECTURE guidance says when and how one is drawn, shown and stored; any other
+  section may show one the same way where a picture explains better than prose.
+
+  HIGHLIGHTING. No GitHub alert blocks (`> [!CAUTION]` and the like) anywhere. The bold
+  reversibility line is the whole of the highlighting.
+
+  EXPANDABLE BLOCKS. What is only sometimes needed — a reversible decision's sentence, a
+  decision's examples, the planned-tasks table — is collapsed, and the template alone writes
+  each block, in the authored form onetaskgraph's README states under "Expandable blocks".
+  No answer writes a `<details>` block of its own.
+
+  THIS TEMPLATE. Each section renders inside its own block: `what`, `why`, `goals`,
+  `visual_changes`, `architecture`, `budgets`, `acceptance_criteria` and `planned_tasks`. Each section's guidance is a Jinja comment in a
+  separate block, `<name>_guidance`, and this block, `document_guidance`, holds what applies
+  to the whole document. Guidance is always a Jinja comment, never an HTML comment, so a
+  rendered document carries none of it. The front matter states the data shape, what each
+  answer and key holds; the judgment lives here. A repository overrides any one block, a
+  section's guidance without its rendering or the other way round, through the engine's
+  repository layer: `.onepipeline/templates/design-doc.md.j2` in its checkout, a file
+  beginning `{% extends "onepipeline/host/design-doc.md.j2" %}` that redefines only the
+  blocks it names.
+#}
+{% endblock %}
+{% block what_guidance %}
+{#
+  WHAT. What is being built. What and Why are each a few plain sentences in plain terms a
+  non-specialist reads, and carry no interface detail and no implementation detail.
+#}
+{% endblock %}
+{% block what %}
+## What
+
+{{ what }}
+
+{% endblock %}
+{% block why_guidance %}
+{#
+  WHY. Why the work is worth doing, from the product owner's point of view: its impact on
+  the product, its users, development and resources. It never narrates who asked for what:
+  no "the user asked", "the user said" or "the brief says", and no quoted request. The
+  record of what was requested and what was decided has one home, the plan's own
+  description, and is not in this document; a task's own Why states impact too, never that
+  record. Speaking of the product's users as the people the work affects is impact, not
+  attribution.
+#}
+{% endblock %}
+{% block why %}
+## Why
+
+{{ why }}
+
+{% endblock %}
+{% block goals_guidance %}
+{#
+  GOALS. The plan's tasks' Goals merged for the reader: one bullet per outcome the plan must
+  reach, written from what the tasks' own `## Goals` sections state and inventing none. Where
+  several tasks state one outcome, it appears once. A non-functional goal keeps the budget it
+  names, by that budget's `id`, as its task states it. What a goal is is stated once, in the
+  `goals` variable of this host's `plan-task` template. A plan whose tasks state no goals
+  answers `[]` and this document has no Goals section.
+#}
+{% endblock %}
+{% block goals %}
+{% if goals %}
+## Goals
+
+{% for goal in goals %}
+- {{ goal | replace("\n", "\n  ") }}
+{% endfor %}
+
+{% endif %}
+{% endblock %}
+{% block visual_changes_guidance %}
+{#
+  VISUAL CHANGES. One `### <name>` subsection per change the plan expects to make to what a
+  user sees: a web page or component, a TUI, or a CLI's printed output. Each says in the
+  user's terms what changes, then shows the required after image and optional before image.
+  The images are illustrative captures from a throwaway, mocked spike, not a preview of the
+  finished work, which may differ where production concerns require.
+
+  The `visual_changes` answer restates the plan's visual spike report, answer for answer,
+  and each image it names is an asset of this document; the writer invents none. A plan
+  with no visual change answers `[]` and this document has no Visual changes section.
+#}
+{% endblock %}
+{% block visual_changes %}
+{% if visual_changes %}
+## Visual changes
+
+{% for change in visual_changes %}
+### {{ change.name }}
+
+{{ change.description }}
+
+{% if change.before is defined %}
+**Before**
+
+![Before: {{ change.name }}](./{{ change.before }})
+
+**After**
+
+![After: {{ change.name }}](./{{ change.after }})
+{% else %}
+![{{ change.name }}](./{{ change.after }})
+{% endif %}
+
+{% endfor %}
+{% endif %}
+{% endblock %}
+{% block architecture_guidance %}
+{#
+  ARCHITECTURE. The `architecture` answer is a short overview, two to four sentences saying
+  how the units fit. A unit is a repository, or a part of a project. Every unit that changes
+  gets one subsection, headed `### <unit> — `<repository>` (`<package or path>`)`; the
+  parenthesis appears only when the unit is part of a repository.
+
+  Under each unit heading:
+    - One paragraph. It says in plain words what the unit is and what changes in it. It
+      does not list the unit's individual decisions; those follow.
+    - One `#### <decision>` per high-cost decision the unit owns, and only for those, so a
+      unit with none has no `####`. Each opens with `**Reversibility: high cost** —` and a
+      justification naming who would have to act to undo it. Then one or two plain
+      sentences say what the decision means. Supply ordered prose/code parts, interleaving
+      explanations and literal artifacts as needed. The template owns every language label
+      and safe backtick fence. Never author fences, and never disguise explanation as code.
+      A prose-only behavioural decision is valid. For literal artifacts use: a `diff` block for
+      a changed shape, the full shape for a new one, a `--help` diff for a CLI, a text
+      sketch for a UI. A behavioural decision with no artifact says so in one sentence.
+    - Optionally, `examples` after a decision's content, rendered collapsed under the
+      summary Examples. Examples are given only where the abstract contract is hard to
+      follow without them: a concrete, illustrative call, record, input and output, or
+      before and after. Keep them to about 800 characters per decision.
+    - Then, after the high-cost subsections, a `**Reversible:**` line followed by one
+      expandable block per trivial or low-cost decision the unit makes: an interface, a
+      stored shape, a flag, a behaviour. Its `title` is the block's summary and its `text`
+      the body. A title says what the decision changes in that area, not only the area:
+      "Adds a `--dry-run` flag to `copy`", not "Flag name". It fits on one line of about 90
+      characters and ends with no period; the template writes its backtick code as the
+      summary's HTML. The text stays one sentence naming the thing exactly (the flag, key,
+      field, route or command). An item carries no level label, no artifact and no
+      justification, because trivial and low cost read the same here. A unit with no such
+      decision has no `**Reversible:**` line.
+    - Nothing else: no Kind, Owner or Status line, no Owes or May-assume bullets, and no
+      links between sections.
+
+  DIAGRAMS. A diagram earns its place when the architecture has three or more units, or a
+  flow or a boundary between units, whose relations prose would need more than a short
+  paragraph to convey. A single unit, or anything one sentence says, gets no diagram, and a
+  document holds a few diagrams at most. Write it as a Mermaid source, render it with `just
+  render-diagram <source.mmd> <name>.png`, show it from the `architecture` overview, a
+  unit's `summary`, or the prose part of a decision as `![<alt text saying what it
+  shows>](./<name>.png)`, and give the file to the store with `--asset` when the document is
+  stored.
+
+  REVERSIBILITY. Three levels, defined by who would have to act to undo the decision:
+    - trivial: only the unit that owns it, in one ordinary change.
+    - low cost: parties we control, changing together. For example, several of our
+      repositories or tools updated in step, a deprecation window, or a migration of data
+      we own.
+    - high cost: parties we don't control or can't list, or data we can't rewrite. For
+      example, a public flag or field other people script against, a released artifact, or
+      stored data that older installed versions or outside readers keep reading.
+  When in doubt, the stricter level. These definitions are guidance a repository may
+  override by replacing this block.
+#}
+{% endblock %}
+{% block architecture %}
+## Architecture
+
+{{ architecture }}
+
+{% for unit in units %}
+### {{ unit.name }} — `{{ unit.repository }}`{% if unit.part %} (`{{ unit.part }}`){% endif %}
+
+
+{{ unit.summary }}
+
+{% for decision in unit.decisions %}
+#### {{ decision.name }}
+
+**Reversibility: high cost** — {{ decision.justification }}
+
+{% if decision.content is defined %}
+{% for one in decision.content %}
+{{ part(one) -}}
+{% endfor %}
+{% if decision.examples is defined %}
+<details>
+<summary>Examples</summary>
+
+{% for one in decision.examples %}
+{{ part(one) -}}
+{% endfor %}
+</details>
+
+{% endif %}
+{% else %}
+{{ decision.summary }}
+
+{% if decision.artifact %}
+{{ decision.artifact }}
+
+{% endif %}
+{% endif %}
+{% endfor %}
+{% if unit.reversible %}
+**Reversible:**
+
+{% for item in unit.reversible %}
+<details>
+<summary>{{ summary(item.title) }}</summary>
+
+{{ item.text }}
+
+</details>
+
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endblock %}
+{% block budgets_guidance %}
+{#
+  BUDGETS. A summary a person approving the plan reads in a minute, often on a phone: what
+  the plan is sized for, what breaks first at 10x, which budgets it adds, which it changes
+  and from what, how much longer every change's checks take because of it, and which
+  existing budgets already cover the work. Every detail of a budget — its workload,
+  evidence, command and budgets file, and for a changed one its full before and after —
+  lives in the `## Budgets` section of the task that owns it, which each row and line links
+  to, and every plan-level answer in full lives in the plan's own description. So this
+  section carries none of that detail. Each link is the budget's `link` answer as it
+  stands: a standard `<path>#<slug>` link to the owning task's `### Budget <id>` heading,
+  relative to this document's file when the task is a local file, never a
+  `#user-content-` fragment and never anchor markup; a tracker's own form is the plan
+  copy's to write. A budget answer saved before `link` existed is linked at its
+  `location`, with `#` and its `anchor` when it carries one, so a document saved then
+  still renders its own body.
+
+  The answers `plan_budgets` and `budgets` are exactly the plan's records: the project's
+  `orchestrator.plan-budgets` metadata and every task's `orchestrator.budgets`, each budget
+  with its task and where the store reports it, a version-3 changed budget's `previous`
+  inside it. Copy them, and invent none. A plan with no added or changed task budget (no
+  `file_change` exactly `add` or `change`) renders no Budgets section, even when it has
+  unchanged budgets, effects, omissions, spike findings or a migration reason. Otherwise
+  the section shows, in order, each part only when it has entries: Sizing; At 10×; the
+  added budgets; the changed budgets whose `name`, `unit`, `direction` or `threshold`
+  differs from `previous`, plus every changed budget with no `previous`, each showing
+  previous → new for a moved name or target and saying when its previous value is not
+  recorded; one collapsed block counting the version-3 changed budgets that differ in
+  another field, one line each naming, without values, which of measure, inner measure
+  reason, workload, command and measurement source (`source`) differ, or check runtime
+  when that is its only other difference; the total check runtime the budgets add,
+  followed by `check_runtime_summary`; the relevant unchanged (`file_change: none`)
+  budgets, collapsed as existing coverage of the work; then in-scope Not budgeted and
+  Spike findings. Every table has two columns, budget and target. The total sums each
+  added version-3 budget's `check_runtime_seconds` and each changed version-3 budget's
+  `check_runtime_seconds` minus its `previous` one, adds nothing for an unchanged budget,
+  names a displayed budget with no version-3 figure as not estimated (showing no figure
+  when none has one), and shows a negative total as a saving. Repo-wide effects never appear here. Filtering is presentation only:
+  copy all three answers in full, including unchanged budgets and effects.
+#}
+{% endblock %}
+{% block budgets %}
+{#- A budget's target as one cell, ≤ or ≥ before its threshold and unit. -#}
+{% macro target(one) %}{% if one.direction == "min" %}≥{% else %}≤{% endif %}{{ one.threshold }} {{ cell(one.unit) }}{% endmacro %}
+{#- Where a budget's name links: its owning task's budget heading. -#}
+{% macro href(one) %}{% if one.link is defined %}{{ one.link }}{% else %}{{ one.location }}{% if one.anchor | default("") %}#{{ one.anchor }}{% endif %}{% endif %}{% endmacro %}
+{#- Seconds as a person reads them: whole when whole, else to one decimal place. -#}
+{% macro seconds(value) %}{% if value == (value | int) %}{{ value | int }}{% else %}{{ value | round(1) }}{% endif %}{% endmacro %}
+{% set groups = namespace(added=[], rows=[], others=[], covering=[], unestimated=[], total=0, estimated=false) %}
+{% for budget in budgets %}
+{% set versioned = (budget.schema_version | default(0)) == 3 %}
+{% if budget.file_change == "add" %}
+{% set groups.added = groups.added + [budget] %}
+{% if versioned %}
+{% set groups.estimated = true %}
+{% set groups.total = groups.total + budget.check_runtime_seconds %}
+{% else %}
+{% set groups.unestimated = groups.unestimated + [budget.name] %}
+{% endif %}
+{% elif budget.file_change == "change" %}
+{% if versioned and budget.previous is defined %}
+{% set was = budget.previous %}
+{% set groups.estimated = true %}
+{% set groups.total = groups.total + budget.check_runtime_seconds - was.check_runtime_seconds %}
+{% if was.name != budget.name or was.unit != budget.unit or was.direction != budget.direction or was.threshold != budget.threshold %}
+{% set groups.rows = groups.rows + [budget] %}
+{% endif %}
+{% set fields = namespace(names=[]) %}
+{% for key, label in [["measure", "measure"], ["inner_measure_reason", "inner measure reason"], ["workload", "workload"], ["command", "command"], ["source", "measurement source"]] if was[key] != budget[key] %}
+{% set fields.names = fields.names + [label] %}
+{% endfor %}
+{% if not fields.names and was.check_runtime_seconds != budget.check_runtime_seconds %}
+{% set fields.names = ["check runtime"] %}
+{% endif %}
+{% if fields.names %}
+{% set groups.others = groups.others + [{"budget": budget, "fields": fields.names}] %}
+{% endif %}
+{% else %}
+{% set groups.rows = groups.rows + [budget] %}
+{% set groups.unestimated = groups.unestimated + [budget.name] %}
+{% endif %}
+{% elif budget.file_change == "none" %}
+{% set groups.covering = groups.covering + [budget] %}
+{% endif %}
+{% endfor %}
+{% set omissions = namespace(items=[]) %}
+{% for entry in (plan_budgets.checklist | default([])) if entry.not_applicable and (entry.in_scope | default(false)) == true %}
+{% set omissions.items = omissions.items + [entry] %}
+{% endfor %}
+{% if groups.added or (budgets | selectattr("file_change", "equalto", "change") | list) %}
+## Budgets
+
+**Sizing.** {{ plan_budgets.sizing }}
+
+**At 10×.** {{ plan_budgets.ten_x_summary }}
+
+{% if groups.added %}
+**Added budgets:**
+
+| Budget | Target |
+| --- | --- |
+{% for budget in groups.added %}
+| [{{ cell(budget.name) }}][{{ loop.index }}] | {{ target(budget) }} |
+{% endfor %}
+
+{% for budget in groups.added %}
+[{{ loop.index }}]: {{ href(budget) }}{{ "\n" -}}
+{% endfor %}
+
+{% endif %}
+{% if groups.rows %}
+**Changed budgets:**
+
+| Budget | Target |
+| --- | --- |
+{% for budget in groups.rows %}
+{% set was = budget.previous if ((budget.schema_version | default(0)) == 3 and budget.previous is defined) else none %}
+| [{% if was and was.name != budget.name %}{{ cell(was.name) }} → {% endif %}{{ cell(budget.name) }}][{{ groups.added | length + loop.index }}] | {% if not was %}{{ target(budget) }}, previous not recorded{% elif was.unit != budget.unit or was.direction != budget.direction or was.threshold != budget.threshold %}{{ target(was) }} → {{ target(budget) }}{% else %}{{ target(budget) }}{% endif %} |
+{% endfor %}
+
+{% for budget in groups.rows %}
+[{{ groups.added | length + loop.index }}]: {{ href(budget) }}{{ "\n" -}}
+{% endfor %}
+
+{% endif %}
+{% if groups.others %}
+<details>
+<summary>{{ groups.others | length }} {% if groups.others | length == 1 %}budget{% else %}budgets{% endif %} changed for other reasons</summary>
+
+{% for other in groups.others %}
+- [{{ other.budget.name }}]({{ href(other.budget) }}): {{ other.fields | join(", ") }}
+{% endfor %}
+
+</details>
+
+{% endif %}
+**Check runtime added:** {% if not groups.estimated %}not estimated for {{ groups.unestimated | join("; ") }}{% else %}{% if groups.total < 0 %}saves ≈{{ seconds(0 - groups.total) }} s{% else %}≈{{ seconds(groups.total) }} s{% endif %}{% if groups.unestimated %}, not estimated for {{ groups.unestimated | join("; ") }}{% endif %}{% endif %}.{% if plan_budgets.check_runtime_summary | default("") %} {{ plan_budgets.check_runtime_summary }}{% endif %}
+
+
+{% if groups.covering %}
+<details>
+<summary>{{ groups.covering | length }} existing {% if groups.covering | length == 1 %}budget already covers{% else %}budgets already cover{% endif %} this work</summary>
+
+| Budget | Target |
+| --- | --- |
+{% for budget in groups.covering %}
+| [{{ cell(budget.name) }}]({{ href(budget) }}) | {{ target(budget) }} |
+{% endfor %}
+
+</details>
+
+{% endif %}
+{% if omissions.items %}
+**Not budgeted:**
+
+{% for entry in omissions.items %}
+- {{ entry.concern }}: {{ entry.summary }}
+{% endfor %}
+
+{% endif %}
+{% for entry in (plan_budgets.spike_findings | default([])) %}
+{% if loop.first %}
+**Spike findings:**
+
+{% endif %}
+- {{ entry.summary }}
+{% if loop.last %}
+
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endblock %}
+{% block accepted_opaque_guidance %}
+{# Copy the export grants from the project's `onepipeline.export_edges` verbatim; never invent a pattern. #}
+{% endblock %}
+{% block accepted_opaque %}
+{% if accepted_opaque %}
+## Accepted opaque content
+
+The export may carry files these patterns match although their contents cannot be checked in full; each file is still screened by its path and printable text, and a private term found in one still refuses the export.
+```json
+{{ accepted_opaque | tojson(indent=2) }}
+```
+{% endif %}
+{% endblock %}
+{% block acceptance_criteria_guidance %}
+{#
+  ACCEPTANCE CRITERIA. A plain list of what must be observably true when the plan is done,
+  no longer than the plan warrants.
+#}
+{% endblock %}
+{% block acceptance_criteria %}
+## Acceptance criteria
+
+{% for criterion in acceptance_criteria %}
+- {{ criterion | replace("\n", "\n  ") }}
+{% endfor %}
+
+{% endblock %}
+{% block planned_tasks_guidance %}
+{#
+  PLANNED TASKS. A table with the columns Task, Unit, What it delivers, Depends on, Where it
+  lives, collapsed in one expandable block under the graph image when there is one, and
+  shown without one for a plan of one task, whose lone row a block would only hide: one row
+  per task, every cell one line, and "What it delivers" a short phrase. The
+  Unit column names the unit the task changes. Where it lives is the location the plan store
+  reports for the task, never one composed by hand.
+
+  Every row's task, unit and dependencies render from the `graph` answer, the plan store's
+  own reading of the plan, and the Architecture's unit names are that graph's groups, so the
+  writer authors only `delivers`. Where it lives, and each dependency on a task of this plan,
+  render from each graph node's `location`, the location the plan store reports for it, never
+  one composed by hand: the cell holds that location alone and the dependency links its title
+  to it, so the store's copy points both at the task's copy on the board; a node with no
+  location keeps its qualified id and its plain title. For a plan of more than one task with at least one
+  dependency edge, the flow also renders that graph, each task inside its unit's box, and
+  the section opens with it: `dag_image` names that generated image and the document holds
+  it as an asset. The writer never draws, edits or replaces it, and a plan of one task or of
+  no edge answers `dag_image` with `""` and shows none, because its picture would only
+  repeat the table.
+#}
+{% endblock %}
+{% block planned_tasks %}
+## Planned tasks
+
+{% if dag_image %}
+![Dependency graph of the plan's tasks](./{{ dag_image }})
+
+{% endif %}
+{% set task_count = (graph.nodes | rejectattr("external") | list | length) if graph.nodes is defined else (planned_tasks | length) %}
+{% if task_count > 1 %}
+<details>
+<summary>All {{ task_count }} planned tasks</summary>
+
+{% endif %}
+{% if graph.nodes is defined %}
+| Task | Unit | What it delivers | Depends on | Where it lives |
+| --- | --- | --- | --- | --- |
+{% for node in graph.nodes if not node.external %}
+{% set deps = namespace(titles=[]) %}
+{% for edge in graph.edges if edge.to == node.id %}
+{% for other in graph.nodes if other.id == edge["from"] %}
+{% set where = located(other) %}
+{% if where and not other.external %}
+{% set deps.titles = deps.titles + ["[" ~ (other.title | replace("\\", "\\\\") | replace("[", "\\[") | replace("]", "\\]")) ~ "](" ~ where ~ ")"] %}
+{% else %}
+{% set deps.titles = deps.titles + [other.title] %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+| {{ cell(node.title) }} | {{ cell(node.group or "none") }} | {{ cell(delivers[node.id] | default("")) }} | {{ cell(deps.titles | join("; ") or "none") }} | {{ cell(located(node) or node.id) }} |
+{% endfor %}
+
+{% else %}
+| Task | Unit | What it delivers | Depends on | Where it lives |
+| --- | --- | --- | --- | --- |
+{% for row in planned_tasks %}
+| {{ cell(row.task) }} | {{ cell(row.unit) }} | {{ cell(row.delivers) }} | {{ cell(row.depends_on or "none") }} | {{ cell(row.location) }} |
+{% endfor %}
+
+{% endif %}
+{% if task_count > 1 %}
+</details>
+{% endif %}
+{% endblock %}

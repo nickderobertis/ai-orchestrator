@@ -3,7 +3,7 @@ title: 'Design: planner-brief-example'
 project: planner-brief-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:d9fc7226a615c542a1db86abed3a13c8e513ea11e9a287dac35edcbf8a94fa54
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:3c3a8049cddfdb99f0afd880b14193ab285fd1eb34211d7455b37540bf6a1340","answers_digest":"sha256:de6beb00d302772a9e020c7ec0d96b3f73d65a6cfb82c7facb1bf86377e9f0b3"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:ff54a57adaf34a907e3ae341d854d4b7bcd7ed66db852a7d989c64b43b2d401e","body_digest":"sha256:1010fd0b8f4322bafc76d493f65bc5b4f073c68c1d9452cb912866a8cae2bde2","answers_digest":"sha256:6e19c69d86c367c132c2f999e8c89c78cfd78a5646bf7295cc1c01f9db9c506f"}
 ---
 ## What
 
@@ -27,7 +27,7 @@ cannot interject a review between its own nodes.
 
 The planner writes a plan into the plan store and commits nothing; `just plan` then hands over to `just finish-plan`, which reviews the plan, checks it, launches the document, and copies both into the destination a person reviews them in.
 
-**Reversible:**
+**Decisions, all reversible (2):**
 
 <details>
 <summary>The plan's address</summary>
@@ -54,14 +54,10 @@ The second launch writes a rendering of the `design-doc` template, so its task n
 
 ## Planned tasks
 
-<details>
-<summary>All 1 planned tasks</summary>
-
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 | feat(plan): planner-brief-example | Planning run | the plan itself | none | examples/tasks/planner-brief-example/plan.md |
 
-</details>
 
 
 <!-- onetaskgraph:template-answers
@@ -95,16 +91,19 @@ planned_tasks:
   task: 'feat(plan): planner-brief-example'
   unit: Planning run
 units:
-- decisions: []
-  name: Planning run
-  part: ''
+- name: Planning run
   repository: ai-orchestrator
-  reversible:
-  - text: The brief names the qualified project the planner writes to, and everything after this run reads that same address.
-    title: The plan's address
-  - text: The second launch writes a rendering of the `design-doc` template, so its task names the template rather than restating it.
-    title: The document's shape
+  part: ''
   summary: The planner writes a plan into the plan store and commits nothing; `just plan` then hands over to `just finish-plan`, which reviews the plan, checks it, launches the document, and copies both into the destination a person reviews them in.
+  reversible:
+  - group: ''
+    gist: ''
+    items:
+    - text: The brief names the qualified project the planner writes to, and everything after this run reads that same address.
+      title: The plan's address
+    - text: The second launch writes a rendering of the `design-doc` template, so its task names the template rather than restating it.
+      title: The document's shape
+  decisions: []
 visual_changes: []
 what: |-
   A planning run: one agent turns a manager's brief into a plan another agent could execute

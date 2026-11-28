@@ -1,12 +1,15 @@
 """The design-doc template's expandable blocks are the form the installed plan store translates.
 
-The design document collapses each reversible decision, a decision's examples, the Budgets
-section's budgets changed for other reasons and its existing coverage, and the Planned tasks
-table into expandable blocks, and it is read on whichever tracker its plan lands
-on: a GitHub Projects board keeps the authored block, and Linear shows it only as its own
-collapsible section, which the plan store writes from the authored form onetaskgraph's README
-states under *Expandable blocks*. The template writes the block and the store recognises it,
-and this is the one check in this repository that goes red when the two part.
+The design document collapses each reversible decision and group of them, a decision's
+examples and details, why a decision or a unit's decisions are high cost, the visual changes
+past the featured ones and each before image, the Budgets section's budgets changed for other
+reasons and its existing coverage, and the Planned tasks table into expandable blocks — one, a
+collapsed visual change's `Before` block, nested in another — and it is read on whichever
+tracker its plan lands on: a GitHub Projects board keeps the authored block, and Linear shows
+it only as its own collapsible section, a nested block as a section inside a section, which the
+plan store writes from the authored form onetaskgraph's README states under *Expandable
+blocks*. The template writes the block and the store recognises it, and this is the one check
+in this repository that goes red when the two part.
 
 Everything is real but the two trackers' APIs: a design document rendered through this host's
 `design-doc` template by the pinned engine's `template resolve` piped into the locked plan
@@ -16,7 +19,9 @@ and the loopback Linear wire (`tests/linear_board.py`), and on from Linear into 
 folder of Markdown; and the pinned engine's launch-time `template check design-doc --item`
 over the Linear copy. A block copied back out of Linear is held to its own lines byte for byte
 and to its body as Linear stores that content anywhere (`MEASURED_REWRITES`), because a table's
-delimiter row Linear rewrites is Linear's normalization rather than a block drifting. The same
+delimiter row Linear rewrites is Linear's normalization rather than a block drifting; an image's
+target is the one thing compared loosely, because each tracker serves the asset at an address of
+its own. The same
 journey over a template whose blocks drop the blank line after `</summary>` is shown to fail.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] The approved acceptance
@@ -28,6 +33,7 @@ time on this host, so a template change rerunning it costs the gate little.
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import re
@@ -57,9 +63,36 @@ LINEAR_DESTINATION = onetaskgraph_user_layer.ORGANIZATION_PLANS
 #: The second folder of Markdown the Linear copy is copied back into.
 RETURNED = "returned"
 
-#: Answers that make the template write every kind of block it writes: two reversible
-#: decisions, one titled with backtick code and `&`, a decision with examples whose code part
-#: holds backticks, and a planned-tasks table of two rows. Locations name no record, so no
+#: A one-pixel PNG, the bytes every image asset of the document holds.
+PIXEL = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+#: A featured visual change and a collapsed one, each with a before image.
+VISUAL_CHANGES: list[dict[str, object]] = [
+    {
+        "name": "The preview lists what a copy would write",
+        "description": "Each item on its own line.",
+        "after": "preview-after.png",
+        "before": "preview-before.png",
+        "featured": True,
+    },
+    {
+        "name": "`copy` ends with a count",
+        "description": "One line after the items.",
+        "after": "count-after.png",
+        "before": "count-before.png",
+    },
+]
+
+#: Answers that make the template write every kind of block it writes: in a unit answered in
+#: the earlier shape, two reversible decisions, one titled with backtick code and `&`, and a
+#: decision with examples whose code part holds backticks; in units answered in today's shape, a
+#: decision's details block with a code part beside a plain bullet, the High cost to undo block
+#: of a unit's `cost_reason` and of a decision's `justification`, a reversible group whose
+#: summary holds `<strong>` and `<code>`, and an ungrouped reversible decision; a featured visual
+#: change's folded before image and a collapsed visual change holding its after image and a
+#: nested `Before` block; and a planned-tasks table of two rows. Locations name no record, so no
 #: copy rewrites them.
 ANSWERS: Mapping[str, object] = {
     "what": "Preview a copy before it writes.",
@@ -99,8 +132,70 @@ ANSWERS: Mapping[str, object] = {
                     ],
                 }
             ],
-        }
+        },
+        {
+            "name": "Preview report",
+            "repository": "onetaskgraph",
+            "part": "crates/report",
+            "summary": "The preview prints the copy's report.",
+            "cost_reason": "Other tools parse the report.",
+            "reversible": [
+                {
+                    "group": "Flags",
+                    "gist": "one `--dry-run` flag & its short form",
+                    "items": [
+                        {"title": "Adds `--dry-run`", "text": "As every verb spells it."},
+                        {"title": "Adds `-n`", "text": "The short form."},
+                    ],
+                },
+                {
+                    "group": "Output",
+                    "gist": "items in write order",
+                    "items": [{"title": "Prints in write order", "text": "As written."}],
+                },
+            ],
+            "decisions": [
+                {
+                    "name": "The report keeps its shape",
+                    "gist": "A preview prints the report a copy prints.",
+                    "show": [{"type": "code", "language": "diff", "text": '+ "preview": true'}],
+                    "details": [
+                        {"summary": "Nothing is written", "parts": []},
+                        {
+                            "summary": "Older readers keep working",
+                            "parts": [
+                                {"type": "prose", "text": "The shape is unchanged."},
+                                {"type": "code", "language": "json", "text": '{"items": []}'},
+                            ],
+                        },
+                    ],
+                }
+            ],
+        },
+        {
+            "name": "Board",
+            "repository": "onetaskgraph",
+            "part": "",
+            "summary": "The board shows a preview badge.",
+            "reversible": [
+                {
+                    "group": "",
+                    "gist": "",
+                    "items": [{"title": "Names the field Preview", "text": "One word."}],
+                }
+            ],
+            "decisions": [
+                {
+                    "name": "The badge is a board field",
+                    "justification": "people filter their boards by it.",
+                    "gist": "A preview sets one field the board shows.",
+                    "show": [{"type": "code", "language": "text", "text": "Preview: yes"}],
+                    "details": [],
+                }
+            ],
+        },
     ],
+    "visual_changes": VISUAL_CHANGES,
     "acceptance_criteria": ["A preview writes nothing."],
     "planned_tasks": [
         {
@@ -173,20 +268,54 @@ BUDGET_ANSWERS: Mapping[str, object] = {
     ],
 }
 
-#: How many blocks the answers render: two reversible decisions, one examples block, the
-#: planned-tasks table, and the Budgets section's other-changes and existing-coverage blocks.
-BLOCKS = 6
+#: How many blocks the answers render outside any other: in the earlier-shape unit two
+#: reversible decisions and one examples block; in today's shape a details block, two High cost
+#: to undo blocks, two reversible groups and one ungrouped decision; the featured change's
+#: before image and the collapsed change; the planned-tasks table; and the Budgets section's
+#: other-changes and existing-coverage blocks.
+BLOCKS = 14
+#: The blocks nested in another: the collapsed visual change's `Before` block.
+NESTED = 1
 #: The blocks whose body Linear stores in its own form (`MEASURED_REWRITES`): the planned
 #: tasks' and the existing coverage's tables, with Linear's delimiter row, and the other
-#: changes' list, with Linear's list marker.
-REWRITTEN_BLOCKS = 3
+#: changes' and both reversible groups' lists, with Linear's list marker.
+REWRITTEN_BLOCKS = 5
 
-#: An authored block whole: `<details>` to `</details>`, each alone on its line.
-AUTHORED_BLOCK = re.compile(r"^<details>\n.*?^</details>$", re.MULTILINE | re.DOTALL)
-#: The parts of an authored block in the form the store translates.
+#: The parts of an authored block in the form the store translates: its summary, and its body
+#: to the last blank line before the block's closing line.
 AUTHORED_PARTS = re.compile(
     r"<details>\n<summary>(?P<summary>[^\n]+)</summary>\n\n(?P<body>.+)\n\n</details>", re.DOTALL
 )
+#: An image reference, whose target each tracker rewrites to the address it serves it at.
+IMAGE = re.compile(r"!\[(?P<alt>[^\]\n]*)\]\((?:<[^>\n]*>|[^)\n]*)\)")
+
+
+def _blocks(content: str) -> list[str]:
+    """Each authored block of ``content`` standing outside any other, nested blocks inside it.
+
+    `<details>` to the `</details>` that closes it, each alone on its line.
+    """
+    lines = content.split("\n")
+    found: list[str] = []
+    depth = 0
+    start = 0
+    for at, line in enumerate(lines):
+        match line:
+            case "<details>":
+                start = at if depth == 0 else start
+                depth += 1
+            case "</details>" if depth:
+                depth -= 1
+                if depth == 0:
+                    found.append("\n".join(lines[start : at + 1]))
+            case _:
+                pass
+    return found
+
+
+def _images(text: str) -> str:
+    """``text`` with every image's target left out, its alt text kept."""
+    return IMAGE.sub(lambda match: f"![{match['alt']}](image)", text)
 
 
 def _cli(environment: Mapping[str, str], *arguments: str, stdin: str | None = None) -> str:
@@ -227,6 +356,12 @@ def _rendered(tmp_path: Path, environment: Mapping[str, str], template_root: Pat
     assert resolved.returncode == 0, resolved.stderr
     answers = tmp_path / "answers.json"
     answers.write_text(json.dumps({**ANSWERS, **BUDGET_ANSWERS}), encoding="utf-8")
+    assets: list[str] = []
+    for change in VISUAL_CHANGES:
+        for key in ("after", "before"):
+            image = tmp_path / str(change[key])
+            image.write_bytes(PIXEL)
+            assets += ["--asset", str(image)]
     _cli(
         environment,
         *("project", "create", AUTHORING_SOURCE, "--id", PROJECT, "--title", PROJECT_TITLE),
@@ -235,7 +370,7 @@ def _rendered(tmp_path: Path, environment: Mapping[str, str], template_root: Pat
     _cli(
         environment,
         *("document", "create", AUTHORING_SOURCE, "--project", PROJECT, "--id", DOCUMENT),
-        *("--title", DOCUMENT_TITLE, "--answers", str(answers)),
+        *("--title", DOCUMENT_TITLE, "--answers", str(answers), *assets),
         *("--template-loader", "-", "--no-interactive"),
         stdin=resolved.stdout,
     )
@@ -255,14 +390,29 @@ def _linear_form(block: str) -> str | None:
 
     `+++ LSUMMARY`, a blank line, the body as the wire stores any long form, a blank line and
     `+++`: LSUMMARY is the summary with `<code>` written as backticks, `<strong>` as `**` and
-    the three entities as their characters, as onetaskgraph's README states.
+    the three entities as their characters, and a block nested in the body is a section of its
+    own inside it, as onetaskgraph's README states.
     """
+    sections = _sections(block)
+    if sections is None:
+        return None
+    return linear_stored(sections, MEASURED_REWRITES)
+
+
+def _sections(block: str) -> str | None:
+    """``block`` written as Linear's sections, a block nested in its body as one inside it."""
     parts = AUTHORED_PARTS.fullmatch(block)
     if parts is None:
         return None
     summary = re.sub(r"<code>(.*?)</code>", r"`\1`", parts["summary"])
     summary = html.unescape(re.sub(r"<strong>(.*?)</strong>", r"**\1**", summary))
-    return f"+++ {summary}\n\n{linear_stored(parts['body'], MEASURED_REWRITES)}\n\n+++"
+    body = parts["body"]
+    for nested in _blocks(body):
+        inner = _sections(nested)
+        if inner is None:
+            return None
+        body = body.replace(nested, inner, 1)
+    return f"+++ {summary}\n\n{body}\n\n+++"
 
 
 def _returned_form(block: str) -> str | None:
@@ -299,10 +449,13 @@ def _drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template_root: Path)
         f"ONETASKGRAPH_SOURCES__{RETURNED.upper()}__CONFIG__STATUS_MAPPING__PLANNED": "todo",
     }
     content = _rendered(tmp_path, environment, template_root)
-    authored = AUTHORED_BLOCK.findall(content)
+    authored = _blocks(content)
     found: list[str] = []
-    if len(authored) != BLOCKS or content.count("<details") != BLOCKS:
+    if len(authored) != BLOCKS or content.count("<details") != BLOCKS + NESTED:
         found.append(f"the template wrote {len(authored)} blocks, not {BLOCKS}:\n{content}")
+    nested = [block for block in authored if block.count("<details>") > 1]
+    if [block.count("<details>") for block in nested] != [1 + NESTED]:
+        found.append(f"the template nests no Before block in a visual change:\n{content}")
 
     with _serving_board(linear=True) as remote, linear_board() as linear:
         # A copy onto `plans` builds every source its routes name, so the example's other
@@ -331,17 +484,22 @@ def _drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template_root: Path)
         found += [
             f"the GitHub board does not store this block as authored:\n{block}"
             for block in authored
-            if block not in issue.body
+            if _images(block) not in _images(issue.body)
         ]
 
         (stored,) = linear.documents()
         text = str(stored["content"])
         for block in authored:
             form = _linear_form(block)
-            if form is None or form not in text:
+            if form is None or _images(form) not in _images(text):
                 found.append(f"Linear stores no section for this block:\n{block}\n---\n{text}")
         if any(line.startswith("<details") for line in text.splitlines()):
             found.append(f"Linear keeps a `<details>` line:\n{text}")
+        for block in nested:
+            form = _linear_form(block)
+            inner = form.split("\n\n+++ Before\n\n", 1) if form else []
+            if len(inner) != 2 or not inner[1].endswith("\n\n+++\n\n+++"):
+                found.append(f"Linear holds no section inside this block's section:\n{form}")
 
         linear_document = f"{LINEAR_DESTINATION}:{stored['id']}"
         checked = _engine(
@@ -349,8 +507,20 @@ def _drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template_root: Path)
             *("template", "check", "design-doc", "--item", linear_document),
             *("--template-root", str(template_root)),
         )
-        if checked.returncode != 0:
+        # The one known divergence: the pinned engine links onetaskgraph 0.16.0
+        # (`tests/linked_divergences.py`), whose read of Linear's section inside a section is
+        # not the authored nested block, so its launch-time check refuses a Linear copy holding
+        # one as differing from its rendering. A plan on a GitHub board is unaffected. Once the
+        # engine links onetaskgraph 0.17.2 or later the check accepts the copy and this goes red,
+        # and the refusal is a finding again like any other.
+        known = nested and "body differs from its rendering" in checked.stderr
+        if checked.returncode != 0 and not known:
             found.append(f"the launch-time check refuses the Linear copy:\n{checked.stderr}")
+        elif nested and checked.returncode == 0:
+            found.append(
+                "the launch-time check accepts a Linear copy holding a nested block, so the "
+                "engine reads nested sections: expect the check to pass and retire this divergence"
+            )
 
         (linear_project,) = linear.projects()
         _cli(
@@ -368,7 +538,7 @@ def _drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template_root: Path)
         back = _content(environment, str(returned_document["id"]))
         for block in authored:
             form = _returned_form(block)
-            if form is None or form not in back:
+            if form is None or _images(form) not in _images(back):
                 found.append(
                     f"the copy back from Linear does not hold this block:\n{block}\n---\n{back}"
                 )

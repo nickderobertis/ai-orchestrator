@@ -3,7 +3,7 @@ title: 'Design: health-endpoint'
 project: health-endpoint
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:5697e51426246121fbc2486ca79881d3fbc11590f7b984c7514a0c1b5100a474
-  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:74e0141a235840245424bb4a58718233eda51d093703e25db52bfcc1fd41122d","body_digest":"sha256:ae7907fb71ccde8aa1e0431c85a5d43b0d40a900b39eb523a7d6c0a802da39f3","answers_digest":"sha256:069948f1db58c046372b96dcda781d068d6adbea57c571208ed670e83041627e"}
+  "onetaskgraph.template": {"template":"onepipeline:design-doc","digest":"sha256:ff54a57adaf34a907e3ae341d854d4b7bcd7ed66db852a7d989c64b43b2d401e","body_digest":"sha256:c0c1ed7b0aea9d95e4c6425145aed06d8870b2857958621310fd040d3941a8e2","answers_digest":"sha256:2300d7ec88cd837749fba372a4836fd260b040fbf9eac9cc51bf987d8e562a82"}
 ---
 ## What
 
@@ -26,15 +26,22 @@ The service gains one route that answers whether it is running.
 
 #### The health response
 
-**Reversibility: high cost** — load balancers, monitors and people we cannot list poll it, and each would have to change.
+`GET /health` answers one fixed shape.
 
-`GET /health` answers a fixed shape. Adding a field later is safe; renaming or removing one is not.
+<details>
+<summary><strong>High cost to undo</strong></summary>
+
+load balancers, monitors and people we cannot list poll it, and each would have to change.
+
+</details>
 
 ```json
 {"status": "ok"}
 ```
 
-**Reversible:**
+- Adding a field later is safe; renaming or removing one is not
+
+**Reversible decisions (1):**
 
 <details>
 <summary>Answered in process</summary>
@@ -66,14 +73,10 @@ The route is served by the service itself, with no new process or store.
 
 ## Planned tasks
 
-<details>
-<summary>All 1 planned tasks</summary>
-
 | Task | Unit | What it delivers | Depends on | Where it lives |
 | --- | --- | --- | --- | --- |
 | feat(api): add /health endpoint | Service | the endpoint and its tests | none | examples/tasks/health-endpoint/health.md |
 
-</details>
 
 
 <!-- onetaskgraph:template-answers
@@ -151,21 +154,27 @@ planned_tasks:
   task: 'feat(api): add /health endpoint'
   unit: Service
 units:
-- decisions:
-  - artifact: |-
-      ```json
-      {"status": "ok"}
-      ```
-    justification: load balancers, monitors and people we cannot list poll it, and each would have to change.
-    name: The health response
-    summary: '`GET /health` answers a fixed shape. Adding a field later is safe; renaming or removing one is not.'
-  name: Service
-  part: ''
+- name: Service
   repository: some-service
-  reversible:
-  - text: The route is served by the service itself, with no new process or store.
-    title: Answered in process
+  part: ''
   summary: The service gains one route that answers whether it is running.
+  reversible:
+  - group: ''
+    gist: ''
+    items:
+    - text: The route is served by the service itself, with no new process or store.
+      title: Answered in process
+  decisions:
+  - name: The health response
+    justification: load balancers, monitors and people we cannot list poll it, and each would have to change.
+    gist: '`GET /health` answers one fixed shape.'
+    show:
+    - type: code
+      language: json
+      text: '{"status": "ok"}'
+    details:
+    - summary: Adding a field later is safe; renaming or removing one is not
+      parts: []
 visual_changes: []
 what: |-
   A health endpoint on the service, so an operator can ask whether it is up without
